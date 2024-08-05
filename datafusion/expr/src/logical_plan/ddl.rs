@@ -29,7 +29,7 @@ use datafusion_common::{Constraints, DFSchemaRef, SchemaReference, TableReferenc
 use sqlparser::ast::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DdlStatement {
     /// Creates an external table.
     CreateExternalTable(CreateExternalTable),
@@ -179,7 +179,7 @@ impl DdlStatement {
 }
 
 /// Creates an external table.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateExternalTable {
     /// The table schema
     pub schema: DFSchemaRef,
@@ -224,7 +224,7 @@ impl Hash for CreateExternalTable {
 }
 
 /// Creates an in memory table.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateMemoryTable {
     /// The table name
     pub name: TableReference,
@@ -241,7 +241,7 @@ pub struct CreateMemoryTable {
 }
 
 /// Creates a view.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateView {
     /// The table name
     pub name: TableReference,
@@ -254,7 +254,7 @@ pub struct CreateView {
 }
 
 /// Creates a catalog (aka "Database").
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateCatalog {
     /// The catalog name
     pub catalog_name: String,
@@ -265,7 +265,7 @@ pub struct CreateCatalog {
 }
 
 /// Creates a schema.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateCatalogSchema {
     /// The table schema
     pub schema_name: String,
@@ -276,7 +276,7 @@ pub struct CreateCatalogSchema {
 }
 
 /// Drops a table.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropTable {
     /// The table name
     pub name: TableReference,
@@ -287,7 +287,7 @@ pub struct DropTable {
 }
 
 /// Drops a view.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropView {
     /// The view name
     pub name: TableReference,
@@ -298,7 +298,7 @@ pub struct DropView {
 }
 
 /// Drops a schema
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropCatalogSchema {
     /// The schema name
     pub name: SchemaReference,

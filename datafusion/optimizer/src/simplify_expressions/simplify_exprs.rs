@@ -187,7 +187,7 @@ mod tests {
         let optimizer = Optimizer::with_rules(vec![Arc::new(SimplifyExpressions::new())]);
         let optimized_plan =
             optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
-        let formatted_plan = format!("{optimized_plan:?}");
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(formatted_plan, expected);
         Ok(())
     }
@@ -437,7 +437,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule.rewrite(plan, &config).unwrap().data;
-        format!("{optimized_plan:?}")
+        format!("{optimized_plan}")
     }
 
     #[test]

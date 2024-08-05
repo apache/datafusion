@@ -28,8 +28,8 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
-    self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
-    InSubquery, Like, ScalarFunction, WindowFunction,
+    self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
+    WindowFunction,
 };
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
@@ -393,31 +393,29 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 )))
             }
             Expr::AggregateFunction(expr::AggregateFunction {
-                func_def,
+                func,
                 args,
                 distinct,
                 filter,
                 order_by,
                 null_treatment,
-            }) => match func_def {
-                AggregateFunctionDefinition::UDF(fun) => {
-                    let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
-                        args,
-                        self.schema,
-                        &fun,
-                    )?;
-                    Ok(Transformed::yes(Expr::AggregateFunction(
-                        expr::AggregateFunction::new_udf(
-                            fun,
-                            new_expr,
-                            distinct,
-                            filter,
-                            order_by,
-                            null_treatment,
-                        ),
-                    )))
-                }
-            },
+            }) => {
+                let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
+                    args,
+                    self.schema,
+                    &func,
+                )?;
+                Ok(Transformed::yes(Expr::AggregateFunction(
+                    expr::AggregateFunction::new_udf(
+                        func,
+                        new_expr,
+                        distinct,
+                        filter,
+                        order_by,
+                        null_treatment,
+                    ),
+                )))
+            }
             Expr::WindowFunction(WindowFunction {
                 fun,
                 args,

@@ -149,7 +149,8 @@ fn parse_ident_normalization() {
             },
         );
         if plan.is_ok() {
-            assert_eq!(expected, format!("{plan:?}"));
+            let plan = plan.unwrap();
+            assert_eq!(expected, format!("Ok({plan})"));
         } else {
             assert_eq!(expected, plan.unwrap_err().strip_backtrace());
         }
@@ -198,7 +199,7 @@ fn test_parse_options_value_normalization() {
             },
         );
         if let Ok(plan) = plan {
-            assert_eq!(expected_plan, format!("{plan:?}"));
+            assert_eq!(expected_plan, format!("{plan}"));
 
             match plan {
                 LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
@@ -2827,7 +2828,7 @@ fn quick_test(sql: &str, expected: &str) {
 
 fn quick_test_with_options(sql: &str, expected: &str, options: ParserOptions) {
     let plan = logical_plan_with_options(sql, options).unwrap();
-    assert_eq!(format!("{plan:?}"), expected);
+    assert_eq!(format!("{plan}"), expected);
 }
 
 fn prepare_stmt_quick_test(
@@ -2839,7 +2840,7 @@ fn prepare_stmt_quick_test(
 
     let assert_plan = plan.clone();
     // verify plan
-    assert_eq!(format!("{assert_plan:?}"), expected_plan);
+    assert_eq!(format!("{assert_plan}"), expected_plan);
 
     // verify data types
     if let LogicalPlan::Prepare(Prepare { data_types, .. }) = assert_plan {
@@ -2857,7 +2858,7 @@ fn prepare_stmt_replace_params_quick_test(
 ) -> LogicalPlan {
     // replace params
     let plan = plan.with_param_values(param_values).unwrap();
-    assert_eq!(format!("{plan:?}"), expected_plan);
+    assert_eq!(format!("{plan}"), expected_plan);
 
     plan
 }

@@ -308,7 +308,7 @@ async fn roundtrip_logical_plan_aggregation_with_pk() -> Result<()> {
 
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
 }
@@ -334,7 +334,7 @@ async fn roundtrip_logical_plan_aggregation() -> Result<()> {
 
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
 }
@@ -358,7 +358,7 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
         logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
 }
@@ -430,7 +430,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
         logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
@@ -544,7 +544,7 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
         logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
@@ -614,7 +614,7 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
         logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
@@ -701,7 +701,7 @@ async fn roundtrip_logical_plan_distinct_on() -> Result<()> {
 
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
 }
@@ -727,7 +727,7 @@ async fn roundtrip_single_count_distinct() -> Result<()> {
 
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
 }
@@ -740,7 +740,7 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
     let plan = ctx.table("t1").await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
     Ok(())
 }
 
@@ -765,7 +765,7 @@ async fn roundtrip_logical_plan_unnest() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
     Ok(())
 }
 
@@ -906,7 +906,7 @@ async fn roundtrip_expr_api() -> Result<()> {
     let plan = table.select(expr_list)?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
     Ok(())
 }
 
@@ -926,13 +926,13 @@ async fn roundtrip_logical_plan_with_view_scan() -> Result<()> {
 
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     // DROP
     let plan = ctx.sql("DROP VIEW view_t1").await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
 }

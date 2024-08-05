@@ -841,8 +841,8 @@ async fn extension_logical_plan() -> Result<()> {
     let proto = to_substrait_plan(&ext_plan, &ctx)?;
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
 
-    let plan1str = format!("{ext_plan:?}");
-    let plan2str = format!("{plan2:?}");
+    let plan1str = format!("{ext_plan}");
+    let plan2str = format!("{plan2}");
     assert_eq!(plan1str, plan2str);
 
     Ok(())
@@ -943,7 +943,7 @@ async fn roundtrip_repartition_roundrobin() -> Result<()> {
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
-    assert_eq!(format!("{plan:?}"), format!("{plan2:?}"));
+    assert_eq!(format!("{plan}"), format!("{plan2}"));
     Ok(())
 }
 
@@ -960,7 +960,7 @@ async fn roundtrip_repartition_hash() -> Result<()> {
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
-    assert_eq!(format!("{plan:?}"), format!("{plan2:?}"));
+    assert_eq!(format!("{plan}"), format!("{plan2}"));
     Ok(())
 }
 
@@ -1061,8 +1061,8 @@ async fn assert_expected_plan(
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
-    println!("{plan:#?}");
-    println!("{plan2:#?}");
+    println!("{plan}");
+    println!("{plan2}");
 
     println!("{proto:?}");
 
@@ -1070,7 +1070,7 @@ async fn assert_expected_plan(
         assert_eq!(plan.schema(), plan2.schema());
     }
 
-    let plan2str = format!("{plan2:?}");
+    let plan2str = format!("{plan2}");
     assert_eq!(expected_plan_str, &plan2str);
 
     Ok(())
@@ -1085,8 +1085,8 @@ async fn roundtrip_fill_na(sql: &str) -> Result<()> {
     let plan2 = ctx.state().optimize(&plan2)?;
 
     // Format plan string and replace all None's with 0
-    let plan1str = format!("{plan:?}").replace("None", "0");
-    let plan2str = format!("{plan2:?}").replace("None", "0");
+    let plan1str = format!("{plan}").replace("None", "0");
+    let plan2str = format!("{plan2}").replace("None", "0");
 
     assert_eq!(plan1str, plan2str);
 
@@ -1108,11 +1108,11 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     let proto = to_substrait_plan(&df.into_optimized_plan()?, &ctx)?;
     let plan = from_substrait_plan(&ctx, &proto).await?;
 
-    println!("{plan_with_alias:#?}");
-    println!("{plan:#?}");
+    println!("{plan_with_alias}");
+    println!("{plan}");
 
-    let plan1str = format!("{plan_with_alias:?}");
-    let plan2str = format!("{plan:?}");
+    let plan1str = format!("{plan_with_alias}");
+    let plan2str = format!("{plan}");
     assert_eq!(plan1str, plan2str);
 
     assert_eq!(plan_with_alias.schema(), plan.schema());
@@ -1126,13 +1126,13 @@ async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<Box<Plan>>
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
-    println!("{plan:#?}");
-    println!("{plan2:#?}");
+    println!("{plan}");
+    println!("{plan2}");
 
     println!("{proto:?}");
 
-    let plan1str = format!("{plan:?}");
-    let plan2str = format!("{plan2:?}");
+    let plan1str = format!("{plan}");
+    let plan2str = format!("{plan2}");
     assert_eq!(plan1str, plan2str);
 
     assert_eq!(plan.schema(), plan2.schema());

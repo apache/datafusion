@@ -43,8 +43,8 @@ mod tests {
         let proto = serializer::deserialize(path).await?;
         // Check plan equality
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str_ref = format!("{plan_ref:?}");
-        let plan_str = format!("{plan:?}");
+        let plan_str_ref = format!("{plan_ref}");
+        let plan_str = format!("{plan}");
         assert_eq!(plan_str_ref, plan_str);
         // Delete test binary file
         fs::remove_file(path)?;
