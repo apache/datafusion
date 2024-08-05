@@ -627,22 +627,6 @@ impl Sort {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// Defines which implementation of an aggregate function DataFusion should call.
-pub enum AggregateFunctionDefinition {
-    /// Resolved to a user defined aggregate function
-    UDF(Arc<crate::AggregateUDF>),
-}
-
-impl AggregateFunctionDefinition {
-    /// Function's name for display
-    pub fn name(&self) -> &str {
-        match self {
-            AggregateFunctionDefinition::UDF(udf) => udf.name(),
-        }
-    }
-}
-
 /// Aggregate function
 ///
 /// See also  [`ExprFunctionExt`] to set these fields on `Expr`
@@ -651,7 +635,7 @@ impl AggregateFunctionDefinition {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
-    pub func_def: AggregateFunctionDefinition,
+    pub func: Arc<crate::AggregateUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
     /// Whether this is a DISTINCT aggregation or not
@@ -666,7 +650,7 @@ pub struct AggregateFunction {
 impl AggregateFunction {
     /// Create a new AggregateFunction expression with a user-defined function (UDF)
     pub fn new_udf(
-        udf: Arc<crate::AggregateUDF>,
+        func: Arc<crate::AggregateUDF>,
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
@@ -674,7 +658,7 @@ impl AggregateFunction {
         null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
-            func_def: AggregateFunctionDefinition::UDF(udf),
+            func,
             args,
             distinct,
             filter,
@@ -1948,14 +1932,14 @@ impl Expr {
                 func.hash(hasher);
             }
             Expr::AggregateFunction(AggregateFunction {
-                func_def,
+                func,
                 args: _args,
                 distinct,
                 filter: _filter,
                 order_by: _order_by,
                 null_treatment,
             }) => {
-                func_def.hash(hasher);
+                func.hash(hasher);
                 distinct.hash(hasher);
                 null_treatment.hash(hasher);
             }
@@ -2156,7 +2140,7 @@ impl fmt::Display for Expr {
                 Ok(())
             }
             Expr::AggregateFunction(AggregateFunction {
-                func_def,
+                func,
                 distinct,
                 ref args,
                 filter,
@@ -2164,7 +2148,7 @@ impl fmt::Display for Expr {
                 null_treatment,
                 ..
             }) => {
-                fmt_function(f, func_def.name(), *distinct, args, true)?;
+                fmt_function(f, func.name(), *distinct, args, true)?;
                 if let Some(nt) = null_treatment {
                     write!(f, " {}", nt)?;
                 }
