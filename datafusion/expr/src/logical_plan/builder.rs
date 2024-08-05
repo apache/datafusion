@@ -1749,7 +1749,7 @@ mod tests {
         \n  Filter: employee_csv.state = Utf8(\"CO\")\
         \n    TableScan: employee_csv projection=[id, state]";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1802,7 +1802,7 @@ mod tests {
         let expected = "Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST\
         \n  TableScan: employee_csv projection=[state, salary]";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1822,7 +1822,7 @@ mod tests {
         \n    TableScan: t1\
         \n    TableScan: t2";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1847,7 +1847,7 @@ mod tests {
         \n    TableScan: employee_csv projection=[state, salary]\
         \n  TableScan: employee_csv projection=[state, salary]";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1876,7 +1876,7 @@ mod tests {
         \n        TableScan: employee_csv projection=[state, salary]\
         \n    TableScan: employee_csv projection=[state, salary]";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1913,7 +1913,7 @@ mod tests {
         \n    Filter: employee_csv.state = Utf8(\"CO\")\
         \n      TableScan: employee_csv projection=[id, state]";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1940,7 +1940,7 @@ mod tests {
         \n        TableScan: foo\
         \n  Projection: bar.a\
         \n    TableScan: bar";
-        assert_eq!(expected, format!("{outer_query:?}"));
+        assert_eq!(expected, format!("{outer_query}"));
 
         Ok(())
     }
@@ -1968,7 +1968,7 @@ mod tests {
         \n        TableScan: foo\
         \n  Projection: bar.a\
         \n    TableScan: bar";
-        assert_eq!(expected, format!("{outer_query:?}"));
+        assert_eq!(expected, format!("{outer_query}"));
 
         Ok(())
     }
@@ -1994,7 +1994,7 @@ mod tests {
         \n      Projection: foo.b\
         \n        TableScan: foo\
         \n  TableScan: bar";
-        assert_eq!(expected, format!("{outer_query:?}"));
+        assert_eq!(expected, format!("{outer_query}"));
 
         Ok(())
     }
@@ -2116,7 +2116,7 @@ mod tests {
         let expected = "\
         Unnest: lists[test_table.strings] structs[]\
         \n  TableScan: test_table";
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         // Check unnested field is a scalar
         let field = plan.schema().field_with_name(None, "strings").unwrap();
@@ -2130,7 +2130,7 @@ mod tests {
         let expected = "\
         Unnest: lists[] structs[test_table.struct_singular]\
         \n  TableScan: test_table";
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         for field_name in &["a", "b"] {
             // Check unnested struct field is a scalar
@@ -2153,7 +2153,7 @@ mod tests {
         \n  Unnest: lists[test_table.structs] structs[]\
         \n    Unnest: lists[test_table.strings] structs[]\
         \n      TableScan: test_table";
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         // Check unnested struct list field should be a struct.
         let field = plan.schema().field_with_name(None, "structs").unwrap();
@@ -2171,7 +2171,7 @@ mod tests {
         let expected = "\
         Unnest: lists[test_table.strings, test_table.structs] structs[test_table.struct_singular]\
         \n  TableScan: test_table";
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         // Unnesting missing column should fail.
         let plan = nested_table_scan("test_table")?.unnest_column("missing");
@@ -2263,9 +2263,9 @@ mod tests {
                 ])?
                 .build()?;
 
-        let plan_expected = format!("{plan:?}");
+        let plan_expected = format!("{plan}");
         let plan_builder: LogicalPlanBuilder = Arc::new(plan).into();
-        assert_eq!(plan_expected, format!("{:?}", plan_builder.plan));
+        assert_eq!(plan_expected, format!("{}", plan_builder.plan));
 
         Ok(())
     }

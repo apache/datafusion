@@ -77,6 +77,22 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
         match plan {
             LogicalPlan::Distinct(Distinct::All(input)) => {
                 let group_expr = expand_wildcard(input.schema(), &input, None)?;
+
+                let field_count = input.schema().fields().len();
+                for dep in input.schema().functional_dependencies().iter() {
+                    // If distinct is exactly the same with a previous GROUP BY, we can
+                    // simply remove it:
+                    if dep.source_indices.len() >= field_count
+                        && dep.source_indices[..field_count]
+                            .iter()
+                            .enumerate()
+                            .all(|(idx, f_idx)| idx == *f_idx)
+                    {
+                        return Ok(Transformed::yes(input.as_ref().clone()));
+                    }
+                }
+
+                // Replace with aggregation:
                 let aggr_plan = LogicalPlan::Aggregate(Aggregate::try_new(
                     input,
                     group_expr,
@@ -163,5 +179,80 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(BottomUp)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
+    use crate::test::*;
+
+    use datafusion_common::Result;
+    use datafusion_expr::{
+        col, logical_plan::builder::LogicalPlanBuilder, Expr, LogicalPlan,
+    };
+    use datafusion_functions_aggregate::sum::sum;
+
+    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+        assert_optimized_plan_eq(
+            Arc::new(ReplaceDistinctWithAggregate::new()),
+            plan.clone(),
+            expected,
+        )
+    }
+
+    #[test]
+    fn eliminate_redundant_distinct_simple() -> Result<()> {
+        let table_scan = test_table_scan().unwrap();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("c")], Vec::<Expr>::new())?
+            .project(vec![col("c")])?
+            .distinct()?
+            .build()?;
+
+        let expected = "Projection: test.c\n  Aggregate: groupBy=[[test.c]], aggr=[[]]\n    TableScan: test";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn eliminate_redundant_distinct_pair() -> Result<()> {
+        let table_scan = test_table_scan().unwrap();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a"), col("b")], Vec::<Expr>::new())?
+            .project(vec![col("a"), col("b")])?
+            .distinct()?
+            .build()?;
+
+        let expected =
+            "Projection: test.a, test.b\n  Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n    TableScan: test";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn do_not_eliminate_distinct() -> Result<()> {
+        let table_scan = test_table_scan().unwrap();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .distinct()?
+            .build()?;
+
+        let expected = "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  Projection: test.a, test.b\n    TableScan: test";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn do_not_eliminate_distinct_with_aggr() -> Result<()> {
+        let table_scan = test_table_scan().unwrap();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a"), col("b"), col("c")], vec![sum(col("c"))])?
+            .project(vec![col("a"), col("b")])?
+            .distinct()?
+            .build()?;
+
+        let expected =
+            "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\n  Projection: test.a, test.b\n    Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[sum(test.c)]]\n      TableScan: test";
+        assert_optimized_plan_equal(&plan, expected)
     }
 }

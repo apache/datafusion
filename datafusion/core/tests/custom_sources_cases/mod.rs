@@ -246,7 +246,7 @@ async fn custom_source_dataframe() -> Result<()> {
     }
 
     let expected = format!("TableScan: {UNNAMED_TABLE} projection=[c2]");
-    assert_eq!(format!("{optimized_plan:?}"), expected);
+    assert_eq!(format!("{optimized_plan}"), expected);
 
     let physical_plan = state.create_physical_plan(&optimized_plan).await?;
 

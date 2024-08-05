@@ -253,7 +253,7 @@ async fn csv_explain_plans() {
 
     // Optimized logical plan
     let state = ctx.state();
-    let msg = format!("Optimizing logical plan for '{sql}': {plan:?}");
+    let msg = format!("Optimizing logical plan for '{sql}': {plan}");
     let plan = state.optimize(plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
@@ -327,7 +327,7 @@ async fn csv_explain_plans() {
 
     // Physical plan
     // Create plan
-    let msg = format!("Creating physical plan for '{sql}': {plan:?}");
+    let msg = format!("Creating physical plan for '{sql}': {plan}");
     let plan = state.create_physical_plan(&plan).await.expect(&msg);
     //
     // Execute plan
@@ -548,7 +548,7 @@ async fn csv_explain_verbose_plans() {
 
     // Physical plan
     // Create plan
-    let msg = format!("Creating physical plan for '{sql}': {plan:?}");
+    let msg = format!("Creating physical plan for '{sql}': {plan}");
     let plan = state.create_physical_plan(&plan).await.expect(&msg);
     //
     // Execute plan

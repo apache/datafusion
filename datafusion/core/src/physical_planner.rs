@@ -73,8 +73,7 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
-    self, physical_name, AggregateFunction, AggregateFunctionDefinition, Alias,
-    GroupingSet, WindowFunction,
+    self, physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -1553,7 +1552,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
 ) -> Result<AggregateExprWithOptionalArgs> {
     match e {
         Expr::AggregateFunction(AggregateFunction {
-            func_def,
+            func,
             distinct,
             args,
             filter,
@@ -1575,36 +1574,34 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
 
-            let (agg_expr, filter, order_by) = match func_def {
-                AggregateFunctionDefinition::UDF(fun) => {
-                    let sort_exprs = order_by.clone().unwrap_or(vec![]);
-                    let physical_sort_exprs = match order_by {
-                        Some(exprs) => Some(create_physical_sort_exprs(
-                            exprs,
-                            logical_input_schema,
-                            execution_props,
-                        )?),
-                        None => None,
-                    };
-
-                    let ordering_reqs: Vec<PhysicalSortExpr> =
-                        physical_sort_exprs.clone().unwrap_or(vec![]);
-
-                    let agg_expr = udaf::create_aggregate_expr_with_dfschema(
-                        fun,
-                        &physical_args,
-                        args,
-                        &sort_exprs,
-                        &ordering_reqs,
+            let (agg_expr, filter, order_by) = {
+                let sort_exprs = order_by.clone().unwrap_or(vec![]);
+                let physical_sort_exprs = match order_by {
+                    Some(exprs) => Some(create_physical_sort_exprs(
+                        exprs,
                         logical_input_schema,
-                        name,
-                        ignore_nulls,
-                        *distinct,
-                        false,
-                    )?;
+                        execution_props,
+                    )?),
+                    None => None,
+                };
 
-                    (agg_expr, filter, physical_sort_exprs)
-                }
+                let ordering_reqs: Vec<PhysicalSortExpr> =
+                    physical_sort_exprs.clone().unwrap_or(vec![]);
+
+                let agg_expr = udaf::create_aggregate_expr_with_dfschema(
+                    func,
+                    &physical_args,
+                    args,
+                    &sort_exprs,
+                    &ordering_reqs,
+                    logical_input_schema,
+                    name,
+                    ignore_nulls,
+                    *distinct,
+                    false,
+                )?;
+
+                (agg_expr, filter, physical_sort_exprs)
             };
 
             Ok((agg_expr, filter, order_by))

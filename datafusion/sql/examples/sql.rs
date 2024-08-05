@@ -63,7 +63,7 @@ fn main() {
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // show the plan
-    println!("{plan:?}");
+    println!("{plan}");
 }
 
 struct MyContextProvider {
