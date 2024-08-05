@@ -50,7 +50,7 @@ fn convert_to_state_bench(
     values: ArrayRef,
     opt_filter: Option<&BooleanArray>,
 ) {
-    let accumulator = prepare_accumulator();
+    let mut accumulator = prepare_accumulator();
     c.bench_function(name, |b| {
         b.iter(|| {
             black_box(

@@ -1065,7 +1065,7 @@ impl GroupedHashAggregateStream {
 
         let iter = self
             .accumulators
-            .iter()
+            .iter_mut()
             .zip(input_values.iter())
             .zip(filter_values.iter());
 

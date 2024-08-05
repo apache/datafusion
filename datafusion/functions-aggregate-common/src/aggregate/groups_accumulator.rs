@@ -22,6 +22,7 @@ pub mod accumulate;
 pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
+use std::mem;
 
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
@@ -47,6 +48,9 @@ pub struct GroupsAccumulatorAdapter {
 
     /// state for each group, stored in group_index order
     states: Vec<AccumulatorState>,
+
+    /// Buffer used for `convert_to_state`
+    convert_state_buffer: Vec<Box<dyn Accumulator>>,
 
     /// Current memory usage, in bytes.
     ///
@@ -93,6 +97,7 @@ impl GroupsAccumulatorAdapter {
         Self {
             factory: Box::new(factory),
             states: vec![],
+            convert_state_buffer: vec![],
             allocation_bytes: 0,
         }
     }
@@ -113,6 +118,32 @@ impl GroupsAccumulatorAdapter {
         }
 
         self.adjust_allocation(vec_size_pre, self.states.allocated_size());
+        Ok(())
+    }
+
+    /// Ensure that the buffer has the enough room to convert the state
+    fn ensure_convert_buffer_large_enough(
+        &mut self,
+        input_batch_size: usize,
+    ) -> Result<()> {
+        // If the buffer is not large enough, enlarge it.
+        if input_batch_size > self.convert_state_buffer.len() {
+            let vec_size_pre = self.convert_state_buffer.allocated_size();
+
+            let new_accumulators = input_batch_size - self.convert_state_buffer.len();
+            for _ in 0..new_accumulators {
+                let accumulator = (self.factory)()?;
+                let state = AccumulatorState::new(accumulator);
+                self.add_allocation(state.size());
+                self.states.push(state);
+            }
+
+            self.adjust_allocation(
+                vec_size_pre,
+                self.convert_state_buffer.allocated_size(),
+            );
+        }
+
         Ok(())
     }
 
@@ -208,7 +239,7 @@ impl GroupsAccumulatorAdapter {
             sizes_pre += state.size();
 
             let values_to_accumulate =
-                slice_and_maybe_filter(&values, opt_filter.as_ref(), offsets)?;
+                slice_and_maybe_filter(&values, opt_filter.as_ref().map(|f| f.as_boolean()), offsets)?;
             (f)(state.accumulator.as_mut(), &values_to_accumulate)?;
 
             // clear out the state so they are empty for next
@@ -348,6 +379,50 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     fn size(&self) -> usize {
         self.allocation_bytes
     }
+
+    fn convert_to_state(
+        &mut self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let num_rows = values[0].len();
+
+        // Make the buffer large enough.
+        self.ensure_convert_buffer_large_enough(num_rows)?;
+
+        // Each row has its respective group.
+        let mut results = vec![Vec::with_capacity(num_rows); values.len()];
+        for row_idx in 0..num_rows {
+            // Take the empty to update, and replace with the new empty.
+            let new_accumulator = (self.factory)()?;
+            let mut convert_state =
+                mem::replace(&mut self.convert_state_buffer[row_idx], new_accumulator);
+
+            // Convert row to state by applying it to the empty accumulator.
+            let values_to_accumulate = slice_and_maybe_filter(
+                &values,
+                opt_filter,
+                &[row_idx, row_idx + 1],
+            )?;
+            convert_state.update_batch(&values_to_accumulate)?;
+            let row_states = convert_state.state()?;
+
+            for (col_idx, col_state) in row_states.into_iter().enumerate() {
+                results[col_idx].push(col_state);
+            }
+        }
+
+        let arrays = results
+            .into_iter()
+            .map(ScalarValue::iter_to_array)
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(arrays)
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
 }
 
 /// Extension trait for [`Vec`] to account for allocations.
@@ -384,7 +459,7 @@ fn get_filter_at_indices(
 // Copied from physical-plan
 pub(crate) fn slice_and_maybe_filter(
     aggr_array: &[ArrayRef],
-    filter_opt: Option<&ArrayRef>,
+    filter_opt: Option<&BooleanArray>,
     offsets: &[usize],
 ) -> Result<Vec<ArrayRef>> {
     let (offset, length) = (offsets[0], offsets[1] - offsets[0]);
@@ -395,12 +470,11 @@ pub(crate) fn slice_and_maybe_filter(
 
     if let Some(f) = filter_opt {
         let filter_array = f.slice(offset, length);
-        let filter_array = filter_array.as_boolean();
 
         sliced_arrays
             .iter()
             .map(|array| {
-                compute::filter(array, filter_array).map_err(|e| arrow_datafusion_err!(e))
+                compute::filter(array, &filter_array).map_err(|e| arrow_datafusion_err!(e))
             })
             .collect()
     } else {

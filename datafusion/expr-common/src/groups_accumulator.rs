@@ -199,7 +199,7 @@ pub trait GroupsAccumulator: Send {
     ///
     /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
     fn convert_to_state(
-        &self,
+        &mut self,
         _values: &[ArrayRef],
         _opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
