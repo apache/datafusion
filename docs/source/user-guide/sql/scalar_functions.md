@@ -3647,6 +3647,7 @@ Returns an Arrow map with the specified key-value pairs.
 
 ```
 map(key, value)
+map(key: value)
 ```
 
 #### Arguments
@@ -3668,6 +3669,10 @@ SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
 SELECT MAP([[1,2], [3,4]], ['a', 'b']);
 ----
 {[1, 2]: a, [3, 4]: b}
+
+SELECT MAP { 'a': 1, 'b': 2 };
+----
+{a: 1, b: 2}
 ```
 
 ### `make_map`
