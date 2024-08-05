@@ -588,8 +588,8 @@ logical_plan
 06)----------EmptyRelation
 07)--Projection: b.x AS count, b.y AS n
 08)----SubqueryAlias: b
-09)------Projection: Int64(1) AS x, MAX(Int64(10)) AS y
-10)--------Aggregate: groupBy=[[]], aggr=[[MAX(Int64(10))]]
+09)------Projection: Int64(1) AS x, max(Int64(10)) AS y
+10)--------Aggregate: groupBy=[[]], aggr=[[max(Int64(10))]]
 11)----------EmptyRelation
 physical_plan
 01)UnionExec
@@ -600,8 +600,8 @@ physical_plan
 06)----------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[count(*)], ordering_mode=Sorted
 07)------------ProjectionExec: expr=[5 as n]
 08)--------------PlaceholderRowExec
-09)--ProjectionExec: expr=[1 as count, MAX(Int64(10))@0 as n]
-10)----AggregateExec: mode=Single, gby=[], aggr=[MAX(Int64(10))]
+09)--ProjectionExec: expr=[1 as count, max(Int64(10))@0 as n]
+10)----AggregateExec: mode=Single, gby=[], aggr=[max(Int64(10))]
 11)------PlaceholderRowExec
 
 
