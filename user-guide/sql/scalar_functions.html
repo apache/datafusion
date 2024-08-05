@@ -3703,6 +3703,55 @@
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#map-functions">
+   Map Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#map">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       map
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id220">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id221">
+       Example
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#make-map">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       make_map
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id222">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id223">
+       Example
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#hashing-functions">
    Hashing Functions
   </a>
@@ -3717,7 +3766,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id220">
+      <a class="reference internal nav-link" href="#id224">
        Arguments
       </a>
      </li>
@@ -3733,7 +3782,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id221">
+      <a class="reference internal nav-link" href="#id225">
        Arguments
       </a>
      </li>
@@ -3749,7 +3798,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id222">
+      <a class="reference internal nav-link" href="#id226">
        Arguments
       </a>
      </li>
@@ -3765,7 +3814,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id223">
+      <a class="reference internal nav-link" href="#id227">
        Arguments
       </a>
      </li>
@@ -3781,7 +3830,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id224">
+      <a class="reference internal nav-link" href="#id228">
        Arguments
       </a>
      </li>
@@ -3797,7 +3846,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id225">
+      <a class="reference internal nav-link" href="#id229">
        Arguments
       </a>
      </li>
@@ -3820,12 +3869,12 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id226">
+      <a class="reference internal nav-link" href="#id230">
        Arguments
       </a>
      </li>
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id227">
+      <a class="reference internal nav-link" href="#id231">
        Example
       </a>
      </li>
@@ -3841,12 +3890,12 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id228">
+      <a class="reference internal nav-link" href="#id232">
        Arguments
       </a>
      </li>
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id229">
+      <a class="reference internal nav-link" href="#id233">
        Example
       </a>
      </li>
@@ -7688,6 +7737,74 @@ Can be a constant, column, or function, and any combination of object operators.
 </section>
 </section>
 </section>
+<section id="map-functions">
+<h2>Map Functions<a class="headerlink" href="#map-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#map">map</a></p></li>
+<li><p><a class="reference internal" href="#make-map">make_map</a></p></li>
+</ul>
+<section id="map">
+<h3><code class="docutils literal notranslate"><span class="pre">map</span></code><a class="headerlink" href="#map" title="Link to this heading">¶</a></h3>
+<p>Returns an Arrow map with the specified key-value pairs.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">map</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+<span class="nb">map</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">value</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id220">
+<h4>Arguments<a class="headerlink" href="#id220" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>key</strong>: Expression to be used for key.
+Can be a constant, column, or function, any combination of arithmetic or
+string operators, or a named expression of previous listed.</p></li>
+<li><p><strong>value</strong>: Expression to be used for value.
+Can be a constant, column, or function, any combination of arithmetic or
+string operators, or a named expression of previous listed.</p></li>
+</ul>
+</section>
+<section id="id221">
+<h4>Example<a class="headerlink" href="#id221" title="Link to this heading">¶</a></h4>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">MAP</span><span class="p">([</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="s1">&#39;HEAD&#39;</span><span class="p">,</span> <span class="s1">&#39;PATCH&#39;</span><span class="p">],</span> <span class="p">[</span><span class="mi">41</span><span class="p">,</span> <span class="mi">33</span><span class="p">,</span> <span class="n">null</span><span class="p">]);</span>
+<span class="o">----</span>
+<span class="p">{</span><span class="n">POST</span><span class="p">:</span> <span class="mi">41</span><span class="p">,</span> <span class="n">HEAD</span><span class="p">:</span> <span class="mi">33</span><span class="p">,</span> <span class="n">PATCH</span><span class="p">:</span> <span class="p">}</span>
+
+<span class="n">SELECT</span> <span class="n">MAP</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]],</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">]);</span>
+<span class="o">----</span>
+<span class="p">{[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]:</span> <span class="n">a</span><span class="p">,</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]:</span> <span class="n">b</span><span class="p">}</span>
+
+<span class="n">SELECT</span> <span class="n">MAP</span> <span class="p">{</span> <span class="s1">&#39;a&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">:</span> <span class="mi">2</span> <span class="p">};</span>
+<span class="o">----</span>
+<span class="p">{</span><span class="n">a</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="mi">2</span><span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="make-map">
+<h3><code class="docutils literal notranslate"><span class="pre">make_map</span></code><a class="headerlink" href="#make-map" title="Link to this heading">¶</a></h3>
+<p>Returns an Arrow map with the specified key-value pairs.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">make_map</span><span class="p">(</span><span class="n">key_1</span><span class="p">,</span> <span class="n">value_1</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">key_n</span><span class="p">,</span> <span class="n">value_n</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id222">
+<h4>Arguments<a class="headerlink" href="#id222" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>key_n</strong>: Expression to be used for key.
+Can be a constant, column, or function, any combination of arithmetic or
+string operators, or a named expression of previous listed.</p></li>
+<li><p><strong>value_n</strong>: Expression to be used for value.
+Can be a constant, column, or function, any combination of arithmetic or
+string operators, or a named expression of previous listed.</p></li>
+</ul>
+</section>
+<section id="id223">
+<h4>Example<a class="headerlink" href="#id223" title="Link to this heading">¶</a></h4>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">MAKE_MAP</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="mi">41</span><span class="p">,</span> <span class="s1">&#39;HEAD&#39;</span><span class="p">,</span> <span class="mi">33</span><span class="p">,</span> <span class="s1">&#39;PATCH&#39;</span><span class="p">,</span> <span class="n">null</span><span class="p">);</span>
+<span class="o">----</span>
+<span class="p">{</span><span class="n">POST</span><span class="p">:</span> <span class="mi">41</span><span class="p">,</span> <span class="n">HEAD</span><span class="p">:</span> <span class="mi">33</span><span class="p">,</span> <span class="n">PATCH</span><span class="p">:</span> <span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
 <section id="hashing-functions">
 <h2>Hashing Functions<a class="headerlink" href="#hashing-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
@@ -7704,8 +7821,8 @@ Can be a constant, column, or function, and any combination of object operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">digest</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">algorithm</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id220">
-<h4>Arguments<a class="headerlink" href="#id220" title="Link to this heading">¶</a></h4>
+<section id="id224">
+<h4>Arguments<a class="headerlink" href="#id224" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -7731,8 +7848,8 @@ Must be one of:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">md5</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id221">
-<h4>Arguments<a class="headerlink" href="#id221" title="Link to this heading">¶</a></h4>
+<section id="id225">
+<h4>Arguments<a class="headerlink" href="#id225" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -7745,8 +7862,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha224</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id222">
-<h4>Arguments<a class="headerlink" href="#id222" title="Link to this heading">¶</a></h4>
+<section id="id226">
+<h4>Arguments<a class="headerlink" href="#id226" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -7759,8 +7876,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha256</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id223">
-<h4>Arguments<a class="headerlink" href="#id223" title="Link to this heading">¶</a></h4>
+<section id="id227">
+<h4>Arguments<a class="headerlink" href="#id227" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -7773,8 +7890,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha384</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id224">
-<h4>Arguments<a class="headerlink" href="#id224" title="Link to this heading">¶</a></h4>
+<section id="id228">
+<h4>Arguments<a class="headerlink" href="#id228" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -7787,8 +7904,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha512</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id225">
-<h4>Arguments<a class="headerlink" href="#id225" title="Link to this heading">¶</a></h4>
+<section id="id229">
+<h4>Arguments<a class="headerlink" href="#id229" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -7808,8 +7925,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_cast</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">datatype</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id226">
-<h4>Arguments<a class="headerlink" href="#id226" title="Link to this heading">¶</a></h4>
+<section id="id230">
+<h4>Arguments<a class="headerlink" href="#id230" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to cast.
 Can be a constant, column, or function, and any combination of arithmetic or
@@ -7818,8 +7935,8 @@ string operators.</p></li>
 to cast to, as a string. The format is the same as that returned by [<code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code>]</p></li>
 </ul>
 </section>
-<section id="id227">
-<h4>Example<a class="headerlink" href="#id227" title="Link to this heading">¶</a></h4>
+<section id="id231">
+<h4>Example<a class="headerlink" href="#id231" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">arrow_cast</span><span class="p">(</span><span class="o">-</span><span class="mi">5</span><span class="p">,</span> <span class="s1">&#39;Int8&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">a</span><span class="p">,</span>
   <span class="n">arrow_cast</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">,</span> <span class="s1">&#39;Dictionary(Int32, Utf8)&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">b</span><span class="p">,</span>
   <span class="n">arrow_cast</span><span class="p">(</span><span class="s1">&#39;bar&#39;</span><span class="p">,</span> <span class="s1">&#39;LargeUtf8&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">c</span><span class="p">,</span>
@@ -7841,16 +7958,16 @@ to cast to, as a string. The format is the same as that returned by [<code class
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_typeof</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id228">
-<h4>Arguments<a class="headerlink" href="#id228" title="Link to this heading">¶</a></h4>
+<section id="id232">
+<h4>Arguments<a class="headerlink" href="#id232" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to evaluate.
 Can be a constant, column, or function, and any combination of arithmetic or
 string operators.</p></li>
 </ul>
 </section>
-<section id="id229">
-<h4>Example<a class="headerlink" href="#id229" title="Link to this heading">¶</a></h4>
+<section id="id233">
+<h4>Example<a class="headerlink" href="#id233" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">),</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
 <span class="o">+---------------------------+------------------------+</span>
 <span class="o">|</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;foo&quot;</span><span class="p">))</span> <span class="o">|</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span> <span class="o">|</span>
