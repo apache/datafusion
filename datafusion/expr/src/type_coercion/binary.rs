@@ -892,6 +892,7 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         // If Utf8View is in any side, we coerce to Utf8.
+        // Ref: https://github.com/apache/datafusion/pull/11796
         (Utf8View, Utf8View | Utf8 | LargeUtf8) | (Utf8 | LargeUtf8, Utf8View) => {
             Some(Utf8)
         }
