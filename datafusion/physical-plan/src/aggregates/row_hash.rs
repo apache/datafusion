@@ -985,7 +985,7 @@ impl GroupedHashAggregateStream {
     }
 
     // Transforms input batch to intermediate aggregate state, without grouping it
-    fn transform_to_states(&self, batch: RecordBatch) -> Result<RecordBatch> {
+    fn transform_to_states(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
         let group_values = evaluate_group_by(&self.group_by, &batch)?;
         let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
         let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
@@ -996,7 +996,7 @@ impl GroupedHashAggregateStream {
 
         let iter = self
             .accumulators
-            .iter()
+            .iter_mut()
             .zip(input_values.iter())
             .zip(filter_values.iter());
 
