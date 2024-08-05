@@ -196,11 +196,11 @@ mod tests {
     use crate::physical_optimizer::enforce_distribution::tests::{
         parquet_exec_with_sort, schema, trim_plan_display,
     };
-    use crate::physical_optimizer::tests::aggregate_statistics::tests::TestAggregate;
     use crate::physical_plan::aggregates::PhysicalGroupBy;
     use crate::physical_plan::collect;
     use crate::physical_plan::memory::MemoryExec;
     use crate::prelude::SessionContext;
+    use crate::test_util::TestAggregate;
 
     use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
