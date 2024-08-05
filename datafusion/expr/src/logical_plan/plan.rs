@@ -1977,13 +1977,16 @@ impl Projection {
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
-        let expr_len: usize = expr.iter().map(|e| match e {
-            Expr::Wildcard { qualifier: None } => schema.fields().len(),
-            Expr::Wildcard { qualifier: Some(qualifier)} => {
-                schema.fields_with_qualified(qualifier).len()
-            }
-            _ => 1,
-        }).sum();
+        let expr_len: usize = expr
+            .iter()
+            .map(|e| match e {
+                Expr::Wildcard { qualifier: None } => schema.fields().len(),
+                Expr::Wildcard {
+                    qualifier: Some(qualifier),
+                } => schema.fields_with_qualified(qualifier).len(),
+                _ => 1,
+            })
+            .sum();
         if expr_len != schema.fields().len() {
             return plan_err!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr_len, schema.fields().len());
         }
