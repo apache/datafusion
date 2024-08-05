@@ -209,6 +209,21 @@ SELECT c2, sum(c3), sum(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 4 29 9.531112968922
 5 -194 7.074412226677
 
+# Test avg for tinyint / float
+query TRR
+SELECT
+  c1,
+  avg(c2),
+  avg(c11)
+FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
+----
+a 2.857142857143 0.438223421574
+b 3.263157894737 0.496481208425
+c 2.666666666667 0.425241138254
+d 2.444444444444 0.541519476308
+e 3 0.505440263521
+
+
 # Enabling PG dialect for filtered aggregates tests
 statement ok
 set datafusion.sql_parser.dialect = 'Postgres';
@@ -266,6 +281,20 @@ FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 3 8 6
 4 11 14
 5 8 7
+
+# Test avg for tinyint / float
+query TRR
+SELECT
+  c1,
+  avg(c2) FILTER (WHERE c2 != 5),
+  avg(c11) FILTER (WHERE c2 != 5)
+FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
+----
+a 2.5 0.449071887467    
+b 2.642857142857 0.445486298629
+c 2.421052631579 0.422882117723
+d 2.125 0.518706191331
+e 2.789473684211 0.536785323369
 
 # Test count with nullable fields and nullable filter
 query III
