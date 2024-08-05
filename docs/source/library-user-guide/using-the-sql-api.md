@@ -52,13 +52,13 @@ async fn main() -> Result<()> {
     // register the "example" table
     ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
     // create a plan to run a SQL query
-    let df = ctx.sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100").await?;
+    let df = ctx.sql("SELECT a, min(b) FROM example WHERE a <= b GROUP BY a LIMIT 100").await?;
     // execute the plan and collect the results as Vec<RecordBatch>
     let results: Vec<RecordBatch> = df.collect().await?;
     // Use the assert_batches_eq macro to compare the results with expected output
     datafusion::assert_batches_eq!(vec![
         "+---+----------------+",
-        "| a | MIN(example.b) |",
+        "| a | min(example.b) |",
         "+---+----------------+",
         "| 1 | 2              |",
         "+---+----------------+",

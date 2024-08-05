@@ -18,7 +18,6 @@
 pub(crate) mod groups_accumulator;
 pub(crate) mod stats;
 
-pub mod moving_min_max;
 pub mod utils {
     pub use datafusion_physical_expr_common::aggregate::utils::{
         adjust_output_array, down_cast_any_ref, get_accum_scalar_values_as_arrays,

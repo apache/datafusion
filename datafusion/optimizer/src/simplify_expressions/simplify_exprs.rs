@@ -401,7 +401,7 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b) AS MAX(test.b = Boolean(true)), MIN(test.b)]]\
+        Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b) AS max(test.b = Boolean(true)), min(test.b)]]\
         \n  Projection: test.a, test.c, test.b\
         \n    TableScan: test";
 
