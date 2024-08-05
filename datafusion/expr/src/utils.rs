@@ -33,10 +33,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::utils::get_at_indices;
-use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, Result,
-    ScalarValue, TableReference,
-};
+use datafusion_common::{internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, Result, ScalarValue, TableReference};
 
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 
@@ -731,10 +728,24 @@ pub fn exprlist_to_fields<'a>(
 ) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
     // look for exact match in plan's output schema
     let input_schema = &plan.schema();
-    exprs
-        .into_iter()
-        .map(|e| e.to_field(input_schema))
-        .collect()
+    exprs.into_iter().flat_map(|e| {
+        match e {
+            Expr::Wildcard { qualifier } => {
+                match qualifier {
+                    None => (0..input_schema.fields().len())
+                        .map(|i| Ok(input_schema.qualified_field(i))
+                            .map(|(qualifier, field)| (qualifier.cloned(), Arc::new(field.to_owned()))))
+                        .collect::<Vec<_>>(),
+                    Some(qualifier) => input_schema
+                        .fields_with_qualified(qualifier)
+                        .into_iter()
+                        .map(|field| Ok((Some(qualifier.clone()), Arc::new(field.to_owned()))))
+                        .collect::<Vec<_>>(),
+                }.into_iter()
+            }
+            _ => vec![e.to_field(input_schema).map_err(Into::into)].into_iter(),
+        }
+    }).collect()
 }
 
 /// Convert an expression into Column expression if it's already provided as input plan.
