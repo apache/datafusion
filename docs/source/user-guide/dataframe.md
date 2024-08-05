@@ -53,6 +53,7 @@ Here is a minimal example showing the execution of a query using the DataFrame A
 ```rust
 use datafusion::prelude::*;
 use datafusion::error::Result;
+use datafusion::functions_aggregate::expr_fn::min;
 
 #[tokio::main]
 async fn main() -> Result<()> {

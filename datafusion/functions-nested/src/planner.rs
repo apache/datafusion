@@ -20,7 +20,6 @@
 use datafusion_common::{exec_err, utils::list_ndims, DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    expr::AggregateFunctionDefinition,
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
     sqlparser, Expr, ExprSchemable, GetFieldAccess,
 };
@@ -171,9 +170,5 @@ impl ExprPlanner for FieldAccessPlanner {
 }
 
 fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
-    if let AggregateFunctionDefinition::UDF(udf) = &agg_func.func_def {
-        return udf.name() == "array_agg";
-    }
-
-    false
+    return agg_func.func.name() == "array_agg";
 }

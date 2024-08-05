@@ -28,7 +28,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{plan_err, Column, DFSchemaRef, Result, ScalarValue};
-use datafusion_expr::expr::{AggregateFunctionDefinition, Alias};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -433,22 +433,13 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .clone()
             .transform_up(|expr| {
                 let new_expr = match expr {
-                    Expr::AggregateFunction(expr::AggregateFunction {
-                        func_def, ..
-                    }) => match func_def {
-                        AggregateFunctionDefinition::BuiltIn(_fun) => {
+                    Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
+                        if func.name() == "count" {
+                            Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(0))))
+                        } else {
                             Transformed::yes(Expr::Literal(ScalarValue::Null))
                         }
-                        AggregateFunctionDefinition::UDF(fun) => {
-                            if fun.name() == "count" {
-                                Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(
-                                    0,
-                                ))))
-                            } else {
-                                Transformed::yes(Expr::Literal(ScalarValue::Null))
-                            }
-                        }
-                    },
+                    }
                     _ => Transformed::no(expr),
                 };
                 Ok(new_expr)

@@ -2,6 +2,23 @@
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! [`Max`] and [`MaxAccumulator`] accumulator for the `max` function
+//! [`Min`] and [`MinAccumulator`] accumulator for the `max` function
+
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
 // to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
@@ -15,86 +32,73 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions that can evaluated at runtime during query execution
-
-use std::any::Any;
-use std::sync::Arc;
-
-use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use crate::{AggregateExpr, PhysicalExpr};
+use arrow::array::{
+    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+    IntervalYearMonthArray, LargeBinaryArray, LargeStringArray, StringArray,
+    StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
+};
 use arrow::compute;
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, IntervalUnit, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType,
+    DataType, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use arrow::{
-    array::{
-        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-        LargeBinaryArray, LargeStringArray, StringArray, Time32MillisecondArray,
-        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-    },
-    datatypes::Field,
-};
-use arrow_array::types::{
-    Decimal128Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-};
-use arrow_array::{BinaryViewArray, StringViewArray};
-use datafusion_common::internal_err;
-use datafusion_common::ScalarValue;
-use datafusion_common::{downcast_value, DataFusionError, Result};
-use datafusion_expr::{Accumulator, GroupsAccumulator};
+use arrow_schema::IntervalUnit;
+use datafusion_common::{downcast_value, internal_err, DataFusionError, Result};
+use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use std::fmt::Debug;
 
-use crate::aggregate::utils::down_cast_any_ref;
-use crate::expressions::format_state_name;
-use arrow::array::Array;
-use arrow::array::Decimal128Array;
-use arrow::array::Decimal256Array;
 use arrow::datatypes::i256;
-use arrow::datatypes::Decimal256Type;
+use arrow::datatypes::{
+    Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
 
-use super::moving_min_max;
+use datafusion_common::ScalarValue;
+use datafusion_expr::GroupsAccumulator;
+use datafusion_expr::{
+    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Signature, Volatility,
+};
+use std::ops::Deref;
 
-// Min/max aggregation can take Dictionary encode input but always produces unpacked
-// (aka non Dictionary) output. We need to adjust the output data type to reflect this.
-// The reason min/max aggregate produces unpacked output because there is only one
-// min/max value per group; there is no needs to keep them Dictionary encode
-fn min_max_aggregate_data_type(input_type: DataType) -> DataType {
-    if let DataType::Dictionary(_, value_type) = input_type {
-        *value_type
-    } else {
-        input_type
+fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
+    // make sure that the input types only has one element.
+    assert_eq!(input_types.len(), 1);
+    // min and max support the dictionary data type
+    // unpack the dictionary to get the value
+    match &input_types[0] {
+        DataType::Dictionary(_, dict_value_type) => {
+            // TODO add checker, if the value type is complex data type
+            Ok(vec![dict_value_type.deref().clone()])
+        }
+        // TODO add checker for datatype which min and max supported
+        // For example, the `Struct` and `Map` type are not supported in the MIN and MAX function
+        _ => Ok(input_types.to_vec()),
     }
 }
 
-/// MAX aggregate expression
-#[derive(Debug, Clone)]
+// MAX aggregate UDF
+#[derive(Debug)]
 pub struct Max {
-    name: String,
-    data_type: DataType,
-    nullable: bool,
-    expr: Arc<dyn PhysicalExpr>,
+    signature: Signature,
 }
 
 impl Max {
-    /// Create a new MAX aggregate function
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        data_type: DataType,
-    ) -> Self {
+    pub fn new() -> Self {
         Self {
-            name: name.into(),
-            expr,
-            data_type: min_max_aggregate_data_type(data_type),
-            nullable: true,
+            signature: Signature::user_defined(Volatility::Immutable),
         }
+    }
+}
+
+impl Default for Max {
+    fn default() -> Self {
+        Self::new()
     }
 }
 /// Creates a [`PrimitiveGroupsAccumulator`] for computing `MAX`
@@ -102,16 +106,13 @@ impl Max {
 ///
 /// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
 macro_rules! instantiate_max_accumulator {
-    ($SELF:expr, $NATIVE:ident, $PRIMTYPE:ident) => {{
+    ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
-            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(
-                &$SELF.data_type,
-                |cur, new| {
-                    if *cur < new {
-                        *cur = new
-                    }
-                },
-            )
+            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new($DATA_TYPE, |cur, new| {
+                if *cur < new {
+                    *cur = new
+                }
+            })
             // Initialize each accumulator to $NATIVE::MIN
             .with_starting_value($NATIVE::MIN),
         ))
@@ -124,60 +125,48 @@ macro_rules! instantiate_max_accumulator {
 ///
 /// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
 macro_rules! instantiate_min_accumulator {
-    ($SELF:expr, $NATIVE:ident, $PRIMTYPE:ident) => {{
+    ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
-            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(
-                &$SELF.data_type,
-                |cur, new| {
-                    if *cur > new {
-                        *cur = new
-                    }
-                },
-            )
+            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(&$DATA_TYPE, |cur, new| {
+                if *cur > new {
+                    *cur = new
+                }
+            })
             // Initialize each accumulator to $NATIVE::MAX
             .with_starting_value($NATIVE::MAX),
         ))
     }};
 }
 
-impl AggregateExpr for Max {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
+impl AggregateUDFImpl for Max {
+    fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            self.data_type.clone(),
-            self.nullable,
-        ))
-    }
-
-    fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![Field::new(
-            format_state_name(&self.name, "max"),
-            self.data_type.clone(),
-            true,
-        )])
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![Arc::clone(&self.expr)]
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MaxAccumulator::try_new(&self.data_type)?))
-    }
-
     fn name(&self) -> &str {
-        &self.name
+        "max"
     }
 
-    fn groups_accumulator_supported(&self) -> bool {
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(arg_types[0].to_owned())
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(MaxAccumulator::try_new(acc_args.data_type)?))
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
         matches!(
-            self.data_type,
+            args.data_type,
             Int8 | Int16
                 | Int32
                 | Int64
@@ -197,97 +186,92 @@ impl AggregateExpr for Max {
         )
     }
 
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-
-        match self.data_type {
-            Int8 => instantiate_max_accumulator!(self, i8, Int8Type),
-            Int16 => instantiate_max_accumulator!(self, i16, Int16Type),
-            Int32 => instantiate_max_accumulator!(self, i32, Int32Type),
-            Int64 => instantiate_max_accumulator!(self, i64, Int64Type),
-            UInt8 => instantiate_max_accumulator!(self, u8, UInt8Type),
-            UInt16 => instantiate_max_accumulator!(self, u16, UInt16Type),
-            UInt32 => instantiate_max_accumulator!(self, u32, UInt32Type),
-            UInt64 => instantiate_max_accumulator!(self, u64, UInt64Type),
+        let data_type = args.data_type;
+        match data_type {
+            Int8 => instantiate_max_accumulator!(data_type, i8, Int8Type),
+            Int16 => instantiate_max_accumulator!(data_type, i16, Int16Type),
+            Int32 => instantiate_max_accumulator!(data_type, i32, Int32Type),
+            Int64 => instantiate_max_accumulator!(data_type, i64, Int64Type),
+            UInt8 => instantiate_max_accumulator!(data_type, u8, UInt8Type),
+            UInt16 => instantiate_max_accumulator!(data_type, u16, UInt16Type),
+            UInt32 => instantiate_max_accumulator!(data_type, u32, UInt32Type),
+            UInt64 => instantiate_max_accumulator!(data_type, u64, UInt64Type),
             Float32 => {
-                instantiate_max_accumulator!(self, f32, Float32Type)
+                instantiate_max_accumulator!(data_type, f32, Float32Type)
             }
             Float64 => {
-                instantiate_max_accumulator!(self, f64, Float64Type)
+                instantiate_max_accumulator!(data_type, f64, Float64Type)
             }
-            Date32 => instantiate_max_accumulator!(self, i32, Date32Type),
-            Date64 => instantiate_max_accumulator!(self, i64, Date64Type),
+            Date32 => instantiate_max_accumulator!(data_type, i32, Date32Type),
+            Date64 => instantiate_max_accumulator!(data_type, i64, Date64Type),
             Time32(Second) => {
-                instantiate_max_accumulator!(self, i32, Time32SecondType)
+                instantiate_max_accumulator!(data_type, i32, Time32SecondType)
             }
             Time32(Millisecond) => {
-                instantiate_max_accumulator!(self, i32, Time32MillisecondType)
+                instantiate_max_accumulator!(data_type, i32, Time32MillisecondType)
             }
             Time64(Microsecond) => {
-                instantiate_max_accumulator!(self, i64, Time64MicrosecondType)
+                instantiate_max_accumulator!(data_type, i64, Time64MicrosecondType)
             }
             Time64(Nanosecond) => {
-                instantiate_max_accumulator!(self, i64, Time64NanosecondType)
+                instantiate_max_accumulator!(data_type, i64, Time64NanosecondType)
             }
             Timestamp(Second, _) => {
-                instantiate_max_accumulator!(self, i64, TimestampSecondType)
+                instantiate_max_accumulator!(data_type, i64, TimestampSecondType)
             }
             Timestamp(Millisecond, _) => {
-                instantiate_max_accumulator!(self, i64, TimestampMillisecondType)
+                instantiate_max_accumulator!(data_type, i64, TimestampMillisecondType)
             }
             Timestamp(Microsecond, _) => {
-                instantiate_max_accumulator!(self, i64, TimestampMicrosecondType)
+                instantiate_max_accumulator!(data_type, i64, TimestampMicrosecondType)
             }
             Timestamp(Nanosecond, _) => {
-                instantiate_max_accumulator!(self, i64, TimestampNanosecondType)
+                instantiate_max_accumulator!(data_type, i64, TimestampNanosecondType)
             }
             Decimal128(_, _) => {
-                instantiate_max_accumulator!(self, i128, Decimal128Type)
+                instantiate_max_accumulator!(data_type, i128, Decimal128Type)
             }
             Decimal256(_, _) => {
-                instantiate_max_accumulator!(self, i256, Decimal256Type)
+                instantiate_max_accumulator!(data_type, i256, Decimal256Type)
             }
 
             // It would be nice to have a fast implementation for Strings as well
             // https://github.com/apache/datafusion/issues/6906
 
             // This is only reached if groups_accumulator_supported is out of sync
-            _ => internal_err!(
-                "GroupsAccumulator not supported for max({})",
-                self.data_type
-            ),
+            _ => internal_err!("GroupsAccumulator not supported for max({})", data_type),
         }
     }
 
-    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        Some(Arc::new(self.clone()))
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SlidingMaxAccumulator::try_new(args.data_type)?))
     }
 
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMaxAccumulator::try_new(&self.data_type)?))
+    fn is_descending(&self) -> Option<bool> {
+        Some(true)
+    }
+    fn order_sensitivity(&self) -> datafusion_expr::utils::AggregateOrderSensitivity {
+        datafusion_expr::utils::AggregateOrderSensitivity::Insensitive
     }
 
-    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
-        Some((self.field().ok()?, true))
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        get_min_max_result_type(arg_types)
     }
-}
-
-impl PartialEq<dyn Any> for Max {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.data_type == x.data_type
-                    && self.nullable == x.nullable
-                    && self.expr.eq(&x.expr)
-            })
-            .unwrap_or(false)
+    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        datafusion_expr::ReversedUDAF::Identical
     }
 }
 
-// Statically-typed version of min/max(array) -> ScalarValue for string types.
+// Statically-typed version of min/max(array) -> ScalarValue for string types
 macro_rules! typed_min_max_batch_string {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = downcast_value!($VALUES, $ARRAYTYPE);
@@ -296,8 +280,7 @@ macro_rules! typed_min_max_batch_string {
         ScalarValue::$SCALAR(value)
     }};
 }
-
-// Statically-typed version of min/max(array) -> ScalarValue for binary types.
+// Statically-typed version of min/max(array) -> ScalarValue for binay types.
 macro_rules! typed_min_max_batch_binary {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
         let array = downcast_value!($VALUES, $ARRAYTYPE);
@@ -545,7 +528,6 @@ macro_rules! typed_min_max {
         )
     }};
 }
-
 macro_rules! typed_min_max_float {
     ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
         ScalarValue::$SCALAR(match ($VALUE, $DELTA) {
@@ -804,16 +786,6 @@ macro_rules! min_max {
     }};
 }
 
-/// the minimum of two scalar values
-pub fn min(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-    min_max!(lhs, rhs, min)
-}
-
-/// the maximum of two scalar values
-pub fn max(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-    min_max!(lhs, rhs, max)
-}
-
 /// An accumulator to compute the maximum value
 #[derive(Debug)]
 pub struct MaxAccumulator {
@@ -833,7 +805,9 @@ impl Accumulator for MaxAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &max_batch(values)?;
-        self.max = max(&self.max, delta)?;
+        let new_max: Result<ScalarValue, DataFusionError> =
+            min_max!(&self.max, delta, max);
+        self.max = new_max?;
         Ok(())
     }
 
@@ -842,9 +816,8 @@ impl Accumulator for MaxAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.max.clone()])
+        Ok(vec![self.evaluate()?])
     }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(self.max.clone())
     }
@@ -854,11 +827,10 @@ impl Accumulator for MaxAccumulator {
     }
 }
 
-/// An accumulator to compute the maximum value
 #[derive(Debug)]
 pub struct SlidingMaxAccumulator {
     max: ScalarValue,
-    moving_max: moving_min_max::MovingMax<ScalarValue>,
+    moving_max: MovingMax<ScalarValue>,
 }
 
 impl SlidingMaxAccumulator {
@@ -866,7 +838,7 @@ impl SlidingMaxAccumulator {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             max: ScalarValue::try_from(datatype)?,
-            moving_max: moving_min_max::MovingMax::<ScalarValue>::new(),
+            moving_max: MovingMax::<ScalarValue>::new(),
         })
     }
 }
@@ -914,69 +886,54 @@ impl Accumulator for SlidingMaxAccumulator {
     }
 }
 
-/// MIN aggregate expression
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Min {
-    name: String,
-    data_type: DataType,
-    nullable: bool,
-    expr: Arc<dyn PhysicalExpr>,
+    signature: Signature,
 }
 
 impl Min {
-    /// Create a new MIN aggregate function
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        data_type: DataType,
-    ) -> Self {
+    pub fn new() -> Self {
         Self {
-            name: name.into(),
-            expr,
-            data_type: min_max_aggregate_data_type(data_type),
-            nullable: true,
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
 
-impl AggregateExpr for Min {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
+impl Default for Min {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AggregateUDFImpl for Min {
+    fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            self.data_type.clone(),
-            self.nullable,
-        ))
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MinAccumulator::try_new(&self.data_type)?))
-    }
-
-    fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![Field::new(
-            format_state_name(&self.name, "min"),
-            self.data_type.clone(),
-            true,
-        )])
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![Arc::clone(&self.expr)]
-    }
-
     fn name(&self) -> &str {
-        &self.name
+        "min"
     }
 
-    fn groups_accumulator_supported(&self) -> bool {
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(arg_types[0].to_owned())
+    }
+
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(MinAccumulator::try_new(acc_args.data_type)?))
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         use DataType::*;
         matches!(
-            self.data_type,
+            args.data_type,
             Int8 | Int16
                 | Int32
                 | Int64
@@ -996,91 +953,92 @@ impl AggregateExpr for Min {
         )
     }
 
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         use TimeUnit::*;
-        match self.data_type {
-            Int8 => instantiate_min_accumulator!(self, i8, Int8Type),
-            Int16 => instantiate_min_accumulator!(self, i16, Int16Type),
-            Int32 => instantiate_min_accumulator!(self, i32, Int32Type),
-            Int64 => instantiate_min_accumulator!(self, i64, Int64Type),
-            UInt8 => instantiate_min_accumulator!(self, u8, UInt8Type),
-            UInt16 => instantiate_min_accumulator!(self, u16, UInt16Type),
-            UInt32 => instantiate_min_accumulator!(self, u32, UInt32Type),
-            UInt64 => instantiate_min_accumulator!(self, u64, UInt64Type),
+        let data_type = args.data_type;
+        match data_type {
+            Int8 => instantiate_min_accumulator!(data_type, i8, Int8Type),
+            Int16 => instantiate_min_accumulator!(data_type, i16, Int16Type),
+            Int32 => instantiate_min_accumulator!(data_type, i32, Int32Type),
+            Int64 => instantiate_min_accumulator!(data_type, i64, Int64Type),
+            UInt8 => instantiate_min_accumulator!(data_type, u8, UInt8Type),
+            UInt16 => instantiate_min_accumulator!(data_type, u16, UInt16Type),
+            UInt32 => instantiate_min_accumulator!(data_type, u32, UInt32Type),
+            UInt64 => instantiate_min_accumulator!(data_type, u64, UInt64Type),
             Float32 => {
-                instantiate_min_accumulator!(self, f32, Float32Type)
+                instantiate_min_accumulator!(data_type, f32, Float32Type)
             }
             Float64 => {
-                instantiate_min_accumulator!(self, f64, Float64Type)
+                instantiate_min_accumulator!(data_type, f64, Float64Type)
             }
-            Date32 => instantiate_min_accumulator!(self, i32, Date32Type),
-            Date64 => instantiate_min_accumulator!(self, i64, Date64Type),
+            Date32 => instantiate_min_accumulator!(data_type, i32, Date32Type),
+            Date64 => instantiate_min_accumulator!(data_type, i64, Date64Type),
             Time32(Second) => {
-                instantiate_min_accumulator!(self, i32, Time32SecondType)
+                instantiate_min_accumulator!(data_type, i32, Time32SecondType)
             }
             Time32(Millisecond) => {
-                instantiate_min_accumulator!(self, i32, Time32MillisecondType)
+                instantiate_min_accumulator!(data_type, i32, Time32MillisecondType)
             }
             Time64(Microsecond) => {
-                instantiate_min_accumulator!(self, i64, Time64MicrosecondType)
+                instantiate_min_accumulator!(data_type, i64, Time64MicrosecondType)
             }
             Time64(Nanosecond) => {
-                instantiate_min_accumulator!(self, i64, Time64NanosecondType)
+                instantiate_min_accumulator!(data_type, i64, Time64NanosecondType)
             }
             Timestamp(Second, _) => {
-                instantiate_min_accumulator!(self, i64, TimestampSecondType)
+                instantiate_min_accumulator!(data_type, i64, TimestampSecondType)
             }
             Timestamp(Millisecond, _) => {
-                instantiate_min_accumulator!(self, i64, TimestampMillisecondType)
+                instantiate_min_accumulator!(data_type, i64, TimestampMillisecondType)
             }
             Timestamp(Microsecond, _) => {
-                instantiate_min_accumulator!(self, i64, TimestampMicrosecondType)
+                instantiate_min_accumulator!(data_type, i64, TimestampMicrosecondType)
             }
             Timestamp(Nanosecond, _) => {
-                instantiate_min_accumulator!(self, i64, TimestampNanosecondType)
+                instantiate_min_accumulator!(data_type, i64, TimestampNanosecondType)
             }
             Decimal128(_, _) => {
-                instantiate_min_accumulator!(self, i128, Decimal128Type)
+                instantiate_min_accumulator!(data_type, i128, Decimal128Type)
             }
             Decimal256(_, _) => {
-                instantiate_min_accumulator!(self, i256, Decimal256Type)
+                instantiate_min_accumulator!(data_type, i256, Decimal256Type)
             }
+
+            // It would be nice to have a fast implementation for Strings as well
+            // https://github.com/apache/datafusion/issues/6906
+
             // This is only reached if groups_accumulator_supported is out of sync
-            _ => internal_err!(
-                "GroupsAccumulator not supported for min({})",
-                self.data_type
-            ),
+            _ => internal_err!("GroupsAccumulator not supported for min({})", data_type),
         }
     }
 
-    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        Some(Arc::new(self.clone()))
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SlidingMinAccumulator::try_new(args.data_type)?))
     }
 
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMinAccumulator::try_new(&self.data_type)?))
+    fn is_descending(&self) -> Option<bool> {
+        Some(false)
     }
 
-    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
-        Some((self.field().ok()?, false))
+    fn order_sensitivity(&self) -> datafusion_expr::utils::AggregateOrderSensitivity {
+        datafusion_expr::utils::AggregateOrderSensitivity::Insensitive
     }
-}
 
-impl PartialEq<dyn Any> for Min {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.data_type == x.data_type
-                    && self.nullable == x.nullable
-                    && self.expr.eq(&x.expr)
-            })
-            .unwrap_or(false)
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        get_min_max_result_type(arg_types)
+    }
+
+    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        datafusion_expr::ReversedUDAF::Identical
     }
 }
-
 /// An accumulator to compute the minimum value
 #[derive(Debug)]
 pub struct MinAccumulator {
@@ -1098,13 +1056,15 @@ impl MinAccumulator {
 
 impl Accumulator for MinAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.min.clone()])
+        Ok(vec![self.evaluate()?])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &min_batch(values)?;
-        self.min = min(&self.min, delta)?;
+        let new_min: Result<ScalarValue, DataFusionError> =
+            min_max!(&self.min, delta, min);
+        self.min = new_min?;
         Ok(())
     }
 
@@ -1121,19 +1081,17 @@ impl Accumulator for MinAccumulator {
     }
 }
 
-/// An accumulator to compute the minimum value
 #[derive(Debug)]
 pub struct SlidingMinAccumulator {
     min: ScalarValue,
-    moving_min: moving_min_max::MovingMin<ScalarValue>,
+    moving_min: MovingMin<ScalarValue>,
 }
 
 impl SlidingMinAccumulator {
-    /// new min accumulator
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             min: ScalarValue::try_from(datatype)?,
-            moving_min: moving_min_max::MovingMin::<ScalarValue>::new(),
+            moving_min: MovingMin::<ScalarValue>::new(),
         })
     }
 }
@@ -1186,12 +1144,278 @@ impl Accumulator for SlidingMinAccumulator {
     }
 }
 
+//
+// Moving min and moving max
+// The implementation is taken from https://github.com/spebern/moving_min_max/blob/master/src/lib.rs.
+
+// Keep track of the minimum or maximum value in a sliding window.
+//
+// `moving min max` provides one data structure for keeping track of the
+// minimum value and one for keeping track of the maximum value in a sliding
+// window.
+//
+// Each element is stored with the current min/max. One stack to push and another one for pop. If pop stack is empty,
+// push to this stack all elements popped from first stack while updating their current min/max. Now pop from
+// the second stack (MovingMin/Max struct works as a queue). To find the minimum element of the queue,
+// look at the smallest/largest two elements of the individual stacks, then take the minimum of those two values.
+//
+// The complexity of the operations are
+// - O(1) for getting the minimum/maximum
+// - O(1) for push
+// - amortized O(1) for pop
+
+/// ```
+/// # use datafusion_functions_aggregate::min_max::MovingMin;
+/// let mut moving_min = MovingMin::<i32>::new();
+/// moving_min.push(2);
+/// moving_min.push(1);
+/// moving_min.push(3);
+///
+/// assert_eq!(moving_min.min(), Some(&1));
+/// assert_eq!(moving_min.pop(), Some(2));
+///
+/// assert_eq!(moving_min.min(), Some(&1));
+/// assert_eq!(moving_min.pop(), Some(1));
+///
+/// assert_eq!(moving_min.min(), Some(&3));
+/// assert_eq!(moving_min.pop(), Some(3));
+///
+/// assert_eq!(moving_min.min(), None);
+/// assert_eq!(moving_min.pop(), None);
+/// ```
+#[derive(Debug)]
+pub struct MovingMin<T> {
+    push_stack: Vec<(T, T)>,
+    pop_stack: Vec<(T, T)>,
+}
+
+impl<T: Clone + PartialOrd> Default for MovingMin<T> {
+    fn default() -> Self {
+        Self {
+            push_stack: Vec::new(),
+            pop_stack: Vec::new(),
+        }
+    }
+}
+
+impl<T: Clone + PartialOrd> MovingMin<T> {
+    /// Creates a new `MovingMin` to keep track of the minimum in a sliding
+    /// window.
+    #[inline]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a new `MovingMin` to keep track of the minimum in a sliding
+    /// window with `capacity` allocated slots.
+    #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            push_stack: Vec::with_capacity(capacity),
+            pop_stack: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Returns the minimum of the sliding window or `None` if the window is
+    /// empty.
+    #[inline]
+    pub fn min(&self) -> Option<&T> {
+        match (self.push_stack.last(), self.pop_stack.last()) {
+            (None, None) => None,
+            (Some((_, min)), None) => Some(min),
+            (None, Some((_, min))) => Some(min),
+            (Some((_, a)), Some((_, b))) => Some(if a < b { a } else { b }),
+        }
+    }
+
+    /// Pushes a new element into the sliding window.
+    #[inline]
+    pub fn push(&mut self, val: T) {
+        self.push_stack.push(match self.push_stack.last() {
+            Some((_, min)) => {
+                if val > *min {
+                    (val, min.clone())
+                } else {
+                    (val.clone(), val)
+                }
+            }
+            None => (val.clone(), val),
+        });
+    }
+
+    /// Removes and returns the last value of the sliding window.
+    #[inline]
+    pub fn pop(&mut self) -> Option<T> {
+        if self.pop_stack.is_empty() {
+            match self.push_stack.pop() {
+                Some((val, _)) => {
+                    let mut last = (val.clone(), val);
+                    self.pop_stack.push(last.clone());
+                    while let Some((val, _)) = self.push_stack.pop() {
+                        let min = if last.1 < val {
+                            last.1.clone()
+                        } else {
+                            val.clone()
+                        };
+                        last = (val.clone(), min);
+                        self.pop_stack.push(last.clone());
+                    }
+                }
+                None => return None,
+            }
+        }
+        self.pop_stack.pop().map(|(val, _)| val)
+    }
+
+    /// Returns the number of elements stored in the sliding window.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.push_stack.len() + self.pop_stack.len()
+    }
+
+    /// Returns `true` if the moving window contains no elements.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+/// ```
+/// # use datafusion_functions_aggregate::min_max::MovingMax;
+/// let mut moving_max = MovingMax::<i32>::new();
+/// moving_max.push(2);
+/// moving_max.push(3);
+/// moving_max.push(1);
+///
+/// assert_eq!(moving_max.max(), Some(&3));
+/// assert_eq!(moving_max.pop(), Some(2));
+///
+/// assert_eq!(moving_max.max(), Some(&3));
+/// assert_eq!(moving_max.pop(), Some(3));
+///
+/// assert_eq!(moving_max.max(), Some(&1));
+/// assert_eq!(moving_max.pop(), Some(1));
+///
+/// assert_eq!(moving_max.max(), None);
+/// assert_eq!(moving_max.pop(), None);
+/// ```
+#[derive(Debug)]
+pub struct MovingMax<T> {
+    push_stack: Vec<(T, T)>,
+    pop_stack: Vec<(T, T)>,
+}
+
+impl<T: Clone + PartialOrd> Default for MovingMax<T> {
+    fn default() -> Self {
+        Self {
+            push_stack: Vec::new(),
+            pop_stack: Vec::new(),
+        }
+    }
+}
+
+impl<T: Clone + PartialOrd> MovingMax<T> {
+    /// Creates a new `MovingMax` to keep track of the maximum in a sliding window.
+    #[inline]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a new `MovingMax` to keep track of the maximum in a sliding window with
+    /// `capacity` allocated slots.
+    #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            push_stack: Vec::with_capacity(capacity),
+            pop_stack: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Returns the maximum of the sliding window or `None` if the window is empty.
+    #[inline]
+    pub fn max(&self) -> Option<&T> {
+        match (self.push_stack.last(), self.pop_stack.last()) {
+            (None, None) => None,
+            (Some((_, max)), None) => Some(max),
+            (None, Some((_, max))) => Some(max),
+            (Some((_, a)), Some((_, b))) => Some(if a > b { a } else { b }),
+        }
+    }
+
+    /// Pushes a new element into the sliding window.
+    #[inline]
+    pub fn push(&mut self, val: T) {
+        self.push_stack.push(match self.push_stack.last() {
+            Some((_, max)) => {
+                if val < *max {
+                    (val, max.clone())
+                } else {
+                    (val.clone(), val)
+                }
+            }
+            None => (val.clone(), val),
+        });
+    }
+
+    /// Removes and returns the last value of the sliding window.
+    #[inline]
+    pub fn pop(&mut self) -> Option<T> {
+        if self.pop_stack.is_empty() {
+            match self.push_stack.pop() {
+                Some((val, _)) => {
+                    let mut last = (val.clone(), val);
+                    self.pop_stack.push(last.clone());
+                    while let Some((val, _)) = self.push_stack.pop() {
+                        let max = if last.1 > val {
+                            last.1.clone()
+                        } else {
+                            val.clone()
+                        };
+                        last = (val.clone(), max);
+                        self.pop_stack.push(last.clone());
+                    }
+                }
+                None => return None,
+            }
+        }
+        self.pop_stack.pop().map(|(val, _)| val)
+    }
+
+    /// Returns the number of elements stored in the sliding window.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.push_stack.len() + self.pop_stack.len()
+    }
+
+    /// Returns `true` if the moving window contains no elements.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+make_udaf_expr_and_func!(
+    Max,
+    max,
+    expression,
+    "Returns the maximum of a group of values.",
+    max_udaf
+);
+
+make_udaf_expr_and_func!(
+    Min,
+    min,
+    expression,
+    "Returns the minimum of a group of values.",
+    min_udaf
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::datatypes::{
         IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
     };
+    use std::sync::Arc;
 
     #[test]
     fn interval_min_max() {
@@ -1323,5 +1547,101 @@ mod tests {
         check(&mut max(), &[&[zero, pos_nan]], pos_nan);
         check(&mut max(), &[&[zero], &[neg_inf]], zero);
         check(&mut max(), &[&[zero, neg_inf]], zero);
+    }
+
+    use datafusion_common::Result;
+    use rand::Rng;
+
+    fn get_random_vec_i32(len: usize) -> Vec<i32> {
+        let mut rng = rand::thread_rng();
+        let mut input = Vec::with_capacity(len);
+        for _i in 0..len {
+            input.push(rng.gen_range(0..100));
+        }
+        input
+    }
+
+    fn moving_min_i32(len: usize, n_sliding_window: usize) -> Result<()> {
+        let data = get_random_vec_i32(len);
+        let mut expected = Vec::with_capacity(len);
+        let mut moving_min = MovingMin::<i32>::new();
+        let mut res = Vec::with_capacity(len);
+        for i in 0..len {
+            let start = i.saturating_sub(n_sliding_window);
+            expected.push(*data[start..i + 1].iter().min().unwrap());
+
+            moving_min.push(data[i]);
+            if i > n_sliding_window {
+                moving_min.pop();
+            }
+            res.push(*moving_min.min().unwrap());
+        }
+        assert_eq!(res, expected);
+        Ok(())
+    }
+
+    fn moving_max_i32(len: usize, n_sliding_window: usize) -> Result<()> {
+        let data = get_random_vec_i32(len);
+        let mut expected = Vec::with_capacity(len);
+        let mut moving_max = MovingMax::<i32>::new();
+        let mut res = Vec::with_capacity(len);
+        for i in 0..len {
+            let start = i.saturating_sub(n_sliding_window);
+            expected.push(*data[start..i + 1].iter().max().unwrap());
+
+            moving_max.push(data[i]);
+            if i > n_sliding_window {
+                moving_max.pop();
+            }
+            res.push(*moving_max.max().unwrap());
+        }
+        assert_eq!(res, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn moving_min_tests() -> Result<()> {
+        moving_min_i32(100, 10)?;
+        moving_min_i32(100, 20)?;
+        moving_min_i32(100, 50)?;
+        moving_min_i32(100, 100)?;
+        Ok(())
+    }
+
+    #[test]
+    fn moving_max_tests() -> Result<()> {
+        moving_max_i32(100, 10)?;
+        moving_max_i32(100, 20)?;
+        moving_max_i32(100, 50)?;
+        moving_max_i32(100, 100)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_min_max_coerce_types() {
+        // the coerced types is same with input types
+        let funs: Vec<Box<dyn AggregateUDFImpl>> =
+            vec![Box::new(Min::new()), Box::new(Max::new())];
+        let input_types = vec![
+            vec![DataType::Int32],
+            vec![DataType::Decimal128(10, 2)],
+            vec![DataType::Decimal256(1, 1)],
+            vec![DataType::Utf8],
+        ];
+        for fun in funs {
+            for input_type in &input_types {
+                let result = fun.coerce_types(input_type);
+                assert_eq!(*input_type, result.unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_min_max_return_type_coerce_dictionary() -> Result<()> {
+        let data_type =
+            DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32));
+        let result = get_min_max_result_type(&[data_type])?;
+        assert_eq!(result, vec![DataType::Int32]);
+        Ok(())
     }
 }

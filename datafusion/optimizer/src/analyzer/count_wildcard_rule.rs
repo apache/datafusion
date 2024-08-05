@@ -21,9 +21,7 @@ use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
-use datafusion_expr::expr::{
-    AggregateFunction, AggregateFunctionDefinition, WindowFunction,
-};
+use datafusion_expr::expr::{AggregateFunction, WindowFunction};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 
@@ -56,10 +54,10 @@ fn is_wildcard(expr: &Expr) -> bool {
 fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
     matches!(aggregate_function,
         AggregateFunction {
-            func_def: AggregateFunctionDefinition::UDF(udf),
+            func,
             args,
             ..
-        } if udf.name() == "count" && (args.len() == 1 && is_wildcard(&args[0]) || args.is_empty()))
+        } if func.name() == "count" && (args.len() == 1 && is_wildcard(&args[0]) || args.is_empty()))
 }
 
 fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
@@ -103,11 +101,11 @@ mod tests {
     use datafusion_expr::expr::Sort;
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
-        col, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, max,
-        out_ref_col, scalar_subquery, wildcard, WindowFrame, WindowFrameBound,
-        WindowFrameUnits,
+        col, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, out_ref_col,
+        scalar_subquery, wildcard, WindowFrame, WindowFrameBound, WindowFrameUnits,
     };
     use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::expr_fn::max;
     use std::sync::Arc;
 
     use datafusion_functions_aggregate::expr_fn::{count, sum};
@@ -273,7 +271,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: count(Int64(1)) AS count(*) [count(*):Int64]\
-        \n  Aggregate: groupBy=[[]], aggr=[[MAX(count(Int64(1))) AS MAX(count(*))]] [MAX(count(*)):Int64;N]\
+        \n  Aggregate: groupBy=[[]], aggr=[[max(count(Int64(1))) AS max(count(*))]] [max(count(*)):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
     }

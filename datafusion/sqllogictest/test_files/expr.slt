@@ -2606,12 +2606,12 @@ query TT
 explain select min(a) filter (where a > 1) as x from t;
 ----
 logical_plan
-01)Projection: MIN(t.a) FILTER (WHERE t.a > Int64(1)) AS x
-02)--Aggregate: groupBy=[[]], aggr=[[MIN(t.a) FILTER (WHERE t.a > Float32(1)) AS MIN(t.a) FILTER (WHERE t.a > Int64(1))]]
+01)Projection: min(t.a) FILTER (WHERE t.a > Int64(1)) AS x
+02)--Aggregate: groupBy=[[]], aggr=[[min(t.a) FILTER (WHERE t.a > Float32(1)) AS min(t.a) FILTER (WHERE t.a > Int64(1))]]
 03)----TableScan: t projection=[a]
 physical_plan
-01)ProjectionExec: expr=[MIN(t.a) FILTER (WHERE t.a > Int64(1))@0 as x]
-02)--AggregateExec: mode=Single, gby=[], aggr=[MIN(t.a) FILTER (WHERE t.a > Int64(1))]
+01)ProjectionExec: expr=[min(t.a) FILTER (WHERE t.a > Int64(1))@0 as x]
+02)--AggregateExec: mode=Single, gby=[], aggr=[min(t.a) FILTER (WHERE t.a > Int64(1))]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 

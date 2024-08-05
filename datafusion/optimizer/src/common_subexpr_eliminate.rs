@@ -1189,7 +1189,7 @@ mod test {
         plan: LogicalPlan,
         config: Option<&dyn OptimizerConfig>,
     ) {
-        assert_eq!(expected, format!("{plan:?}"), "Unexpected starting plan");
+        assert_eq!(expected, format!("{plan}"), "Unexpected starting plan");
         let optimizer = CommonSubexprEliminate::new();
         let default_config = OptimizerContext::new();
         let config = config.unwrap_or(&default_config);
@@ -1198,7 +1198,7 @@ mod test {
         let optimized_plan = optimized_plan.data;
         assert_eq!(
             expected,
-            format!("{optimized_plan:?}"),
+            format!("{optimized_plan}"),
             "Unexpected optimized plan"
         );
     }
@@ -1214,7 +1214,7 @@ mod test {
         let optimized_plan = optimizer.rewrite(plan, config).unwrap();
         assert!(optimized_plan.transformed, "failed to optimize plan");
         let optimized_plan = optimized_plan.data;
-        let formatted_plan = format!("{optimized_plan:?}");
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(expected, formatted_plan);
     }
 

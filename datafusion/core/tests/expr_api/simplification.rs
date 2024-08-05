@@ -119,7 +119,7 @@ fn get_optimized_plan_formatted(plan: LogicalPlan, date_time: &DateTime<Utc>) ->
     let optimizer = Optimizer::with_rules(vec![Arc::new(SimplifyExpressions::new())]);
     let optimized_plan = optimizer.optimize(plan, &config, observe).unwrap();
 
-    format!("{optimized_plan:?}")
+    format!("{optimized_plan}")
 }
 
 // ------------------------------

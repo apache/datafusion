@@ -413,7 +413,7 @@ async fn test_parameterized_aggregate_udf() -> Result<()> {
         .build()?;
 
     assert_eq!(
-        format!("{plan:?}"),
+        format!("{plan}"),
         "Aggregate: groupBy=[[t.text]], aggr=[[geo_mean(t.text) AS a, geo_mean(t.text) AS b]]\n  TableScan: t projection=[text]"
     );
 

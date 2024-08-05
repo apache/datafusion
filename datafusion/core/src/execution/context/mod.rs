@@ -144,6 +144,7 @@ where
 ///
 /// ```
 /// use datafusion::prelude::*;
+/// # use datafusion::functions_aggregate::expr_fn::min;
 /// # use datafusion::{error::Result, assert_batches_eq};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
@@ -158,7 +159,7 @@ where
 /// assert_batches_eq!(
 ///  &[
 ///    "+---+----------------+",
-///    "| a | MIN(?table?.b) |",
+///    "| a | min(?table?.b) |",
 ///    "+---+----------------+",
 ///    "| 1 | 2              |",
 ///    "+---+----------------+",
@@ -181,14 +182,14 @@ where
 /// let mut ctx = SessionContext::new();
 /// ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
 /// let results = ctx
-///   .sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100")
+///   .sql("SELECT a, min(b) FROM example GROUP BY a LIMIT 100")
 ///   .await?
 ///   .collect()
 ///   .await?;
 /// assert_batches_eq!(
 ///  &[
 ///    "+---+----------------+",
-///    "| a | MIN(example.b) |",
+///    "| a | min(example.b) |",
 ///    "+---+----------------+",
 ///    "| 1 | 2              |",
 ///    "+---+----------------+",

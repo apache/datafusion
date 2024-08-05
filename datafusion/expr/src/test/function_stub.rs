@@ -202,13 +202,6 @@ impl AggregateUDFImpl for Sum {
         unreachable!("stub should not have accumulate()")
     }
 
-    fn create_sliding_accumulator(
-        &self,
-        _args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
-        unreachable!("stub should not have accumulate()")
-    }
-
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
@@ -286,6 +279,176 @@ impl AggregateUDFImpl for Count {
 
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
+    }
+}
+
+create_func!(Min, min_udaf);
+
+pub fn min(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new_udf(
+        min_udaf(),
+        vec![expr],
+        false,
+        None,
+        None,
+        None,
+    ))
+}
+
+/// Testing stub implementation of Min aggregate
+pub struct Min {
+    signature: Signature,
+}
+
+impl std::fmt::Debug for Min {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Min")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+impl Default for Min {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Min {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for Min {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "min"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        ReversedUDAF::Identical
+    }
+    fn is_descending(&self) -> Option<bool> {
+        Some(false)
+    }
+}
+
+create_func!(Max, max_udaf);
+
+pub fn max(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new_udf(
+        max_udaf(),
+        vec![expr],
+        false,
+        None,
+        None,
+        None,
+    ))
+}
+
+/// Testing stub implementation of MAX aggregate
+pub struct Max {
+    signature: Signature,
+}
+
+impl std::fmt::Debug for Max {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Max")
+            .field("name", &self.name())
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+impl Default for Max {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Max {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::variadic_any(Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for Max {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "max"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        ReversedUDAF::Identical
+    }
+    fn is_descending(&self) -> Option<bool> {
+        Some(true)
     }
 }
 

@@ -207,6 +207,8 @@ datafusion.execution.parquet.statistics_enabled page
 datafusion.execution.parquet.write_batch_size 1024
 datafusion.execution.parquet.writer_version 1.0
 datafusion.execution.planning_concurrency 13
+datafusion.execution.skip_partial_aggregation_probe_ratio_threshold 0.8
+datafusion.execution.skip_partial_aggregation_probe_rows_threshold 100000
 datafusion.execution.soft_max_rows_per_output_file 50000000
 datafusion.execution.sort_in_place_threshold_bytes 1048576
 datafusion.execution.sort_spill_reservation_bytes 10485760
@@ -294,6 +296,8 @@ datafusion.execution.parquet.statistics_enabled page (writing) Sets if statistic
 datafusion.execution.parquet.write_batch_size 1024 (writing) Sets write_batch_size in bytes
 datafusion.execution.parquet.writer_version 1.0 (writing) Sets parquet writer version valid values are "1.0" and "2.0"
 datafusion.execution.planning_concurrency 13 Fan-out during initial physical planning. This is mostly use to plan `UNION` children in parallel. Defaults to the number of CPU cores on the system
+datafusion.execution.skip_partial_aggregation_probe_ratio_threshold 0.8 Aggregation ratio (number of distinct groups / number of input rows) threshold for skipping partial aggregation. If the value is greater then partial aggregation will skip aggregation for further input
+datafusion.execution.skip_partial_aggregation_probe_rows_threshold 100000 Number of input rows partial aggregation partition should process, before aggregation ratio check and trying to switch to skipping aggregation mode
 datafusion.execution.soft_max_rows_per_output_file 50000000 Target number of rows in output files when writing multiple. This is a soft max, so it can be exceeded slightly. There also will be one file smaller than the limit if the total number of rows written is not roughly divisible by the soft max
 datafusion.execution.sort_in_place_threshold_bytes 1048576 When sorting, below what size should data be concatenated and sorted in a single RecordBatch rather than sorted in batches and merged.
 datafusion.execution.sort_spill_reservation_bytes 10485760 Specifies the reserved memory for each spillable sort operation to facilitate an in-memory merge. When a sort operation spills to disk, the in-memory data must be sorted and merged before being written to a file. This setting reserves a specific amount of memory for that in-memory sort/merge process. Note: This setting is irrelevant if the sort operation cannot spill (i.e., if there's no `DiskManager` configured).

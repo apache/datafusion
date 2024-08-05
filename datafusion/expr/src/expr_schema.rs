@@ -17,8 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateFunctionDefinition, Alias, BinaryExpr, Cast, InList,
-    InSubquery, Placeholder, ScalarFunction, Sort, TryCast, Unnest, WindowFunction,
+    AggregateFunction, Alias, BinaryExpr, Cast, InList, InSubquery, Placeholder,
+    ScalarFunction, Sort, TryCast, Unnest, WindowFunction,
 };
 use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::{
@@ -194,35 +194,24 @@ impl ExprSchemable for Expr {
                     _ => fun.return_type(&data_types, &nullability),
                 }
             }
-            Expr::AggregateFunction(AggregateFunction { func_def, args, .. }) => {
+            Expr::AggregateFunction(AggregateFunction { func, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                let nullability = args
-                    .iter()
-                    .map(|e| e.nullable(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                match func_def {
-                    AggregateFunctionDefinition::BuiltIn(fun) => {
-                        fun.return_type(&data_types, &nullability)
-                    }
-                    AggregateFunctionDefinition::UDF(fun) => {
-                        let new_types = data_types_with_aggregate_udf(&data_types, fun)
-                            .map_err(|err| {
-                            plan_datafusion_err!(
-                                "{} {}",
-                                err,
-                                utils::generate_signature_error_msg(
-                                    fun.name(),
-                                    fun.signature().clone(),
-                                    &data_types
-                                )
+                let new_types = data_types_with_aggregate_udf(&data_types, func)
+                    .map_err(|err| {
+                        plan_datafusion_err!(
+                            "{} {}",
+                            err,
+                            utils::generate_signature_error_msg(
+                                func.name(),
+                                func.signature().clone(),
+                                &data_types
                             )
-                        })?;
-                        Ok(fun.return_type(&new_types)?)
-                    }
-                }
+                        )
+                    })?;
+                Ok(func.return_type(&new_types)?)
             }
             Expr::Not(_)
             | Expr::IsNull(_)
@@ -337,14 +326,12 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
-            Expr::AggregateFunction(AggregateFunction { func_def, .. }) => {
-                match func_def {
-                    AggregateFunctionDefinition::BuiltIn(fun) => fun.nullable(),
-                    // TODO: UDF should be able to customize nullability
-                    AggregateFunctionDefinition::UDF(udf) if udf.name() == "count" => {
-                        Ok(false)
-                    }
-                    AggregateFunctionDefinition::UDF(_) => Ok(true),
+            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
+                // TODO: UDF should be able to customize nullability
+                if func.name() == "count" {
+                    Ok(false)
+                } else {
+                    Ok(true)
                 }
             }
             Expr::ScalarVariable(_, _)
