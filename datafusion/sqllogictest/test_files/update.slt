@@ -53,8 +53,8 @@ logical_plan
 01)Dml: op=[Update] table=[t1]
 02)--Projection: t1.a AS a, (<subquery>) AS b, t1.c AS c, t1.d AS d
 03)----Subquery:
-04)------Projection: MAX(t2.b)
-05)--------Aggregate: groupBy=[[]], aggr=[[MAX(t2.b)]]
+04)------Projection: max(t2.b)
+05)--------Aggregate: groupBy=[[]], aggr=[[max(t2.b)]]
 06)----------Filter: outer_ref(t1.a) = t2.a
 07)------------TableScan: t2
 08)----TableScan: t1
