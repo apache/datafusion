@@ -322,3 +322,25 @@ FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 3 109 211 2.80575042963 2.80632930994
 4 -171 56 2.10740506649 1.939846396446
 5 -86 -76 1.8741710186 1.600569307804
+
+
+statement ok
+DROP TABLE aggregate_test_100_null;
+
+# Test for aggregate functions with different intermediate types
+# Need more than 10 values to trigger skipping
+statement ok
+CREATE TABLE decimal_table(i int, d decimal(10,3)) as
+VALUES (1, 1.1), (2, 2.2), (3, 3.3), (2, 4.4), (1, 5.5);
+
+statement ok
+CREATE TABLE t(id int) as values (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
+
+query error DataFusion error: External error: Arrow error: Invalid argument error: column types must match schema types, expected Decimal128\(20, 3\) but found Decimal128\(38, 10\) at column index 1
+SELECT i, sum(d)
+FROM decimal_table CROSS JOIN t
+GROUP BY i
+ORDER BY i;
+
+statement ok
+DROP TABLE decimal_table;
