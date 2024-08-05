@@ -4530,21 +4530,21 @@ EXPLAIN SELECT DISTINCT c3, min(c1) FROM aggregate_test_100 group by c3 limit 5;
 ----
 logical_plan
 01)Limit: skip=0, fetch=5
-02)--Aggregate: groupBy=[[aggregate_test_100.c3, MIN(aggregate_test_100.c1)]], aggr=[[]]
-03)----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[MIN(aggregate_test_100.c1)]]
+02)--Aggregate: groupBy=[[aggregate_test_100.c3, min(aggregate_test_100.c1)]], aggr=[[]]
+03)----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[min(aggregate_test_100.c1)]]
 04)------TableScan: aggregate_test_100 projection=[c1, c3]
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--CoalescePartitionsExec
 03)----LocalLimitExec: fetch=5
-04)------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, MIN(aggregate_test_100.c1)@1 as MIN(aggregate_test_100.c1)], aggr=[], lim=[5]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
 05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([c3@0, MIN(aggregate_test_100.c1)@1], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[c3@0 as c3, MIN(aggregate_test_100.c1)@1 as MIN(aggregate_test_100.c1)], aggr=[], lim=[5]
-08)--------------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[MIN(aggregate_test_100.c1)]
+06)----------RepartitionExec: partitioning=Hash([c3@0, min(aggregate_test_100.c1)@1], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
+08)--------------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
 09)----------------CoalesceBatchesExec: target_batch_size=8192
 10)------------------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
-11)--------------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[MIN(aggregate_test_100.c1)]
+11)--------------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
 12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 13)------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
 
