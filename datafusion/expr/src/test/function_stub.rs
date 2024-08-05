@@ -202,13 +202,6 @@ impl AggregateUDFImpl for Sum {
         unreachable!("stub should not have accumulate()")
     }
 
-    fn create_sliding_accumulator(
-        &self,
-        _args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
-        unreachable!("stub should not have accumulate()")
-    }
-
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
