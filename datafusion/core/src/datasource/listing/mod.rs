@@ -160,24 +160,6 @@ impl From<ObjectMeta> for PartitionedFile {
     }
 }
 
-impl Default for PartitionedFile {
-    fn default() -> Self {
-        Self {
-            object_meta: ObjectMeta {
-                location: Path::default(),
-                last_modified: chrono::Utc.timestamp_nanos(0),
-                size: 0,
-                e_tag: None,
-                version: None,
-            },
-            partition_values: Vec::new(),
-            range: None,
-            statistics: None,
-            extensions: None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::datasource::listing::ListingTableUrl;
