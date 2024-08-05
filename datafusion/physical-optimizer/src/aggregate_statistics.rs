@@ -28,7 +28,7 @@ use datafusion_physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statis
 use crate::PhysicalOptimizerRule;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_expr::utils::COUNT_STAR_EXPANSION;
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 
