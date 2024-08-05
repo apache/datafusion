@@ -1001,7 +1001,7 @@ impl Expr {
             | Expr::Wildcard { .. } => write!(&mut s, "{self}")?,
 
             Expr::AggregateFunction(AggregateFunction {
-                func_def,
+                func,
                 args,
                 distinct,
                 filter,
@@ -1013,16 +1013,13 @@ impl Expr {
                     .map(Self::schema_name)
                     .collect::<Result<Vec<_>>>()?;
                 // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
-                if *distinct {
-                    write!(
-                        &mut s,
-                        "{}(DISTINCT {})",
-                        func_def.name(),
-                        args_name.join(",")
-                    )?;
-                } else {
-                    write!(&mut s, "{}({})", func_def.name(), args_name.join(","))?;
-                }
+                write!(
+                    &mut s,
+                    "{}({}{})",
+                    func.name(),
+                    if *distinct { "DISTINCT " } else { "" },
+                    args_name.join(",")
+                )?;
 
                 if let Some(null_treatment) = null_treatment {
                     write!(&mut s, " {}", null_treatment)?;
