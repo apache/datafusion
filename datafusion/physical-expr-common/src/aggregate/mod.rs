@@ -108,6 +108,7 @@ pub fn create_aggregate_expr_with_dfschema(
     builder = builder.sort_exprs(sort_exprs.to_vec());
     builder = builder.order_by(ordering_req.to_vec());
     builder = builder.logical_exprs(input_exprs.to_vec());
+    builder = builder.dfschema(dfschema.clone());
     let schema: Schema = dfschema.into();
     builder = builder.schema(Arc::new(schema));
     builder = builder.name(name);

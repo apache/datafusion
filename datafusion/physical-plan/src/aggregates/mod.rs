@@ -1790,7 +1790,7 @@ mod tests {
     // Median(a)
     fn test_median_agg_expr(schema: SchemaRef) -> Result<Arc<dyn AggregateExpr>> {
         AggregateExprBuilder::new(median_udaf(), vec![col("a", &schema)?])
-            .schema(Arc::clone(&schema))
+            .schema(schema)
             .name("MEDIAN(a)")
             .build()
     }
