@@ -328,7 +328,7 @@ mod tests {
         let dfschema = DFSchema::empty();
         let args1 = AccumulatorArgs {
             data_type: &DataType::Float64,
-            schema: &schema,
+            schema,
             dfschema: &dfschema,
             ignore_nulls: false,
             sort_exprs: &[],
@@ -340,7 +340,7 @@ mod tests {
 
         let args2 = AccumulatorArgs {
             data_type: &DataType::Float64,
-            schema: &schema,
+            schema,
             dfschema: &dfschema,
             ignore_nulls: false,
             sort_exprs: &[],
