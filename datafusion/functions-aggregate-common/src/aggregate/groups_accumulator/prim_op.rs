@@ -15,17 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
-use arrow::buffer::NullBuffer;
-use arrow::compute;
-use arrow::datatypes::ArrowPrimitiveType;
+use crate::aggregate::groups_accumulator::accumulate::NullState;
+use crate::aggregate::groups_accumulator::nulls::{filtered_null_mask, set_nulls};
+use arrow::array::{ArrayRef, ArrowPrimitiveType, AsArray, BooleanArray, PrimitiveArray};
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::Result;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
-
-use super::accumulate::NullState;
+use std::sync::Arc;
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -147,44 +143,31 @@ where
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        let values = values[0].as_primitive::<T>().clone();
+        let values = values[0].as_primitive::<T>();
 
-        // Initializing state with starting values
-        let initial_state =
-            PrimitiveArray::<T>::from_value(self.starting_value, values.len());
+        // Figure out which values will be non null in the output
+        let nulls = filtered_null_mask(opt_filter, values);
 
-        // Recalculating values in case there is filter
-        let values = match opt_filter {
-            None => values,
-            Some(filter) => {
-                let (filter_values, filter_nulls) = filter.clone().into_parts();
-                // Calculating filter mask as a result of bitand of filter, and converting it to null buffer
-                let filter_bool = match filter_nulls {
-                    Some(filter_nulls) => filter_nulls.inner() & &filter_values,
-                    None => filter_values,
-                };
-                let filter_nulls = NullBuffer::from(filter_bool);
+        // Initializing state with starting value
+        let mut state = vec![self.starting_value; values.len()];
 
-                // Rebuilding input values with a new nulls mask, which is equal to
-                // the union of original nulls and filter mask
-                let (dt, values_buf, original_nulls) = values.clone().into_parts();
-                let nulls_buf =
-                    NullBuffer::union(original_nulls.as_ref(), Some(&filter_nulls));
-                PrimitiveArray::<T>::new(values_buf, nulls_buf).with_data_type(dt)
+        // update state with any non-filtered input
+        if nulls.is_some() {
+            // mask out any filtered / null input values
+            let values = set_nulls(values.clone(), nulls.clone());
+            for (state, value) in state.iter_mut().zip(values.iter()) {
+                if let Some(value) = value {
+                    (self.prim_fn)(state, value);
+                }
+            }
+        } else {
+            // no nulls in input, so iterate over all values
+            let all_values = values.values().iter();
+            for (state, value) in state.iter_mut().zip(all_values) {
+                (self.prim_fn)(state, *value)
             }
         };
-
-        let state_values = compute::binary_mut(initial_state, &values, |mut x, y| {
-            (self.prim_fn)(&mut x, y);
-            x
-        });
-        let state_values = state_values
-            .map_err(|_| {
-                internal_datafusion_err!(
-                    "initial_values underlying buffer must not be shared"
-                )
-            })?
-            .map_err(DataFusionError::from)?
+        let state_values = PrimitiveArray::<T>::new(state.into(), nulls)
             .with_data_type(self.data_type.clone());
 
         Ok(vec![Arc::new(state_values)])
