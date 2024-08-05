@@ -134,13 +134,12 @@ fn to_unique_names<'a>(
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::{DataType, Field, Schema};
     use super::*;
     use crate::test::{assert_analyzed_plan_eq_display_indent, test_table_scan};
     use crate::Analyzer;
-    use datafusion_common::TableReference;
-    use datafusion_expr::{
-        col, in_subquery, qualified_wildcard, wildcard, LogicalPlanBuilder,
-    };
+    use datafusion_common::{JoinType, TableReference};
+    use datafusion_expr::{col, in_subquery, qualified_wildcard, wildcard, LogicalPlanBuilder, table_scan};
 
     fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_analyzed_plan_eq_display_indent(
@@ -230,6 +229,47 @@ mod tests {
                 assert_ne!(field.name(), "*");
             }
         }
+        Ok(())
+    }
+
+    fn employee_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("first_name", DataType::Utf8, false),
+            Field::new("last_name", DataType::Utf8, false),
+            Field::new("state", DataType::Utf8, false),
+            Field::new("salary", DataType::Int32, false),
+        ])
+    }
+
+    #[test]
+    fn plan_using_join_wildcard_projection() -> Result<()> {
+        let t2 = table_scan(Some("t2"), &employee_schema(), None)?.build()?;
+
+        let plan = table_scan(Some("t1"), &employee_schema(), None)?
+            .join_using(t2, JoinType::Inner, vec!["id"])?
+            .project(vec![Expr::Wildcard { qualifier: None }])?
+            .build()?;
+
+        let expected = "Projection: *\
+        \n  Inner Join: Using t1.id = t2.id\
+        \n    TableScan: t1\
+        \n    TableScan: t2";
+
+        assert_eq!(expected, format!("{plan}"));
+
+        let analyzer = Analyzer::with_rules(vec![Arc::new(ExpandWildcardRule::new())]);
+        let options = ConfigOptions::default();
+
+        let analyzed_plan = analyzer.execute_and_check(plan, &options, |_, _| {})?;
+
+        // id column should only show up once in projection
+        let expected = "Projection: t1.id, t1.first_name, t1.last_name, t1.state, t1.salary, t2.first_name, t2.last_name, t2.state, t2.salary\
+        \n  Inner Join: Using t1.id = t2.id\
+        \n    TableScan: t1\
+        \n    TableScan: t2";
+        assert_eq!(expected, format!("{analyzed_plan}"));
+
         Ok(())
     }
 }

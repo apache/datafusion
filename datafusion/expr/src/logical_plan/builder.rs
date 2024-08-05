@@ -1797,26 +1797,6 @@ mod tests {
     }
 
     #[test]
-    fn plan_using_join_wildcard_projection() -> Result<()> {
-        let t2 = table_scan(Some("t2"), &employee_schema(), None)?.build()?;
-
-        let plan = table_scan(Some("t1"), &employee_schema(), None)?
-            .join_using(t2, JoinType::Inner, vec!["id"])?
-            .project(vec![Expr::Wildcard { qualifier: None }])?
-            .build()?;
-
-        // id column should only show up once in projection
-        let expected = "Projection: t1.id, t1.first_name, t1.last_name, t1.state, t1.salary, t2.first_name, t2.last_name, t2.state, t2.salary\
-        \n  Inner Join: Using t1.id = t2.id\
-        \n    TableScan: t1\
-        \n    TableScan: t2";
-
-        assert_eq!(expected, format!("{plan}"));
-
-        Ok(())
-    }
-
-    #[test]
     fn plan_builder_union() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
