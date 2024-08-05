@@ -38,7 +38,7 @@ use crate::logical_plan::{
 };
 use crate::type_coercion::binary::{comparison_coercion, values_coercion};
 use crate::utils::{
-    can_hash, columnize_expr, compare_sort_expr, expand_wildcard, expr_to_columns,
+    can_hash, columnize_expr, compare_sort_expr, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
@@ -1355,6 +1355,7 @@ pub fn project_with_column_index(
                 ref name,
             }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
             Expr::Alias { .. } | Expr::Column { .. } => e,
+            Expr::Wildcard { .. } => e,
             _ => e.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
