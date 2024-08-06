@@ -38,7 +38,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
+    internal_err, not_impl_err, plan_err, Column, DFSchema, Result, ScalarValue,
+    TableReference,
 };
 use sqlparser::ast::NullTreatment;
 
