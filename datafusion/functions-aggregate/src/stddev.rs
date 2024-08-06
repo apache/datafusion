@@ -337,7 +337,6 @@ mod tests {
             is_reversed: false,
             input_types: &[DataType::Float64],
             physical_exprs: &[col("a", schema)?],
-            // input_exprs: &[datafusion_expr::col("a")],
         };
 
         let args2 = AccumulatorArgs {
@@ -352,7 +351,6 @@ mod tests {
             is_reversed: false,
             input_types: &[DataType::Float64],
             physical_exprs: &[col("a", schema)?],
-            // input_exprs: &[datafusion_expr::col("a")],
         };
 
         let mut accum1 = agg1.accumulator(args1)?;

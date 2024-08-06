@@ -46,5 +46,3 @@ datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 rand = { workspace = true }
-# strum = { version = "0.26.1", features = ["derive"] }
-# strum_macros = "0.26.0"

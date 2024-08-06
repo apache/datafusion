@@ -100,22 +100,6 @@ impl AggregateUDFImpl for StringAgg {
         }
 
         not_impl_err!("expect literal")
-
-        // match &acc_args.physical_exprs[1] {
-        //     Expr::Literal(ScalarValue::Utf8(Some(delimiter)))
-        //     | Expr::Literal(ScalarValue::LargeUtf8(Some(delimiter))) => {
-        //         Ok(Box::new(StringAggAccumulator::new(delimiter)))
-        //     }
-        //     Expr::Literal(ScalarValue::Utf8(None))
-        //     | Expr::Literal(ScalarValue::LargeUtf8(None))
-        //     | Expr::Literal(ScalarValue::Null) => {
-        //         Ok(Box::new(StringAggAccumulator::new("")))
-        //     }
-        //     _ => not_impl_err!(
-        //         "StringAgg not supported for delimiter {}",
-        //         &acc_args.input_exprs[1]
-        //     ),
-        // }
     }
 }
 

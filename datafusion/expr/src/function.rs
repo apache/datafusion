@@ -80,8 +80,7 @@ pub struct AccumulatorArgs<'a> {
     /// SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
     /// ```
     ///
-    /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
-    // pub sort_exprs: &'a [Expr],
+    /// If no `ORDER BY` is specified, `ordering_req` will be empty.
     pub ordering_req: &'a [PhysicalSortExpr],
 
     /// Whether the aggregation is running in reverse order
@@ -100,8 +99,7 @@ pub struct AccumulatorArgs<'a> {
     /// The input types of the aggregate function.
     pub input_types: &'a [DataType],
 
-    /// The logical expression of arguments the aggregate function takes.
-    // pub input_exprs: &'a [Expr],
+    /// The physical expression of arguments the aggregate function takes.
     pub physical_exprs: &'a [Arc<dyn PhysicalExpr>],
 }
 

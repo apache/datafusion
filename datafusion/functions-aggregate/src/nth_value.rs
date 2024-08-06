@@ -85,52 +85,34 @@ impl AggregateUDFImpl for NthValueAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        // TODO: simplfiy this
-        let n = if let Some(lit) = acc_args.physical_exprs[1]
+        let n = match acc_args.physical_exprs[1]
             .as_any()
             .downcast_ref::<Literal>()
         {
-            if let ScalarValue::Int64(Some(value)) = lit.value() {
-                if acc_args.is_reversed {
-                    -*value
-                } else {
-                    *value
+            Some(lit) => match lit.value() {
+                ScalarValue::Int64(Some(value)) => {
+                    if acc_args.is_reversed {
+                        -*value
+                    } else {
+                        *value
+                    }
                 }
-            } else {
+                _ => {
+                    return not_impl_err!(
+                        "{} not supported for n: {}",
+                        self.name(),
+                        &acc_args.physical_exprs[1]
+                    );
+                }
+            },
+            None => {
                 return not_impl_err!(
                     "{} not supported for n: {}",
                     self.name(),
                     &acc_args.physical_exprs[1]
                 );
             }
-        } else {
-            return not_impl_err!(
-                "{} not supported for n: {}",
-                self.name(),
-                &acc_args.physical_exprs[1]
-            );
         };
-
-        // let n = match acc_args.physical_exprs[1] {
-
-        //     Expr::Literal(ScalarValue::Int64(Some(value))) => {
-        //         if acc_args.is_reversed {
-        //             Ok(-value)
-        //         } else {
-        //             Ok(value)
-        //         }
-        //     }
-        //     _ => not_impl_err!(
-        //         "{} not supported for n: {}",
-        //         self.name(),
-        //         &acc_args.physical_exprs[1]
-        //     ),
-        // }?;
-
-        // let ordering_req = limited_convert_logical_sort_exprs_to_physical_with_dfschema(
-        //     acc_args.sort_exprs,
-        //     acc_args.dfschema,
-        // )?;
 
         let ordering_dtypes = acc_args
             .ordering_req

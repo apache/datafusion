@@ -1219,61 +1219,6 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
 
-// /// Converts `datafusion_expr::Expr` into corresponding `Arc<dyn PhysicalExpr>`.
-// /// If conversion is not supported yet, returns Error.
-// pub fn limited_convert_logical_expr_to_physical_expr_with_dfschema(
-//     expr: &Expr,
-//     dfschema: &DFSchema,
-// ) -> Result<Arc<dyn PhysicalExpr>> {
-//     match expr {
-//         Expr::Alias(Alias { expr, .. }) => Ok(
-//             limited_convert_logical_expr_to_physical_expr_with_dfschema(expr, dfschema)?,
-//         ),
-//         Expr::Column(col) => {
-//             let idx = dfschema.index_of_column(col)?;
-//             Ok(Arc::new(Column::new(&col.name, idx)))
-//         }
-//         Expr::Cast(cast_expr) => Ok(Arc::new(CastExpr::new(
-//             limited_convert_logical_expr_to_physical_expr_with_dfschema(
-//                 cast_expr.expr.as_ref(),
-//                 dfschema,
-//             )?,
-//             cast_expr.data_type.clone(),
-//             None,
-//         ))),
-//         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
-//         _ => exec_err!(
-//             "Unsupported expression: {expr} for conversion to Arc<dyn PhysicalExpr>"
-//         ),
-//     }
-// }
-
-// /// Converts each [`Expr::Sort`] into a corresponding [`PhysicalSortExpr`].
-// /// Returns an error if the given logical expression is not a [`Expr::Sort`].
-// pub fn limited_convert_logical_sort_exprs_to_physical_with_dfschema(
-//     exprs: &[Expr],
-//     dfschema: &DFSchema,
-// ) -> Result<Vec<PhysicalSortExpr>> {
-//     // Construct PhysicalSortExpr objects from Expr objects:
-//     let mut sort_exprs = vec![];
-//     for expr in exprs {
-//         let Expr::Sort(sort) = expr else {
-//             return exec_err!("Expects to receive sort expression");
-//         };
-//         sort_exprs.push(PhysicalSortExpr::new(
-//             limited_convert_logical_expr_to_physical_expr_with_dfschema(
-//                 sort.expr.as_ref(),
-//                 dfschema,
-//             )?,
-//             SortOptions {
-//                 descending: !sort.asc,
-//                 nulls_first: sort.nulls_first,
-//             },
-//         ))
-//     }
-//     Ok(sort_exprs)
-// }
-
 #[cfg(test)]
 mod tests {
     use super::*;

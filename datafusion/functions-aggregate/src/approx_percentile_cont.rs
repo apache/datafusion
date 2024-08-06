@@ -19,7 +19,7 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use arrow::array::{Array, RecordBatch};
+use arrow::array::Array;
 use arrow::compute::{filter, is_not_null};
 use arrow::{
     array::{
@@ -28,7 +28,7 @@ use arrow::{
     },
     datatypes::DataType,
 };
-use arrow_schema::{Field, Schema};
+use arrow_schema::Field;
 
 use datafusion_common::{
     downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, ScalarValue,
@@ -37,11 +37,12 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ColumnarValue, Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
 };
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 make_udaf_expr_and_func!(
@@ -132,31 +133,27 @@ impl ApproxPercentileCont {
     }
 }
 
-fn get_lit_value(expr: &Arc<dyn PhysicalExpr>) -> datafusion_common::Result<ScalarValue> {
-    // TODO: use real schema
-    let empty_schema = Arc::new(Schema::empty());
-    let empty_batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
-    let result = expr.evaluate(&empty_batch)?;
-    match result {
-        ColumnarValue::Array(_) => Err(DataFusionError::Internal(format!(
-            "The expr {:?} can't be evaluated to scalar value",
-            expr
-        ))),
-        ColumnarValue::Scalar(scalar_value) => Ok(scalar_value),
-    }
-}
-
 fn validate_input_percentile_expr(
     expr: &Arc<dyn PhysicalExpr>,
 ) -> datafusion_common::Result<f64> {
-    let lit = get_lit_value(expr)?;
-    let percentile = match &lit {
-        ScalarValue::Float32(Some(q)) => *q as f64,
-        ScalarValue::Float64(Some(q)) => *q,
-        got => return not_impl_err!(
-            "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
-            got.data_type()
-        )
+    let percentile = match expr.as_any().downcast_ref::<Literal>() {
+        Some(lit) => match lit.value() {
+            ScalarValue::Float32(Some(value)) => {
+                *value as f64
+            }
+            ScalarValue::Float64(Some(value)) => {
+                *value
+            }
+            sv => {
+                return not_impl_err!(
+                    "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
+                    sv.data_type()
+                )
+            }
+        },
+        None => {
+            return internal_err!("Expect to get a literal expr")
+        }
     };
 
     // Ensure the percentile is between 0 and 1.
@@ -171,21 +168,28 @@ fn validate_input_percentile_expr(
 fn validate_input_max_size_expr(
     expr: &Arc<dyn PhysicalExpr>,
 ) -> datafusion_common::Result<usize> {
-    let lit = get_lit_value(expr)?;
-    let max_size = match &lit {
-        ScalarValue::UInt8(Some(q)) => *q as usize,
-        ScalarValue::UInt16(Some(q)) => *q as usize,
-        ScalarValue::UInt32(Some(q)) => *q as usize,
-        ScalarValue::UInt64(Some(q)) => *q as usize,
-        ScalarValue::Int32(Some(q)) if *q > 0 => *q as usize,
-        ScalarValue::Int64(Some(q)) if *q > 0 => *q as usize,
-        ScalarValue::Int16(Some(q)) if *q > 0 => *q as usize,
-        ScalarValue::Int8(Some(q)) if *q > 0 => *q as usize,
-        got => return not_impl_err!(
-            "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
-            got.data_type()
-        )
+    let max_size = match expr.as_any().downcast_ref::<Literal>() {
+        Some(lit) => match lit.value() {
+            ScalarValue::UInt8(Some(q)) => *q as usize,
+            ScalarValue::UInt16(Some(q)) => *q as usize,
+            ScalarValue::UInt32(Some(q)) => *q as usize,
+            ScalarValue::UInt64(Some(q)) => *q as usize,
+            ScalarValue::Int32(Some(q)) if *q > 0 => *q as usize,
+            ScalarValue::Int64(Some(q)) if *q > 0 => *q as usize,
+            ScalarValue::Int16(Some(q)) if *q > 0 => *q as usize,
+            ScalarValue::Int8(Some(q)) if *q > 0 => *q as usize,
+            sv => {
+                return not_impl_err!(
+                    "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
+                    sv.data_type()
+                )
+            }
+        },
+        None => {
+            return internal_err!("Expect to get a literal expr")
+        }
     };
+
     Ok(max_size)
 }
 
