@@ -73,7 +73,8 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
-    self, physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
+    self, create_function_physical_name, physical_name, AggregateFunction, Alias,
+    GroupingSet, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -1559,6 +1560,18 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             order_by,
             null_treatment,
         }) => {
+            let name = if name.is_none() {
+                let name = create_function_physical_name(
+                    func.name(),
+                    *distinct,
+                    args,
+                    order_by.as_ref(),
+                )?;
+                Some(name)
+            } else {
+                name
+            };
+
             let physical_args =
                 create_physical_exprs(args, logical_input_schema, execution_props)?;
             let filter = match filter {

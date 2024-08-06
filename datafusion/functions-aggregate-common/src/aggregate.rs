@@ -20,14 +20,11 @@ use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::Field;
 
+use crate::order::AggregateOrderSensitivity;
 use datafusion_common::exec_err;
 use datafusion_common::{not_impl_err, Result};
-// use datafusion_expr::utils::AggregateOrderSensitivity;
-use crate::order::AggregateOrderSensitivity;
 use datafusion_expr_common::accumulator::Accumulator;
-
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
-
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
@@ -155,7 +152,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// Rewrites [`AggregateExpr`], with new expressions given. The argument should be consistent
     /// with the return value of the [`AggregateExpr::all_expressions`] method.
     /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
-    /// TODO: This method only rewrites the [`PhysicalExpr`]s and does not handle [`Expr`]s.
+    /// TODO: This method only rewrites the [`PhysicalExpr`]s and does not handle `Expr`s.
     /// This can cause silent bugs and should be fixed in the future (possibly with physical-to-logical
     /// conversions).
     fn with_new_expressions(

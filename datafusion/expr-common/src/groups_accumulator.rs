@@ -75,7 +75,7 @@ impl EmitTo {
 /// expected that each `GroupAccumulator` will use something like `Vec<..>`
 /// to store the group states.
 ///
-/// [`Accumulator`]: crate::Accumulator
+/// [`Accumulator`]: crate::accumulator::Accumulator
 /// [Aggregating Millions of Groups Fast blog]: https://arrow.apache.org/blog/2023/08/05/datafusion_fast_grouping/
 pub trait GroupsAccumulator: Send {
     /// Updates the accumulator's state from its arguments, encoded as
@@ -140,7 +140,7 @@ pub trait GroupsAccumulator: Send {
     /// See [`Self::evaluate`] for details on the required output
     /// order and `emit_to`.
     ///
-    /// [`Accumulator::state`]: crate::Accumulator::state
+    /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
     /// Merges intermediate state (the output from [`Self::state`])
@@ -197,7 +197,7 @@ pub trait GroupsAccumulator: Send {
     /// state directly to the next aggregation phase with minimal processing
     /// using this method.
     ///
-    /// [`Accumulator::state`]: crate::Accumulator::state
+    /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
     fn convert_to_state(
         &self,
         _values: &[ArrayRef],

@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`AggregateUDF`]: User Defined Aggregate Functions
-
 pub mod aggregate;
 pub mod merge_arrays;
 pub mod order;

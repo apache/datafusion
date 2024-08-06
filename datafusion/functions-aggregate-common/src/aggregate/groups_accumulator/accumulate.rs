@@ -17,7 +17,7 @@
 
 //! [`GroupsAccumulator`] helpers: [`NullState`] and [`accumulate_indices`]
 //!
-//! [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
+//! [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 
 use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
@@ -48,7 +48,7 @@ use datafusion_expr_common::groups_accumulator::EmitTo;
 /// had at least one value to accumulate so they do not need to track
 /// if they have seen values for a particular group.
 ///
-/// [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
+/// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 #[derive(Debug)]
 pub struct NullState {
     /// Have we seen any non-filtered input values for `group_index`?

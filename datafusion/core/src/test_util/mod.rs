@@ -54,7 +54,7 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
+use datafusion_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use futures::Stream;
 use tempfile::TempDir;
 // backwards compatibility
