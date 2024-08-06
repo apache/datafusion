@@ -3957,13 +3957,14 @@ SELECT * FROM (
 ) as lhs RIGHT JOIN (
     SELECT * from right_table_missing_probe
     ORDER BY b
+    LIMIT 10
 ) AS rhs ON lhs.b=rhs.b
 ----
 11 1 21 1
-14 6 23 6
-15 8 25 8
 NULL NULL 22 4
+14 6 23 6
 NULL NULL 24 7
+15 8 25 8
 
 query TT
 EXPLAIN SELECT * FROM (
