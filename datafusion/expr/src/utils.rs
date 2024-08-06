@@ -35,14 +35,14 @@ use datafusion_common::tree_node::{
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, Result,
-    ScalarValue, TableReference,
+    TableReference,
 };
 
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
-pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::Int64(Some(1));
+pub use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 
 /// Recursively walk a list of expression trees, collecting the unique set of columns
 /// referenced in the expression

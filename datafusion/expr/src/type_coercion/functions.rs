@@ -378,6 +378,16 @@ fn get_valid_types(
                 array(&current_types[0])
                     .map_or_else(|| vec![vec![]], |array_type| vec![vec![array_type]])
             }
+            ArrayFunctionSignature::MapArray => {
+                if current_types.len() != 1 {
+                    return Ok(vec![vec![]]);
+                }
+
+                match &current_types[0] {
+                    DataType::Map(_, _) => vec![vec![current_types[0].clone()]],
+                    _ => vec![vec![]],
+                }
+            }
         },
         TypeSignature::Any(number) => {
             if current_types.len() != *number {

@@ -25,7 +25,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
-/// For example, `max(x)` is written to `col("MAX(x)")`
+/// For example, `max(x)` is written to `col("max(x)")`
 pub fn rewrite_sort_cols_by_aggs(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
@@ -237,15 +237,15 @@ mod test {
                 expected: sort(col("c1")),
             },
             TestCase {
-                desc: r#"min(c2) --> "MIN(c2)" -- (column *named* "min(t.c2)"!)"#,
+                desc: r#"min(c2) --> "min(c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(min(col("c2"))),
-                expected: sort(col("MIN(t.c2)")),
+                expected: sort(col("min(t.c2)")),
             },
             TestCase {
-                desc: r#"c1 + min(c2) --> "c1 + MIN(c2)" -- (column *named* "min(t.c2)"!)"#,
+                desc: r#"c1 + min(c2) --> "c1 + min(c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(col("c1") + min(col("c2"))),
                 // should be "c1" not t.c1
-                expected: sort(col("c1") + col("MIN(t.c2)")),
+                expected: sort(col("c1") + col("min(t.c2)")),
             },
             TestCase {
                 desc: r#"avg(c3) --> "avg(t.c3)" as average (column *named* "avg(t.c3)", aliased)"#,

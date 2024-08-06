@@ -351,6 +351,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Return the fields used to store the intermediate state of this accumulator.
     ///
+    /// See [`Accumulator::state`] for background information.
+    ///
     /// args:  [`StateFieldsArgs`] contains arguments passed to the
     /// aggregate function's accumulator.
     ///
@@ -388,7 +390,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// # Notes
     ///
     /// Even if this function returns true, DataFusion will still use
-    /// `Self::accumulator` for certain queries, such as when this aggregate is
+    /// [`Self::accumulator`] for certain queries, such as when this aggregate is
     /// used as a window function or when there no GROUP BY columns in the
     /// query.
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
