@@ -1147,13 +1147,13 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-expr-functions-aggregate",
  "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-functions-nested",
  "datafusion-optimizer",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
+ "datafusion-physical-expr-functions-aggregate",
  "datafusion-physical-optimizer",
  "datafusion-physical-plan",
  "datafusion-sql",
@@ -1299,20 +1299,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "datafusion-expr-functions-aggregate"
-version = "40.0.0"
-dependencies = [
- "ahash",
- "arrow",
- "datafusion-common",
- "datafusion-expr",
- "datafusion-expr-common",
- "datafusion-functions-aggregate-common",
- "datafusion-physical-expr-common",
- "rand",
-]
-
-[[package]]
 name = "datafusion-functions"
 version = "40.0.0"
 dependencies = [
@@ -1448,6 +1434,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-physical-expr-functions-aggregate"
+version = "40.0.0"
+dependencies = [
+ "ahash",
+ "arrow",
+ "datafusion-common",
+ "datafusion-expr",
+ "datafusion-expr-common",
+ "datafusion-functions-aggregate-common",
+ "datafusion-physical-expr-common",
+ "rand",
+]
+
+[[package]]
 name = "datafusion-physical-optimizer"
 version = "40.0.0"
 dependencies = [
@@ -1473,11 +1473,11 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-expr-functions-aggregate",
  "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
+ "datafusion-physical-expr-functions-aggregate",
  "futures",
  "half",
  "hashbrown 0.14.5",

@@ -35,7 +35,6 @@ use datafusion_expr::{
     BuiltInWindowFunction, Expr, PartitionEvaluator, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
 };
-use datafusion_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
@@ -43,6 +42,7 @@ use datafusion_physical_expr::{
     AggregateExpr, ConstExpr, EquivalenceProperties, LexOrdering,
     PhysicalSortRequirement,
 };
+use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use itertools::Itertools;
 
 mod bounded_window_agg_exec;

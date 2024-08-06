@@ -174,10 +174,10 @@ mod tests {
     use crate::physical_plan::{displayable, Partitioning};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_expr_functions_aggregate::aggregate::AggregateExprBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 
     /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {

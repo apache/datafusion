@@ -1218,10 +1218,10 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use crate::common::collect;
-    use datafusion_expr_functions_aggregate::aggregate::{
+    use datafusion_physical_expr::expressions::Literal;
+    use datafusion_physical_expr_functions_aggregate::aggregate::{
         create_aggregate_expr_with_dfschema, AggregateExprBuilder,
     };
-    use datafusion_physical_expr::expressions::Literal;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1987,7 +1987,7 @@ mod tests {
         }];
         let args = vec![col("b", schema)?];
         let func = datafusion_expr::AggregateUDF::new_from_impl(FirstValue::new());
-        datafusion_expr_functions_aggregate::aggregate::create_aggregate_expr_with_dfschema(
+        datafusion_physical_expr_functions_aggregate::aggregate::create_aggregate_expr_with_dfschema(
             &func,
             &args,
             &ordering_req,

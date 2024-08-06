@@ -24,7 +24,7 @@ use std::vec;
 
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
-use datafusion::expr_functions_aggregate::aggregate::AggregateExprBuilder;
+use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use datafusion_functions_aggregate::min_max::max_udaf;
 use prost::Message;
 

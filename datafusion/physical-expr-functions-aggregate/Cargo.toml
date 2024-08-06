@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "datafusion-expr-functions-aggregate"
+name = "datafusion-physical-expr-functions-aggregate"
 description = "Logical plan and expression representation for DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
@@ -32,7 +32,7 @@ rust-version = { workspace = true }
 workspace = true
 
 [lib]
-name = "datafusion_expr_functions_aggregate"
+name = "datafusion_physical_expr_functions_aggregate"
 path = "src/lib.rs"
 
 [features]
