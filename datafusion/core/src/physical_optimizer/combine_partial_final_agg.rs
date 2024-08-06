@@ -280,7 +280,7 @@ mod tests {
     ) -> Arc<dyn AggregateExpr> {
         AggregateExprBuilder::new(count_udaf(), vec![expr])
             .schema(Arc::new(schema.clone()))
-            .name(name)
+            .alias(name)
             .build()
             .unwrap()
     }
@@ -364,7 +364,7 @@ mod tests {
             vec![
                 AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
                     .schema(Arc::clone(&schema))
-                    .name("Sum(b)")
+                    .alias("Sum(b)")
                     .build()
                     .unwrap(),
             ];
