@@ -200,6 +200,15 @@ impl SessionConfig {
         self
     }
 
+    /// Customize [`skip_partial_aggregation_probe_rows_threshold`]
+    ///
+    /// [`skip_partial_aggregation_probe_rows_threshold`]: datafusion_common::config::ExecutionOptions::skip_partial_aggregation_probe_rows_threshold
+    pub fn with_skip_partial_aggregation_probe_rows_threshold(mut self, n: usize) -> Self {
+        self.options.execution.skip_partial_aggregation_probe_rows_threshold = n;
+        self
+    }
+
+
     /// Insert new [ConfigExtension]
     pub fn with_option_extension<T: ConfigExtension>(mut self, extension: T) -> Self {
         self.options_mut().extensions.insert(extension);

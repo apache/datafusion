@@ -466,6 +466,7 @@ impl GroupedHashAggregateStream {
         // - all accumulators support input batch to intermediate
         //   aggregate state conversion
         // - there is only one GROUP BY expressions set
+        // - skip_partial_aggregation_probe_rows_threshold is greater than 0
         let skip_aggregation_probe = if agg.mode == AggregateMode::Partial
             && matches!(group_ordering, GroupOrdering::None)
             && accumulators
@@ -473,18 +474,20 @@ impl GroupedHashAggregateStream {
                 .all(|acc| acc.supports_convert_to_state())
             && agg_group_by.is_single()
         {
-            Some(SkipAggregationProbe::new(
-                context
-                    .session_config()
-                    .options()
-                    .execution
-                    .skip_partial_aggregation_probe_rows_threshold,
-                context
-                    .session_config()
-                    .options()
-                    .execution
-                    .skip_partial_aggregation_probe_ratio_threshold,
-            ))
+            let execution_options = &context
+                .session_config()
+                .options()
+                .execution;
+            if execution_options.skip_partial_aggregation_probe_rows_threshold > 0 {
+                Some(SkipAggregationProbe::new(
+                    execution_options
+                        .skip_partial_aggregation_probe_rows_threshold,
+                    execution_options
+                        .skip_partial_aggregation_probe_ratio_threshold,
+                ))
+            } else {
+                None
+            }
         } else {
             None
         };
