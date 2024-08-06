@@ -1361,7 +1361,7 @@ mod tests {
 
         let aggregates = vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1i8)])
             .schema(Arc::clone(&input_schema))
-            .name("COUNT(1)")
+            .alias("COUNT(1)")
             .build()?];
 
         let task_ctx = if spill {
@@ -1505,7 +1505,7 @@ mod tests {
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
                     .schema(Arc::clone(&input_schema))
-                    .name("AVG(b)")
+                    .alias("AVG(b)")
                     .build()?,
             ];
 
@@ -1801,7 +1801,7 @@ mod tests {
     fn test_median_agg_expr(schema: SchemaRef) -> Result<Arc<dyn AggregateExpr>> {
         AggregateExprBuilder::new(median_udaf(), vec![col("a", &schema)?])
             .schema(schema)
-            .name("MEDIAN(a)")
+            .alias("MEDIAN(a)")
             .build()
     }
 
@@ -1832,7 +1832,7 @@ mod tests {
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
                     .schema(Arc::clone(&input_schema))
-                    .name("AVG(b)")
+                    .alias("AVG(b)")
                     .build()?,
             ];
 
@@ -1892,7 +1892,7 @@ mod tests {
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("a", &schema)?])
                     .schema(Arc::clone(&schema))
-                    .name("AVG(a)")
+                    .alias("AVG(a)")
                     .build()?,
             ];
 
@@ -1932,7 +1932,7 @@ mod tests {
             vec![
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
                     .schema(Arc::clone(&schema))
-                    .name("AVG(b)")
+                    .alias("AVG(b)")
                     .build()?,
             ];
 
@@ -1992,7 +1992,7 @@ mod tests {
             &args,
             &ordering_req,
             dfschema,
-            "FIRST_VALUE(b)",
+            None,
             false,
             false,
             false,
@@ -2016,7 +2016,7 @@ mod tests {
             &args,
             &ordering_req,
             dfschema,
-            "LAST_VALUE(b)",
+            None,
             false,
             false,
             false,
@@ -2112,24 +2112,24 @@ mod tests {
         let result = crate::collect(aggregate_final, task_ctx).await?;
         if is_first_acc {
             let expected = [
-                "+---+----------------+",
-                "| a | FIRST_VALUE(b) |",
-                "+---+----------------+",
-                "| 2 | 0.0            |",
-                "| 3 | 1.0            |",
-                "| 4 | 3.0            |",
-                "+---+----------------+",
+                "+---+--------------------------------------------+",
+                "| a | first_value(b) ORDER BY [b ASC NULLS LAST] |",
+                "+---+--------------------------------------------+",
+                "| 2 | 0.0                                        |",
+                "| 3 | 1.0                                        |",
+                "| 4 | 3.0                                        |",
+                "+---+--------------------------------------------+",
             ];
             assert_batches_eq!(expected, &result);
         } else {
             let expected = [
-                "+---+---------------+",
-                "| a | LAST_VALUE(b) |",
-                "+---+---------------+",
-                "| 2 | 3.0           |",
-                "| 3 | 5.0           |",
-                "| 4 | 6.0           |",
-                "+---+---------------+",
+                "+---+-------------------------------------------+",
+                "| a | last_value(b) ORDER BY [b ASC NULLS LAST] |",
+                "+---+-------------------------------------------+",
+                "| 2 | 3.0                                       |",
+                "| 3 | 5.0                                       |",
+                "| 4 | 6.0                                       |",
+                "+---+-------------------------------------------+",
             ];
             assert_batches_eq!(expected, &result);
         };
@@ -2206,7 +2206,7 @@ mod tests {
                     &[Arc::clone(col_a)],
                     &ordering_req,
                     &test_df_schema,
-                    "array_agg",
+                    None,
                     false,
                     false,
                     false,
@@ -2302,7 +2302,7 @@ mod tests {
         let aggregates: Vec<Arc<dyn AggregateExpr>> =
             vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
                 .schema(Arc::clone(&schema))
-                .name("1")
+                .alias("1")
                 .build()?];
 
         let input_batches = (0..4)
@@ -2364,7 +2364,7 @@ mod tests {
                 &[col("val", &schema)?],
                 &[],
                 &df_schema,
-                "COUNT(val)",
+                Some("COUNT(val)".to_string()),
                 false,
                 false,
                 false,
@@ -2450,7 +2450,7 @@ mod tests {
                 &[col("val", &schema)?],
                 &[],
                 &df_schema,
-                "COUNT(val)",
+                Some("COUNT(val)".to_string()),
                 false,
                 false,
                 false,

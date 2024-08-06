@@ -113,7 +113,7 @@ pub fn create_window_expr(
         WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
                 .schema(Arc::new(input_schema.clone()))
-                .name(name)
+                .alias(name)
                 .order_by(order_by.to_vec())
                 .with_ignore_nulls(ignore_nulls)
                 .build()?;

@@ -15,14 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod groups_accumulator;
-pub(crate) mod stats;
-
-pub mod utils {
-    pub use datafusion_functions_aggregate_common::utils::{
-        adjust_output_array, down_cast_any_ref, get_accum_scalar_values_as_arrays,
-        get_sort_options, ordering_fields, DecimalAverager, Hashable,
-    };
-}
-
-pub use datafusion_functions_aggregate_common::aggregate::AggregateExpr;
+mod aggregate_statistics;

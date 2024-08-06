@@ -85,14 +85,12 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
 // MAX aggregate UDF
 #[derive(Debug)]
 pub struct Max {
-    aliases: Vec<String>,
     signature: Signature,
 }
 
 impl Max {
     pub fn new() -> Self {
         Self {
-            aliases: vec!["max".to_owned()],
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
@@ -146,7 +144,7 @@ impl AggregateUDFImpl for Max {
     }
 
     fn name(&self) -> &str {
-        "MAX"
+        "max"
     }
 
     fn signature(&self) -> &Signature {
@@ -162,7 +160,7 @@ impl AggregateUDFImpl for Max {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -891,14 +889,12 @@ impl Accumulator for SlidingMaxAccumulator {
 #[derive(Debug)]
 pub struct Min {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Min {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
-            aliases: vec!["min".to_owned()],
         }
     }
 }
@@ -915,7 +911,7 @@ impl AggregateUDFImpl for Min {
     }
 
     fn name(&self) -> &str {
-        "MIN"
+        "min"
     }
 
     fn signature(&self) -> &Signature {
@@ -931,7 +927,7 @@ impl AggregateUDFImpl for Min {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {

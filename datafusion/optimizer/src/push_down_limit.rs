@@ -375,7 +375,7 @@ mod test {
 
         // Limit should *not* push down aggregate node
         let expected = "Limit: skip=0, fetch=1000\
-        \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]\
         \n    TableScan: test";
 
         assert_optimized_plan_equal(plan, expected)
@@ -447,7 +447,7 @@ mod test {
 
         // Limit should use deeper LIMIT 1000, but Limit 10 shouldn't push down aggregation
         let expected = "Limit: skip=0, fetch=10\
-        \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]\
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000";
 
@@ -548,7 +548,7 @@ mod test {
 
         // Limit should *not* push down aggregate node
         let expected = "Limit: skip=10, fetch=1000\
-        \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]\
         \n    TableScan: test";
 
         assert_optimized_plan_equal(plan, expected)

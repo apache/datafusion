@@ -215,13 +215,6 @@ impl AggregateUDFImpl for Avg {
         &self.aliases
     }
 
-    fn create_sliding_accumulator(
-        &self,
-        args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
-        self.accumulator(args)
-    }
-
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }

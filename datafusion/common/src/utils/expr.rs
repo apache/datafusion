@@ -15,14 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod groups_accumulator;
-pub(crate) mod stats;
+//! Expression utilities
 
-pub mod utils {
-    pub use datafusion_functions_aggregate_common::utils::{
-        adjust_output_array, down_cast_any_ref, get_accum_scalar_values_as_arrays,
-        get_sort_options, ordering_fields, DecimalAverager, Hashable,
-    };
-}
+use crate::ScalarValue;
 
-pub use datafusion_functions_aggregate_common::aggregate::AggregateExpr;
+///  The value to which `COUNT(*)` is expanded to in
+///  `COUNT(<constant>)` expressions
+pub const COUNT_STAR_EXPANSION: ScalarValue = ScalarValue::Int64(Some(1));

@@ -145,6 +145,9 @@ pub enum ArrayFunctionSignature {
     /// The function takes a single argument that must be a List/LargeList/FixedSizeList
     /// or something that can be coerced to one of those types.
     Array,
+    /// Specialized Signature for MapArray
+    /// The function takes a single argument that must be a MapArray
+    MapArray,
 }
 
 impl std::fmt::Display for ArrayFunctionSignature {
@@ -164,6 +167,9 @@ impl std::fmt::Display for ArrayFunctionSignature {
             }
             ArrayFunctionSignature::Array => {
                 write!(f, "array")
+            }
+            ArrayFunctionSignature::MapArray => {
+                write!(f, "map_array")
             }
         }
     }

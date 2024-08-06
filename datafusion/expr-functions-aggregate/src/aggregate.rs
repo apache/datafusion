@@ -17,6 +17,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
+// use datafusion_expr::expr::create_function_physical_name;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::ReversedUDAF;
 use datafusion_expr::{function::AccumulatorArgs, AggregateUDF};
@@ -55,7 +56,7 @@ pub fn create_aggregate_expr(
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     ordering_req: &[PhysicalSortExpr],
     schema: &Schema,
-    name: impl Into<String>,
+    name: Option<String>,
     ignore_nulls: bool,
     is_distinct: bool,
 ) -> Result<Arc<dyn AggregateExpr>> {
@@ -63,7 +64,9 @@ pub fn create_aggregate_expr(
         AggregateExprBuilder::new(Arc::new(fun.clone()), input_phy_exprs.to_vec());
     builder = builder.order_by(ordering_req.to_vec());
     builder = builder.schema(Arc::new(schema.clone()));
-    builder = builder.name(name);
+    if let Some(name) = name {
+        builder = builder.alias(name);
+    }
 
     if ignore_nulls {
         builder = builder.ignore_nulls();
@@ -82,7 +85,7 @@ pub fn create_aggregate_expr_with_dfschema(
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     ordering_req: &[PhysicalSortExpr],
     dfschema: &DFSchema,
-    name: impl Into<String>,
+    alias: Option<String>,
     ignore_nulls: bool,
     is_distinct: bool,
     is_reversed: bool,
@@ -93,7 +96,9 @@ pub fn create_aggregate_expr_with_dfschema(
     builder = builder.dfschema(dfschema.clone());
     let schema: Schema = dfschema.into();
     builder = builder.schema(Arc::new(schema));
-    builder = builder.name(name);
+    if let Some(alias) = alias {
+        builder = builder.alias(alias);
+    }
 
     if ignore_nulls {
         builder = builder.ignore_nulls();
@@ -117,7 +122,7 @@ pub struct AggregateExprBuilder {
     fun: Arc<AggregateUDF>,
     /// Physical expressions of the aggregate function
     args: Vec<Arc<dyn PhysicalExpr>>,
-    name: String,
+    alias: Option<String>,
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
     /// Datafusion Schema for the aggregate function
@@ -137,7 +142,7 @@ impl AggregateExprBuilder {
         Self {
             fun,
             args,
-            name: String::new(),
+            alias: None,
             schema: Arc::new(Schema::empty()),
             dfschema: DFSchema::empty(),
             ordering_req: vec![],
@@ -151,7 +156,7 @@ impl AggregateExprBuilder {
         let Self {
             fun,
             args,
-            name,
+            alias,
             schema,
             dfschema,
             ordering_req,
@@ -186,6 +191,16 @@ impl AggregateExprBuilder {
         )?;
 
         let data_type = fun.return_type(&input_exprs_types)?;
+        let name = match alias {
+            // TODO: fix this
+            None => create_function_physical_name(
+                fun.name(),
+                is_distinct,
+                &[],
+                args,
+            )?,
+            Some(alias) => alias,
+        };
 
         Ok(Arc::new(AggregateFunctionExpr {
             fun: Arc::unwrap_or_clone(fun),
@@ -203,8 +218,8 @@ impl AggregateExprBuilder {
         }))
     }
 
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
+    pub fn alias(mut self, alias: impl Into<String>) -> Self {
+        self.alias = Some(alias.into());
         self
     }
 
@@ -482,7 +497,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             &self.args,
             &self.ordering_req,
             &self.dfschema,
-            self.name(),
+            Some(self.name().to_string()),
             self.ignore_nulls,
             self.is_distinct,
             self.is_reversed,
@@ -509,7 +524,7 @@ impl AggregateExpr for AggregateFunctionExpr {
                     &self.args,
                     &reverse_ordering_req,
                     &self.dfschema,
-                    name,
+                    Some(name),
                     self.ignore_nulls,
                     self.is_distinct,
                     !self.is_reversed,

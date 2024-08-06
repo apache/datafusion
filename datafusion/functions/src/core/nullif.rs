@@ -19,7 +19,6 @@ use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
 
-use arrow::array::Array;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
 use datafusion_common::ScalarValue;
@@ -122,8 +121,13 @@ fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Array(array))
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Array(rhs)) => {
-            let lhs = lhs.to_array_of_size(rhs.len())?;
-            let array = nullif(&lhs, &eq(&lhs, &rhs)?)?;
+            let lhs_s = lhs.to_scalar()?;
+            let lhs_a = lhs.to_array_of_size(rhs.len())?;
+            let array = nullif(
+                // nullif in arrow-select does not support Datum, so we need to convert to array
+                lhs_a.as_ref(),
+                &eq(&lhs_s, &rhs)?,
+            )?;
             Ok(ColumnarValue::Array(array))
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Scalar(rhs)) => {

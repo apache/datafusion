@@ -165,13 +165,6 @@ impl AggregateUDFImpl for BoolAnd {
         &[]
     }
 
-    fn create_sliding_accumulator(
-        &self,
-        _: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::<BoolAndAccumulator>::default())
-    }
-
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Insensitive
     }
@@ -290,13 +283,6 @@ impl AggregateUDFImpl for BoolOr {
 
     fn aliases(&self) -> &[String] {
         &[]
-    }
-
-    fn create_sliding_accumulator(
-        &self,
-        _: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::<BoolOrAccumulator>::default())
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
