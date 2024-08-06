@@ -139,10 +139,22 @@ pub fn split_files(
 
     // effectively this is div with rounding up instead of truncating
     let chunk_size = (partitioned_files.len() + n - 1) / n;
-    partitioned_files
-        .chunks_mut(chunk_size)
-        .map(|c| c.iter_mut().map(mem::take).collect())
-        .collect()
+    let mut chunks = Vec::with_capacity(n);
+    let mut current_chunk = Vec::with_capacity(chunk_size);
+    for file in partitioned_files.drain(..) {
+        current_chunk.push(file);
+        if current_chunk.len() == chunk_size {
+            let full_chunk =
+                mem::replace(&mut current_chunk, Vec::with_capacity(chunk_size));
+            chunks.push(full_chunk);
+        }
+    }
+
+    if !current_chunk.is_empty() {
+        chunks.push(current_chunk)
+    }
+
+    chunks
 }
 
 struct Partition {
