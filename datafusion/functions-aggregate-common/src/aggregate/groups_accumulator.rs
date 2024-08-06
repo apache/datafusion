@@ -133,9 +133,7 @@ impl GroupsAccumulatorAdapter {
             let new_accumulators = input_batch_size - self.convert_state_buffer.len();
             for _ in 0..new_accumulators {
                 let accumulator = (self.factory)()?;
-                let state = AccumulatorState::new(accumulator);
-                self.add_allocation(state.size());
-                self.states.push(state);
+                self.convert_state_buffer.push(accumulator);
             }
 
             self.adjust_allocation(
