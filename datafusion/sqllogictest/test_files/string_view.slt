@@ -355,6 +355,75 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[count(DISTINCT test.column1_utf8), count(DISTINCT test.column1_utf8view), count(DISTINCT test.column1_dict)]]
 02)--TableScan: test projection=[column1_utf8, column1_utf8view, column1_dict]
 
+### `STARTS_WITH`
+
+# Test STARTS_WITH with utf8view against utf8view, utf8, and largeutf8
+# (should be no casts)
+query TT
+EXPLAIN SELECT
+  STARTS_WITH(column1_utf8view, column2_utf8view) as c1,
+  STARTS_WITH(column1_utf8view, column2_utf8) as c2,
+  STARTS_WITH(column1_utf8view, column2_large_utf8) as c3
+FROM test;
+----
+logical_plan
+01)Projection: starts_with(test.column1_utf8view, test.column2_utf8view) AS c1, starts_with(test.column1_utf8view, CAST(test.column2_utf8 AS Utf8View)) AS c2, starts_with(test.column1_utf8view, CAST(test.column2_large_utf8 AS Utf8View)) AS c3
+02)--TableScan: test projection=[column2_utf8, column2_large_utf8, column1_utf8view, column2_utf8view]
+
+query BBB
+SELECT
+  STARTS_WITH(column1_utf8view, column2_utf8view) as c1,
+  STARTS_WITH(column1_utf8view, column2_utf8) as c2,
+  STARTS_WITH(column1_utf8view, column2_large_utf8) as c3
+FROM test;
+----
+false false false
+true true true
+true true true
+NULL NULL NULL
+
+# Test STARTS_WITH with utf8 against utf8view, utf8, and largeutf8
+# Should work, but will have to cast to common types
+# should cast utf8 -> utf8view and largeutf8 -> utf8view
+query TT
+EXPLAIN SELECT
+  STARTS_WITH(column1_utf8, column2_utf8view) as c1,
+  STARTS_WITH(column1_utf8, column2_utf8) as c3,
+  STARTS_WITH(column1_utf8, column2_large_utf8) as c4
+FROM test;
+----
+logical_plan
+01)Projection: starts_with(__common_expr_1, test.column2_utf8view) AS c1, starts_with(test.column1_utf8, test.column2_utf8) AS c3, starts_with(__common_expr_1, CAST(test.column2_large_utf8 AS Utf8View)) AS c4
+02)--Projection: CAST(test.column1_utf8 AS Utf8View) AS __common_expr_1, test.column1_utf8, test.column2_utf8, test.column2_large_utf8, test.column2_utf8view
+03)----TableScan: test projection=[column1_utf8, column2_utf8, column2_large_utf8, column2_utf8view]
+
+query BBB
+ SELECT
+  STARTS_WITH(column1_utf8, column2_utf8view) as c1,
+  STARTS_WITH(column1_utf8, column2_utf8) as c3,
+  STARTS_WITH(column1_utf8, column2_large_utf8) as c4
+FROM test;
+----
+false false false
+true true true
+true true true
+NULL NULL NULL
+
+
+# Test STARTS_WITH with utf8view against literals
+# In this case, the literals should be cast to utf8view. The columns
+# should not be cast to utf8.
+query TT
+EXPLAIN SELECT
+  STARTS_WITH(column1_utf8view, 'äöüß') as c1,
+  STARTS_WITH(column1_utf8view, '') as c2,
+  STARTS_WITH(column1_utf8view, NULL) as c3,
+  STARTS_WITH(NULL, column1_utf8view) as c4
+FROM test;
+----
+logical_plan
+01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
+02)--TableScan: test projection=[column1_utf8view]
 
 statement ok
 drop table test;
@@ -375,7 +444,6 @@ query D
 select t.dt from dates t where arrow_cast('2024-01-01', 'Utf8View') < t.dt;
 ----
 2024-01-23
-
 
 statement ok
 drop table dates;
