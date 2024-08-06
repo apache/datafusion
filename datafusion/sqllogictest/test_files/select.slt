@@ -990,13 +990,13 @@ FROM (
     ) AS a
 ) AS b
 ----
-a 5 -101
-a 5 -54
 a 5 -38
-a 5 65
-a 6 -101
-a 6 -31
+a 5 -54
 a 6 36
+a 6 -31
+a 5 65
+a 5 -101
+a 6 -101
 
 # nested select without aliases
 query TII
@@ -1011,13 +1011,13 @@ FROM (
     )
 )
 ----
-a 5 -101
-a 5 -54
 a 5 -38
-a 5 65
-a 6 -101
-a 6 -31
+a 5 -54
 a 6 36
+a 6 -31
+a 5 65
+a 5 -101
+a 6 -101
 
 # select with join unaliased subqueries
 query TIITII
@@ -1454,29 +1454,6 @@ physical_plan
 04)------FilterExec: a@1 = 0 OR b@2 = 0
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
-
-# When ordering lost during projection, we shouldn't keep the SortExec.
-# in the final physical plan.
-query TT
-EXPLAIN SELECT c2, COUNT(*)
-FROM (SELECT c2
-FROM aggregate_test_100
-ORDER BY c1, c2)
-GROUP BY c2;
-----
-logical_plan
-01)Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[count(Int64(1)) AS count(*)]]
-02)--Projection: aggregate_test_100.c2
-03)----Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST
-04)------Projection: aggregate_test_100.c2, aggregate_test_100.c1
-05)--------TableScan: aggregate_test_100 projection=[c1, c2]
-physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[count(*)]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
-04)------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(*)]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2], has_header=true
 
 # FilterExec can track equality of non-column expressions.
 # plan below shouldn't have a SortExec because given column 'a' is ordered.

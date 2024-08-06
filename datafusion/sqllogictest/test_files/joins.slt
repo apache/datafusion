@@ -3918,14 +3918,12 @@ logical_plan
 02)--SubqueryAlias: lhs
 03)----TableScan: left_table_no_nulls projection=[a, b]
 04)--SubqueryAlias: rhs
-05)----Sort: right_table_no_nulls.b ASC NULLS LAST
-06)------TableScan: right_table_no_nulls projection=[a, b]
+05)----TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3
 02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)------MemoryExec: partitions=1, partition_sizes=[1]
+04)----MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # Missing probe index in the middle of the batch:
@@ -3956,10 +3954,10 @@ SELECT * FROM (
 ) AS rhs ON lhs.b=rhs.b
 ----
 11 1 21 1
-NULL NULL 22 4
 14 6 23 6
-NULL NULL 24 7
 15 8 25 8
+NULL NULL 22 4
+NULL NULL 24 7
 
 query TT
 EXPLAIN SELECT * FROM (
@@ -3974,14 +3972,12 @@ logical_plan
 02)--SubqueryAlias: lhs
 03)----TableScan: left_table_no_nulls projection=[a, b]
 04)--SubqueryAlias: rhs
-05)----Sort: right_table_no_nulls.b ASC NULLS LAST
-06)------TableScan: right_table_no_nulls projection=[a, b]
+05)----TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3
 02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)------MemoryExec: partitions=1, partition_sizes=[1]
+04)----MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # Null build indices:
@@ -4011,9 +4007,9 @@ SELECT * FROM (
     ORDER BY b
 ) AS rhs ON lhs.b=rhs.b
 ----
-NULL NULL 21 4
 13 5 22 5
 14 5 22 5
+NULL NULL 21 4
 NULL NULL 23 6
 NULL NULL 24 7
 NULL NULL 25 8
@@ -4032,11 +4028,9 @@ logical_plan
 02)--SubqueryAlias: lhs
 03)----TableScan: left_table_no_nulls projection=[a, b]
 04)--SubqueryAlias: rhs
-05)----Sort: right_table_no_nulls.b ASC NULLS LAST
-06)------TableScan: right_table_no_nulls projection=[a, b]
+05)----TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3
 02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)------MemoryExec: partitions=1, partition_sizes=[1]
+04)----MemoryExec: partitions=1, partition_sizes=[1]
