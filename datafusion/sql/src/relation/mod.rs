@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_err, DFSchema, Result, TableReference};
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{not_impl_err, plan_err, DFSchema, Result, TableReference};
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, TableFactor};
 
@@ -174,5 +174,5 @@ fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>>
         }
         Ok(Transformed::no(c))
     });
-    return new_plan
+    new_plan
 }
