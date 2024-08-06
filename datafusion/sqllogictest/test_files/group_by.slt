@@ -2527,19 +2527,24 @@ EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
         SUM(s.amount) AS sum1
           FROM (SELECT *
             FROM sales_global
-            ORDER BY country) AS s
+            ORDER BY country
+            LIMIT 10) AS s
           GROUP BY s.country
 ----
 logical_plan
 01)Projection: s.country, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
-04)------TableScan: sales_global projection=[country, amount]
+04)------Limit: skip=0, fetch=10
+05)--------Sort: sales_global.country ASC NULLS LAST, fetch=10
+06)----------TableScan: sales_global projection=[country, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
-02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(s.amount)]
-03)----SortExec: expr=[amount@1 DESC], preserve_partitioning=[false]
-04)------MemoryExec: partitions=1, partition_sizes=[1]
+02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=Sorted
+03)----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC], preserve_partitioning=[false]
+04)------SortExec: TopK(fetch=10), expr=[country@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
+
 
 query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
@@ -2562,19 +2567,23 @@ EXPLAIN SELECT s.country, s.zip_code, ARRAY_AGG(s.amount ORDER BY s.amount DESC)
         SUM(s.amount) AS sum1
           FROM (SELECT *
             FROM sales_global
-            ORDER BY country) AS s
+            ORDER BY country
+            LIMIT 10) AS s
           GROUP BY s.country, s.zip_code
 ----
 logical_plan
 01)Projection: s.country, s.zip_code, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
 02)--Aggregate: groupBy=[[s.country, s.zip_code]], aggr=[[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
-04)------TableScan: sales_global projection=[zip_code, country, amount]
+04)------Limit: skip=0, fetch=10
+05)--------Sort: sales_global.country ASC NULLS LAST, fetch=10
+06)----------TableScan: sales_global projection=[zip_code, country, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, zip_code@1 as zip_code, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@2 as amounts, sum(s.amount)@3 as sum1]
-02)--AggregateExec: mode=Single, gby=[country@1 as country, zip_code@0 as zip_code], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(s.amount)]
-03)----SortExec: expr=[amount@2 DESC], preserve_partitioning=[false]
-04)------MemoryExec: partitions=1, partition_sizes=[1]
+02)--AggregateExec: mode=Single, gby=[country@1 as country, zip_code@0 as zip_code], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=PartiallySorted([0])
+03)----SortExec: expr=[country@1 ASC NULLS LAST,amount@2 DESC], preserve_partitioning=[false]
+04)------SortExec: TopK(fetch=10), expr=[country@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TI?R rowsort
 SELECT s.country, s.zip_code, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
@@ -2597,18 +2606,22 @@ EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.country DESC) AS amounts
         SUM(s.amount) AS sum1
           FROM (SELECT *
             FROM sales_global
-            ORDER BY country) AS s
+            ORDER BY country
+            LIMIT 10) AS s
           GROUP BY s.country
 ----
 logical_plan
 01)Projection: s.country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
-04)------TableScan: sales_global projection=[country, amount]
+04)------Limit: skip=0, fetch=10
+05)--------Sort: sales_global.country ASC NULLS LAST, fetch=10
+06)----------TableScan: sales_global projection=[country, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
-02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST], sum(s.amount)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
+02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST], sum(s.amount)], ordering_mode=Sorted
+03)----SortExec: TopK(fetch=10), expr=[country@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------MemoryExec: partitions=1, partition_sizes=[1]
 
 query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
@@ -2630,19 +2643,24 @@ EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.country DESC, s.amount D
         SUM(s.amount) AS sum1
           FROM (SELECT *
             FROM sales_global
-            ORDER BY country) AS s
+            ORDER BY country
+            LIMIT 10) AS s
           GROUP BY s.country
 ----
 logical_plan
 01)Projection: s.country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
-04)------TableScan: sales_global projection=[country, amount]
+04)------Limit: skip=0, fetch=10
+05)--------Sort: sales_global.country ASC NULLS LAST, fetch=10
+06)----------TableScan: sales_global projection=[country, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
-02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST], sum(s.amount)]
-03)----SortExec: expr=[amount@1 DESC], preserve_partitioning=[false]
-04)------MemoryExec: partitions=1, partition_sizes=[1]
+02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=Sorted
+03)----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC], preserve_partitioning=[false]
+04)------SortExec: TopK(fetch=10), expr=[country@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
+
 
 query T?R rowsort
 SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.country DESC, s.amount DESC) AS amounts,
