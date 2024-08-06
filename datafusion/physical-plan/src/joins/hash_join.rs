@@ -1971,7 +1971,6 @@ mod tests {
         } else {
             // With hash collisions enabled, all records will match each other
             // and filtered later.
-            // Expected number of matches = 9
             div_ceil(9, batch_size)
         };
 
@@ -2042,7 +2041,6 @@ mod tests {
         } else {
             // With hash collisions enabled, all records will match each other
             // and filtered later.
-            // Expected number of matches = 9
             div_ceil(9, batch_size)
         };
 
