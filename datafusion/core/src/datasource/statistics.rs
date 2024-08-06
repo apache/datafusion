@@ -57,8 +57,10 @@ pub async fn get_statistics_with_limit(
     let mut all_files = Box::pin(all_files.fuse());
 
     if let Some(first_file) = all_files.next().await {
-        let (file, file_stats) = first_file?;
+        let (mut file, file_stats) = first_file?;
+        file.statistics = Some(file_stats.as_ref().clone());
         result_files.push(file);
+
 
         // First file, we set them directly from the file statistics.
         num_rows = file_stats.num_rows.clone();
@@ -81,7 +83,8 @@ pub async fn get_statistics_with_limit(
         };
         if conservative_num_rows <= limit.unwrap_or(usize::MAX) {
             while let Some(current) = all_files.next().await {
-                let (file, file_stats) = current?;
+                let (mut file, file_stats) = current?;
+                file.statistics = Some(file_stats.as_ref().clone());
                 result_files.push(file);
                 if !collect_stats {
                     continue;

@@ -1193,7 +1193,7 @@ mod tests {
                     },
                     partition_values: vec![ScalarValue::from(file.date)],
                     range: None,
-                    statistics: Some(Arc::new(Statistics {
+                    statistics: Some(Statistics {
                         num_rows: Precision::Absent,
                         total_byte_size: Precision::Absent,
                         column_statistics: file
@@ -1213,7 +1213,7 @@ mod tests {
                                     .unwrap_or_default()
                             })
                             .collect::<Vec<_>>(),
-                    })),
+                    }),
                     extensions: None,
                 }
             }

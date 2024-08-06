@@ -973,11 +973,10 @@ impl ListingTable {
         // collect the statistics if required by the config
         let files = file_list
             .map(|part_file| async {
-                let mut part_file = part_file?;
+                let part_file = part_file?;
                 if self.options.collect_stat {
                     let statistics =
                         self.do_collect_statistics(ctx, &store, &part_file).await?;
-                    part_file.statistics = Some(statistics.clone());
                     Ok((part_file, statistics))
                 } else {
                     Ok((
@@ -1014,8 +1013,7 @@ impl ListingTable {
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> Result<Arc<Statistics>> {
-        let statistics_cache = self.collected_statistics.clone();
-        match statistics_cache
+        match self.collected_statistics
             .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
         {
             Some(statistics) => Ok(statistics.clone()),
@@ -1031,7 +1029,7 @@ impl ListingTable {
                     )
                     .await?;
                 let statistics = Arc::new(statistics);
-                statistics_cache.put_with_extra(
+                self.collected_statistics.put_with_extra(
                     &part_file.object_meta.location,
                     statistics.clone(),
                     &part_file.object_meta,
