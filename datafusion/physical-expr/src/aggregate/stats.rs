@@ -15,4 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use datafusion_physical_expr_common::aggregate::stats::StatsType;
+pub use datafusion_functions_aggregate_common::stats::StatsType;

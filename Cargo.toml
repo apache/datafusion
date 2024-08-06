@@ -23,8 +23,11 @@ members = [
     "datafusion/catalog",
     "datafusion/core",
     "datafusion/expr",
+    "datafusion/expr-common",
+    "datafusion/expr-functions-aggregate",
     "datafusion/execution",
     "datafusion/functions-aggregate",
+    "datafusion/functions-aggregate-common",
     "datafusion/functions",
     "datafusion/functions-nested",
     "datafusion/optimizer",
@@ -94,8 +97,11 @@ datafusion-common = { path = "datafusion/common", version = "40.0.0", default-fe
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "40.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "40.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "40.0.0" }
+datafusion-expr-common = { path = "datafusion/expr-common", version = "40.0.0" }
+datafusion-expr-functions-aggregate = { path = "datafusion/expr-functions-aggregate", version = "40.0.0" }
 datafusion-functions = { path = "datafusion/functions", version = "40.0.0" }
 datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "40.0.0" }
+datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "40.0.0" }
 datafusion-functions-nested = { path = "datafusion/functions-nested", version = "40.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "40.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "40.0.0", default-features = false }

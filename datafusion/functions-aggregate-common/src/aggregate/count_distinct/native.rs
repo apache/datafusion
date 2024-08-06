@@ -35,9 +35,9 @@ use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::utils::array_into_list_array_nullable;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::ScalarValue;
-use datafusion_expr::Accumulator;
+use datafusion_expr_common::accumulator::Accumulator;
 
-use crate::aggregate::utils::Hashable;
+use crate::utils::Hashable;
 
 #[derive(Debug)]
 pub struct PrimitiveDistinctCountAccumulator<T>

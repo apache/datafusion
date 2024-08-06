@@ -257,10 +257,10 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::expressions::lit;
     use datafusion_physical_expr::expressions::BinaryExpr;
     use datafusion_physical_expr::Partitioning;
-    use datafusion_physical_expr_common::expressions::column::col;
-    use datafusion_physical_expr_common::expressions::lit;
     use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion_physical_plan::empty::EmptyExec;

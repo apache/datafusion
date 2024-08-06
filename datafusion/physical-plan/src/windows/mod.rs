@@ -36,6 +36,7 @@ use datafusion_expr::{
     BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
     WindowUDF,
 };
+use datafusion_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
@@ -43,7 +44,6 @@ use datafusion_physical_expr::{
     AggregateExpr, ConstExpr, EquivalenceProperties, LexOrdering,
     PhysicalSortRequirement,
 };
-use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
 use itertools::Itertools;
 
 mod bounded_window_agg_exec;
@@ -130,7 +130,7 @@ pub fn create_window_expr(
                 .schema(Arc::new(input_schema.clone()))
                 .name(name)
                 .order_by(order_by.to_vec())
-                .sort_exprs(sort_exprs)
+                // .sort_exprs(sort_exprs)
                 .with_ignore_nulls(ignore_nulls)
                 .build()?;
             window_expr_from_aggregate_expr(
@@ -412,7 +412,7 @@ pub(crate) fn calc_requirements<
         let PhysicalSortExpr { expr, options } = element.borrow();
         if !sort_reqs.iter().any(|e| e.expr.eq(expr)) {
             sort_reqs.push(PhysicalSortRequirement::new(
-                Arc::clone(expr),
+                Arc::clone(&expr),
                 Some(*options),
             ));
         }

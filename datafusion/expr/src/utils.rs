@@ -23,10 +23,10 @@ use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WindowFunction};
 use crate::expr_rewriter::strip_outer_reference;
-use crate::signature::{Signature, TypeSignature};
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
 };
+use datafusion_expr_common::signature::{Signature, TypeSignature};
 
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion_common::tree_node::{
@@ -39,6 +39,8 @@ use datafusion_common::{
 };
 
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
+
+pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
@@ -1217,36 +1219,60 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
 
-/// Represents the sensitivity of an aggregate expression to ordering.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum AggregateOrderSensitivity {
-    /// Indicates that the aggregate expression is insensitive to ordering.
-    /// Ordering at the input is not important for the result of the aggregator.
-    Insensitive,
-    /// Indicates that the aggregate expression has a hard requirement on ordering.
-    /// The aggregator can not produce a correct result unless its ordering
-    /// requirement is satisfied.
-    HardRequirement,
-    /// Indicates that ordering is beneficial for the aggregate expression in terms
-    /// of evaluation efficiency. The aggregator can produce its result efficiently
-    /// when its required ordering is satisfied; however, it can still produce the
-    /// correct result (albeit less efficiently) when its required ordering is not met.
-    Beneficial,
-}
+// /// Converts `datafusion_expr::Expr` into corresponding `Arc<dyn PhysicalExpr>`.
+// /// If conversion is not supported yet, returns Error.
+// pub fn limited_convert_logical_expr_to_physical_expr_with_dfschema(
+//     expr: &Expr,
+//     dfschema: &DFSchema,
+// ) -> Result<Arc<dyn PhysicalExpr>> {
+//     match expr {
+//         Expr::Alias(Alias { expr, .. }) => Ok(
+//             limited_convert_logical_expr_to_physical_expr_with_dfschema(expr, dfschema)?,
+//         ),
+//         Expr::Column(col) => {
+//             let idx = dfschema.index_of_column(col)?;
+//             Ok(Arc::new(Column::new(&col.name, idx)))
+//         }
+//         Expr::Cast(cast_expr) => Ok(Arc::new(CastExpr::new(
+//             limited_convert_logical_expr_to_physical_expr_with_dfschema(
+//                 cast_expr.expr.as_ref(),
+//                 dfschema,
+//             )?,
+//             cast_expr.data_type.clone(),
+//             None,
+//         ))),
+//         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
+//         _ => exec_err!(
+//             "Unsupported expression: {expr} for conversion to Arc<dyn PhysicalExpr>"
+//         ),
+//     }
+// }
 
-impl AggregateOrderSensitivity {
-    pub fn is_insensitive(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::Insensitive)
-    }
-
-    pub fn is_beneficial(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::Beneficial)
-    }
-
-    pub fn hard_requires(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::HardRequirement)
-    }
-}
+// /// Converts each [`Expr::Sort`] into a corresponding [`PhysicalSortExpr`].
+// /// Returns an error if the given logical expression is not a [`Expr::Sort`].
+// pub fn limited_convert_logical_sort_exprs_to_physical_with_dfschema(
+//     exprs: &[Expr],
+//     dfschema: &DFSchema,
+// ) -> Result<Vec<PhysicalSortExpr>> {
+//     // Construct PhysicalSortExpr objects from Expr objects:
+//     let mut sort_exprs = vec![];
+//     for expr in exprs {
+//         let Expr::Sort(sort) = expr else {
+//             return exec_err!("Expects to receive sort expression");
+//         };
+//         sort_exprs.push(PhysicalSortExpr::new(
+//             limited_convert_logical_expr_to_physical_expr_with_dfschema(
+//                 sort.expr.as_ref(),
+//                 dfschema,
+//             )?,
+//             SortOptions {
+//                 descending: !sort.asc,
+//                 nulls_first: sort.nulls_first,
+//             },
+//         ))
+//     }
+//     Ok(sort_exprs)
+// }
 
 #[cfg(test)]
 mod tests {

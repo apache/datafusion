@@ -18,7 +18,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::physical_expr_common::aggregate::AggregateExprBuilder;
+use datafusion::expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use prost::bytes::BufMut;
 use prost::Message;
 

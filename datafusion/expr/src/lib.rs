@@ -27,13 +27,10 @@
 //!
 //! The [expr_fn] module contains functions for creating expressions.
 
-mod accumulator;
 mod built_in_window_function;
-mod columnar_value;
 mod literal;
 mod operator;
 mod partition_evaluator;
-mod signature;
 mod table_source;
 mod udaf;
 mod udf;
@@ -46,13 +43,20 @@ pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod function;
-pub mod groups_accumulator;
-pub mod interval_arithmetic;
+pub mod groups_accumulator {
+    pub use datafusion_expr_common::groups_accumulator::*;
+}
+
+pub mod interval_arithmetic {
+    pub use datafusion_expr_common::interval_arithmetic::*;
+}
 pub mod logical_plan;
 pub mod planner;
 pub mod registry;
 pub mod simplify;
-pub mod sort_properties;
+pub mod sort_properties {
+    pub use datafusion_expr_common::sort_properties::*;
+}
 pub mod test;
 pub mod tree_node;
 pub mod type_coercion;
@@ -62,9 +66,15 @@ pub mod window_frame;
 pub mod window_function;
 pub mod window_state;
 
-pub use accumulator::Accumulator;
 pub use built_in_window_function::BuiltInWindowFunction;
-pub use columnar_value::ColumnarValue;
+pub use datafusion_expr_common::accumulator::Accumulator;
+pub use datafusion_expr_common::columnar_value::ColumnarValue;
+pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+pub use datafusion_expr_common::operator::Operator;
+pub use datafusion_expr_common::signature::{
+    ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
+};
+pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{
     Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GroupingSet, Like,
     Sort as SortExpr, TryCast, WindowFunctionDefinition,
@@ -75,14 +85,9 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
-pub use groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
-pub use operator::Operator;
 pub use partition_evaluator::PartitionEvaluator;
-pub use signature::{
-    ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
-};
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{AggregateUDF, AggregateUDFImpl, ReversedUDAF};

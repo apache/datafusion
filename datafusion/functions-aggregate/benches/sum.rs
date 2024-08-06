@@ -23,6 +23,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::DFSchema;
 use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::sum::Sum;
+use datafusion_physical_expr::expressions::col;
 use std::sync::Arc;
 
 fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
@@ -33,12 +34,12 @@ fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
         schema: &schema,
         dfschema: &df_schema,
         ignore_nulls: false,
-        sort_exprs: &[],
+        ordering_req: &[],
         is_reversed: false,
         name: "SUM(f)",
         is_distinct: false,
         input_types: &[data_type.clone()],
-        input_exprs: &[datafusion_expr::col("f")],
+        physical_exprs: &[col("f", &schema).unwrap()],
     };
     let sum_fn = Sum::new();
 

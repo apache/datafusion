@@ -35,7 +35,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
 };
 
-use datafusion_physical_expr_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
 
 // returns the new value after bool_and/bool_or with the new values, taking nullability into account
 macro_rules! typed_bool_and_or_batch {

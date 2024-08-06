@@ -17,9 +17,6 @@
 
 use std::sync::Arc;
 
-use crate::signature::{
-    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
-};
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
@@ -28,6 +25,9 @@ use arrow::{
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err, Result,
+};
+use datafusion_expr_common::signature::{
+    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
 };
 
 use super::binary::{binary_numeric_coercion, comparison_coercion};

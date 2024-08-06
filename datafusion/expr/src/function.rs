@@ -21,6 +21,8 @@ use crate::ColumnarValue;
 use crate::{Accumulator, Expr, PartitionEvaluator};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{DFSchema, Result};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy)]
@@ -79,7 +81,8 @@ pub struct AccumulatorArgs<'a> {
     /// ```
     ///
     /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
-    pub sort_exprs: &'a [Expr],
+    // pub sort_exprs: &'a [Expr],
+    pub ordering_req: &'a [PhysicalSortExpr],
 
     /// Whether the aggregation is running in reverse order
     pub is_reversed: bool,
@@ -98,7 +101,8 @@ pub struct AccumulatorArgs<'a> {
     pub input_types: &'a [DataType],
 
     /// The logical expression of arguments the aggregate function takes.
-    pub input_exprs: &'a [Expr],
+    // pub input_exprs: &'a [Expr],
+    pub physical_exprs: &'a [Arc<dyn PhysicalExpr>],
 }
 
 /// [`StateFieldsArgs`] contains information about the fields that an

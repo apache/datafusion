@@ -32,8 +32,8 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-use datafusion_physical_expr_common::expressions::column::Column;
-use datafusion_physical_expr_common::expressions::Literal;
+use super::Column;
+use super::Literal;
 use itertools::Itertools;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
@@ -550,6 +550,7 @@ mod tests {
     use super::*;
     use crate::expressions::{binary, cast, col, lit, BinaryExpr};
 
+    use super::Literal;
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
@@ -558,7 +559,6 @@ mod tests {
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr_common::expressions::Literal;
 
     #[test]
     fn case_with_expr() -> Result<()> {

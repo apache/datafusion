@@ -29,11 +29,10 @@ use arrow::{
     },
 };
 use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr_common::accumulator::Accumulator;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
-use crate::sort_expr::PhysicalSortExpr;
-
-use super::AggregateExpr;
+use crate::aggregate::AggregateExpr;
 
 /// Downcast a `Box<dyn AggregateExpr>` or `Arc<dyn AggregateExpr>`
 /// and return the inner trait object as [`Any`] so

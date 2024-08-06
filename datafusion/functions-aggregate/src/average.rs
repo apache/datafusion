@@ -34,8 +34,8 @@ use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
 };
-use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::NullState;
-use datafusion_physical_expr_common::aggregate::utils::DecimalAverager;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use log::debug;
 use std::any::Any;
 use std::fmt::Debug;

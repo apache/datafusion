@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
 use arrow::buffer::BooleanBuffer;
 use datafusion_common::Result;
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use super::accumulate::NullState;
 

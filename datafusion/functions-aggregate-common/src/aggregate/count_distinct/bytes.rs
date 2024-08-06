@@ -17,13 +17,13 @@
 
 //! [`BytesDistinctCountAccumulator`] for Utf8/LargeUtf8/Binary/LargeBinary values
 
-use crate::binary_map::{ArrowBytesSet, OutputType};
-use crate::binary_view_map::ArrowBytesViewSet;
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::array_into_list_array_nullable;
 use datafusion_common::ScalarValue;
-use datafusion_expr::Accumulator;
+use datafusion_expr_common::accumulator::Accumulator;
+use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
+use datafusion_physical_expr_common::binary_view_map::ArrowBytesViewSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 

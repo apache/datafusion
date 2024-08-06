@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::Operator;
+use crate::operator::Operator;
 
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
@@ -569,7 +569,7 @@ fn string_temporal_coercion(
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type where both are numeric
-pub(crate) fn binary_numeric_coercion(
+pub fn binary_numeric_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {

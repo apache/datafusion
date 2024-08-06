@@ -1219,10 +1219,10 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use crate::common::collect;
-    use datafusion_physical_expr_common::aggregate::{
+    use datafusion_expr_functions_aggregate::aggregate::{
         create_aggregate_expr_with_dfschema, AggregateExprBuilder,
     };
-    use datafusion_physical_expr_common::expressions::Literal;
+    use datafusion_physical_expr::expressions::Literal;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1995,11 +1995,9 @@ mod tests {
         let args = vec![col("b", schema)?];
         let logical_args = vec![datafusion_expr::col("b")];
         let func = datafusion_expr::AggregateUDF::new_from_impl(FirstValue::new());
-        datafusion_physical_expr_common::aggregate::create_aggregate_expr_with_dfschema(
+        datafusion_expr_functions_aggregate::aggregate::create_aggregate_expr_with_dfschema(
             &func,
             &args,
-            &logical_args,
-            &sort_exprs,
             &ordering_req,
             dfschema,
             "FIRST_VALUE(b)",
@@ -2030,8 +2028,6 @@ mod tests {
         create_aggregate_expr_with_dfschema(
             &func,
             &args,
-            &logical_args,
-            &sort_exprs,
             &ordering_req,
             dfschema,
             "LAST_VALUE(b)",
@@ -2263,8 +2259,6 @@ mod tests {
                 create_aggregate_expr_with_dfschema(
                     &array_agg_udaf(),
                     &[Arc::clone(col_a)],
-                    &[],
-                    &sort_exprs,
                     &ordering_req,
                     &test_df_schema,
                     "array_agg",
@@ -2423,8 +2417,6 @@ mod tests {
             vec![create_aggregate_expr_with_dfschema(
                 &count_udaf(),
                 &[col("val", &schema)?],
-                &[datafusion_expr::col("val")],
-                &[],
                 &[],
                 &df_schema,
                 "COUNT(val)",
@@ -2511,8 +2503,6 @@ mod tests {
             vec![create_aggregate_expr_with_dfschema(
                 &count_udaf(),
                 &[col("val", &schema)?],
-                &[datafusion_expr::col("val")],
-                &[],
                 &[],
                 &df_schema,
                 "COUNT(val)",

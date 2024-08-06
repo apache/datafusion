@@ -313,10 +313,10 @@ pub(crate) mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_int64_array;
+    use datafusion_expr_functions_aggregate::aggregate::AggregateExprBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::expressions::cast;
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
     use datafusion_physical_plan::aggregates::AggregateMode;
 
     /// Mock data using a MemoryExec which has an exact count statistic

@@ -1853,8 +1853,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 let agg_expr = udaf::create_aggregate_expr_with_dfschema(
                     func,
                     &physical_args,
-                    args,
-                    &sort_exprs,
                     &ordering_reqs,
                     logical_input_schema,
                     name,

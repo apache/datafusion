@@ -49,7 +49,7 @@ use arrow::datatypes::{
 };
 use arrow_schema::IntervalUnit;
 use datafusion_common::{downcast_value, internal_err, DataFusionError, Result};
-use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use std::fmt::Debug;
 
 use arrow::datatypes::i256;

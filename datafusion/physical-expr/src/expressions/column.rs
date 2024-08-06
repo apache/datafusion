@@ -25,7 +25,9 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{internal_err, Result};
+use arrow_schema::SchemaRef;
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::ColumnarValue;
 
 use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
@@ -134,6 +136,35 @@ impl Column {
 /// Create a column expression
 pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(Column::new_with_schema(name, schema)?))
+}
+
+// TODO: Move expressions out of physical-expr?
+
+/// Rewrites an expression according to new schema; i.e. changes the columns it
+/// refers to with the column at corresponding index in the new schema. Returns
+/// an error if the given schema has fewer columns than the original schema.
+/// Note that the resulting expression may not be valid if data types in the
+/// new schema is incompatible with expression nodes.
+pub fn with_new_schema(
+    expr: Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(expr
+        .transform_up(|expr| {
+            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                let idx = col.index();
+                let Some(field) = schema.fields().get(idx) else {
+                    return plan_err!(
+                        "New schema has fewer columns than original schema"
+                    );
+                };
+                let new_col = Column::new(field.name(), idx);
+                Ok(Transformed::yes(Arc::new(new_col) as _))
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })?
+        .data)
 }
 
 #[cfg(test)]

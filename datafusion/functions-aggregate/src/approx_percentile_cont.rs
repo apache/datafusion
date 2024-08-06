@@ -31,9 +31,10 @@ use arrow::{
 use arrow_schema::{Field, Schema};
 
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, plan_err, DFSchema, DataFusionError,
-    ScalarValue,
+    downcast_value, exec_err, internal_err, not_impl_err, plan_err, DFSchema,
+    DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::expr::Alias;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
@@ -41,10 +42,11 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, ColumnarValue, Expr, Signature, TypeSignature,
     Volatility,
 };
-use datafusion_physical_expr_common::aggregate::tdigest::{
+use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
 };
-use datafusion_physical_expr_common::utils::limited_convert_logical_expr_to_physical_expr_with_dfschema;
+use datafusion_physical_expr::expressions::{CastExpr, Column, Literal};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 make_udaf_expr_and_func!(
     ApproxPercentileCont,
@@ -98,9 +100,9 @@ impl ApproxPercentileCont {
         &self,
         args: AccumulatorArgs,
     ) -> datafusion_common::Result<ApproxPercentileAccumulator> {
-        let percentile = validate_input_percentile_expr(&args.input_exprs[1])?;
-        let tdigest_max_size = if args.input_exprs.len() == 3 {
-            Some(validate_input_max_size_expr(&args.input_exprs[2])?)
+        let percentile = validate_input_percentile_expr(&args.physical_exprs[1])?;
+        let tdigest_max_size = if args.physical_exprs.len() == 3 {
+            Some(validate_input_max_size_expr(&args.physical_exprs[2])?)
         } else {
             None
         };
@@ -134,12 +136,42 @@ impl ApproxPercentileCont {
     }
 }
 
-fn get_lit_value(expr: &Expr) -> datafusion_common::Result<ScalarValue> {
+/// Converts `datafusion_expr::Expr` into corresponding `Arc<dyn PhysicalExpr>`.
+/// If conversion is not supported yet, returns Error.
+fn limited_convert_logical_expr_to_physical_expr_with_dfschema(
+    expr: &Expr,
+    dfschema: &DFSchema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    match expr {
+        Expr::Alias(Alias { expr, .. }) => Ok(
+            limited_convert_logical_expr_to_physical_expr_with_dfschema(expr, dfschema)?,
+        ),
+        Expr::Column(col) => {
+            let idx = dfschema.index_of_column(col)?;
+            Ok(Arc::new(Column::new(&col.name, idx)))
+        }
+        Expr::Cast(cast_expr) => Ok(Arc::new(CastExpr::new(
+            limited_convert_logical_expr_to_physical_expr_with_dfschema(
+                cast_expr.expr.as_ref(),
+                dfschema,
+            )?,
+            cast_expr.data_type.clone(),
+            None,
+        ))),
+        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
+        _ => exec_err!(
+            "Unsupported expression: {expr} for conversion to Arc<dyn PhysicalExpr>"
+        ),
+    }
+}
+
+fn get_lit_value(expr: &Arc<dyn PhysicalExpr>) -> datafusion_common::Result<ScalarValue> {
+    // TODO: use real schema
     let empty_schema = Arc::new(Schema::empty());
     let empty_batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
-    let dfschema = DFSchema::empty();
-    let expr =
-        limited_convert_logical_expr_to_physical_expr_with_dfschema(expr, &dfschema)?;
+    // let dfschema = DFSchema::empty();
+    // let expr =
+    //     limited_convert_logical_expr_to_physical_expr_with_dfschema(expr, &dfschema)?;
     let result = expr.evaluate(&empty_batch)?;
     match result {
         ColumnarValue::Array(_) => Err(DataFusionError::Internal(format!(
@@ -150,7 +182,9 @@ fn get_lit_value(expr: &Expr) -> datafusion_common::Result<ScalarValue> {
     }
 }
 
-fn validate_input_percentile_expr(expr: &Expr) -> datafusion_common::Result<f64> {
+fn validate_input_percentile_expr(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> datafusion_common::Result<f64> {
     let lit = get_lit_value(expr)?;
     let percentile = match &lit {
         ScalarValue::Float32(Some(q)) => *q as f64,
@@ -170,7 +204,9 @@ fn validate_input_percentile_expr(expr: &Expr) -> datafusion_common::Result<f64>
     Ok(percentile)
 }
 
-fn validate_input_max_size_expr(expr: &Expr) -> datafusion_common::Result<usize> {
+fn validate_input_max_size_expr(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> datafusion_common::Result<usize> {
     let lit = get_lit_value(expr)?;
     let max_size = match &lit {
         ScalarValue::UInt8(Some(q)) => *q as usize,
@@ -464,7 +500,7 @@ impl Accumulator for ApproxPercentileAccumulator {
 mod tests {
     use arrow_schema::DataType;
 
-    use datafusion_physical_expr_common::aggregate::tdigest::TDigest;
+    use datafusion_functions_aggregate_common::tdigest::TDigest;
 
     use crate::approx_percentile_cont::ApproxPercentileAccumulator;
 

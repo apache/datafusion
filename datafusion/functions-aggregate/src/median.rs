@@ -38,7 +38,7 @@ use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     Signature, Volatility,
 };
-use datafusion_physical_expr_common::aggregate::utils::Hashable;
+use datafusion_functions_aggregate_common::utils::Hashable;
 
 make_udaf_expr_and_func!(
     Median,

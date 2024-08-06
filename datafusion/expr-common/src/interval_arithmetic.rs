@@ -17,9 +17,9 @@
 
 //! Interval arithmetic library
 
+use crate::operator::Operator;
 use crate::type_coercion::binary::get_result_type;
-use crate::Operator;
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
+use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano};
 use std::borrow::Borrow;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
@@ -120,12 +120,12 @@ macro_rules! value_transition {
                 IntervalYearMonth(None)
             }
             IntervalDayTime(Some(value))
-                if value == arrow_buffer::IntervalDayTime::$bound =>
+                if value == arrow::datatypes::IntervalDayTime::$bound =>
             {
                 IntervalDayTime(None)
             }
             IntervalMonthDayNano(Some(value))
-                if value == arrow_buffer::IntervalMonthDayNano::$bound =>
+                if value == arrow::datatypes::IntervalMonthDayNano::$bound =>
             {
                 IntervalMonthDayNano(None)
             }
@@ -1135,12 +1135,12 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
         }
         IntervalDayTime(Some(val)) => IntervalDayTime(Some(increment_decrement::<
             INC,
-            arrow_buffer::IntervalDayTime,
+            arrow::datatypes::IntervalDayTime,
         >(val))),
         IntervalMonthDayNano(Some(val)) => {
             IntervalMonthDayNano(Some(increment_decrement::<
                 INC,
-                arrow_buffer::IntervalMonthDayNano,
+                arrow::datatypes::IntervalMonthDayNano,
             >(val)))
         }
         _ => value, // Unbounded values return without change.

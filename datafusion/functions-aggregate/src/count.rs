@@ -16,7 +16,7 @@
 // under the License.
 
 use ahash::RandomState;
-use datafusion_physical_expr_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
+use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use std::collections::HashSet;
 use std::ops::BitAnd;
 use std::{fmt::Debug, sync::Arc};
@@ -47,14 +47,12 @@ use datafusion_expr::{
     EmitTo, GroupsAccumulator, Signature, Volatility,
 };
 use datafusion_expr::{Expr, ReversedUDAF, TypeSignature};
-use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
-use datafusion_physical_expr_common::{
-    aggregate::count_distinct::{
-        BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
-        PrimitiveDistinctCountAccumulator,
-    },
-    binary_map::OutputType,
+use datafusion_functions_aggregate_common::aggregate::count_distinct::{
+    BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
+    PrimitiveDistinctCountAccumulator,
 };
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
+use datafusion_physical_expr_common::binary_map::OutputType;
 
 make_udaf_expr_and_func!(
     Count,
@@ -145,7 +143,7 @@ impl AggregateUDFImpl for Count {
             return Ok(Box::new(CountAccumulator::new()));
         }
 
-        if acc_args.input_exprs.len() > 1 {
+        if acc_args.physical_exprs.len() > 1 {
             return not_impl_err!("COUNT DISTINCT with multiple arguments");
         }
 
@@ -271,7 +269,7 @@ impl AggregateUDFImpl for Count {
         if args.is_distinct {
             return false;
         }
-        args.input_exprs.len() == 1
+        args.physical_exprs.len() == 1
     }
 
     fn create_groups_accumulator(
