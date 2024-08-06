@@ -17,6 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{not_impl_err, plan_err, DFSchema, Result, TableReference};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, TableFactor};
 
@@ -142,10 +143,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 );
             }
         };
+
+        let optimized_plan = optimize_subquery_sort(plan)?.data;
         if let Some(alias) = alias {
-            self.apply_table_alias(plan, alias)
+            self.apply_table_alias(optimized_plan, alias)
         } else {
-            Ok(plan)
+            Ok(optimized_plan)
         }
     }
+}
+
+fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    // When a subquery is initialized, we look for the sort options since they might be redundant.
+    // It's only important if the subquery result is affected with the order by statement.
+    // Which are the cases of:
+    // 1. DISTINCT ON => We handle it as an Aggregate plan and keep the sorting
+    // 2. RANK / ROW_NUMBER ... => It's handled as a WindowAggr plan sorting is preserved
+    // 3. LIMIT => It's handled as a Sort plan type so that we need to search for it
+    let mut has_limit = false;
+    let new_plan = plan.clone().transform_down(|c| {
+        if let LogicalPlan::Limit(_) = c {
+            has_limit = true;
+            return Ok(Transformed::no(c));
+        }
+        if let LogicalPlan::Sort(_) = c {
+            if !has_limit {
+                has_limit = false;
+                return Ok(Transformed::yes(c.inputs()[0].clone()));
+            }
+        }
+        Ok(Transformed::no(c))
+    });
+    return new_plan
 }
