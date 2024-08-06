@@ -18,12 +18,13 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
 use datafusion_expr::expr::create_function_physical_name;
-use datafusion_expr::function::StateFieldsArgs;
+use datafusion_expr::AggregateUDF;
 use datafusion_expr::ReversedUDAF;
-use datafusion_expr::{function::AccumulatorArgs, AggregateUDF};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
+use datafusion_functions_aggregate_common::accumulator::AccumulatorArgs;
+use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
 use datafusion_functions_aggregate_common::aggregate::AggregateExpr;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_functions_aggregate_common::utils::{self, down_cast_any_ref};

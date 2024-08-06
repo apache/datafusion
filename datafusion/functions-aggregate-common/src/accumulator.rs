@@ -84,9 +84,7 @@ pub type AccumulatorFactoryFunction =
     Arc<dyn Fn(AccumulatorArgs) -> Result<Box<dyn Accumulator>> + Send + Sync>;
 
 /// [`StateFieldsArgs`] contains information about the fields that an
-/// aggregate function's accumulator should have. Used for [`AggregateUDFImpl::state_fields`].
-///
-/// [`AggregateUDFImpl::state_fields`]: crate::udaf::AggregateUDFImpl::state_fields
+/// aggregate function's accumulator should have. Used for `AggregateUDFImpl::state_fields`.
 pub struct StateFieldsArgs<'a> {
     /// The name of the aggregate function.
     pub name: &'a str,
