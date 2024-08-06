@@ -61,7 +61,6 @@ pub async fn get_statistics_with_limit(
         file.statistics = Some(file_stats.as_ref().clone());
         result_files.push(file);
 
-
         // First file, we set them directly from the file statistics.
         num_rows = file_stats.num_rows.clone();
         total_byte_size = file_stats.total_byte_size.clone();

@@ -1013,7 +1013,8 @@ impl ListingTable {
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> Result<Arc<Statistics>> {
-        match self.collected_statistics
+        match self
+            .collected_statistics
             .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
         {
             Some(statistics) => Ok(statistics.clone()),
