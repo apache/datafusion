@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
-use arrow::buffer::BooleanBuffer;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use datafusion_common::Result;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 
@@ -134,5 +134,39 @@ where
     fn size(&self) -> usize {
         // capacity is in bits, so convert to bytes
         self.values.capacity() / 8 + self.null_state.size()
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let values = values[0].as_boolean().clone();
+
+        let values_filtered = match opt_filter {
+            None => values,
+            Some(filter) => {
+                let (filter_values, filter_nulls) = filter.clone().into_parts();
+                // Calculating filter mask as a result of bitand of filter, and converting it to null buffer
+                let filter_bool = match filter_nulls {
+                    Some(filter_nulls) => filter_nulls.inner() & &filter_values,
+                    None => filter_values,
+                };
+                let filter_nulls = NullBuffer::from(filter_bool);
+
+                // Rebuilding input values with a new nulls mask, which is equal to
+                // the union of original nulls and filter mask
+                let (values_buf, original_nulls) = values.clone().into_parts();
+                let nulls_buf =
+                    NullBuffer::union(original_nulls.as_ref(), Some(&filter_nulls));
+                BooleanArray::new(values_buf, nulls_buf)
+            }
+        };
+
+        Ok(vec![Arc::new(values_filtered)])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 }
