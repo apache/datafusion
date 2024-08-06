@@ -1209,7 +1209,6 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use datafusion_expr::expr::Sort;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
@@ -1363,7 +1362,6 @@ mod tests {
         let aggregates = vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1i8)])
             .schema(Arc::clone(&input_schema))
             .name("COUNT(1)")
-            .logical_exprs(vec![datafusion_expr::lit(1i8)])
             .build()?];
 
         let task_ctx = if spill {
@@ -1983,17 +1981,11 @@ mod tests {
         dfschema: &DFSchema,
         sort_options: SortOptions,
     ) -> Result<Arc<dyn AggregateExpr>> {
-        let sort_exprs = vec![datafusion_expr::Expr::Sort(Sort {
-            expr: Box::new(datafusion_expr::col("b")),
-            asc: !sort_options.descending,
-            nulls_first: sort_options.nulls_first,
-        })];
         let ordering_req = vec![PhysicalSortExpr {
             expr: col("b", schema)?,
             options: sort_options,
         }];
         let args = vec![col("b", schema)?];
-        let logical_args = vec![datafusion_expr::col("b")];
         let func = datafusion_expr::AggregateUDF::new_from_impl(FirstValue::new());
         datafusion_expr_functions_aggregate::aggregate::create_aggregate_expr_with_dfschema(
             &func,
@@ -2013,17 +2005,11 @@ mod tests {
         dfschema: &DFSchema,
         sort_options: SortOptions,
     ) -> Result<Arc<dyn AggregateExpr>> {
-        let sort_exprs = vec![datafusion_expr::Expr::Sort(Sort {
-            expr: Box::new(datafusion_expr::col("b")),
-            asc: !sort_options.descending,
-            nulls_first: sort_options.nulls_first,
-        })];
         let ordering_req = vec![PhysicalSortExpr {
             expr: col("b", schema)?,
             options: sort_options,
         }];
         let args = vec![col("b", schema)?];
-        let logical_args = vec![datafusion_expr::col("b")];
         let func = datafusion_expr::AggregateUDF::new_from_impl(LastValue::new());
         create_aggregate_expr_with_dfschema(
             &func,
@@ -2200,46 +2186,7 @@ mod tests {
                 },
             ]),
         ];
-        let col_expr_a = Box::new(datafusion_expr::col("a"));
-        let col_expr_b = Box::new(datafusion_expr::col("b"));
-        let col_expr_c = Box::new(datafusion_expr::col("c"));
-        let sort_exprs = vec![
-            None,
-            Some(vec![datafusion_expr::Expr::Sort(Sort::new(
-                col_expr_a.clone(),
-                options1.descending,
-                options1.nulls_first,
-            ))]),
-            Some(vec![
-                datafusion_expr::Expr::Sort(Sort::new(
-                    col_expr_a.clone(),
-                    options1.descending,
-                    options1.nulls_first,
-                )),
-                datafusion_expr::Expr::Sort(Sort::new(
-                    col_expr_b.clone(),
-                    options1.descending,
-                    options1.nulls_first,
-                )),
-                datafusion_expr::Expr::Sort(Sort::new(
-                    col_expr_c,
-                    options1.descending,
-                    options1.nulls_first,
-                )),
-            ]),
-            Some(vec![
-                datafusion_expr::Expr::Sort(Sort::new(
-                    col_expr_a,
-                    options1.descending,
-                    options1.nulls_first,
-                )),
-                datafusion_expr::Expr::Sort(Sort::new(
-                    col_expr_b,
-                    options1.descending,
-                    options1.nulls_first,
-                )),
-            ]),
-        ];
+
         let common_requirement = vec![
             PhysicalSortExpr {
                 expr: Arc::clone(col_a),
@@ -2252,10 +2199,8 @@ mod tests {
         ];
         let mut aggr_exprs = order_by_exprs
             .into_iter()
-            .zip(sort_exprs.into_iter())
-            .map(|(order_by_expr, sort_exprs)| {
+            .map(|order_by_expr| {
                 let ordering_req = order_by_expr.unwrap_or_default();
-                let sort_exprs = sort_exprs.unwrap_or_default();
                 create_aggregate_expr_with_dfschema(
                     &array_agg_udaf(),
                     &[Arc::clone(col_a)],

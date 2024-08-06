@@ -31,21 +31,17 @@ use arrow::{
 use arrow_schema::{Field, Schema};
 
 use datafusion_common::{
-    downcast_value, exec_err, internal_err, not_impl_err, plan_err, DFSchema,
-    DataFusionError, Result, ScalarValue,
+    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, ScalarValue,
 };
-use datafusion_expr::expr::Alias;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ColumnarValue, Expr, Signature, TypeSignature,
-    Volatility,
+    Accumulator, AggregateUDFImpl, ColumnarValue, Signature, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
 };
-use datafusion_physical_expr::expressions::{CastExpr, Column, Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 make_udaf_expr_and_func!(
@@ -136,42 +132,10 @@ impl ApproxPercentileCont {
     }
 }
 
-/// Converts `datafusion_expr::Expr` into corresponding `Arc<dyn PhysicalExpr>`.
-/// If conversion is not supported yet, returns Error.
-fn limited_convert_logical_expr_to_physical_expr_with_dfschema(
-    expr: &Expr,
-    dfschema: &DFSchema,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    match expr {
-        Expr::Alias(Alias { expr, .. }) => Ok(
-            limited_convert_logical_expr_to_physical_expr_with_dfschema(expr, dfschema)?,
-        ),
-        Expr::Column(col) => {
-            let idx = dfschema.index_of_column(col)?;
-            Ok(Arc::new(Column::new(&col.name, idx)))
-        }
-        Expr::Cast(cast_expr) => Ok(Arc::new(CastExpr::new(
-            limited_convert_logical_expr_to_physical_expr_with_dfschema(
-                cast_expr.expr.as_ref(),
-                dfschema,
-            )?,
-            cast_expr.data_type.clone(),
-            None,
-        ))),
-        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
-        _ => exec_err!(
-            "Unsupported expression: {expr} for conversion to Arc<dyn PhysicalExpr>"
-        ),
-    }
-}
-
 fn get_lit_value(expr: &Arc<dyn PhysicalExpr>) -> datafusion_common::Result<ScalarValue> {
     // TODO: use real schema
     let empty_schema = Arc::new(Schema::empty());
     let empty_batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
-    // let dfschema = DFSchema::empty();
-    // let expr =
-    //     limited_convert_logical_expr_to_physical_expr_with_dfschema(expr, &dfschema)?;
     let result = expr.evaluate(&empty_batch)?;
     match result {
         ColumnarValue::Array(_) => Err(DataFusionError::Internal(format!(

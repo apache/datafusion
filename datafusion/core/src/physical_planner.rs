@@ -1837,7 +1837,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 == NullTreatment::IgnoreNulls;
 
             let (agg_expr, filter, order_by) = {
-                let sort_exprs = order_by.clone().unwrap_or(vec![]);
                 let physical_sort_exprs = match order_by {
                     Some(exprs) => Some(create_physical_sort_exprs(
                         exprs,

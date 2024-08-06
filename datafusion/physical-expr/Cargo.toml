@@ -57,8 +57,8 @@ datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
-datafusion-physical-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
 hex = { version = "0.4", optional = true }

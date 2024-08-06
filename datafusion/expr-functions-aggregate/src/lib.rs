@@ -15,6 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Technically, those aggregate functions releated things that has depedency on `expr` should be here
+//! Technically, all aggregate functions that depend on `expr` crate should be included here.
 
 pub mod aggregate;
