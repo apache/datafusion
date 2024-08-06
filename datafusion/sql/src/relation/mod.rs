@@ -157,7 +157,7 @@ fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>>
     // When a subquery is initialized, we look for the sort options since they might be redundant.
     // It's only important if the subquery result is affected with the order by statement.
     // Which are the cases of:
-    // 1. DISTINCT ON => We handle it as an Aggregate plan and keep the sorting
+    // 1. DISTINCT ON => It's handled as an Aggregate plan and keep the sorting
     // 2. RANK / ROW_NUMBER ... => It's handled as a WindowAggr plan sorting is preserved
     // 3. LIMIT => It's handled as a Sort plan type so that we need to search for it
     let mut has_limit = false;
