@@ -2739,8 +2739,8 @@ fn logical_plan_with_dialect_and_options(
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
     let context = MockContextProvider::default()
-        .with_udf(unicode::character_length().as_ref().clone())
-        .with_udf(string::concat().as_ref().clone())
+        .with_udf(unicode::character_length().as_ref().clone().into())
+        .with_udf(string::concat().as_ref().clone().into())
         .with_udf(make_udf(
             "nullif",
             vec![DataType::Int32, DataType::Int32],
@@ -2777,8 +2777,16 @@ fn logical_plan_with_dialect_and_options(
     planner.statement_to_plan(ast.pop_front().unwrap())
 }
 
-fn make_udf(name: &'static str, args: Vec<DataType>, return_type: DataType) -> ScalarUDF {
-    ScalarUDF::new_from_impl(DummyUDF::new(name, args, return_type))
+fn make_udf(
+    name: &'static str,
+    args: Vec<DataType>,
+    return_type: DataType,
+) -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(DummyUDF::new(
+        name,
+        args,
+        return_type,
+    )))
 }
 
 /// Mocked UDF

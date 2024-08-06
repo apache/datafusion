@@ -20,6 +20,7 @@
 //! These are used to avoid a dependence on `datafusion-functions-aggregate` which live in a different crate
 
 use std::any::Any;
+use std::sync::Arc;
 
 use arrow::datatypes::{
     DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
@@ -28,13 +29,12 @@ use arrow::datatypes::{
 use datafusion_common::{exec_err, not_impl_err, Result};
 
 use crate::type_coercion::aggregates::{avg_return_type, coerce_avg_type, NUMERICS};
-use crate::Volatility::Immutable;
 use crate::{
     expr::AggregateFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::AggregateOrderSensitivity,
-    Accumulator, AggregateUDFImpl, Expr, GroupsAccumulator, ReversedUDAF, Signature,
-    Volatility,
+    Accumulator, AggregateUDFImpl, ColumnarValue, Expr, GroupsAccumulator, ReversedUDAF,
+    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 
 macro_rules! create_func {
@@ -43,15 +43,13 @@ macro_rules! create_func {
             /// Singleton instance of [$UDAF], ensures the UDAF is only created once
             /// named STATIC_$(UDAF). For example `STATIC_FirstValue`
             #[allow(non_upper_case_globals)]
-            static [< STATIC_ $UDAF >]: std::sync::OnceLock<std::sync::Arc<crate::AggregateUDF>> =
+            static [< STATIC_ $UDAF >]: std::sync::OnceLock<Arc<crate::AggregateUDF>> =
                 std::sync::OnceLock::new();
 
             #[doc = concat!("AggregateFunction that returns a [AggregateUDF](crate::AggregateUDF) for [`", stringify!($UDAF), "`]")]
-            pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<crate::AggregateUDF> {
+            pub fn $AGGREGATE_UDF_FN() -> Arc<crate::AggregateUDF> {
                 [< STATIC_ $UDAF >]
-                    .get_or_init(|| {
-                        std::sync::Arc::new(crate::AggregateUDF::from(<$UDAF>::default()))
-                    })
+                    .get_or_init(|| Arc::new(crate::AggregateUDF::from(<$UDAF>::default())))
                     .clone()
             }
         }
@@ -463,7 +461,7 @@ impl Avg {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("mean")],
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Immutable),
+            signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
         }
     }
 }
@@ -505,4 +503,57 @@ impl AggregateUDFImpl for Avg {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         coerce_avg_type(self.name(), arg_types)
     }
+}
+
+#[derive(Debug)]
+pub struct ArrayHas {
+    signature: Signature,
+}
+
+impl Default for ArrayHas {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ArrayHas {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::array_and_element(Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayHas {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_has"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Boolean)
+    }
+
+    fn invoke(&self, _: &[ColumnarValue]) -> Result<ColumnarValue> {
+        not_impl_err!("no impl for stub")
+    }
+
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
+}
+
+static STATIC_ARRAY_HAS: std::sync::OnceLock<Arc<ScalarUDF>> = std::sync::OnceLock::new();
+
+pub fn array_has_udf() -> Arc<ScalarUDF> {
+    Arc::<ScalarUDF>::clone(
+        STATIC_ARRAY_HAS
+            .get_or_init(|| Arc::new(ScalarUDF::new_from_impl(ArrayHas::new()))),
+    )
 }

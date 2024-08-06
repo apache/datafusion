@@ -21,8 +21,8 @@ use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::planner::RawDictionaryExpr;
 use datafusion_expr::planner::RawFieldAccessExpr;
 use sqlparser::ast::{
-    CastKind, DictionaryField, Expr as SQLExpr, MapEntry, StructField, Subscript,
-    TrimWhereField, Value,
+    BinaryOperator, CastKind, DictionaryField, Expr as SQLExpr, MapEntry, StructField,
+    Subscript, TrimWhereField, Value,
 };
 
 use datafusion_common::{
@@ -630,6 +630,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             SQLExpr::Map(map) => {
                 self.try_plan_map_literal(map.entries, schema, planner_context)
+            }
+            SQLExpr::AnyOp {
+                left,
+                compare_op,
+                right,
+            } => {
+                if compare_op != BinaryOperator::Eq {
+                    return plan_err!(
+                        "Unsupported AnyOp: {compare_op}, only '=' is supported"
+                    );
+                }
+
+                let Some(fun) = self.context_provider.get_function_meta("array_has")
+                else {
+                    return plan_err!("Unable to find expected 'array_has' function");
+                };
+
+                let haystack_array_arg =
+                    self.sql_expr_to_logical_expr(*right, schema, planner_context)?;
+                let needle_arg =
+                    self.sql_expr_to_logical_expr(*left, schema, planner_context)?;
+                Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                    fun,
+                    vec![haystack_array_arg, needle_arg],
+                )))
             }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }

@@ -64,9 +64,8 @@ impl MockContextProvider {
         &mut self.options
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn with_udf(mut self, udf: ScalarUDF) -> Self {
-        self.udfs.insert(udf.name().to_string(), Arc::new(udf));
+    pub(crate) fn with_udf(mut self, udf: Arc<ScalarUDF>) -> Self {
+        self.udfs.insert(udf.name().to_string(), udf);
         self
     }
 
