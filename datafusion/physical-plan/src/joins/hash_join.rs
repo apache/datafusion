@@ -2160,7 +2160,6 @@ mod tests {
         } else {
             // With hash collisions enabled, all records will match each other
             // and filtered later.
-            // Expected number of matches = 6
             div_ceil(6, batch_size)
         };
         assert_eq!(batches.len(), expected_batch_count);
@@ -2186,7 +2185,6 @@ mod tests {
         } else {
             // With hash collisions enabled, all records will match each other
             // and filtered later.
-            // Expected number of matches = 3
             div_ceil(3, batch_size)
         };
         assert_eq!(batches.len(), expected_batch_count);
