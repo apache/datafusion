@@ -274,7 +274,50 @@ impl PhysicalExpr for BinaryExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         use arrow::compute::kernels::numeric::*;
 
+        fn check_short_circuit(arg: &ColumnarValue, op: &Operator) -> bool {
+            let data_type = arg.data_type();
+            match (data_type, op) {
+                (DataType::Boolean, Operator::And) => {
+                    match arg {
+                        ColumnarValue::Array(array) => {
+                            if let Ok(array) = as_boolean_array(&array) {
+                                return array.true_count() == 0;
+                            }
+                        }
+                        ColumnarValue::Scalar(scalar) => {
+                            if let ScalarValue::Boolean(Some(value)) = scalar {
+                                return !value;
+                            }
+                        }
+                    }
+                    false
+                }
+                (DataType::Boolean, Operator::Or) => {
+                    match arg {
+                        ColumnarValue::Array(array) => {
+                            if let Ok(array) = as_boolean_array(&array) {
+                                return array.true_count() == array.len();
+                            }
+                        }
+                        ColumnarValue::Scalar(scalar) => {
+                            if let ScalarValue::Boolean(Some(value)) = scalar {
+                                return *value;
+                            }
+                        }
+                    }
+                    false
+                }
+                _ => false,
+            }
+        }
+
         let lhs = self.left.evaluate(batch)?;
+
+        // Optimize for short-circuiting `Operator::And` or `Operator::Or` operations and return early.
+        if check_short_circuit(&lhs, &self.op) {
+            return Ok(lhs);
+        }
+
         let rhs = self.right.evaluate(batch)?;
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
