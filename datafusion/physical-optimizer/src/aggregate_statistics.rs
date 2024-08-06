@@ -296,3 +296,5 @@ fn is_max(agg_expr: &dyn AggregateExpr) -> bool {
     }
     false
 }
+
+// See tests in datafusion/core/tests/physical_optimizer

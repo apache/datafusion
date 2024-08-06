@@ -36,6 +36,12 @@ mod memory_limit;
 /// Run all tests that are found in the `custom_sources_cases` directory
 mod custom_sources_cases;
 
+/// Run all tests that are found in the `optimizer` directory
+mod optimizer;
+
+/// Run all tests that are found in the `physical_optimizer` directory
+mod physical_optimizer;
+
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
