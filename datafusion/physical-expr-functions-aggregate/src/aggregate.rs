@@ -345,7 +345,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             input_types: &self.input_types,
             name: &self.name,
             is_reversed: self.is_reversed,
-            physical_exprs: &self.args,
+            exprs: &self.args,
         };
 
         self.fun.accumulator(acc_args)
@@ -362,7 +362,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             input_types: &self.input_types,
             name: &self.name,
             is_reversed: self.is_reversed,
-            physical_exprs: &self.args,
+            exprs: &self.args,
         };
 
         let accumulator = self.fun.create_sliding_accumulator(args)?;
@@ -434,7 +434,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             input_types: &self.input_types,
             name: &self.name,
             is_reversed: self.is_reversed,
-            physical_exprs: &self.args,
+            exprs: &self.args,
         };
         self.fun.groups_accumulator_supported(args)
     }
@@ -450,7 +450,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             input_types: &self.input_types,
             name: &self.name,
             is_reversed: self.is_reversed,
-            physical_exprs: &self.args,
+            exprs: &self.args,
         };
         self.fun.create_groups_accumulator(args)
     }

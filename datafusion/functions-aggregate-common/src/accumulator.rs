@@ -76,7 +76,7 @@ pub struct AccumulatorArgs<'a> {
     pub input_types: &'a [DataType],
 
     /// The physical expression of arguments the aggregate function takes.
-    pub physical_exprs: &'a [Arc<dyn PhysicalExpr>],
+    pub exprs: &'a [Arc<dyn PhysicalExpr>],
 }
 
 /// Factory that returns an accumulator for the given aggregate function.

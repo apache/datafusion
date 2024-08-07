@@ -39,7 +39,7 @@ fn prepare_accumulator() -> Box<dyn GroupsAccumulator> {
         name: "COUNT(f)",
         is_distinct: false,
         input_types: &[DataType::Int32],
-        physical_exprs: &[col("f", &schema).unwrap()],
+        exprs: &[col("f", &schema).unwrap()],
     };
     let count_fn = Count::new();
 

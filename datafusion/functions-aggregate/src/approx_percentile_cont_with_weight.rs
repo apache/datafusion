@@ -124,16 +124,16 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
             );
         }
 
-        if acc_args.physical_exprs.len() != 3 {
+        if acc_args.exprs.len() != 3 {
             return plan_err!(
                 "approx_percentile_cont_with_weight requires three arguments: value, weight, percentile"
             );
         }
 
         let sub_args = AccumulatorArgs {
-            physical_exprs: &[
-                Arc::clone(&acc_args.physical_exprs[0]),
-                Arc::clone(&acc_args.physical_exprs[2]),
+            exprs: &[
+                Arc::clone(&acc_args.exprs[0]),
+                Arc::clone(&acc_args.exprs[2]),
             ],
             ..acc_args
         };

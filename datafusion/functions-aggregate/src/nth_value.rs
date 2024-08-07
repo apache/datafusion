@@ -85,7 +85,7 @@ impl AggregateUDFImpl for NthValueAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let n = match acc_args.physical_exprs[1]
+        let n = match acc_args.exprs[1]
             .as_any()
             .downcast_ref::<Literal>()
             .map(|lit| lit.value())
@@ -101,7 +101,7 @@ impl AggregateUDFImpl for NthValueAgg {
                 return not_impl_err!(
                     "{} not supported for n: {}",
                     self.name(),
-                    &acc_args.physical_exprs[1]
+                    &acc_args.exprs[1]
                 )
             }
         };

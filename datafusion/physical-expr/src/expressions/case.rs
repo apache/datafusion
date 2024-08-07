@@ -548,10 +548,10 @@ pub fn case(
 mod tests {
     use super::*;
 
+    use crate::expressions::{binary, cast, col, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
-    use crate::expressions::{binary, cast, col, lit, BinaryExpr};
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};

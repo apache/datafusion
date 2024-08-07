@@ -39,7 +39,7 @@ fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
         name: "SUM(f)",
         is_distinct: false,
         input_types: &[data_type.clone()],
-        physical_exprs: &[col("f", &schema).unwrap()],
+        exprs: &[col("f", &schema).unwrap()],
     };
     let sum_fn = Sum::new();
 

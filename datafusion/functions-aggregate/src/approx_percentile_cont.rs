@@ -97,9 +97,9 @@ impl ApproxPercentileCont {
         &self,
         args: AccumulatorArgs,
     ) -> Result<ApproxPercentileAccumulator> {
-        let percentile = validate_input_percentile_expr(&args.physical_exprs[1])?;
-        let tdigest_max_size = if args.physical_exprs.len() == 3 {
-            Some(validate_input_max_size_expr(&args.physical_exprs[2])?)
+        let percentile = validate_input_percentile_expr(&args.exprs[1])?;
+        let tdigest_max_size = if args.exprs.len() == 3 {
+            Some(validate_input_max_size_expr(&args.exprs[2])?)
         } else {
             None
         };

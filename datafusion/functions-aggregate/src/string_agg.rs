@@ -83,7 +83,7 @@ impl AggregateUDFImpl for StringAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if let Some(lit) = acc_args.physical_exprs[1]
+        if let Some(lit) = acc_args.exprs[1]
             .as_any()
             .downcast_ref::<Literal>()
         {
