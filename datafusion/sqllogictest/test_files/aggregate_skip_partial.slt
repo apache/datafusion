@@ -56,6 +56,28 @@ set datafusion.execution.batch_size = 1;
 statement ok
 set datafusion.sql_parser.dialect = 'Postgres';
 
+# Regression test for https://github.com/apache/datafusion/issues/11850
+# Loosely based on TPC-DS q97
+query IIIIII
+WITH left AS (
+  SELECT c1 as l1, c2 as l2, c3 as l3, c4 as l4
+  FROM aggregate_test_100
+  GROUP BY 1, 2, 3, 4),
+right AS (
+  SELECT c1 as r1, c2 as r2, c3 as r3, c4 as r4
+  FROM aggregate_test_100
+  GROUP BY 1, 2, 3, 4)
+SELECT
+  SUM(l2), sum(l3), sum(l4),
+  sum(r2), sum(r3), sum(r4) FROM left
+FULL OUTER JOIN right
+ON left.l1 = right.r1
+AND left.l2 = right.r2
+AND left.l3 = right.r3
+AND left.l4 = right.r4;
+----
+285 781 231997 285 781 231997
+
 # Grouping by unique fields allows to check all accumulators
 query ITIIII
 SELECT c5, c1,
