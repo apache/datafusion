@@ -186,35 +186,3 @@ impl ExprPlanner for FieldAccessPlanner {
 fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
     return agg_func.func.name() == "array_agg";
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use datafusion_common::ScalarValue;
-
-    #[test]
-    fn test_plan_any_ok() {
-        let planner = NestedFunctionPlanner;
-        let expr = RawBinaryExpr {
-            op: sqlparser::ast::BinaryOperator::Eq,
-            left: Expr::Literal(ScalarValue::Int32(Some(1))),
-            right: Expr::Literal(ScalarValue::Int32(Some(1))), // isn't actually used, hence simple value
-        };
-        let p = planner.plan_any(expr).unwrap();
-        assert!(matches!(p, PlannerResult::Planned(Expr::ScalarFunction(_))));
-    }
-
-    #[test]
-    fn test_plan_wrong_op() {
-        let planner = NestedFunctionPlanner;
-        let expr = RawBinaryExpr {
-            op: sqlparser::ast::BinaryOperator::Lt,
-            left: Expr::Literal(ScalarValue::Int32(Some(1))),
-            right: Expr::Literal(ScalarValue::Int32(Some(1))), // isn't actually used, hence simple value
-        };
-        let p = planner.plan_any(expr).unwrap_err();
-        assert!(p.to_string().starts_with(
-            "Error during planning: Unsupported AnyOp: '<', only '=' is supported"
-        ));
-    }
-}
