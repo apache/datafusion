@@ -94,7 +94,7 @@ pub trait Accumulator: Send + Sync + Debug {
     ///
     /// Intermediate state is used for "multi-phase" grouping in
     /// DataFusion, where an aggregate is computed in parallel with
-    /// multiple `Accumulator` instances, as illustrated below:
+    /// multiple `Accumulator` instances, as described below:
     ///
     /// # MultiPhase Grouping
     ///
@@ -130,7 +130,7 @@ pub trait Accumulator: Send + Sync + Debug {
     ///          `───────'                        `───────'
     /// ```
     ///
-    /// The partial state is serialied as `Arrays` and then combined
+    /// The partial state is serialized as `Arrays` and then combined
     /// with other partial states from different instances of this
     /// Accumulator (that ran on different partitions, for example).
     ///
@@ -147,6 +147,107 @@ pub trait Accumulator: Send + Sync + Debug {
     /// Note that [`ScalarValue::List`] can be used to pass multiple
     /// values if the number of intermediate values is not known at
     /// planning time (e.g. for `MEDIAN`)
+    ///
+    /// # Multi-phase repartitioned Grouping
+    ///
+    /// Many multi-phase grouping plans contain a Repartition operation
+    /// as well as shown below:
+    ///
+    /// ```text
+    ///                ▲                          ▲
+    ///                │                          │
+    ///                │                          │
+    ///                │                          │
+    ///                │                          │
+    ///                │                          │
+    ///    ┌───────────────────────┐  ┌───────────────────────┐       4. Each AggregateMode::Final
+    ///    │GroupBy                │  │GroupBy                │       GroupBy has an entry for its
+    ///    │(AggregateMode::Final) │  │(AggregateMode::Final) │       subset of groups (in this case
+    ///    │                       │  │                       │       that means half the entries)
+    ///    └───────────────────────┘  └───────────────────────┘
+    ///                ▲                          ▲
+    ///                │                          │
+    ///                └─────────────┬────────────┘
+    ///                              │
+    ///                              │
+    ///                              │
+    ///                 ┌─────────────────────────┐                   3. Repartitioning by hash(group
+    ///                 │       Repartition       │                   keys) ensures that each distinct
+    ///                 │         HASH(x)         │                   group key now appears in exactly
+    ///                 └─────────────────────────┘                   one partition
+    ///                              ▲
+    ///                              │
+    ///              ┌───────────────┴─────────────┐
+    ///              │                             │
+    ///              │                             │
+    /// ┌─────────────────────────┐  ┌──────────────────────────┐     2. Each AggregateMode::Partial
+    /// │        GroubyBy         │  │         GroubyBy         │     GroupBy has an entry for *all*
+    /// │(AggregateMode::Partial) │  │ (AggregateMode::Partial) │     the groups
+    /// └─────────────────────────┘  └──────────────────────────┘
+    ///              ▲                             ▲
+    ///              │                            ┌┘
+    ///              │                            │
+    ///         .─────────.                  .─────────.
+    ///      ,─'           '─.            ,─'           '─.
+    ///     ;      Input      :          ;      Input      :          1. Since input data is
+    ///     :   Partition 0   ;          :   Partition 1   ;          arbitrarily or RoundRobin
+    ///      ╲               ╱            ╲               ╱           distributed, each partition
+    ///       '─.         ,─'              '─.         ,─'            likely has all distinct
+    ///          `───────'                    `───────'
+    /// ```
+    ///
+    /// This structure is used so that the `AggregateMode::Partial` accumulators
+    /// reduces the cardinality of the input as soon as possible. Typically,
+    /// each partial accumulator sees all groups in the input as the group keys
+    /// are evenly distributed across the input.
+    ///
+    /// The final output is computed by repartitioning the result of
+    /// [`Self::state`] from each Partial aggregate and `hash(group keys)` so
+    /// that each distinct group key appears in exactly one of the
+    /// `AggregateMode::Final` GroupBy nodes. The output of the final nodes are
+    /// then unioned together to produce the overall final output.
+    ///
+    /// Here is an example that shows the distribution of groups in the
+    /// different phases
+    ///
+    /// ```text
+    ///               ┌─────┐                ┌─────┐
+    ///               │  1  │                │  3  │
+    ///               ├─────┤                ├─────┤
+    ///               │  2  │                │  4  │                After repartitioning by
+    ///               └─────┘                └─────┘                hash(group keys), each distinct
+    ///               ┌─────┐                ┌─────┐                group key now appears in exactly
+    ///               │  1  │                │  3  │                one partition
+    ///               ├─────┤                ├─────┤
+    ///               │  2  │                │  4  │
+    ///               └─────┘                └─────┘
+    ///
+    ///
+    /// ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+    ///
+    ///               ┌─────┐                ┌─────┐
+    ///               │  2  │                │  2  │
+    ///               ├─────┤                ├─────┤
+    ///               │  1  │                │  2  │
+    ///               ├─────┤                ├─────┤
+    ///               │  3  │                │  3  │
+    ///               ├─────┤                ├─────┤
+    ///               │  4  │                │  1  │
+    ///               └─────┘                └─────┘                Input data is arbitrarily or
+    ///                 ...                    ...                  RoundRobin distributed, each
+    ///               ┌─────┐                ┌─────┐                partition likely has all
+    ///               │  1  │                │  4  │                distinct group keys
+    ///               ├─────┤                ├─────┤
+    ///               │  4  │                │  3  │
+    ///               ├─────┤                ├─────┤
+    ///               │  1  │                │  1  │
+    ///               ├─────┤                ├─────┤
+    ///               │  4  │                │  3  │
+    ///               └─────┘                └─────┘
+    ///
+    ///           group values           group values
+    ///           in partition 0         in partition 1
+    /// ```
     fn state(&mut self) -> Result<Vec<ScalarValue>>;
 
     /// Updates the accumulator's state from an `Array` containing one

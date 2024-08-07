@@ -164,13 +164,6 @@ impl AggregateUDFImpl for Regr {
         Ok(Box::new(RegrAccumulator::try_new(&self.regr_type)?))
     }
 
-    fn create_sliding_accumulator(
-        &self,
-        _args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(RegrAccumulator::try_new(&self.regr_type)?))
-    }
-
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(

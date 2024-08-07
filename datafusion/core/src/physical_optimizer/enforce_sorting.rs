@@ -44,7 +44,8 @@ use crate::physical_optimizer::replace_with_order_preserving_variants::{
     replace_with_order_preserving_variants, OrderPreservationContext,
 };
 use crate::physical_optimizer::sort_pushdown::{
-    assign_initial_requirements, pushdown_sorts, SortPushDown,
+    assign_initial_requirements, prune_unnecessary_operators, pushdown_sorts,
+    SortPushDown,
 };
 use crate::physical_optimizer::utils::{
     is_coalesce_partitions, is_limit, is_repartition, is_sort, is_sort_preserving_merge,
@@ -61,6 +62,7 @@ use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
@@ -172,7 +174,6 @@ impl PhysicalOptimizerRule for EnforceSorting {
         } else {
             adjusted.plan
         };
-
         let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
         let updated_plan = plan_with_pipeline_fixer
             .transform_up(|plan_with_pipeline_fixer| {
@@ -190,11 +191,12 @@ impl PhysicalOptimizerRule for EnforceSorting {
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
         assign_initial_requirements(&mut sort_pushdown);
         let adjusted = sort_pushdown.transform_down(pushdown_sorts)?.data;
-
-        adjusted
+        let plan = adjusted
             .plan
             .transform_up(|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
-            .data()
+            .data()?;
+        // Prune out unnecessary operators from the plan.
+        prune_unnecessary_operators(plan)
     }
 
     fn name(&self) -> &str {
@@ -513,8 +515,25 @@ fn remove_corresponding_coalesce_in_sub_plan(
             })
             .collect::<Result<_>>()?;
     }
-
-    requirements.update_plan_from_children()
+    let mut new_req = requirements.update_plan_from_children()?;
+    if let Some(repartition) = new_req.plan.as_any().downcast_ref::<RepartitionExec>() {
+        let mut can_remove = false;
+        if repartition
+            .input()
+            .output_partitioning()
+            .eq(repartition.partitioning())
+        {
+            // Their partitioning same
+            can_remove = true;
+        } else if let Partitioning::RoundRobinBatch(n_out) = repartition.partitioning() {
+            can_remove =
+                *n_out == repartition.input().output_partitioning().partition_count();
+        }
+        if can_remove {
+            new_req = new_req.children.swap_remove(0)
+        }
+    }
+    Ok(new_req)
 }
 
 /// Updates child to remove the unnecessary sort below it.
@@ -540,8 +559,12 @@ fn remove_corresponding_sort_from_sub_plan(
     requires_single_partition: bool,
 ) -> Result<PlanWithCorrespondingSort> {
     // A `SortExec` is always at the bottom of the tree.
-    if is_sort(&node.plan) {
-        node = node.children.swap_remove(0);
+    if let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() {
+        if sort_exec.fetch().is_none() {
+            node = node.children.swap_remove(0);
+        } else {
+            // Do not remove the sort with fetch
+        }
     } else {
         let mut any_connection = false;
         let required_dist = node.plan.required_input_distribution();
@@ -632,8 +655,9 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_expr::JoinType;
     use datafusion_physical_expr::expressions::{col, Column, NotExpr};
-
     use datafusion_physical_optimizer::PhysicalOptimizerRule;
+    use datafusion_physical_plan::limit::GlobalLimitExec;
+
     use rstest::rstest;
 
     fn create_test_schema() -> Result<SchemaRef> {
@@ -1044,6 +1068,66 @@ mod tests {
         let expected_optimized = ["HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
             "  MemoryExec: partitions=1, partition_sizes=[0]",
             "  ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]"];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_unnecessary_sort6() -> Result<()> {
+        let schema = create_test_schema()?;
+        let source = memory_exec(&schema);
+        // let input = sort_exec(vec![sort_expr("non_nullable_col", &schema)], source);
+        let input = Arc::new(
+            SortExec::new(vec![sort_expr("non_nullable_col", &schema)], source)
+                .with_fetch(Some(2)),
+        );
+        let physical_plan = sort_exec(
+            vec![
+                sort_expr("non_nullable_col", &schema),
+                sort_expr("nullable_col", &schema),
+            ],
+            input,
+        );
+
+        let expected_input = [
+            "SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
+            "  SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        let expected_optimized = [
+            "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
+            "  MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_do_not_pushdown_through_limit() -> Result<()> {
+        let schema = create_test_schema()?;
+        let source = memory_exec(&schema);
+        // let input = sort_exec(vec![sort_expr("non_nullable_col", &schema)], source);
+        let input = Arc::new(SortExec::new(
+            vec![sort_expr("non_nullable_col", &schema)],
+            source,
+        ));
+        let limit = Arc::new(GlobalLimitExec::new(input, 0, Some(5))) as _;
+        let physical_plan = sort_exec(vec![sort_expr("nullable_col", &schema)], limit);
+
+        let expected_input = [
+            "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
+            "  GlobalLimitExec: skip=0, fetch=5",
+            "    SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
+            "      MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        let expected_optimized = [
+            "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
+            "  GlobalLimitExec: skip=0, fetch=5",
+            "    SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
+            "      MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
         Ok(())

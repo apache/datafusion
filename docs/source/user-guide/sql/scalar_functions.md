@@ -3636,6 +3636,70 @@ Unwraps struct fields into columns.
 +-----------------------+-----------------------+
 ```
 
+## Map Functions
+
+- [map](#map)
+- [make_map](#make_map)
+
+### `map`
+
+Returns an Arrow map with the specified key-value pairs.
+
+```
+map(key, value)
+map(key: value)
+```
+
+#### Arguments
+
+- **key**: Expression to be used for key.
+  Can be a constant, column, or function, any combination of arithmetic or
+  string operators, or a named expression of previous listed.
+- **value**: Expression to be used for value.
+  Can be a constant, column, or function, any combination of arithmetic or
+  string operators, or a named expression of previous listed.
+
+#### Example
+
+```
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+----
+{POST: 41, HEAD: 33, PATCH: }
+
+SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+----
+{[1, 2]: a, [3, 4]: b}
+
+SELECT MAP { 'a': 1, 'b': 2 };
+----
+{a: 1, b: 2}
+```
+
+### `make_map`
+
+Returns an Arrow map with the specified key-value pairs.
+
+```
+make_map(key_1, value_1, ..., key_n, value_n)
+```
+
+#### Arguments
+
+- **key_n**: Expression to be used for key.
+  Can be a constant, column, or function, any combination of arithmetic or
+  string operators, or a named expression of previous listed.
+- **value_n**: Expression to be used for value.
+  Can be a constant, column, or function, any combination of arithmetic or
+  string operators, or a named expression of previous listed.
+
+#### Example
+
+```
+SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', null);
+----
+{POST: 41, HEAD: 33, PATCH: }
+```
+
 ## Hashing Functions
 
 - [digest](#digest)
