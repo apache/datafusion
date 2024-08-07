@@ -179,7 +179,7 @@ where
 /// # use datafusion::{error::Result, assert_batches_eq};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
-/// let mut ctx = SessionContext::new();
+/// let ctx = SessionContext::new();
 /// ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
 /// let results = ctx
 ///   .sql("SELECT a, min(b) FROM example GROUP BY a LIMIT 100")
@@ -369,7 +369,7 @@ impl SessionContext {
     /// # use datafusion_execution::object_store::ObjectStoreUrl;
     /// let object_store_url = ObjectStoreUrl::parse("file://").unwrap();
     /// let object_store = object_store::local::LocalFileSystem::new();
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// // All files with the file:// url prefix will be read from the local file system
     /// ctx.register_object_store(object_store_url.as_ref(), Arc::new(object_store));
     /// ```
@@ -452,7 +452,7 @@ impl SessionContext {
     /// # use datafusion::{error::Result, assert_batches_eq};
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// ctx
     ///   .sql("CREATE TABLE foo (x INTEGER)")
     ///   .await?
@@ -480,7 +480,7 @@ impl SessionContext {
     /// # use datafusion::physical_plan::collect;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let options = SQLOptions::new()
     ///   .with_allow_ddl(false);
     /// let err = ctx.sql_with_options("CREATE TABLE foo (x INTEGER)", options)
