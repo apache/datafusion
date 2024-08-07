@@ -15,6 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Logical Expr Common packages for [DataFusion]
+//!
+//! [DataFusion]: <https://crates.io/crates/datafusion>
+
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
+
 pub mod accumulator;
 pub mod columnar_value;
 pub mod groups_accumulator;
