@@ -182,7 +182,7 @@ mod tests {
         let plan = scan.filter(col("x.a").eq(lit(1)))?.build()?;
         let expected = "Filter: x.a = Int32(1)\
         \n  SubqueryAlias: x\
-        \n    Projection: y.a, y.b\
+        \n    Projection: *\
         \n      TableScan: y";
 
         assert_analyzed_plan_eq(Arc::new(InlineTableScan::new()), plan, expected)
