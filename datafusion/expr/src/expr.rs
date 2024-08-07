@@ -1010,7 +1010,7 @@ impl Expr {
     /// ```
     ///
     /// [`Schema`]: arrow::datatypes::Schema
-    pub fn schema_name<'a>(&'a self) -> impl Display + 'a {
+    pub fn schema_name(&self) -> impl Display + '_ {
         SchemaDisplay(self)
     }
 
