@@ -31,7 +31,7 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::tree_node::PlanContext;
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use datafusion_common::tree_node::{ConcreteTreeNode, Transformed};
+use datafusion_common::tree_node::{ConcreteTreeNode, Transformed, TreeNodeRecursion};
 use datafusion_common::{plan_err, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
@@ -67,9 +67,9 @@ pub fn assign_initial_requirements(node: &mut SortPushDown) {
 pub(crate) fn call_till_not_early_exit(
     sort_pushdown: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
-    let (mut result, mut early_exit) = pushdown_sorts_helper(sort_pushdown)?;
-    while early_exit {
-        (result, early_exit) = pushdown_sorts_helper(result.data)?;
+    let mut result = pushdown_sorts_helper(sort_pushdown)?;
+    while result.tnr == TreeNodeRecursion::Stop {
+        result = pushdown_sorts_helper(result.data)?;
     }
     Ok(result)
 }
@@ -86,7 +86,7 @@ pub(crate) fn pushdown_sorts(sort_pushdown: SortPushDown) -> Result<SortPushDown
 
 pub(crate) fn pushdown_sorts_helper(
     mut requirements: SortPushDown,
-) -> Result<(Transformed<SortPushDown>, bool)> {
+) -> Result<Transformed<SortPushDown>> {
     let plan = &requirements.plan;
     let parent_reqs = requirements
         .data
@@ -127,7 +127,11 @@ pub(crate) fn pushdown_sorts_helper(
                 fetch,
             };
 
-            return Ok((Transformed::yes(child), true));
+            return Ok(Transformed {
+                data: child,
+                transformed: true,
+                tnr: TreeNodeRecursion::Stop,
+            });
         } else {
             // Can not push down requirements
             requirements.children = vec![child];
@@ -157,7 +161,7 @@ pub(crate) fn pushdown_sorts_helper(
         requirements = add_sort_above(requirements, sort_reqs, fetch);
         assign_initial_requirements(&mut requirements);
     }
-    Ok((Transformed::yes(requirements), false))
+    Ok(Transformed::yes(requirements))
 }
 
 fn pushdown_requirement_to_children(
