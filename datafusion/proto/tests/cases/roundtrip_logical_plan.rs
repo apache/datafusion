@@ -56,10 +56,7 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::dml::CopyTo;
-use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Sort, Unnest,
-};
+use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction, Sort, Unnest, WildcardOptions};
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
     Accumulator, AggregateUDF, ColumnarValue, ExprFunctionExt, ExprSchemable, Literal,
@@ -1974,7 +1971,7 @@ fn roundtrip_unnest() {
 
 #[test]
 fn roundtrip_wildcard() {
-    let test_expr = Expr::Wildcard { qualifier: None };
+    let test_expr = Expr::Wildcard { qualifier: None, options: WildcardOptions::default() };
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -1984,6 +1981,7 @@ fn roundtrip_wildcard() {
 fn roundtrip_qualified_wildcard() {
     let test_expr = Expr::Wildcard {
         qualifier: Some("foo".into()),
+        options: WildcardOptions::default(),
     };
 
     let ctx = SessionContext::new();
