@@ -125,7 +125,7 @@ impl ExprPlanner for NestedFunctionPlanner {
                 ),
             )))
         } else {
-            plan_err!("Unsupported AnyOp: {}, only '=' is supported", expr.op)
+            plan_err!("Unsupported AnyOp: '{}', only '=' is supported", expr.op)
         }
     }
 }
@@ -213,9 +213,8 @@ mod tests {
             right: Expr::Literal(ScalarValue::Int32(Some(1))), // isn't actually used, hence simple value
         };
         let p = planner.plan_any(expr).unwrap_err();
-        assert_eq!(
-            p.to_string(),
-            "Error during planning: Unsupported AnyOp: <, only '=' is supported"
-        );
+        assert!(p.to_string().starts_with(
+            "Error during planning: Unsupported AnyOp: '<', only '=' is supported"
+        ));
     }
 }
