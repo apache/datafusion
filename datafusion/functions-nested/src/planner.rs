@@ -17,7 +17,7 @@
 
 //! SQL planning extensions like [`NestedFunctionPlanner`] and [`FieldAccessPlanner`]
 
-use datafusion_common::{exec_err, utils::list_ndims, DFSchema, Result};
+use datafusion_common::{exec_err, plan_err, utils::list_ndims, DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
@@ -28,7 +28,7 @@ use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 
 use crate::map::map_udf;
 use crate::{
-    array_has::array_has_all,
+    array_has::{array_has_all, array_has_udf},
     expr_fn::{array_append, array_concat, array_prepend},
     extract::{array_element, array_slice},
     make_array::make_array,
@@ -113,6 +113,20 @@ impl ExprPlanner for NestedFunctionPlanner {
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
             ScalarFunction::new_udf(map_udf(), vec![keys, values]),
         )))
+    }
+
+    fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
+        if expr.op == sqlparser::ast::BinaryOperator::Eq {
+            Ok(PlannerResult::Planned(Expr::ScalarFunction(
+                ScalarFunction::new_udf(
+                    array_has_udf(),
+                    // left and right are reversed here `needle=any(haystack)` -> `array_has(haystack, needle)`
+                    vec![expr.right, expr.left],
+                ),
+            )))
+        } else {
+            plan_err!("Unsupported AnyOp: {}, only '=' is supported", expr.op)
+        }
     }
 }
 

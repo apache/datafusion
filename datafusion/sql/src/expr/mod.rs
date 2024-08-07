@@ -17,9 +17,9 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use datafusion_expr::planner::PlannerResult;
-use datafusion_expr::planner::RawDictionaryExpr;
-use datafusion_expr::planner::RawFieldAccessExpr;
+use datafusion_expr::planner::{
+    PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
+};
 use sqlparser::ast::{
     BinaryOperator, CastKind, DictionaryField, Expr as SQLExpr, MapEntry, StructField,
     Subscript, TrimWhereField, Value,
@@ -104,13 +104,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn build_logical_expr(
         &self,
-        op: sqlparser::ast::BinaryOperator,
+        op: BinaryOperator,
         left: Expr,
         right: Expr,
         schema: &DFSchema,
     ) -> Result<Expr> {
         // try extension planers
-        let mut binary_expr = datafusion_expr::planner::RawBinaryExpr { op, left, right };
+        let mut binary_expr = RawBinaryExpr { op, left, right };
         for planner in self.context_provider.get_expr_planners() {
             match planner.plan_binary_op(binary_expr, schema)? {
                 PlannerResult::Planned(expr) => {
@@ -122,7 +122,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
 
-        let datafusion_expr::planner::RawBinaryExpr { op, left, right } = binary_expr;
+        let RawBinaryExpr { op, left, right } = binary_expr;
         Ok(Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left),
             self.parse_sql_binary_op(op)?,
@@ -636,25 +636,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 compare_op,
                 right,
             } => {
-                if compare_op != BinaryOperator::Eq {
-                    return plan_err!(
-                        "Unsupported AnyOp: {compare_op}, only '=' is supported"
-                    );
-                }
-
-                let Some(fun) = self.context_provider.get_function_meta("array_has")
-                else {
-                    return plan_err!("Unable to find expected 'array_has' function");
+                let mut binary_expr = RawBinaryExpr {
+                    op: compare_op,
+                    left: self.sql_expr_to_logical_expr(
+                        *left,
+                        schema,
+                        planner_context,
+                    )?,
+                    right: self.sql_expr_to_logical_expr(
+                        *right,
+                        schema,
+                        planner_context,
+                    )?,
                 };
-
-                let haystack_array_arg =
-                    self.sql_expr_to_logical_expr(*right, schema, planner_context)?;
-                let needle_arg =
-                    self.sql_expr_to_logical_expr(*left, schema, planner_context)?;
-                Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                    fun,
-                    vec![haystack_array_arg, needle_arg],
-                )))
+                for planner in self.context_provider.get_expr_planners() {
+                    match planner.plan_any(binary_expr)? {
+                        PlannerResult::Planned(expr) => {
+                            return Ok(expr);
+                        }
+                        PlannerResult::Original(expr) => {
+                            binary_expr = expr;
+                        }
+                    }
+                }
+                not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
             }
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
