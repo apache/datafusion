@@ -46,13 +46,21 @@ use datafusion_physical_expr_common::aggregate::tdigest::{
 };
 use datafusion_physical_expr_common::utils::limited_convert_logical_expr_to_physical_expr_with_dfschema;
 
-make_udaf_expr_and_func!(
-    ApproxPercentileCont,
-    approx_percentile_cont,
-    expression percentile,
-    "Computes the approximate percentile continuous of a set of numbers",
-    approx_percentile_cont_udaf
-);
+create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
+
+/// Computes the approximate percentile continuous of a set of numbers
+pub fn approx_percentile_cont(
+    expression: datafusion_expr::Expr,
+    percentile: datafusion_expr::Expr,
+    centroids: Option<datafusion_expr::Expr>,
+) -> datafusion_expr::Expr {
+    let args = if let Some(centroids) = centroids {
+        vec![expression, percentile, centroids]
+    } else {
+        vec![expression, percentile]
+    };
+    approx_percentile_cont_udaf().call(args)
+}
 
 pub struct ApproxPercentileCont {
     signature: Signature,
