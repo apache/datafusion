@@ -249,7 +249,7 @@ impl Session for SessionState {
 impl SessionState {
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
+    #[deprecated(since = "41.0.0", note = "Use SessionStateBuilder")]
     pub fn new_with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         SessionStateBuilder::new()
             .with_config(config)

@@ -52,7 +52,7 @@ order by
 logical_plan
 01)Sort: supplier.s_suppkey ASC NULLS LAST
 02)--Projection: supplier.s_suppkey, supplier.s_name, supplier.s_address, supplier.s_phone, revenue0.total_revenue
-03)----Inner Join: revenue0.total_revenue = __scalar_sq_1.MAX(revenue0.total_revenue)
+03)----Inner Join: revenue0.total_revenue = __scalar_sq_1.max(revenue0.total_revenue)
 04)------Projection: supplier.s_suppkey, supplier.s_name, supplier.s_address, supplier.s_phone, revenue0.total_revenue
 05)--------Inner Join: supplier.s_suppkey = revenue0.supplier_no
 06)----------TableScan: supplier projection=[s_suppkey, s_name, s_address, s_phone]
@@ -63,7 +63,7 @@ logical_plan
 11)------------------Filter: lineitem.l_shipdate >= Date32("1996-01-01") AND lineitem.l_shipdate < Date32("1996-04-01")
 12)--------------------TableScan: lineitem projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("1996-01-01"), lineitem.l_shipdate < Date32("1996-04-01")]
 13)------SubqueryAlias: __scalar_sq_1
-14)--------Aggregate: groupBy=[[]], aggr=[[MAX(revenue0.total_revenue)]]
+14)--------Aggregate: groupBy=[[]], aggr=[[max(revenue0.total_revenue)]]
 15)----------SubqueryAlias: revenue0
 16)------------Projection: sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS total_revenue
 17)--------------Aggregate: groupBy=[[lineitem.l_suppkey]], aggr=[[sum(lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount)) AS sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
@@ -74,7 +74,7 @@ physical_plan
 01)SortPreservingMergeExec: [s_suppkey@0 ASC NULLS LAST]
 02)--SortExec: expr=[s_suppkey@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----CoalesceBatchesExec: target_batch_size=8192
-04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(total_revenue@4, MAX(revenue0.total_revenue)@0)], projection=[s_suppkey@0, s_name@1, s_address@2, s_phone@3, total_revenue@4]
+04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(total_revenue@4, max(revenue0.total_revenue)@0)], projection=[s_suppkey@0, s_name@1, s_address@2, s_phone@3, total_revenue@4]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([total_revenue@4], 4), input_partitions=4
 07)------------CoalesceBatchesExec: target_batch_size=8192
@@ -93,10 +93,10 @@ physical_plan
 20)------------------------------FilterExec: l_shipdate@3 >= 1996-01-01 AND l_shipdate@3 < 1996-04-01
 21)--------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate], has_header=false
 22)--------CoalesceBatchesExec: target_batch_size=8192
-23)----------RepartitionExec: partitioning=Hash([MAX(revenue0.total_revenue)@0], 4), input_partitions=1
-24)------------AggregateExec: mode=Final, gby=[], aggr=[MAX(revenue0.total_revenue)]
+23)----------RepartitionExec: partitioning=Hash([max(revenue0.total_revenue)@0], 4), input_partitions=1
+24)------------AggregateExec: mode=Final, gby=[], aggr=[max(revenue0.total_revenue)]
 25)--------------CoalescePartitionsExec
-26)----------------AggregateExec: mode=Partial, gby=[], aggr=[MAX(revenue0.total_revenue)]
+26)----------------AggregateExec: mode=Partial, gby=[], aggr=[max(revenue0.total_revenue)]
 27)------------------ProjectionExec: expr=[sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@1 as total_revenue]
 28)--------------------AggregateExec: mode=FinalPartitioned, gby=[l_suppkey@0 as l_suppkey], aggr=[sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
 29)----------------------CoalesceBatchesExec: target_batch_size=8192

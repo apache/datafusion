@@ -202,13 +202,6 @@ impl AggregateUDFImpl for Sum {
         unreachable!("stub should not have accumulate()")
     }
 
-    fn create_sliding_accumulator(
-        &self,
-        _args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
-        unreachable!("stub should not have accumulate()")
-    }
-
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
@@ -305,7 +298,6 @@ pub fn min(expr: Expr) -> Expr {
 /// Testing stub implementation of Min aggregate
 pub struct Min {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl std::fmt::Debug for Min {
@@ -326,7 +318,6 @@ impl Default for Min {
 impl Min {
     pub fn new() -> Self {
         Self {
-            aliases: vec!["min".to_string()],
             signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
@@ -338,7 +329,7 @@ impl AggregateUDFImpl for Min {
     }
 
     fn name(&self) -> &str {
-        "MIN"
+        "min"
     }
 
     fn signature(&self) -> &Signature {
@@ -358,7 +349,7 @@ impl AggregateUDFImpl for Min {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn create_groups_accumulator(
@@ -392,7 +383,6 @@ pub fn max(expr: Expr) -> Expr {
 /// Testing stub implementation of MAX aggregate
 pub struct Max {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl std::fmt::Debug for Max {
@@ -413,7 +403,6 @@ impl Default for Max {
 impl Max {
     pub fn new() -> Self {
         Self {
-            aliases: vec!["max".to_string()],
             signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
@@ -425,7 +414,7 @@ impl AggregateUDFImpl for Max {
     }
 
     fn name(&self) -> &str {
-        "MAX"
+        "max"
     }
 
     fn signature(&self) -> &Signature {
@@ -445,7 +434,7 @@ impl AggregateUDFImpl for Max {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn create_groups_accumulator(

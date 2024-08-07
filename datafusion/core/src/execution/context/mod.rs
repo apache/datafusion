@@ -159,7 +159,7 @@ where
 /// assert_batches_eq!(
 ///  &[
 ///    "+---+----------------+",
-///    "| a | MIN(?table?.b) |",
+///    "| a | min(?table?.b) |",
 ///    "+---+----------------+",
 ///    "| 1 | 2              |",
 ///    "+---+----------------+",
@@ -182,14 +182,14 @@ where
 /// let mut ctx = SessionContext::new();
 /// ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
 /// let results = ctx
-///   .sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100")
+///   .sql("SELECT a, min(b) FROM example GROUP BY a LIMIT 100")
 ///   .await?
 ///   .collect()
 ///   .await?;
 /// assert_batches_eq!(
 ///  &[
 ///    "+---+----------------+",
-///    "| a | MIN(example.b) |",
+///    "| a | min(example.b) |",
 ///    "+---+----------------+",
 ///    "| 1 | 2              |",
 ///    "+---+----------------+",
@@ -544,30 +544,35 @@ impl SessionContext {
                 // stack overflows.
                 match ddl {
                     DdlStatement::CreateExternalTable(cmd) => {
-                        Box::pin(async move { self.create_external_table(&cmd).await })
-                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>
+                        (Box::pin(async move { self.create_external_table(&cmd).await })
+                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>)
+                            .await
                     }
                     DdlStatement::CreateMemoryTable(cmd) => {
-                        Box::pin(self.create_memory_table(cmd))
+                        Box::pin(self.create_memory_table(cmd)).await
                     }
-                    DdlStatement::CreateView(cmd) => Box::pin(self.create_view(cmd)),
+                    DdlStatement::CreateView(cmd) => {
+                        Box::pin(self.create_view(cmd)).await
+                    }
                     DdlStatement::CreateCatalogSchema(cmd) => {
-                        Box::pin(self.create_catalog_schema(cmd))
+                        Box::pin(self.create_catalog_schema(cmd)).await
                     }
                     DdlStatement::CreateCatalog(cmd) => {
-                        Box::pin(self.create_catalog(cmd))
+                        Box::pin(self.create_catalog(cmd)).await
                     }
-                    DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)),
-                    DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)),
+                    DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)).await,
+                    DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)).await,
                     DdlStatement::DropCatalogSchema(cmd) => {
-                        Box::pin(self.drop_schema(cmd))
+                        Box::pin(self.drop_schema(cmd)).await
                     }
                     DdlStatement::CreateFunction(cmd) => {
-                        Box::pin(self.create_function(cmd))
+                        Box::pin(self.create_function(cmd)).await
                     }
-                    DdlStatement::DropFunction(cmd) => Box::pin(self.drop_function(cmd)),
+                    DdlStatement::DropFunction(cmd) => {
+                        Box::pin(self.drop_function(cmd)).await
+                    }
+                    ddl => Ok(DataFrame::new(self.state(), LogicalPlan::Ddl(ddl))),
                 }
-                .await
             }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {

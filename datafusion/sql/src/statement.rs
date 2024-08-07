@@ -45,20 +45,20 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
-    CreateMemoryTable, CreateView, DescribeTable, DmlStatement, DropCatalogSchema,
-    DropFunction, DropTable, DropView, EmptyRelation, Explain, Expr, ExprSchemable,
-    Filter, LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
-    SetVariable, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
-    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
-    Volatility, WriteOp,
+    CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, DescribeTable,
+    DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView, EmptyRelation,
+    Explain, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder,
+    OperateFunctionArg, PlanType, Prepare, SetVariable, Statement as PlanStatement,
+    ToStringifiedPlan, TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, AssignmentTarget, ColumnDef, CreateTable, CreateTableOptions, Delete,
-    DescribeAlias, Expr as SQLExpr, FromTable, Ident, Insert, ObjectName, ObjectType,
-    OneOrManyWithParens, Query, SchemaName, SetExpr, ShowCreateObject,
-    ShowStatementFilter, Statement, TableConstraint, TableFactor, TableWithJoins,
-    TransactionMode, UnaryOperator, Value,
+    Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
+    CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, FromTable, Ident, Insert,
+    ObjectName, ObjectType, OneOrManyWithParens, Query, SchemaName, SetExpr,
+    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
+    TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -768,6 +768,42 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     exec_err!("Function name not provided")
                 }
+            }
+            Statement::CreateIndex(CreateIndex {
+                name,
+                table_name,
+                using,
+                columns,
+                unique,
+                if_not_exists,
+                ..
+            }) => {
+                let name: Option<String> = name.as_ref().map(object_name_to_string);
+                let table = self.object_name_to_table_reference(table_name)?;
+                let table_schema = self
+                    .context_provider
+                    .get_table_source(table.clone())?
+                    .schema()
+                    .to_dfschema_ref()?;
+                let using: Option<String> = using.as_ref().map(ident_to_string);
+                let columns = self.order_by_to_sort_expr(
+                    columns,
+                    &table_schema,
+                    planner_context,
+                    false,
+                    None,
+                )?;
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateIndex(
+                    PlanCreateIndex {
+                        name,
+                        table,
+                        using,
+                        columns,
+                        unique,
+                        if_not_exists,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    },
+                )))
             }
             _ => {
                 not_impl_err!("Unsupported SQL statement: {sql:?}")

@@ -41,6 +41,8 @@ pub enum DdlStatement {
     CreateCatalogSchema(CreateCatalogSchema),
     /// Creates a new catalog (aka "Database").
     CreateCatalog(CreateCatalog),
+    /// Creates a new index.
+    CreateIndex(CreateIndex),
     /// Drops a table.
     DropTable(DropTable),
     /// Drops a view.
@@ -66,6 +68,7 @@ impl DdlStatement {
                 schema
             }
             DdlStatement::CreateCatalog(CreateCatalog { schema, .. }) => schema,
+            DdlStatement::CreateIndex(CreateIndex { schema, .. }) => schema,
             DdlStatement::DropTable(DropTable { schema, .. }) => schema,
             DdlStatement::DropView(DropView { schema, .. }) => schema,
             DdlStatement::DropCatalogSchema(DropCatalogSchema { schema, .. }) => schema,
@@ -83,6 +86,7 @@ impl DdlStatement {
             DdlStatement::CreateView(_) => "CreateView",
             DdlStatement::CreateCatalogSchema(_) => "CreateCatalogSchema",
             DdlStatement::CreateCatalog(_) => "CreateCatalog",
+            DdlStatement::CreateIndex(_) => "CreateIndex",
             DdlStatement::DropTable(_) => "DropTable",
             DdlStatement::DropView(_) => "DropView",
             DdlStatement::DropCatalogSchema(_) => "DropCatalogSchema",
@@ -101,6 +105,7 @@ impl DdlStatement {
                 vec![input]
             }
             DdlStatement::CreateView(CreateView { input, .. }) => vec![input],
+            DdlStatement::CreateIndex(_) => vec![],
             DdlStatement::DropTable(_) => vec![],
             DdlStatement::DropView(_) => vec![],
             DdlStatement::DropCatalogSchema(_) => vec![],
@@ -146,6 +151,9 @@ impl DdlStatement {
                         catalog_name, ..
                     }) => {
                         write!(f, "CreateCatalog: {catalog_name:?}")
+                    }
+                    DdlStatement::CreateIndex(CreateIndex { name, .. }) => {
+                        write!(f, "CreateIndex: {name:?}")
                     }
                     DdlStatement::DropTable(DropTable {
                         name, if_exists, ..
@@ -349,5 +357,16 @@ pub struct CreateFunctionBody {
 pub struct DropFunction {
     pub name: String,
     pub if_exists: bool,
+    pub schema: DFSchemaRef,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct CreateIndex {
+    pub name: Option<String>,
+    pub table: TableReference,
+    pub using: Option<String>,
+    pub columns: Vec<Expr>,
+    pub unique: bool,
+    pub if_not_exists: bool,
     pub schema: DFSchemaRef,
 }

@@ -475,3 +475,12 @@ SELECT MAP { 'a': 1, 2: 3 };
 # SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
 # ----
 # 33
+
+## cardinality
+
+# cardinality scalar function
+query IIII
+select cardinality(map([1, 2, 3], ['a', 'b', 'c'])), cardinality(MAP {'a': 1, 'b': null}), cardinality(MAP([],[])),
+       cardinality(MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} });
+----
+3 2 0 2
