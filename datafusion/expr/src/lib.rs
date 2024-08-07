@@ -29,7 +29,7 @@
 
 mod built_in_window_function;
 mod literal;
-mod operator;
+mod operation;
 mod partition_evaluator;
 mod table_source;
 mod udaf;

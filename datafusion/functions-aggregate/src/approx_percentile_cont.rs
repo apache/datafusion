@@ -31,7 +31,7 @@ use arrow::{
 use arrow_schema::{Field, Schema};
 
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, ScalarValue,
+    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, ScalarValue, Result,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
@@ -95,7 +95,7 @@ impl ApproxPercentileCont {
     pub(crate) fn create_accumulator(
         &self,
         args: AccumulatorArgs,
-    ) -> datafusion_common::Result<ApproxPercentileAccumulator> {
+    ) -> Result<ApproxPercentileAccumulator> {
         let percentile = validate_input_percentile_expr(&args.physical_exprs[1])?;
         let tdigest_max_size = if args.physical_exprs.len() == 3 {
             Some(validate_input_max_size_expr(&args.physical_exprs[2])?)
@@ -134,11 +134,10 @@ impl ApproxPercentileCont {
 
 fn get_scalar_value(
     expr: &Arc<dyn PhysicalExpr>,
-) -> datafusion_common::Result<ScalarValue> {
+) -> Result<ScalarValue> {
     let empty_schema = Arc::new(Schema::empty());
     let batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
-    let val = expr.evaluate(&batch)?;
-    if let ColumnarValue::Scalar(s) = val {
+    if let ColumnarValue::Scalar(s) = expr.evaluate(&batch)? {
         Ok(s)
     } else {
         internal_err!("Didn't expect ColumnarValue::Array")
@@ -147,7 +146,7 @@ fn get_scalar_value(
 
 fn validate_input_percentile_expr(
     expr: &Arc<dyn PhysicalExpr>,
-) -> datafusion_common::Result<f64> {
+) -> Result<f64> {
     let percentile = match get_scalar_value(expr)? {
         ScalarValue::Float32(Some(value)) => {
             value as f64
@@ -174,7 +173,7 @@ fn validate_input_percentile_expr(
 
 fn validate_input_max_size_expr(
     expr: &Arc<dyn PhysicalExpr>,
-) -> datafusion_common::Result<usize> {
+) -> Result<usize> {
     let max_size = match get_scalar_value(expr)? {
         ScalarValue::UInt8(Some(q)) => q as usize,
         ScalarValue::UInt16(Some(q)) => q as usize,
@@ -206,7 +205,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     fn state_fields(
         &self,
         args: StateFieldsArgs,
-    ) -> datafusion_common::Result<Vec<Field>> {
+    ) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
                 format_state_name(args.name, "max_size"),
@@ -253,11 +252,11 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     fn accumulator(
         &self,
         acc_args: AccumulatorArgs,
-    ) -> datafusion_common::Result<Box<dyn Accumulator>> {
+    ) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(self.create_accumulator(acc_args)?))
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if !arg_types[0].is_numeric() {
             return plan_err!("approx_percentile_cont requires numeric input types");
         }
@@ -305,7 +304,7 @@ impl ApproxPercentileAccumulator {
     }
 
     // public for approx_percentile_cont_with_weight
-    pub fn convert_to_float(values: &ArrayRef) -> datafusion_common::Result<Vec<f64>> {
+    pub fn convert_to_float(values: &ArrayRef) -> Result<Vec<f64>> {
         match values.data_type() {
             DataType::Float64 => {
                 let array = downcast_value!(values, Float64Array);
@@ -313,7 +312,7 @@ impl ApproxPercentileAccumulator {
                     .values()
                     .iter()
                     .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<datafusion_common::Result<Vec<_>>>()?)
+                    .collect::<Result<Vec<_>>>()?)
             }
             DataType::Float32 => {
                 let array = downcast_value!(values, Float32Array);
@@ -321,7 +320,7 @@ impl ApproxPercentileAccumulator {
                     .values()
                     .iter()
                     .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<datafusion_common::Result<Vec<_>>>()?)
+                    .collect::<Result<Vec<_>>>()?)
             }
             DataType::Int64 => {
                 let array = downcast_value!(values, Int64Array);
@@ -329,7 +328,7 @@ impl ApproxPercentileAccumulator {
                     .values()
                     .iter()
                     .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<datafusion_common::Result<Vec<_>>>()?)
+                    .collect::<Result<Vec<_>>>()?)
             }
             DataType::Int32 => {
                 let array = downcast_value!(values, Int32Array);
@@ -337,7 +336,7 @@ impl ApproxPercentileAccumulator {
                     .values()
                     .iter()
                     .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<datafusion_common::Result<Vec<_>>>()?)
+                    .collect::<Result<Vec<_>>>()?)
             }
             DataType::Int16 => {
                 let array = downcast_value!(values, Int16Array);
@@ -345,7 +344,7 @@ impl ApproxPercentileAccumulator {
                     .values()
                     .iter()
                     .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<datafusion_common::Result<Vec<_>>>()?)
+                    .collect::<Result<Vec<_>>>()?)
             }
             DataType::Int8 => {
                 let array = downcast_value!(values, Int8Array);
@@ -353,7 +352,7 @@ impl ApproxPercentileAccumulator {
                     .values()
                     .iter()
                     .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<datafusion_common::Result<Vec<_>>>()?)
+                    .collect::<Result<Vec<_>>>()?)
             }
             DataType::UInt64 => {
                 let array = downcast_value!(values, UInt64Array);
@@ -361,7 +360,7 @@ impl ApproxPercentileAccumulator {
                     .values()
                     .iter()
                     .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<datafusion_common::Result<Vec<_>>>()?)
+                    .collect::<Result<Vec<_>>>()?)
             }
             DataType::UInt32 => {
                 let array = downcast_value!(values, UInt32Array);
@@ -369,7 +368,7 @@ impl ApproxPercentileAccumulator {
                     .values()
                     .iter()
                     .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<datafusion_common::Result<Vec<_>>>()?)
+                    .collect::<Result<Vec<_>>>()?)
             }
             DataType::UInt16 => {
                 let array = downcast_value!(values, UInt16Array);
@@ -377,7 +376,7 @@ impl ApproxPercentileAccumulator {
                     .values()
                     .iter()
                     .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<datafusion_common::Result<Vec<_>>>()?)
+                    .collect::<Result<Vec<_>>>()?)
             }
             DataType::UInt8 => {
                 let array = downcast_value!(values, UInt8Array);
@@ -385,7 +384,7 @@ impl ApproxPercentileAccumulator {
                     .values()
                     .iter()
                     .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<datafusion_common::Result<Vec<_>>>()?)
+                    .collect::<Result<Vec<_>>>()?)
             }
             e => internal_err!(
                 "APPROX_PERCENTILE_CONT is not expected to receive the type {e:?}"
@@ -395,11 +394,11 @@ impl ApproxPercentileAccumulator {
 }
 
 impl Accumulator for ApproxPercentileAccumulator {
-    fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(self.digest.to_scalar_state().into_iter().collect())
     }
 
-    fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // Remove any nulls before computing the percentile
         let mut values = Arc::clone(&values[0]);
         if values.nulls().is_some() {
@@ -411,7 +410,7 @@ impl Accumulator for ApproxPercentileAccumulator {
         Ok(())
     }
 
-    fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
+    fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.digest.count() == 0 {
             return ScalarValue::try_from(self.return_type.clone());
         }
@@ -434,7 +433,7 @@ impl Accumulator for ApproxPercentileAccumulator {
         })
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion_common::Result<()> {
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
         }
@@ -444,10 +443,10 @@ impl Accumulator for ApproxPercentileAccumulator {
                 states
                     .iter()
                     .map(|array| ScalarValue::try_from_array(array, index))
-                    .collect::<datafusion_common::Result<Vec<_>>>()
+                    .collect::<Result<Vec<_>>>()
                     .map(|state| TDigest::from_scalar_state(&state))
             })
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         self.merge_digests(&states);
 
