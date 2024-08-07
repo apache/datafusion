@@ -1248,7 +1248,7 @@ mod tests {
     use arrow_schema::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_common::cast::{
-        as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
+        as_binary_view_array, as_boolean_array, as_float32_array, as_float64_array,
         as_int32_array, as_timestamp_nanosecond_array,
     };
     use datafusion_common::config::ParquetOptions;
@@ -1799,8 +1799,8 @@ mod tests {
              bigint_col: Int64\n\
              float_col: Float32\n\
              double_col: Float64\n\
-             date_string_col: Binary\n\
-             string_col: Binary\n\
+             date_string_col: BinaryView\n\
+             string_col: BinaryView\n\
              timestamp_col: Timestamp(Nanosecond, None)",
             y
         );
@@ -1956,7 +1956,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = as_binary_array(batches[0].column(0))?;
+        let array = as_binary_view_array(batches[0].column(0))?;
         let mut values: Vec<&str> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(std::str::from_utf8(array.value(i)).unwrap());
@@ -2070,7 +2070,7 @@ mod tests {
         let int_col_offset = offset_index.get(4).unwrap();
 
         // 325 pages in int_col
-        assert_eq!(int_col_offset.len(), 325);
+        assert_eq!(int_col_offset.page_locations().len(), 325);
         match int_col_index {
             Index::INT32(index) => {
                 assert_eq!(index.indexes.len(), 325);

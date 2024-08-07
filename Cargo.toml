@@ -16,7 +16,7 @@
 # under the License.
 
 [workspace]
-exclude = ["datafusion-cli", "dev/depcheck"]
+exclude = ["datafusion-cli", "dev/depcheck", "datafusion-examples"]
 members = [
     "datafusion/common",
     "datafusion/common-runtime",
@@ -40,7 +40,6 @@ members = [
     "datafusion/sqllogictest",
     "datafusion/substrait",
     "datafusion/wasmtest",
-    "datafusion-examples",
     "docs",
     "test-utils",
     "benchmarks",
@@ -158,3 +157,17 @@ large_futures = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_imports = "deny"
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git" }
+parquet = { git = "https://github.com/apache/arrow-rs.git" }
