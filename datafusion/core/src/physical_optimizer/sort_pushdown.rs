@@ -37,6 +37,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_plan::displayable;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
@@ -54,6 +55,12 @@ pub fn assign_initial_requirements(node: &mut SortPushDown) {
     }
 }
 
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
+    let formatted = displayable(plan.as_ref()).indent(true).to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    println!("{:#?}", actual);
+}
+
 pub(crate) fn pushdown_sorts(
     mut requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
@@ -64,11 +71,13 @@ pub(crate) fn pushdown_sorts(
         .ordering_satisfy_requirement(parent_reqs);
 
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+        println!("sort operator");
+        print_plan(&plan);
         let required_ordering = plan
             .output_ordering()
             .map(PhysicalSortRequirement::from_sort_exprs)
             .unwrap_or_default();
-
+        println!("required_ordering: {:?}", required_ordering);
         if !satisfy_parent {
             // Make sure this `SortExec` satisfies parent requirements:
             let fetch = sort_exec.fetch();
@@ -85,9 +94,13 @@ pub(crate) fn pushdown_sorts(
             for (grand_child, order) in child.children.iter_mut().zip(adjusted) {
                 grand_child.data = order;
             }
+            println!("pushed down requirements plan");
+            print_plan(&requirements.plan);
+            println!("pushed down child plan");
+            print_plan(&child.plan);
             // Can push down requirements
             child.data = None;
-            return Ok(Transformed::yes(child));
+            requirements = child;
         } else {
             // Can not push down requirements
             requirements.children = vec![child];
@@ -131,6 +144,18 @@ fn pushdown_requirement_to_children(
             }
             RequirementsCompatibility::Compatible(adjusted) => Ok(Some(vec![adjusted])),
             RequirementsCompatibility::NonCompatible => Ok(None),
+        }
+    } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+        println!("trying to pushdown sort exec");
+        println!("parent_required: {:?}", parent_required);
+        println!("sort_exec.properties().eq_properties: {:?}", sort_exec.properties().eq_properties);
+        let sort_req = PhysicalSortRequirement::from_sort_exprs(sort_exec.properties().output_ordering().unwrap_or(&[]));
+        if sort_exec.properties().eq_properties.requirements_compatible(parent_required, &sort_req){
+            println!("compatible, parent_required: {:?}", parent_required);
+            debug_assert!(!parent_required.is_empty());
+            Ok(Some(vec![Some(parent_required.to_vec())]))
+        } else {
+            Ok(None)
         }
     } else if is_union(plan) {
         // UnionExec does not have real sort requirements for its input. Here we change the adjusted_request_ordering to UnionExec's output ordering and
