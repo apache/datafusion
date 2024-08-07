@@ -568,7 +568,9 @@ fn join_left_and_right_batch(
         })
         .collect::<Result<Vec<(UInt64Array, UInt32Array)>>>()
         .map_err(|e| {
-            exec_datafusion_err!("Fail to build join indices in NestedLoopJoinExec, error:{e}")
+            exec_datafusion_err!(
+                "Fail to build join indices in NestedLoopJoinExec, error:{e}"
+            )
         })?;
 
     let mut left_indices_builder = UInt64Builder::new();
