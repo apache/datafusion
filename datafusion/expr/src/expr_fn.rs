@@ -125,6 +125,7 @@ pub fn wildcard() -> Expr {
     }
 }
 
+/// Create an '*' [`Expr::Wildcard`] expression with the wildcard options
 pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
     Expr::Wildcard {
         qualifier: None,
@@ -149,6 +150,7 @@ pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> Expr {
     }
 }
 
+/// Create an 't.*' [`Expr::Wildcard`] expression with the wildcard options
 pub fn qualified_wildcard_with_options(
     qualifier: impl Into<TableReference>,
     options: WildcardOptions,
