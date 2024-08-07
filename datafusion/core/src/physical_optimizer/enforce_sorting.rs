@@ -173,6 +173,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
         } else {
             adjusted.plan
         };
+
         let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
         let updated_plan = plan_with_pipeline_fixer
             .transform_up(|plan_with_pipeline_fixer| {
@@ -190,6 +191,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
         assign_initial_requirements(&mut sort_pushdown);
         let adjusted = pushdown_sorts(sort_pushdown)?;
+
         adjusted
             .plan
             .transform_up(|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
