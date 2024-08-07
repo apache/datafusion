@@ -224,6 +224,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
             cache: self.cache.clone(),
         }))
     }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
 }
 
 /// Stream for [`CoalesceBatchesExec`]. See [`CoalesceBatchesExec`] for more details.

@@ -934,6 +934,10 @@ impl ExecutionPlan for SortExec {
             cache: self.cache.clone(),
         }))
     }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
 }
 
 #[cfg(test)]

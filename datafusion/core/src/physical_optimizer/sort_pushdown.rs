@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use super::utils::add_sort_above;
@@ -32,11 +34,13 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, JoinSide, Result};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 #[derive(Default, Clone)]
 pub struct ParentRequirements {
@@ -63,45 +67,75 @@ pub fn assign_initial_requirements(node: &mut SortPushDown) {
     }
 }
 
-/// Get fetch information for the operator.
-fn get_fetch(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
-    if let Some(sort) = plan.as_any().downcast_ref::<SortExec>() {
-        sort.fetch()
-    } else {
-        None
-    }
-}
-
 /// Prunes unnecessary operators from the plan.
 pub(crate) fn prune_unnecessary_operators(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     Ok(plan
         .transform_up(|p| {
-            if let Some(sort) = p.as_any().downcast_ref::<SortExec>() {
-                let out_ordering = sort.expr();
-                if sort
-                    .input()
-                    .equivalence_properties()
-                    .ordering_satisfy(out_ordering)
-                {
-                    // Ordering is satisfied
-                    let out_fetch = sort.fetch();
-                    let in_fetch = get_fetch(sort.input());
-                    let can_remove = match (out_fetch, in_fetch) {
-                        (Some(out_fetch), Some(in_fetch)) => in_fetch >= out_fetch,
-                        (None, _) => true,
-                        // Cannot remove, as sort decreases number of rows after processing.
-                        (Some(_), None) => false,
-                    };
-                    if can_remove {
-                        return Ok(Transformed::yes(sort.input().clone()));
-                    }
-                }
+            if let Some(p) = p.as_any().downcast_ref::<PlaceHolderOperatorExec>() {
+                return Ok(Transformed::yes(p.child.clone()));
             }
             Ok(Transformed::no(p))
         })?
         .data)
+}
+
+/// A dummy operator to make sure each node is visited, during top-down pass
+/// even some of the nodes are removed from the plan. When an operator is removed from the plan,
+/// this operator is inserted on top of it. With this insertion at the next iteration, its child will be visited
+/// enabling us to not miss any node.
+/// This operator should be removed after rule ends from the plan.
+struct PlaceHolderOperatorExec {
+    child: Arc<dyn ExecutionPlan>,
+}
+
+impl Debug for PlaceHolderOperatorExec {
+    fn fmt(&self, _f: &mut Formatter<'_>) -> std::fmt::Result {
+        unreachable!()
+    }
+}
+
+impl DisplayAs for PlaceHolderOperatorExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "PlaceHolderExec")
+    }
+}
+
+impl ExecutionPlan for PlaceHolderOperatorExec {
+    fn name(&self) -> &str {
+        unreachable!()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        self.child.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.child]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        debug_assert_eq!(children.len(), 1);
+        Ok(Arc::new(Self {
+            child: children.swap_remove(0),
+        }))
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unreachable!()
+    }
 }
 
 pub(crate) fn pushdown_sorts(
@@ -116,16 +150,15 @@ pub(crate) fn pushdown_sorts(
     let satisfy_parent = plan
         .equivalence_properties()
         .ordering_satisfy_requirement(parent_reqs);
-
-    if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+    if plan.as_any().downcast_ref::<SortExec>().is_some() {
         let required_ordering = plan
             .output_ordering()
             .map(PhysicalSortRequirement::from_sort_exprs)
             .unwrap_or_default();
         if !satisfy_parent {
             // Make sure this `SortExec` satisfies parent requirements:
-            let fetch = sort_exec.fetch();
             let sort_reqs = requirements.data.ordering_requirement.unwrap_or_default();
+            let fetch = requirements.data.fetch;
             requirements = requirements.children.swap_remove(0);
             requirements = add_sort_above(requirements, sort_reqs, fetch);
         };
@@ -135,7 +168,7 @@ pub(crate) fn pushdown_sorts(
         if let Some(adjusted) =
             pushdown_requirement_to_children(&child.plan, &required_ordering)?
         {
-            let fetch = get_fetch(&child.plan);
+            let fetch = child.plan.fetch();
             for (grand_child, order) in child.children.iter_mut().zip(adjusted) {
                 grand_child.data = ParentRequirements {
                     ordering_requirement: order,
@@ -144,10 +177,22 @@ pub(crate) fn pushdown_sorts(
             }
             // Can push down requirements
             child.data = ParentRequirements {
-                ordering_requirement: None,
+                ordering_requirement: Some(required_ordering.clone()),
                 fetch,
             };
-            return Ok(Transformed::yes(child));
+
+            let new_plan = Arc::new(PlaceHolderOperatorExec {
+                child: child.plan.clone(),
+            }) as Arc<dyn ExecutionPlan>;
+            let new_reqs = PlanContext::new(
+                new_plan,
+                ParentRequirements {
+                    ordering_requirement: Some(required_ordering),
+                    fetch,
+                },
+                vec![child],
+            );
+            return Ok(Transformed::yes(new_reqs));
         } else {
             // Can not push down requirements
             requirements.children = vec![child];
@@ -198,9 +243,6 @@ fn pushdown_requirement_to_children(
             RequirementsCompatibility::NonCompatible => Ok(None),
         }
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        println!("trying to pushdown sort exec");
-        // println!("parent_required: {:?}", parent_required);
-        // println!("sort_exec.properties().eq_properties: {:?}", sort_exec.properties().eq_properties);
         let sort_req = PhysicalSortRequirement::from_sort_exprs(
             sort_exec.properties().output_ordering().unwrap_or(&[]),
         );
@@ -209,9 +251,23 @@ fn pushdown_requirement_to_children(
             .eq_properties
             .requirements_compatible(parent_required, &sort_req)
         {
-            println!("compatible, parent_required: {:?}", parent_required);
             debug_assert!(!parent_required.is_empty());
             Ok(Some(vec![Some(parent_required.to_vec())]))
+        } else {
+            Ok(None)
+        }
+    } else if is_limit(plan) {
+        let output_req = PhysicalSortRequirement::from_sort_exprs(
+            plan.properties().output_ordering().unwrap_or(&[]),
+        );
+        // Push down through limit only when requirement is aligned with output ordering.
+        if plan
+            .properties()
+            .eq_properties
+            .requirements_compatible(parent_required, &output_req)
+        {
+            let req = (!parent_required.is_empty()).then(|| parent_required.to_vec());
+            Ok(Some(vec![req]))
         } else {
             Ok(None)
         }
@@ -257,7 +313,6 @@ fn pushdown_requirement_to_children(
         || plan.as_any().is::<FilterExec>()
         // TODO: Add support for Projection push down
         || plan.as_any().is::<ProjectionExec>()
-        || is_limit(plan)
         || plan.as_any().is::<HashJoinExec>()
         || pushdown_would_violate_requirements(parent_required, plan.as_ref())
     {

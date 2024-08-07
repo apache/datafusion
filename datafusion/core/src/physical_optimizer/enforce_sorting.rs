@@ -656,7 +656,7 @@ mod tests {
     use datafusion_expr::JoinType;
     use datafusion_physical_expr::expressions::{col, Column, NotExpr};
     use datafusion_physical_optimizer::PhysicalOptimizerRule;
-    use datafusion_physical_plan::limit::GlobalLimitExec;
+    use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 
     use rstest::rstest;
 
@@ -1077,7 +1077,6 @@ mod tests {
     async fn test_remove_unnecessary_sort6() -> Result<()> {
         let schema = create_test_schema()?;
         let source = memory_exec(&schema);
-        // let input = sort_exec(vec![sort_expr("non_nullable_col", &schema)], source);
         let input = Arc::new(
             SortExec::new(vec![sort_expr("non_nullable_col", &schema)], source)
                 .with_fetch(Some(2)),
@@ -1098,6 +1097,39 @@ mod tests {
         let expected_optimized = [
             "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
             "  MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_unnecessary_sort7() -> Result<()> {
+        let schema = create_test_schema()?;
+        let source = memory_exec(&schema);
+        let input = Arc::new(SortExec::new(
+            vec![sort_expr("non_nullable_col", &schema)],
+            source,
+        ));
+        let limit = Arc::new(LocalLimitExec::new(input, 2));
+        let physical_plan = sort_exec(
+            vec![
+                sort_expr("non_nullable_col", &schema),
+                sort_expr("nullable_col", &schema),
+            ],
+            limit,
+        );
+
+        let expected_input = [
+            "SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
+            "  LocalLimitExec: fetch=2",
+            "    SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
+            "      MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        let expected_optimized = [
+            "LocalLimitExec: fetch=2",
+            "  SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
