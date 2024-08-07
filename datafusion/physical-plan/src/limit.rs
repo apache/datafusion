@@ -260,6 +260,10 @@ impl ExecutionPlan for GlobalLimitExec {
         };
         Ok(stats)
     }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
 }
 
 /// LocalLimitExec applies a limit to a single partition
@@ -427,6 +431,10 @@ impl ExecutionPlan for LocalLimitExec {
             },
         };
         Ok(stats)
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        Some(self.fetch)
     }
 }
 
