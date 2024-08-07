@@ -29,7 +29,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::{col, lit, Expr};
+use datafusion_expr::{cast, col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
 
 use futures::StreamExt;
@@ -150,7 +150,16 @@ async fn page_index_filter_one_col() {
     let task_ctx = session_ctx.task_ctx();
 
     // 5.create filter date_string_col == 1;
-    let filter = col("date_string_col").eq(lit("01/01/09"));
+    let force_string_view = state
+        .config_options()
+        .execution
+        .parquet
+        .schema_force_string_view;
+    let filter = if force_string_view {
+        col("date_string_col").eq(cast(lit("01/01/09"), arrow_schema::DataType::Utf8View))
+    } else {
+        col("date_string_col").eq(lit("01/01/09"))
+    };
     let parquet_exec = get_parquet_exec(&state, filter).await;
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
     let batch = results.next().await.unwrap().unwrap();
