@@ -17,7 +17,7 @@
 
 //! SQL planning extensions like [`NestedFunctionPlanner`] and [`FieldAccessPlanner`]
 
-use datafusion_common::{exec_err, plan_err, utils::list_ndims, DFSchema, Result};
+use datafusion_common::{plan_err, utils::list_ndims, DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
@@ -102,7 +102,7 @@ impl ExprPlanner for NestedFunctionPlanner {
 
     fn plan_make_map(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         if args.len() % 2 != 0 {
-            return exec_err!("make_map requires an even number of arguments");
+            return plan_err!("make_map requires an even number of arguments");
         }
 
         let (keys, values): (Vec<_>, Vec<_>) =
@@ -120,7 +120,7 @@ impl ExprPlanner for NestedFunctionPlanner {
             Ok(PlannerResult::Planned(Expr::ScalarFunction(
                 ScalarFunction::new_udf(
                     array_has_udf(),
-                    // left and right are reversed here `needle=any(haystack)` -> `array_has(haystack, needle)`
+                    // left and right are reversed here so `needle=any(haystack)` -> `array_has(haystack, needle)`
                     vec![expr.right, expr.left],
                 ),
             )))
@@ -185,4 +185,37 @@ impl ExprPlanner for FieldAccessPlanner {
 
 fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
     return agg_func.func.name() == "array_agg";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_common::ScalarValue;
+
+    #[test]
+    fn test_plan_any_ok() {
+        let planner = NestedFunctionPlanner;
+        let expr = RawBinaryExpr {
+            op: sqlparser::ast::BinaryOperator::Eq,
+            left: Expr::Literal(ScalarValue::Int32(Some(1))),
+            right: Expr::Literal(ScalarValue::Int32(Some(1))), // isn't actually used, hence simple value
+        };
+        let p = planner.plan_any(expr).unwrap();
+        assert!(matches!(p, PlannerResult::Planned(Expr::ScalarFunction(_))));
+    }
+
+    #[test]
+    fn test_plan_wrong_op() {
+        let planner = NestedFunctionPlanner;
+        let expr = RawBinaryExpr {
+            op: sqlparser::ast::BinaryOperator::Lt,
+            left: Expr::Literal(ScalarValue::Int32(Some(1))),
+            right: Expr::Literal(ScalarValue::Int32(Some(1))), // isn't actually used, hence simple value
+        };
+        let p = planner.plan_any(expr).unwrap_err();
+        assert_eq!(
+            p.to_string(),
+            "Error during planning: Unsupported AnyOp: <, only '=' is supported"
+        );
+    }
 }
