@@ -15,18 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::Debug;
-use std::{any::Any, sync::Arc};
-
-use arrow::datatypes::Field;
-
 use crate::order::AggregateOrderSensitivity;
+use arrow::datatypes::Field;
 use datafusion_common::exec_err;
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use std::fmt::Debug;
+use std::{any::Any, sync::Arc};
 
 pub mod count_distinct;
 pub mod groups_accumulator;
