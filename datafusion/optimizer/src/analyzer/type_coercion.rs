@@ -21,16 +21,20 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, IntervalUnit};
 
+use crate::analyzer::AnalyzerRule;
+use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::builder::project_with_column_index;
 use datafusion_expr::expr::{
     self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
     InSubquery, Like, ScalarFunction, WindowFunction,
 };
+use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::Subquery;
@@ -45,11 +49,11 @@ use datafusion_expr::type_coercion::other::{
 };
 use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::{is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not, AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, Operator, ScalarUDF, WindowFrame, WindowFrameBound, WindowFrameUnits, Projection, Union};
-use datafusion_expr::builder::project_with_column_index;
-use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
-use crate::analyzer::AnalyzerRule;
-use crate::utils::NamePreserver;
+use datafusion_expr::{
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
+    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, Operator,
+    Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
+};
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -175,7 +179,8 @@ impl<'a> TypeCoercionRewriter<'a> {
             return Ok(plan);
         };
 
-        let inputs = union.inputs
+        let inputs = union
+            .inputs
             .into_iter()
             .map(|p| {
                 let plan = coerce_plan_expr_for_schema(&p, &union.schema)?;

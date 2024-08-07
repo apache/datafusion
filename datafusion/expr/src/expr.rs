@@ -40,7 +40,10 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     internal_err, plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
-use sqlparser::ast::NullTreatment;
+use sqlparser::ast::{
+    display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
+    NullTreatment, RenameSelectItem, ReplaceSelectElement,
+};
 
 /// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
 ///
@@ -314,7 +317,10 @@ pub enum Expr {
     ///
     /// This expr has to be resolved to a list of columns before translating logical
     /// plan into physical plan.
-    Wildcard { qualifier: Option<TableReference> },
+    Wildcard {
+        qualifier: Option<TableReference>,
+        options: WildcardOptions,
+    },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
@@ -982,6 +988,70 @@ impl GroupingSet {
                 exprs
             }
         }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
+pub struct WildcardOptions {
+    pub opt_ilike: Option<IlikeSelectItem>,
+    pub opt_exclude: Option<ExcludeSelectItem>,
+    pub opt_except: Option<ExceptSelectItem>,
+    pub opt_replace: Option<PlannedReplaceSelectItem>,
+    pub opt_rename: Option<RenameSelectItem>,
+}
+
+impl WildcardOptions {
+    pub fn valid(&self) -> bool {
+        self.opt_ilike.is_some()
+            || self.opt_exclude.is_some()
+            || self.opt_except.is_some()
+            || self.opt_replace.is_some()
+            || self.opt_rename.is_some()
+    }
+}
+
+impl Display for WildcardOptions {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        if let Some(ilike) = &self.opt_ilike {
+            write!(f, " {ilike}")?;
+        }
+        if let Some(exclude) = &self.opt_exclude {
+            write!(f, " {exclude}")?;
+        }
+        if let Some(except) = &self.opt_except {
+            write!(f, " {except}")?;
+        }
+        if let Some(replace) = &self.opt_replace {
+            write!(f, " {replace}")?;
+        }
+        if let Some(rename) = &self.opt_rename {
+            write!(f, " {rename}")?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
+pub struct PlannedReplaceSelectItem {
+    pub items: Vec<Box<ReplaceSelectElement>>,
+    pub planned_expressions: Vec<Expr>,
+}
+
+impl Display for PlannedReplaceSelectItem {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "REPLACE")?;
+        write!(f, " ({})", display_comma_separated(&self.items))?;
+        Ok(())
+    }
+}
+
+impl PlannedReplaceSelectItem {
+    pub fn items(&self) -> &[Box<ReplaceSelectElement>] {
+        &self.items
+    }
+
+    pub fn expressions(&self) -> &[Expr] {
+        &self.planned_expressions
     }
 }
 
@@ -1711,8 +1781,9 @@ impl Expr {
             Expr::ScalarSubquery(subquery) => {
                 subquery.hash(hasher);
             }
-            Expr::Wildcard { qualifier } => {
+            Expr::Wildcard { qualifier, options } => {
                 qualifier.hash(hasher);
+                options.hash(hasher);
             }
             Expr::GroupingSet(grouping_set) => {
                 mem::discriminant(grouping_set).hash(hasher);
@@ -1948,9 +2019,9 @@ impl fmt::Display for Expr {
                     write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
                 }
             }
-            Expr::Wildcard { qualifier } => match qualifier {
-                Some(qualifier) => write!(f, "{qualifier}.*"),
-                None => write!(f, "*"),
+            Expr::Wildcard { qualifier, options } => match qualifier {
+                Some(qualifier) => write!(f, "{qualifier}.*{options}"),
+                None => write!(f, "*{options}"),
             },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
@@ -2264,9 +2335,9 @@ fn write_name<W: Write>(w: &mut W, e: &Expr) -> Result<()> {
         Expr::Sort { .. } => {
             return internal_err!("Create name does not support sort expression")
         }
-        Expr::Wildcard { qualifier } => match qualifier {
-            Some(qualifier) => write!(w, "{}.*", qualifier)?,
-            None => write!(w, "*")?,
+        Expr::Wildcard { qualifier, options } => match qualifier {
+            Some(qualifier) => write!(w, "{}.*{}", qualifier, options)?,
+            None => write!(w, "*{}", options)?,
         },
         Expr::Placeholder(Placeholder { id, .. }) => write!(w, "{}", id)?,
     };
@@ -2292,7 +2363,12 @@ fn write_names_join<W: Write>(w: &mut W, exprs: &[Expr], sep: &str) -> Result<()
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
-    use crate::{case, lit, ColumnarValue, ScalarUDF, ScalarUDFImpl, Volatility};
+    use crate::{
+        case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue,
+        ScalarUDF, ScalarUDFImpl, Volatility,
+    };
+    use sqlparser::ast;
+    use sqlparser::ast::{Ident, IdentWithAlias};
     use std::any::Any;
 
     #[test]
@@ -2593,5 +2669,110 @@ mod test {
             ))
         );
         assert_eq!(find_df_window_func("not_exist"), None)
+    }
+
+    #[test]
+    fn test_display_wildcard() {
+        assert_eq!(format!("{}", wildcard()), "*");
+        assert_eq!(format!("{}", qualified_wildcard("t1")), "t1.*");
+        assert_eq!(
+            format!(
+                "{}",
+                wildcard_with_options(wildcard_options(
+                    Some(IlikeSelectItem {
+                        pattern: "c1".to_string()
+                    }),
+                    None,
+                    None,
+                    None,
+                    None
+                ))
+            ),
+            "* ILIKE 'c1'"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                wildcard_with_options(wildcard_options(
+                    None,
+                    Some(ExcludeSelectItem::Multiple(vec![
+                        Ident::from("c1"),
+                        Ident::from("c2")
+                    ])),
+                    None,
+                    None,
+                    None
+                ))
+            ),
+            "* EXCLUDE (c1, c2)"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                wildcard_with_options(wildcard_options(
+                    None,
+                    None,
+                    Some(ExceptSelectItem {
+                        first_element: Ident::from("c1"),
+                        additional_elements: vec![Ident::from("c2")]
+                    }),
+                    None,
+                    None
+                ))
+            ),
+            "* EXCEPT (c1, c2)"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                wildcard_with_options(wildcard_options(
+                    None,
+                    None,
+                    None,
+                    Some(PlannedReplaceSelectItem {
+                        items: vec![Box::new(ReplaceSelectElement {
+                            expr: ast::Expr::Identifier(Ident::from("c1")),
+                            column_name: Ident::from("a1"),
+                            as_keyword: false
+                        })],
+                        planned_expressions: vec![]
+                    }),
+                    None
+                ))
+            ),
+            "* REPLACE (c1 a1)"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                wildcard_with_options(wildcard_options(
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(RenameSelectItem::Multiple(vec![IdentWithAlias {
+                        ident: Ident::from("c1"),
+                        alias: Ident::from("a1")
+                    }]))
+                ))
+            ),
+            "* RENAME (c1 AS a1)"
+        )
+    }
+
+    fn wildcard_options(
+        opt_ilike: Option<IlikeSelectItem>,
+        opt_exclude: Option<ExcludeSelectItem>,
+        opt_except: Option<ExceptSelectItem>,
+        opt_replace: Option<PlannedReplaceSelectItem>,
+        opt_rename: Option<RenameSelectItem>,
+    ) -> WildcardOptions {
+        WildcardOptions {
+            opt_ilike,
+            opt_exclude,
+            opt_except,
+            opt_replace,
+            opt_rename,
+        }
     }
 }

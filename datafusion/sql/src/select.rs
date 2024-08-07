@@ -27,9 +27,9 @@ use crate::utils::{
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::UnnestOptions;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
-use datafusion_common::{Column, UnnestOptions};
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
 };
@@ -38,12 +38,12 @@ use datafusion_expr::utils::{
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
-    qualified_wildcard, wildcard, Aggregate, Expr, Filter, GroupingSet, LogicalPlan,
-    LogicalPlanBuilder, Partitioning,
+    qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
+    GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{
     Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
-    ReplaceSelectItem, WildcardAdditionalOptions, WindowType,
+    WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -568,40 +568,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             SelectItem::Wildcard(options) => {
                 Self::check_wildcard_options(&options)?;
-
                 if empty_from {
                     return plan_err!("SELECT * with no tables specified is not valid");
                 }
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                if let Some(replace) = options.opt_replace {
-                    self.replace_columns(
-                        plan,
-                        empty_from,
-                        planner_context,
-                        vec![wildcard()],
-                        replace,
-                    )
-                } else {
-                    Ok(vec![wildcard()])
-                }
+                let planned_options = self.plan_wildcard_options(
+                    plan,
+                    empty_from,
+                    planner_context,
+                    options,
+                )?;
+                Ok(vec![wildcard_with_options(planned_options)])
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
                 let qualifier = idents_to_table_reference(object_name.0, false)?;
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                if let Some(replace) = options.opt_replace {
-                    self.replace_columns(
-                        plan,
-                        empty_from,
-                        planner_context,
-                        vec![qualified_wildcard(qualifier)],
-                        replace,
-                    )
-                } else {
-                    Ok(vec![qualified_wildcard(qualifier)])
-                }
+                let planned_options = self.plan_wildcard_options(
+                    plan,
+                    empty_from,
+                    planner_context,
+                    options,
+                )?;
+                Ok(vec![qualified_wildcard_with_options(
+                    qualifier,
+                    planned_options,
+                )])
             }
         }
     }
@@ -626,40 +616,49 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// If there is a REPLACE statement in the projected expression in the form of
-    /// "REPLACE (some_column_within_an_expr AS some_column)", this function replaces
-    /// that column with the given replace expression. Column name remains the same.
-    /// Multiple REPLACEs are also possible with comma separations.
-    fn replace_columns(
+    /// "REPLACE (some_column_within_an_expr AS some_column)", we should plan the
+    /// replace expressions first.
+    fn plan_wildcard_options(
         &self,
         plan: &LogicalPlan,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-        mut exprs: Vec<Expr>,
-        replace: ReplaceSelectItem,
-    ) -> Result<Vec<Expr>> {
-        for expr in exprs.iter_mut() {
-            if let Expr::Column(Column { name, .. }) = expr {
-                if let Some(item) = replace
-                    .items
-                    .iter()
-                    .find(|item| item.column_name.value == *name)
-                {
-                    let new_expr = self.sql_select_to_rex(
+        options: WildcardAdditionalOptions,
+    ) -> Result<WildcardOptions> {
+        if let Some(replace) = options.opt_replace {
+            let replace_expr = replace
+                .items
+                .iter()
+                .map(|item| {
+                    Ok(self.sql_select_to_rex(
                         SelectItem::UnnamedExpr(item.expr.clone()),
                         plan,
                         empty_from,
                         planner_context,
                     )?[0]
-                        .clone();
-                    *expr = Expr::Alias(Alias {
-                        expr: Box::new(new_expr),
-                        relation: None,
-                        name: name.clone(),
-                    });
-                }
-            }
+                        .clone())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let planned_option = PlannedReplaceSelectItem {
+                items: replace.items,
+                planned_expressions: replace_expr,
+            };
+            Ok(WildcardOptions {
+                opt_ilike: options.opt_ilike,
+                opt_exclude: options.opt_exclude,
+                opt_except: options.opt_except,
+                opt_replace: Some(planned_option),
+                opt_rename: options.opt_rename,
+            })
+        } else {
+            Ok(WildcardOptions {
+                opt_ilike: options.opt_ilike,
+                opt_exclude: options.opt_exclude,
+                opt_except: options.opt_except,
+                opt_replace: None,
+                opt_rename: options.opt_rename,
+            })
         }
-        Ok(exprs)
     }
 
     /// Wrap a plan in a projection

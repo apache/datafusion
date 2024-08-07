@@ -21,7 +21,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, WindowFunction};
+use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::signature::{Signature, TypeSignature};
 use crate::{
@@ -418,7 +418,7 @@ pub fn expand_wildcard(
 pub fn expand_qualified_wildcard(
     qualifier: &TableReference,
     schema: &DFSchema,
-    wildcard_options: Option<&WildcardAdditionalOptions>,
+    wildcard_options: Option<&WildcardOptions>,
 ) -> Result<Vec<Expr>> {
     let qualified_indices = schema.fields_indices_with_qualified(qualifier);
     let projected_func_dependencies = schema
@@ -433,7 +433,7 @@ pub fn expand_qualified_wildcard(
     let qualified_dfschema =
         DFSchema::try_from_qualified_schema(qualifier.clone(), &qualified_schema)?
             .with_functional_dependencies(projected_func_dependencies)?;
-    let excluded_columns = if let Some(WildcardAdditionalOptions {
+    let excluded_columns = if let Some(WildcardOptions {
         opt_exclude,
         opt_except,
         ..
@@ -733,7 +733,7 @@ pub fn exprlist_to_fields<'a>(
     exprs
         .into_iter()
         .flat_map(|e| match e {
-            Expr::Wildcard { qualifier } => match qualifier {
+            Expr::Wildcard { qualifier, .. } => match qualifier {
                 None => (0..input_schema.fields().len())
                     .map(|i| {
                         Ok(input_schema.qualified_field(i)).map(|(qualifier, field)| {

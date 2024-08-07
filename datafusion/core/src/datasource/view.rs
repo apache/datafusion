@@ -244,6 +244,26 @@ mod tests {
 
         assert_batches_eq!(expected, &results);
 
+        let view_sql =
+            "CREATE VIEW replace_xyz AS SELECT * REPLACE (column1*2 as column1) FROM xyz";
+        session_ctx.sql(view_sql).await?.collect().await?;
+
+        let results = session_ctx
+            .sql("SELECT * FROM replace_xyz")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = [
+            "+---------+---------+---------+",
+            "| column1 | column2 | column3 |",
+            "+---------+---------+---------+",
+            "| 2       | 2       | 3       |",
+            "| 8       | 5       | 6       |",
+            "+---------+---------+---------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
         Ok(())
     }
 

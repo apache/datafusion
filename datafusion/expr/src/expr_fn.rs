@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WindowFunction,
+    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -119,7 +119,17 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
 /// assert_eq!(p.to_string(), "*")
 /// ```
 pub fn wildcard() -> Expr {
-    Expr::Wildcard { qualifier: None }
+    Expr::Wildcard {
+        qualifier: None,
+        options: WildcardOptions::default(),
+    }
+}
+
+pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
+    Expr::Wildcard {
+        qualifier: None,
+        options,
+    }
 }
 
 /// Create an 't.*' [`Expr::Wildcard`] expression that matches all columns from a specific table
@@ -132,9 +142,20 @@ pub fn wildcard() -> Expr {
 /// let p = qualified_wildcard(TableReference::bare("t"));
 /// assert_eq!(p.to_string(), "t.*")
 /// ```
-pub fn qualified_wildcard(qualifier: TableReference) -> Expr {
+pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> Expr {
     Expr::Wildcard {
-        qualifier: Some(qualifier),
+        qualifier: Some(qualifier.into()),
+        options: WildcardOptions::default(),
+    }
+}
+
+pub fn qualified_wildcard_with_options(
+    qualifier: impl Into<TableReference>,
+    options: WildcardOptions,
+) -> Expr {
+    Expr::Wildcard {
+        qualifier: Some(qualifier.into()),
+        options,
     }
 }
 

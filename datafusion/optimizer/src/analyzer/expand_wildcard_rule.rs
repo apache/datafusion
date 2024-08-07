@@ -19,6 +19,7 @@ use crate::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{Column, DataFusionError, Result};
+use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem};
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
 use std::collections::hash_map::Entry;
@@ -52,19 +53,31 @@ fn expand_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             let mut projected_expr = vec![];
             for e in expr {
                 match e {
-                    Expr::Wildcard { qualifier } => {
+                    Expr::Wildcard { qualifier, options } => {
                         if let Some(qualifier) = qualifier {
-                            projected_expr.extend(expand_qualified_wildcard(
+                            let expanded = expand_qualified_wildcard(
                                 &qualifier,
                                 input.schema(),
-                                None,
-                            )?);
+                                Some(&options),
+                            )?;
+                            // If there is a REPLACE statement, replace that column with the given
+                            // replace expression. Column name remains the same.
+                            let replaced = if let Some(replace) = options.opt_replace {
+                                replace_columns(expanded, replace)?
+                            } else {
+                                expanded
+                            };
+                            projected_expr.extend(replaced);
                         } else {
-                            projected_expr.extend(expand_wildcard(
-                                input.schema(),
-                                &input,
-                                None,
-                            )?);
+                            let expanded = expand_wildcard(input.schema(), &input, None)?;
+                            // If there is a REPLACE statement, replace that column with the given
+                            // replace expression. Column name remains the same.
+                            let replaced = if let Some(replace) = options.opt_replace {
+                                replace_columns(expanded, replace)?
+                            } else {
+                                expanded
+                            };
+                            projected_expr.extend(replaced);
                         }
                     }
                     // A workaround to handle the case when the column name is "*".
@@ -132,14 +145,43 @@ fn to_unique_names<'a>(
     Ok(unique_expr)
 }
 
+/// If there is a REPLACE statement in the projected expression in the form of
+/// "REPLACE (some_column_within_an_expr AS some_column)", this function replaces
+/// that column with the given replace expression. Column name remains the same.
+/// Multiple REPLACEs are also possible with comma separations.
+fn replace_columns(
+    mut exprs: Vec<Expr>,
+    replace: PlannedReplaceSelectItem,
+) -> Result<Vec<Expr>> {
+    for expr in exprs.iter_mut() {
+        if let Expr::Column(Column { name, .. }) = expr {
+            if let Some((_, new_expr)) = replace
+                .items()
+                .iter()
+                .zip(replace.expressions().iter())
+                .find(|(item, _)| item.column_name.value == *name)
+            {
+                *expr = Expr::Alias(Alias {
+                    expr: Box::new(new_expr.clone()),
+                    relation: None,
+                    name: name.clone(),
+                })
+            }
+        }
+    }
+    Ok(exprs)
+}
+
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{DataType, Field, Schema};
     use super::*;
     use crate::test::{assert_analyzed_plan_eq_display_indent, test_table_scan};
     use crate::Analyzer;
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{JoinType, TableReference};
-    use datafusion_expr::{col, in_subquery, qualified_wildcard, wildcard, LogicalPlanBuilder, table_scan};
+    use datafusion_expr::{
+        col, in_subquery, qualified_wildcard, table_scan, wildcard, LogicalPlanBuilder,
+    };
 
     fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_analyzed_plan_eq_display_indent(
@@ -248,7 +290,7 @@ mod tests {
 
         let plan = table_scan(Some("t1"), &employee_schema(), None)?
             .join_using(t2, JoinType::Inner, vec!["id"])?
-            .project(vec![Expr::Wildcard { qualifier: None }])?
+            .project(vec![wildcard()])?
             .build()?;
 
         let expected = "Projection: *\

@@ -26,6 +26,8 @@ use sqlparser::ast::{
 use std::sync::Arc;
 use std::{fmt::Display, vec};
 
+use super::dialect::{DateFieldExtractStyle, IntervalStyle};
+use super::Unparser;
 use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
 use arrow::util::display::array_value_to_string;
 use arrow_array::types::{
@@ -43,9 +45,6 @@ use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
-
-use super::dialect::{DateFieldExtractStyle, IntervalStyle};
-use super::Unparser;
 
 /// DataFusion's Exprs can represent either an `Expr` or an `OrderByExpr`
 pub enum Unparsed {
@@ -159,7 +158,13 @@ impl Unparser<'_> {
                 let args = args
                     .iter()
                     .map(|e| {
-                        if matches!(e, Expr::Wildcard { qualifier: None }) {
+                        if matches!(
+                            e,
+                            Expr::Wildcard {
+                                qualifier: None,
+                                ..
+                            }
+                        ) {
                             Ok(FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
                         } else {
                             self.expr_to_sql_inner(e).map(|e| {
@@ -477,7 +482,7 @@ impl Unparser<'_> {
                     format: None,
                 })
             }
-            Expr::Wildcard { qualifier: _ } => {
+            Expr::Wildcard { .. } => {
                 not_impl_err!("Unsupported Expr conversion: {expr:?}")
             }
             Expr::GroupingSet(grouping_set) => match grouping_set {
@@ -643,7 +648,13 @@ impl Unparser<'_> {
     fn function_args_to_sql(&self, args: &[Expr]) -> Result<Vec<ast::FunctionArg>> {
         args.iter()
             .map(|e| {
-                if matches!(e, Expr::Wildcard { qualifier: None }) {
+                if matches!(
+                    e,
+                    Expr::Wildcard {
+                        qualifier: None,
+                        ..
+                    }
+                ) {
                     Ok(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
                 } else {
                     self.expr_to_sql(e)
@@ -1503,6 +1514,7 @@ mod tests {
     use arrow_schema::DataType::Int8;
     use ast::ObjectName;
     use datafusion_common::TableReference;
+    use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
         case, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
@@ -1558,7 +1570,10 @@ mod tests {
     fn expr_to_sql_ok() -> Result<()> {
         let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
-            .project(vec![Expr::Wildcard { qualifier: None }])?
+            .project(vec![Expr::Wildcard {
+                qualifier: None,
+                options: WildcardOptions::default(),
+            }])?
             .filter(col("a").eq(lit(1)))?
             .build()?;
 
@@ -1749,7 +1764,10 @@ mod tests {
             (sum(col("a")), r#"sum(a)"#),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard { qualifier: None }])
+                    .call(vec![Expr::Wildcard {
+                        qualifier: None,
+                        options: WildcardOptions::default(),
+                    }])
                     .distinct()
                     .build()
                     .unwrap(),
@@ -1757,7 +1775,10 @@ mod tests {
             ),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard { qualifier: None }])
+                    .call(vec![Expr::Wildcard {
+                        qualifier: None,
+                        options: WildcardOptions::default(),
+                    }])
                     .filter(lit(true))
                     .build()
                     .unwrap(),

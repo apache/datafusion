@@ -1980,9 +1980,12 @@ impl Projection {
         let expr_len: usize = expr
             .iter()
             .map(|e| match e {
-                Expr::Wildcard { qualifier: None } => schema.fields().len(),
+                Expr::Wildcard {
+                    qualifier: None, ..
+                } => schema.fields().len(),
                 Expr::Wildcard {
                     qualifier: Some(qualifier),
+                    ..
                 } => schema.fields_with_qualified(qualifier).len(),
                 _ => 1,
             })
