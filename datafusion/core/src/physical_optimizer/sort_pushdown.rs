@@ -19,9 +19,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::utils::{add_sort_above, is_sort};
-use crate::physical_optimizer::utils::{
-    is_limit, is_sort_preserving_merge, is_union, is_window,
-};
+use crate::physical_optimizer::utils::{is_sort_preserving_merge, is_union, is_window};
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils::calculate_join_output_ordering;
 use crate::physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
@@ -188,11 +186,17 @@ fn pushdown_requirement_to_children(
         } else {
             Ok(None)
         }
-    } else if is_limit(plan) {
+    } else if plan.fetch().is_some()
+        && plan.maintains_input_order().len() == 1
+        && plan.maintains_input_order()[0]
+        && plan.supports_limit_pushdown()
+    {
         let output_req = PhysicalSortRequirement::from_sort_exprs(
             plan.properties().output_ordering().unwrap_or(&[]),
         );
-        // Push down through limit only when requirement is aligned with output ordering.
+        // Push down through operator with fetch when:
+        // - requirement is aligned with output ordering
+        // - it preserves ordering during execution
         if plan
             .properties()
             .eq_properties

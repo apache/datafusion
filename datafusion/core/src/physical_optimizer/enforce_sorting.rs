@@ -483,9 +483,10 @@ fn adjust_window_sort_removal(
     Ok(window_tree)
 }
 
-/// Removes the [`CoalescePartitionsExec`] from the plan in `node`.After the removal of
-/// the `CoalescePartitionsExec` from the plan. Some of the `RepartitionExec`s might turn into
-/// redundant. Removes those `RepartitionExec`s from the plan on the way also.
+/// Removes parallelization-reducing, avoidable [`CoalescePartitionsExec`]s from the plan in `node`.
+/// After the removal of such `CoalescePartitionsExec`s from the plan, some of the
+/// `RepartitionExec`s might become redundant. Removes those `RepartitionExec`s from the plan as
+/// well.
 fn remove_bottleneck_in_subplan(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<PlanWithCorrespondingCoalescePartitions> {
