@@ -31,7 +31,8 @@ use arrow::{
 use arrow_schema::{Field, Schema};
 
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, ScalarValue, Result,
+    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
@@ -132,9 +133,7 @@ impl ApproxPercentileCont {
     }
 }
 
-fn get_scalar_value(
-    expr: &Arc<dyn PhysicalExpr>,
-) -> Result<ScalarValue> {
+fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
     let empty_schema = Arc::new(Schema::empty());
     let batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
     if let ColumnarValue::Scalar(s) = expr.evaluate(&batch)? {
@@ -144,9 +143,7 @@ fn get_scalar_value(
     }
 }
 
-fn validate_input_percentile_expr(
-    expr: &Arc<dyn PhysicalExpr>,
-) -> Result<f64> {
+fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
     let percentile = match get_scalar_value(expr)? {
         ScalarValue::Float32(Some(value)) => {
             value as f64
@@ -171,9 +168,7 @@ fn validate_input_percentile_expr(
     Ok(percentile)
 }
 
-fn validate_input_max_size_expr(
-    expr: &Arc<dyn PhysicalExpr>,
-) -> Result<usize> {
+fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
     let max_size = match get_scalar_value(expr)? {
         ScalarValue::UInt8(Some(q)) => q as usize,
         ScalarValue::UInt16(Some(q)) => q as usize,
@@ -202,10 +197,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     #[allow(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialised
     /// state.
-    fn state_fields(
-        &self,
-        args: StateFieldsArgs,
-    ) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
                 format_state_name(args.name, "max_size"),
@@ -249,10 +241,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     }
 
     #[inline]
-    fn accumulator(
-        &self,
-        acc_args: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(self.create_accumulator(acc_args)?))
     }
 

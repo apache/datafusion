@@ -24,7 +24,9 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
 
 use arrow::compute::{cast_with_options, CastOptions};
-use arrow::datatypes::{DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit, TimeUnit};
+use arrow::datatypes::{
+    DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit, TimeUnit,
+};
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
 use datafusion_common::{internal_err, Result, ScalarValue};
 

@@ -21,9 +21,6 @@ use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 
 use datafusion_common::Result;
-// use datafusion_expr::expr::Alias;
-// use datafusion_expr::sort_properties::ExprProperties;
-// use datafusion_expr::Expr;
 use datafusion_expr_common::sort_properties::ExprProperties;
 
 use crate::physical_expr::PhysicalExpr;
