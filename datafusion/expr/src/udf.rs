@@ -26,6 +26,7 @@ use arrow::datatypes::DataType;
 
 use datafusion_common::{not_impl_err, ExprSchema, Result};
 
+use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
 use crate::interval_arithmetic::Interval;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
@@ -357,14 +358,15 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Ok(format!("{}({})", self.name(), names.join(",")))
     }
 
-    /// Returns the user-defined schema name of the UDF given the arguments
+    /// Returns the name of the column this expression would create
+    ///
+    /// See [`Expr::schema_name`] for details
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
-        let args_name = args
-            .iter()
-            .map(|e| e.schema_name().to_string())
-            .collect::<Vec<_>>();
-        // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
-        Ok(format!("{}({})", self.name(), args_name.join(",")))
+        Ok(format!(
+            "{}({})",
+            self.name(),
+            schema_name_from_exprs_comma_seperated_without_space(args)?
+        ))
     }
 
     /// Returns the function's [`Signature`] for information about what input

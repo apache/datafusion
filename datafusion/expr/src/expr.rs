@@ -983,11 +983,33 @@ impl PartialOrd for Expr {
 }
 
 impl Expr {
-    /// Returns the name for schema / field that is different from Display
-    /// Most of the expressions are the same as Display
-    /// Those are the main difference
-    /// 1. Alias, where excludes expression
-    /// 2. Cast / TryCast, where takes expression only
+    #[deprecated(since = "40.0.0", note = "use schema_name instead")]
+    pub fn display_name(&self) -> Result<String> {
+        Ok(self.schema_name().to_string())
+    }
+
+    /// The name of the column (field) that this `Expr` will produce.
+    ///
+    /// For example, for a projection (e.g. `SELECT <expr>`) the resulting arrow
+    /// [`Schema`] will have a field with this name.
+    ///
+    /// Note that the resulting string is subtlety different than the `Display`
+    /// representation for certain `Expr`. Some differences:
+    ///
+    /// 1. [`Expr::Alias`], which shows only the alias itself
+    /// 2. [`Expr::Cast`] / [`Expr::TryCast`], which only displays the expression
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::{col, lit};
+    /// let expr = col("foo").eq(lit(42));
+    /// assert_eq!("foo = Int32(42)", expr.schema_name().to_string());
+    ///
+    /// let expr = col("foo").alias("bar").eq(lit(11));
+    /// assert_eq!("bar = Int32(11)", expr.schema_name().to_string());
+    /// ```
+    ///
+    /// [`Schema`]: arrow::datatypes::Schema
     pub fn schema_name<'a>(&'a self) -> impl Display + 'a {
         SchemaDisplay(self)
     }
@@ -1772,15 +1794,12 @@ impl<'a> Display for SchemaDisplay<'a> {
                 order_by,
                 null_treatment,
             }) => {
-                // let args_name = args.iter().map(|e| format!("{}", SchemaDisplay(e))).collect::<Vec<_>>();
-                let args_name = args.iter().map(|e| format!("{}", SchemaDisplay(e))).collect::<Vec<_>>();
-
                 write!(
                     f,
                     "{}({}{})",
                     func.name(),
                     if *distinct { "DISTINCT " } else { "" },
-                    args_name.join(",")
+                    schema_name_from_exprs_comma_seperated_without_space(args)?
                 )?;
 
                 if let Some(null_treatment) = null_treatment {
@@ -1792,12 +1811,7 @@ impl<'a> Display for SchemaDisplay<'a> {
                 };
 
                 if let Some(order_by) = order_by {
-                    let order_by_name = order_by
-                        .iter()
-                        .map(|e| format!("{e}"))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    write!(f, " ORDER BY [{}]", order_by_name)?;
+                    write!(f, " ORDER BY [{}]", schema_name_from_exprs(order_by)?)?;
                 };
 
                 Ok(())
@@ -1829,12 +1843,7 @@ impl<'a> Display for SchemaDisplay<'a> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(
-                    f,
-                    "{} {op} {}",
-                    SchemaDisplay(left),
-                    SchemaDisplay(right),
-                )
+                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
             }
             Expr::Case(Case {
                 expr,
@@ -1871,11 +1880,7 @@ impl<'a> Display for SchemaDisplay<'a> {
                 list,
                 negated,
             }) => {
-                let inlist_exprs = list
-                    .iter()
-                    .map(|e| format!("{}", SchemaDisplay(e)))
-                    .collect::<Vec<_>>();
-                let inlist_name = inlist_exprs.join(", ");
+                let inlist_name = schema_name_from_exprs(list)?;
 
                 if *negated {
                     write!(f, "{} NOT IN {}", SchemaDisplay(expr), inlist_name)
@@ -1886,32 +1891,17 @@ impl<'a> Display for SchemaDisplay<'a> {
             Expr::Exists(Exists { negated: true, .. }) => write!(f, "NOT EXISTS"),
             Expr::Exists(Exists { negated: false, .. }) => write!(f, "EXISTS"),
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
-                let exprs_name = exprs
-                    .iter()
-                    .map(|e| format!("{}", SchemaDisplay(e)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(f, "ROLLUP ({})", exprs_name)
+                write!(f, "ROLLUP ({})", schema_name_from_exprs(exprs)?)
             }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 write!(f, "GROUPING SETS (")?;
                 for exprs in lists_of_exprs.iter() {
-                    let exprs_name = exprs
-                        .iter()
-                        .map(|e| format!("{}", SchemaDisplay(e)))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    write!(f, "({})", exprs_name)?;
+                    write!(f, "({})", schema_name_from_exprs(exprs)?)?;
                 }
                 write!(f, ")")
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
-                let exprs_name = exprs
-                    .iter()
-                    .map(|e| format!("{}", SchemaDisplay(e)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(f, "ROLLUP ({})", exprs_name)
+                write!(f, "ROLLUP ({})", schema_name_from_exprs(exprs)?)
             }
             Expr::IsNull(expr) => write!(f, "{} IS NULL", SchemaDisplay(expr)),
             Expr::IsNotNull(expr) => {
@@ -2007,44 +1997,61 @@ impl<'a> Display for SchemaDisplay<'a> {
                 window_frame,
                 null_treatment,
             }) => {
-                let args_name = args.iter().map(|e| format!("{}", SchemaDisplay(e))).collect::<Vec<_>>();
-
-                // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
-                write!(f, "{}({})", fun, args_name.join(","))?;
+                write!(
+                    f,
+                    "{}({})",
+                    fun,
+                    schema_name_from_exprs_comma_seperated_without_space(args)?
+                )?;
 
                 if let Some(null_treatment) = null_treatment {
                     write!(f, " {}", null_treatment)?;
                 }
 
                 if !partition_by.is_empty() {
-                    let partition_by_name = partition_by.iter().map(|e| format!("{}", SchemaDisplay(e))).collect::<Vec<_>>().join(", ");
-                    write!(f, " PARTITION BY [{}]", partition_by_name)?;
+                    write!(
+                        f,
+                        " PARTITION BY [{}]",
+                        schema_name_from_exprs(partition_by)?
+                    )?;
                 }
 
                 if !order_by.is_empty() {
-                    let order_by_name = order_by.iter().map(|e| format!("{}", SchemaDisplay(e))).collect::<Vec<_>>().join(", ");
-                    write!(f, " ORDER BY [{}]", order_by_name)?;
+                    write!(f, " ORDER BY [{}]", schema_name_from_exprs(order_by)?)?;
                 };
 
                 write!(f, " {window_frame}")
             }
-            _ => todo!(""),
         }
     }
 }
 
-impl<'a> SchemaDisplay<'a> {
-    fn fmt_args(f: &mut Formatter<'_>, args: &[Expr]) -> fmt::Result {
-        for (i, arg) in args.iter().enumerate() {
-            if i > 0 {
-                // TODO: Use ", " to standardize the formatting of Vec<Expr>,
-                // <https://github.com/apache/datafusion/issues/10364>
-                write!(f, ",")?;
-            }
-            write!(f, "{}", SchemaDisplay(arg))?;
+/// Get schema_name for Vector of expressions
+///
+/// Internal usage. Please call `schema_name_from_exprs` instead
+// TODO: Use ", " to standardize the formatting of Vec<Expr>,
+// <https://github.com/apache/datafusion/issues/10364>
+pub(crate) fn schema_name_from_exprs_comma_seperated_without_space(
+    exprs: &[Expr],
+) -> Result<String, fmt::Error> {
+    schema_name_from_exprs_inner(exprs, ",")
+}
+
+/// Get schema_name for Vector of expressions
+pub fn schema_name_from_exprs(exprs: &[Expr]) -> Result<String, fmt::Error> {
+    schema_name_from_exprs_inner(exprs, ", ")
+}
+
+fn schema_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt::Error> {
+    let mut s = String::new();
+    for (i, e) in exprs.iter().enumerate() {
+        if i > 0 {
+            write!(&mut s, "{sep}")?;
         }
-        Ok(())
+        write!(&mut s, "{}", SchemaDisplay(e))?;
     }
+
+    Ok(s)
 }
 
 /// Format expressions for display as part of a logical plan. In many cases, this will produce

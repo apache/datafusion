@@ -452,7 +452,8 @@ fn agg_exprs_evaluation_result_on_empty_batch(
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_))) {
-            expr_result_map_for_count_bug.insert(e.schema_name().to_string(), result_expr);
+            expr_result_map_for_count_bug
+                .insert(e.schema_name().to_string(), result_expr);
         }
     }
     Ok(())
@@ -547,8 +548,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
                         else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
                     });
                     let expr_key = new_expr.schema_name().to_string();
-                    expr_result_map_for_count_bug
-                        .insert(expr_key, new_expr);
+                    expr_result_map_for_count_bug.insert(expr_key, new_expr);
                 }
                 None
             }
