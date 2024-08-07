@@ -1177,7 +1177,7 @@ fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
 /// Example usage:
 /// ```
 /// use datafusion_common::DataFusionError;
-/// use crate::interval_arithmetic::{satisfy_greater, Interval};
+/// use datafusion_expr_common::interval_arithmetic::{satisfy_greater, Interval};
 ///
 /// let left = Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?;
 /// let right = Interval::make(Some(500.0_f32), Some(2000.0_f32))?;
@@ -1552,8 +1552,8 @@ fn cast_scalar_value(
 /// ```
 /// use arrow::datatypes::DataType;
 /// use datafusion_common::ScalarValue;
-/// use crate::interval_arithmetic::Interval;
-/// use crate::interval_arithmetic::NullableInterval;
+/// use datafusion_expr_common::interval_arithmetic::Interval;
+/// use datafusion_expr_common::interval_arithmetic::NullableInterval;
 ///
 /// // [1, 2) U {NULL}
 /// let maybe_null = NullableInterval::MaybeNull {
