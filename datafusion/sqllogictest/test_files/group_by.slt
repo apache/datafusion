@@ -2263,13 +2263,11 @@ ORDER BY a, b, d
 LIMIT 50;
 ----
 logical_plan
-01)Limit: skip=0, fetch=50
-02)--Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST, fetch=50
-03)----TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
+01)Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST, fetch=50
+02)--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=50
-02)--PartialSortExec: TopK(fetch=50), expr=[a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,d@4 ASC NULLS LAST], common_prefix_length=[2]
-03)----StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
+01)PartialSortExec: TopK(fetch=50), expr=[a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,d@4 ASC NULLS LAST], common_prefix_length=[2]
+02)--StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
 
 query TT
 EXPLAIN SELECT *
@@ -2535,15 +2533,13 @@ logical_plan
 01)Projection: s.country, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
-04)------Limit: skip=0, fetch=10
-05)--------Sort: sales_global.country ASC NULLS LAST, fetch=10
-06)----------TableScan: sales_global projection=[country, amount]
+04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
+05)--------TableScan: sales_global projection=[country, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=Sorted
-03)----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC], preserve_partitioning=[false]
-04)------SortExec: TopK(fetch=10), expr=[country@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------MemoryExec: partitions=1, partition_sizes=[1]
+03)----SortExec: TopK(fetch=10), expr=[country@0 ASC NULLS LAST,amount@1 DESC], preserve_partitioning=[false]
+04)------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 query T?R rowsort
@@ -2575,15 +2571,13 @@ logical_plan
 01)Projection: s.country, s.zip_code, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
 02)--Aggregate: groupBy=[[s.country, s.zip_code]], aggr=[[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
-04)------Limit: skip=0, fetch=10
-05)--------Sort: sales_global.country ASC NULLS LAST, fetch=10
-06)----------TableScan: sales_global projection=[zip_code, country, amount]
+04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
+05)--------TableScan: sales_global projection=[zip_code, country, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, zip_code@1 as zip_code, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@2 as amounts, sum(s.amount)@3 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@1 as country, zip_code@0 as zip_code], aggr=[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=PartiallySorted([0])
-03)----SortExec: expr=[country@1 ASC NULLS LAST,amount@2 DESC], preserve_partitioning=[false]
-04)------SortExec: TopK(fetch=10), expr=[country@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------MemoryExec: partitions=1, partition_sizes=[1]
+03)----SortExec: TopK(fetch=10), expr=[country@1 ASC NULLS LAST,amount@2 DESC], preserve_partitioning=[false]
+04)------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TI?R rowsort
 SELECT s.country, s.zip_code, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
@@ -2614,9 +2608,8 @@ logical_plan
 01)Projection: s.country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
-04)------Limit: skip=0, fetch=10
-05)--------Sort: sales_global.country ASC NULLS LAST, fetch=10
-06)----------TableScan: sales_global projection=[country, amount]
+04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
+05)--------TableScan: sales_global projection=[country, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST], sum(s.amount)], ordering_mode=Sorted
@@ -2651,15 +2644,13 @@ logical_plan
 01)Projection: s.country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
-04)------Limit: skip=0, fetch=10
-05)--------Sort: sales_global.country ASC NULLS LAST, fetch=10
-06)----------TableScan: sales_global projection=[country, amount]
+04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
+05)--------TableScan: sales_global projection=[country, amount]
 physical_plan
 01)ProjectionExec: expr=[country@0 as country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST]@1 as amounts, sum(s.amount)@2 as sum1]
 02)--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST], sum(s.amount)], ordering_mode=Sorted
-03)----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC], preserve_partitioning=[false]
-04)------SortExec: TopK(fetch=10), expr=[country@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------MemoryExec: partitions=1, partition_sizes=[1]
+03)----SortExec: TopK(fetch=10), expr=[country@0 ASC NULLS LAST,amount@1 DESC], preserve_partitioning=[false]
+04)------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 query T?R rowsort
@@ -4235,22 +4226,19 @@ EXPLAIN SELECT date_bin('15 minutes', ts) as time_chunks
   LIMIT 5;
 ----
 logical_plan
-01)Limit: skip=0, fetch=5
-02)--Sort: time_chunks DESC NULLS FIRST, fetch=5
-03)----Projection: date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts) AS time_chunks
-04)------Aggregate: groupBy=[[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }"), unbounded_csv_with_timestamps.ts) AS date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)]], aggr=[[]]
-05)--------TableScan: unbounded_csv_with_timestamps projection=[ts]
+01)Sort: time_chunks DESC NULLS FIRST, fetch=5
+02)--Projection: date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts) AS time_chunks
+03)----Aggregate: groupBy=[[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }"), unbounded_csv_with_timestamps.ts) AS date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)]], aggr=[[]]
+04)------TableScan: unbounded_csv_with_timestamps projection=[ts]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
-02)--SortPreservingMergeExec: [time_chunks@0 DESC], fetch=5
-03)----ProjectionExec: expr=[date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 as time_chunks]
-04)------LocalLimitExec: fetch=5
-05)--------AggregateExec: mode=FinalPartitioned, gby=[date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 as date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
-06)----------CoalesceBatchesExec: target_batch_size=2
-07)------------RepartitionExec: partitioning=Hash([date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0], 8), input_partitions=8, preserve_order=true, sort_exprs=date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 DESC
-08)--------------AggregateExec: mode=Partial, gby=[date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }, ts@0) as date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-10)------------------StreamingTableExec: partition_sizes=1, projection=[ts], infinite_source=true, output_ordering=[ts@0 DESC]
+01)SortPreservingMergeExec: [time_chunks@0 DESC], fetch=5
+02)--ProjectionExec: expr=[date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 as time_chunks]
+03)----AggregateExec: mode=FinalPartitioned, gby=[date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 as date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
+04)------CoalesceBatchesExec: target_batch_size=2
+05)--------RepartitionExec: partitioning=Hash([date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0], 8), input_partitions=8, preserve_order=true, sort_exprs=date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 DESC
+06)----------AggregateExec: mode=Partial, gby=[date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }, ts@0) as date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
+07)------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+08)--------------StreamingTableExec: partition_sizes=1, projection=[ts], infinite_source=true, output_ordering=[ts@0 DESC]
 
 query P
 SELECT date_bin('15 minutes', ts) as time_chunks
@@ -4291,22 +4279,20 @@ EXPLAIN SELECT extract(month from ts) as months
   LIMIT 5;
 ----
 logical_plan
-01)Limit: skip=0, fetch=5
-02)--Sort: months DESC NULLS FIRST, fetch=5
-03)----Projection: date_part(Utf8("MONTH"),csv_with_timestamps.ts) AS months
-04)------Aggregate: groupBy=[[date_part(Utf8("MONTH"), csv_with_timestamps.ts)]], aggr=[[]]
-05)--------TableScan: csv_with_timestamps projection=[ts]
+01)Sort: months DESC NULLS FIRST, fetch=5
+02)--Projection: date_part(Utf8("MONTH"),csv_with_timestamps.ts) AS months
+03)----Aggregate: groupBy=[[date_part(Utf8("MONTH"), csv_with_timestamps.ts)]], aggr=[[]]
+04)------TableScan: csv_with_timestamps projection=[ts]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
-02)--SortPreservingMergeExec: [months@0 DESC], fetch=5
-03)----SortExec: TopK(fetch=5), expr=[months@0 DESC], preserve_partitioning=[true]
-04)------ProjectionExec: expr=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 as months]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 as date_part(Utf8("MONTH"),csv_with_timestamps.ts)], aggr=[]
-06)----------CoalesceBatchesExec: target_batch_size=2
-07)------------RepartitionExec: partitioning=Hash([date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0], 8), input_partitions=8
-08)--------------AggregateExec: mode=Partial, gby=[date_part(MONTH, ts@0) as date_part(Utf8("MONTH"),csv_with_timestamps.ts)], aggr=[]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 DESC], has_header=false
+01)SortPreservingMergeExec: [months@0 DESC], fetch=5
+02)--SortExec: TopK(fetch=5), expr=[months@0 DESC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 as months]
+04)------AggregateExec: mode=FinalPartitioned, gby=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 as date_part(Utf8("MONTH"),csv_with_timestamps.ts)], aggr=[]
+05)--------CoalesceBatchesExec: target_batch_size=2
+06)----------RepartitionExec: partitioning=Hash([date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0], 8), input_partitions=8
+07)------------AggregateExec: mode=Partial, gby=[date_part(MONTH, ts@0) as date_part(Utf8("MONTH"),csv_with_timestamps.ts)], aggr=[]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 DESC], has_header=false
 
 query R
 SELECT extract(month from ts) as months
@@ -4339,17 +4325,14 @@ EXPLAIN SELECT name, date_bin('15 minutes', ts) as time_chunks
   LIMIT 5;
 ----
 logical_plan
-01)Limit: skip=0, fetch=5
-02)--Sort: unbounded_csv_with_timestamps2.name DESC NULLS FIRST, time_chunks DESC NULLS FIRST, fetch=5
-03)----Projection: unbounded_csv_with_timestamps2.name, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }"), unbounded_csv_with_timestamps2.ts) AS time_chunks
-04)------TableScan: unbounded_csv_with_timestamps2 projection=[name, ts]
+01)Sort: unbounded_csv_with_timestamps2.name DESC NULLS FIRST, time_chunks DESC NULLS FIRST, fetch=5
+02)--Projection: unbounded_csv_with_timestamps2.name, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }"), unbounded_csv_with_timestamps2.ts) AS time_chunks
+03)----TableScan: unbounded_csv_with_timestamps2 projection=[name, ts]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
-02)--SortPreservingMergeExec: [name@0 DESC,time_chunks@1 DESC], fetch=5
-03)----ProjectionExec: expr=[name@0 as name, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }, ts@1) as time_chunks]
-04)------LocalLimitExec: fetch=5
-05)--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-06)----------StreamingTableExec: partition_sizes=1, projection=[name, ts], infinite_source=true, output_ordering=[name@0 DESC, ts@1 DESC]
+01)SortPreservingMergeExec: [name@0 DESC,time_chunks@1 DESC], fetch=5
+02)--ProjectionExec: expr=[name@0 as name, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }, ts@1) as time_chunks]
+03)----RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+04)------StreamingTableExec: partition_sizes=1, projection=[name, ts], infinite_source=true, output_ordering=[name@0 DESC, ts@1 DESC]
 
 statement ok
 drop table t1
@@ -4587,20 +4570,18 @@ ORDER BY MAX(t1) DESC
 LIMIT 4;
 ----
 logical_plan
-01)Limit: skip=0, fetch=4
-02)--Sort: max(timestamp_table.t1) DESC NULLS FIRST, fetch=4
-03)----Aggregate: groupBy=[[timestamp_table.c2]], aggr=[[max(timestamp_table.t1)]]
-04)------TableScan: timestamp_table projection=[t1, c2]
+01)Sort: max(timestamp_table.t1) DESC NULLS FIRST, fetch=4
+02)--Aggregate: groupBy=[[timestamp_table.c2]], aggr=[[max(timestamp_table.t1)]]
+03)----TableScan: timestamp_table projection=[t1, c2]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=4
-02)--SortPreservingMergeExec: [max(timestamp_table.t1)@1 DESC], fetch=4
-03)----SortExec: TopK(fetch=4), expr=[max(timestamp_table.t1)@1 DESC], preserve_partitioning=[true]
-04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[max(timestamp_table.t1)], lim=[4]
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([c2@0], 8), input_partitions=8
-07)------------AggregateExec: mode=Partial, gby=[c2@1 as c2], aggr=[max(timestamp_table.t1)], lim=[4]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
-09)----------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/3.csv]]}, projection=[t1, c2], has_header=true
+01)SortPreservingMergeExec: [max(timestamp_table.t1)@1 DESC], fetch=4
+02)--SortExec: TopK(fetch=4), expr=[max(timestamp_table.t1)@1 DESC], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[max(timestamp_table.t1)], lim=[4]
+04)------CoalesceBatchesExec: target_batch_size=2
+05)--------RepartitionExec: partitioning=Hash([c2@0], 8), input_partitions=8
+06)----------AggregateExec: mode=Partial, gby=[c2@1 as c2], aggr=[max(timestamp_table.t1)], lim=[4]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+08)--------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/3.csv]]}, projection=[t1, c2], has_header=true
 
 # Clean up
 statement ok

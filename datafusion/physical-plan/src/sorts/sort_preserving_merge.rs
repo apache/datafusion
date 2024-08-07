@@ -163,6 +163,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         &self.cache
     }
 
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
     }

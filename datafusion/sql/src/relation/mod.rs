@@ -166,13 +166,16 @@ fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>>
             has_limit = true;
             return Ok(Transformed::no(c));
         }
-        if let LogicalPlan::Sort(_) = c {
-            if !has_limit {
-                has_limit = false;
-                return Ok(Transformed::yes(c.inputs()[0].clone()));
+        match c {
+            LogicalPlan::Sort(s) => {
+                if !has_limit {
+                    has_limit = false;
+                    return Ok(Transformed::yes(s.input.as_ref().clone()));
+                }
+                Ok(Transformed::no(LogicalPlan::Sort(s)))
             }
+            _ => Ok(Transformed::no(c)),
         }
-        Ok(Transformed::no(c))
     });
     new_plan
 }

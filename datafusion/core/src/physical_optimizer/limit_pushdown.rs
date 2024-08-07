@@ -127,11 +127,34 @@ pub fn push_down_limits(
         } else {
             add_fetch_to_child(&limit_exec, child.clone())
         }
+    } else if plan.supports_limit_pushdown() {
+        let new_children = add_fetch_to_children(plan.fetch(), &plan.children());
+        if new_children.iter().all(|item| item.is_none()) {
+            None
+        } else {
+            let new_children = updated_children(new_children, plan.children());
+            Some(plan.clone().with_new_children(new_children)?)
+        }
     } else {
         None
     };
 
     Ok(maybe_modified.map_or(Transformed::no(plan), Transformed::yes))
+}
+
+fn updated_children(
+    new_children: Vec<Option<Arc<dyn ExecutionPlan>>>,
+    children: Vec<&Arc<dyn ExecutionPlan>>,
+) -> Vec<Arc<dyn ExecutionPlan>> {
+    let mut updated_children = vec![];
+    for (new_child, old_child) in new_children.into_iter().zip(children) {
+        if let Some(new_child) = new_child {
+            updated_children.push(new_child)
+        } else {
+            updated_children.push(old_child.clone())
+        }
+    }
+    updated_children
 }
 
 /// Transforms the [`ExecutionPlan`] into a [`LimitExec`] if it is a
@@ -248,6 +271,38 @@ fn add_fetch_to_child(
     } else {
         None
     }
+}
+
+fn add_fetch_to_children(
+    fetch: Option<usize>,
+    children: &[&Arc<dyn ExecutionPlan>],
+) -> Vec<Option<Arc<dyn ExecutionPlan>>> {
+    if fetch.is_none() {
+        return vec![None];
+    }
+    let mut latest_fetch: Option<usize> = fetch;
+
+    children
+        .iter()
+        .map(|child| {
+            if let Some(child_with_fetch) = child.with_fetch(fetch) {
+                latest_fetch = fetch;
+                Some(child_with_fetch)
+            } else if child.supports_limit_pushdown() {
+                if latest_fetch.is_some() {
+                    let new_children =
+                        add_fetch_to_children(latest_fetch, &child.children());
+                    let new_children =
+                        updated_children(new_children, children.to_owned());
+                    Some(Arc::clone(child).with_new_children(new_children).ok()?)
+                } else {
+                    Some(Arc::clone(child))
+                }
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
