@@ -463,11 +463,13 @@ impl GroupedHashAggregateStream {
         // - aggregation mode is Partial
         // - input is not ordered by GROUP BY expressions,
         //   since Final mode expects unique group values as its input
+        // - there is at least one accumulator
         // - all accumulators support input batch to intermediate
         //   aggregate state conversion
         // - there is only one GROUP BY expressions set
         let skip_aggregation_probe = if agg.mode == AggregateMode::Partial
             && matches!(group_ordering, GroupOrdering::None)
+            && !accumulators.is_empty()
             && accumulators
                 .iter()
                 .all(|acc| acc.supports_convert_to_state())
