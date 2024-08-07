@@ -1645,6 +1645,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),
+            LogicalPlan::Ddl(DdlStatement::CreateIndex(_)) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for CreateIndex",
+            )),
             LogicalPlan::Ddl(DdlStatement::DropTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropTable",
             )),
