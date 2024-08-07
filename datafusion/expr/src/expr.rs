@@ -1000,16 +1000,6 @@ pub struct WildcardOptions {
     pub opt_rename: Option<RenameSelectItem>,
 }
 
-impl WildcardOptions {
-    pub fn valid(&self) -> bool {
-        self.opt_ilike.is_some()
-            || self.opt_exclude.is_some()
-            || self.opt_except.is_some()
-            || self.opt_replace.is_some()
-            || self.opt_rename.is_some()
-    }
-}
-
 impl Display for WildcardOptions {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         if let Some(ilike) = &self.opt_ilike {
