@@ -262,13 +262,13 @@ async fn topk_query() -> Result<()> {
 #[tokio::test]
 // Run EXPLAIN PLAN and show the plan was in fact rewritten
 async fn topk_plan() -> Result<()> {
-    let mut ctx = setup_table(make_topk_context()).await?;
+    let ctx = setup_table(make_topk_context()).await?;
 
     let mut expected = ["| logical_plan after topk                               | TopK: k=3                                                                     |",
         "|                                                       |   TableScan: sales projection=[customer_id,revenue]                                  |"].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {QUERY}");
-    let actual_output = exec_sql(&mut ctx, &explain_query).await?;
+    let actual_output = exec_sql(&ctx, &explain_query).await?;
 
     // normalize newlines (output on windows uses \r\n)
     let mut actual_output = actual_output.replace("\r\n", "\n");
