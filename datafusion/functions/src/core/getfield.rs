@@ -94,7 +94,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
         };
 
-        Ok(format!("{}[{}]", args[0].schema_name()?, name))
+        Ok(format!("{}[{}]", args[0].schema_name(), name))
     }
 
     fn signature(&self) -> &Signature {

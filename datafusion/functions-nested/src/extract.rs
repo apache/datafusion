@@ -108,8 +108,8 @@ impl ScalarUDFImpl for ArrayElement {
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let args_name = args
             .iter()
-            .map(Expr::schema_name)
-            .collect::<Result<Vec<_>>>()?;
+            .map(|e| e.schema_name().to_string())
+            .collect::<Vec<_>>();
         if args_name.len() != 2 {
             return exec_err!("expect 2 args, got {}", args_name.len());
         }
@@ -278,8 +278,8 @@ impl ScalarUDFImpl for ArraySlice {
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let args_name = args
             .iter()
-            .map(Expr::schema_name)
-            .collect::<Result<Vec<_>>>()?;
+            .map(|e| e.schema_name().to_string())
+            .collect::<Vec<_>>();
         if let Some((arr, indexes)) = args_name.split_first() {
             Ok(format!("{arr}[{}]", indexes.join(":")))
         } else {

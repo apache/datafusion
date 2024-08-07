@@ -473,7 +473,7 @@ impl ExprSchemable for Expr {
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
                 Ok((
                     None,
-                    Field::new(self.schema_name()?, data_type, nullable)
+                    Field::new(self.schema_name().to_string(), data_type, nullable)
                         .with_metadata(self.metadata(input_schema)?)
                         .into(),
                 ))

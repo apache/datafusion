@@ -988,285 +988,8 @@ impl Expr {
     /// Those are the main difference
     /// 1. Alias, where excludes expression
     /// 2. Cast / TryCast, where takes expression only
-    pub fn schema_name(&self) -> Result<String> {
-        let mut s = String::new();
-
-        match self {
-            // The same as Display
-            Expr::Column(_)
-            | Expr::Literal(_)
-            | Expr::ScalarVariable(..)
-            | Expr::Sort(_)
-            | Expr::OuterReferenceColumn(..)
-            | Expr::Placeholder(_)
-            | Expr::Wildcard { .. } => write!(&mut s, "{self}")?,
-
-            Expr::AggregateFunction(AggregateFunction {
-                func,
-                args,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
-            }) => {
-                let args_name = args
-                    .iter()
-                    .map(Self::schema_name)
-                    .collect::<Result<Vec<_>>>()?;
-                // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
-                write!(
-                    &mut s,
-                    "{}({}{})",
-                    func.name(),
-                    if *distinct { "DISTINCT " } else { "" },
-                    args_name.join(",")
-                )?;
-
-                if let Some(null_treatment) = null_treatment {
-                    write!(&mut s, " {}", null_treatment)?;
-                }
-
-                if let Some(filter) = filter {
-                    write!(&mut s, " FILTER (WHERE {})", filter.schema_name()?)?;
-                };
-
-                if let Some(order_by) = order_by {
-                    let order_by_name = order_by
-                        .iter()
-                        .map(Self::schema_name)
-                        .collect::<Result<Vec<_>>>()?
-                        .join(", ");
-                    write!(&mut s, " ORDER BY [{}]", order_by_name)?;
-                };
-            }
-            // expr is not shown since it is aliased
-            Expr::Alias(Alias { name, .. }) => write!(&mut s, "{name}")?,
-            Expr::Between(Between {
-                expr,
-                negated,
-                low,
-                high,
-            }) => {
-                if *negated {
-                    write!(
-                        &mut s,
-                        "{} NOT BETWEEN {} AND {}",
-                        expr.schema_name()?,
-                        low.schema_name()?,
-                        high.schema_name()?
-                    )?;
-                } else {
-                    write!(
-                        &mut s,
-                        "{} BETWEEN {} AND {}",
-                        expr.schema_name()?,
-                        low.schema_name()?,
-                        high.schema_name()?
-                    )?;
-                }
-            }
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(
-                    &mut s,
-                    "{} {op} {}",
-                    left.schema_name()?,
-                    right.schema_name()?
-                )?;
-            }
-            Expr::Case(Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            }) => {
-                write!(&mut s, "CASE ")?;
-
-                if let Some(e) = expr {
-                    write!(&mut s, "{} ", e.schema_name()?)?;
-                }
-
-                for (when, then) in when_then_expr {
-                    write!(
-                        &mut s,
-                        "WHEN {} THEN {} ",
-                        when.schema_name()?,
-                        then.schema_name()?
-                    )?;
-                }
-
-                if let Some(e) = else_expr {
-                    write!(&mut s, "ELSE {} ", e.schema_name()?)?;
-                }
-
-                write!(&mut s, "END")?;
-            }
-            // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
-            Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
-                write!(&mut s, "{}", expr.schema_name()?)?
-            }
-            Expr::InList(InList {
-                expr,
-                list,
-                negated,
-            }) => {
-                let inlist_exprs = list
-                    .iter()
-                    .map(Self::schema_name)
-                    .collect::<Result<Vec<_>>>()?;
-                let inlist_name = inlist_exprs.join(", ");
-
-                if *negated {
-                    write!(&mut s, "{} NOT IN {}", expr.schema_name()?, inlist_name)?;
-                } else {
-                    write!(&mut s, "{} IN {}", expr.schema_name()?, inlist_name)?;
-                }
-            }
-            Expr::Exists(Exists { negated: true, .. }) => write!(&mut s, "NOT EXISTS")?,
-            Expr::Exists(Exists { negated: false, .. }) => write!(&mut s, "EXISTS")?,
-            Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
-                let exprs_name = exprs
-                    .iter()
-                    .map(Self::schema_name)
-                    .collect::<Result<Vec<_>>>()?
-                    .join(", ");
-                write!(&mut s, "ROLLUP ({})", exprs_name)?;
-            }
-            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
-                write!(&mut s, "GROUPING SETS (")?;
-                for exprs in lists_of_exprs.iter() {
-                    let exprs_name = exprs
-                        .iter()
-                        .map(Self::schema_name)
-                        .collect::<Result<Vec<_>>>()?
-                        .join(", ");
-                    write!(&mut s, "({})", exprs_name)?;
-                }
-                write!(&mut s, ")")?;
-            }
-            Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
-                let exprs_name = exprs
-                    .iter()
-                    .map(Self::schema_name)
-                    .collect::<Result<Vec<_>>>()?
-                    .join(", ");
-                write!(&mut s, "ROLLUP ({})", exprs_name)?;
-            }
-            Expr::IsNull(expr) => write!(&mut s, "{} IS NULL", expr.schema_name()?)?,
-            Expr::IsNotNull(expr) => {
-                write!(&mut s, "{} IS NOT NULL", expr.schema_name()?)?
-            }
-            Expr::IsUnknown(expr) => {
-                write!(&mut s, "{} IS UNKNOWN", expr.schema_name()?)?
-            }
-            Expr::IsNotUnknown(expr) => {
-                write!(&mut s, "{} IS NOT UNKNOWN", expr.schema_name()?)?
-            }
-            Expr::InSubquery(InSubquery { negated: true, .. }) => {
-                write!(&mut s, "NOT IN")?
-            }
-            Expr::InSubquery(InSubquery { negated: false, .. }) => write!(&mut s, "IN")?,
-            Expr::IsTrue(expr) => write!(&mut s, "{} IS TRUE", expr.schema_name()?)?,
-            Expr::IsFalse(expr) => write!(&mut s, "{} IS FALSE", expr.schema_name()?)?,
-            Expr::IsNotTrue(expr) => {
-                write!(&mut s, "{} IS NOT TRUE", expr.schema_name()?)?
-            }
-            Expr::IsNotFalse(expr) => {
-                write!(&mut s, "{} IS NOT FALSE", expr.schema_name()?)?
-            }
-            Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive,
-            }) => {
-                write!(
-                    &mut s,
-                    "{} {}{} {}",
-                    expr.schema_name()?,
-                    if *negated { "NOT " } else { "" },
-                    if *case_insensitive { "ILIKE" } else { "LIKE" },
-                    pattern.schema_name()?,
-                )?;
-
-                if let Some(char) = escape_char {
-                    write!(&mut s, " CHAR '{char}'")?;
-                }
-            }
-            Expr::Negative(expr) => write!(&mut s, "(- {})", expr.schema_name()?)?,
-            Expr::Not(expr) => write!(&mut s, "NOT {}", expr.schema_name()?)?,
-            Expr::Unnest(Unnest { expr }) => {
-                write!(&mut s, "UNNEST({})", expr.schema_name()?)?
-            }
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                write!(&mut s, "{}", func.schema_name(args)?)?
-            }
-            Expr::ScalarSubquery(Subquery { subquery, .. }) => {
-                write!(&mut s, "{}", subquery.schema().field(0).name())?;
-            }
-            Expr::SimilarTo(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                ..
-            }) => {
-                write!(
-                    &mut s,
-                    "{} {} {}",
-                    expr.schema_name()?,
-                    if *negated {
-                        "NOT SIMILAR TO"
-                    } else {
-                        "SIMILAR TO"
-                    },
-                    pattern.schema_name()?,
-                )?;
-                if let Some(char) = escape_char {
-                    write!(&mut s, " CHAR '{char}'")?;
-                }
-            }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
-            }) => {
-                let args_name = args
-                    .iter()
-                    .map(Self::schema_name)
-                    .collect::<Result<Vec<_>>>()?;
-                // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
-                write!(&mut s, "{}({})", fun, args_name.join(","))?;
-
-                if let Some(null_treatment) = null_treatment {
-                    write!(&mut s, " {}", null_treatment)?;
-                }
-
-                if !partition_by.is_empty() {
-                    let partition_by_name = partition_by
-                        .iter()
-                        .map(Self::schema_name)
-                        .collect::<Result<Vec<_>>>()?
-                        .join(", ");
-                    write!(&mut s, " PARTITION BY [{}]", partition_by_name)?;
-                }
-
-                if !order_by.is_empty() {
-                    let order_by_name = order_by
-                        .iter()
-                        .map(Self::schema_name)
-                        .collect::<Result<Vec<_>>>()?
-                        .join(", ");
-                    write!(&mut s, " ORDER BY [{}]", order_by_name)?;
-                };
-
-                write!(&mut s, " {window_frame}")?;
-            }
-        }
-
-        Ok(s)
+    pub fn schema_name<'a>(&'a self) -> impl Display + 'a {
+        SchemaDisplay(self)
     }
 
     /// Returns a full and complete string representation of this expression.
@@ -1399,7 +1122,7 @@ impl Expr {
         match self {
             // call Expr::display_name() on a Expr::Sort will throw an error
             Expr::Sort(Sort { expr, .. }) => expr.name_for_alias(),
-            expr => expr.schema_name(),
+            expr => Ok(expr.schema_name().to_string()),
         }
     }
 
@@ -2028,6 +1751,302 @@ macro_rules! expr_vec_fmt {
     }};
 }
 
+struct SchemaDisplay<'a>(&'a Expr);
+impl<'a> Display for SchemaDisplay<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            // The same as Display
+            Expr::Column(_)
+            | Expr::Literal(_)
+            | Expr::ScalarVariable(..)
+            | Expr::Sort(_)
+            | Expr::OuterReferenceColumn(..)
+            | Expr::Placeholder(_)
+            | Expr::Wildcard { .. } => write!(f, "{}", self.0),
+
+            Expr::AggregateFunction(AggregateFunction {
+                func,
+                args,
+                distinct,
+                filter,
+                order_by,
+                null_treatment,
+            }) => {
+                // let args_name = args.iter().map(|e| format!("{}", SchemaDisplay(e))).collect::<Vec<_>>();
+                let args_name = args.iter().map(|e| format!("{}", SchemaDisplay(e))).collect::<Vec<_>>();
+
+                write!(
+                    f,
+                    "{}({}{})",
+                    func.name(),
+                    if *distinct { "DISTINCT " } else { "" },
+                    args_name.join(",")
+                )?;
+
+                if let Some(null_treatment) = null_treatment {
+                    write!(f, " {}", null_treatment)?;
+                }
+
+                if let Some(filter) = filter {
+                    write!(f, " FILTER (WHERE {filter})")?;
+                };
+
+                if let Some(order_by) = order_by {
+                    let order_by_name = order_by
+                        .iter()
+                        .map(|e| format!("{e}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    write!(f, " ORDER BY [{}]", order_by_name)?;
+                };
+
+                Ok(())
+            }
+            // expr is not shown since it is aliased
+            Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
+            Expr::Between(Between {
+                expr,
+                negated,
+                low,
+                high,
+            }) => {
+                if *negated {
+                    write!(
+                        f,
+                        "{} NOT BETWEEN {} AND {}",
+                        SchemaDisplay(expr),
+                        SchemaDisplay(low),
+                        SchemaDisplay(high),
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{} BETWEEN {} AND {}",
+                        SchemaDisplay(expr),
+                        SchemaDisplay(low),
+                        SchemaDisplay(high),
+                    )
+                }
+            }
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                write!(
+                    f,
+                    "{} {op} {}",
+                    SchemaDisplay(left),
+                    SchemaDisplay(right),
+                )
+            }
+            Expr::Case(Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            }) => {
+                write!(f, "CASE ")?;
+
+                if let Some(e) = expr {
+                    write!(f, "{} ", SchemaDisplay(e))?;
+                }
+
+                for (when, then) in when_then_expr {
+                    write!(
+                        f,
+                        "WHEN {} THEN {} ",
+                        SchemaDisplay(when),
+                        SchemaDisplay(then),
+                    )?;
+                }
+
+                if let Some(e) = else_expr {
+                    write!(f, "ELSE {} ", SchemaDisplay(e))?;
+                }
+
+                write!(f, "END")
+            }
+            // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
+            Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
+                write!(f, "{}", SchemaDisplay(expr))
+            }
+            Expr::InList(InList {
+                expr,
+                list,
+                negated,
+            }) => {
+                let inlist_exprs = list
+                    .iter()
+                    .map(|e| format!("{}", SchemaDisplay(e)))
+                    .collect::<Vec<_>>();
+                let inlist_name = inlist_exprs.join(", ");
+
+                if *negated {
+                    write!(f, "{} NOT IN {}", SchemaDisplay(expr), inlist_name)
+                } else {
+                    write!(f, "{} IN {}", SchemaDisplay(expr), inlist_name)
+                }
+            }
+            Expr::Exists(Exists { negated: true, .. }) => write!(f, "NOT EXISTS"),
+            Expr::Exists(Exists { negated: false, .. }) => write!(f, "EXISTS"),
+            Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
+                let exprs_name = exprs
+                    .iter()
+                    .map(|e| format!("{}", SchemaDisplay(e)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "ROLLUP ({})", exprs_name)
+            }
+            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+                write!(f, "GROUPING SETS (")?;
+                for exprs in lists_of_exprs.iter() {
+                    let exprs_name = exprs
+                        .iter()
+                        .map(|e| format!("{}", SchemaDisplay(e)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    write!(f, "({})", exprs_name)?;
+                }
+                write!(f, ")")
+            }
+            Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
+                let exprs_name = exprs
+                    .iter()
+                    .map(|e| format!("{}", SchemaDisplay(e)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "ROLLUP ({})", exprs_name)
+            }
+            Expr::IsNull(expr) => write!(f, "{} IS NULL", SchemaDisplay(expr)),
+            Expr::IsNotNull(expr) => {
+                write!(f, "{} IS NOT NULL", SchemaDisplay(expr))
+            }
+            Expr::IsUnknown(expr) => {
+                write!(f, "{} IS UNKNOWN", SchemaDisplay(expr))
+            }
+            Expr::IsNotUnknown(expr) => {
+                write!(f, "{} IS NOT UNKNOWN", SchemaDisplay(expr))
+            }
+            Expr::InSubquery(InSubquery { negated: true, .. }) => {
+                write!(f, "NOT IN")
+            }
+            Expr::InSubquery(InSubquery { negated: false, .. }) => write!(f, "IN"),
+            Expr::IsTrue(expr) => write!(f, "{} IS TRUE", SchemaDisplay(expr)),
+            Expr::IsFalse(expr) => write!(f, "{} IS FALSE", SchemaDisplay(expr)),
+            Expr::IsNotTrue(expr) => {
+                write!(f, "{} IS NOT TRUE", SchemaDisplay(expr))
+            }
+            Expr::IsNotFalse(expr) => {
+                write!(f, "{} IS NOT FALSE", SchemaDisplay(expr))
+            }
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            }) => {
+                write!(
+                    f,
+                    "{} {}{} {}",
+                    SchemaDisplay(expr),
+                    if *negated { "NOT " } else { "" },
+                    if *case_insensitive { "ILIKE" } else { "LIKE" },
+                    SchemaDisplay(pattern),
+                )?;
+
+                if let Some(char) = escape_char {
+                    write!(f, " CHAR '{char}'")?;
+                }
+
+                Ok(())
+            }
+            Expr::Negative(expr) => write!(f, "(- {})", SchemaDisplay(expr)),
+            Expr::Not(expr) => write!(f, "NOT {}", SchemaDisplay(expr)),
+            Expr::Unnest(Unnest { expr }) => {
+                write!(f, "UNNEST({})", SchemaDisplay(expr))
+            }
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                match func.schema_name(args) {
+                    Ok(name) => {
+                        write!(f, "{name}")
+                    }
+                    Err(e) => {
+                        write!(f, "got error from schema_name {}", e)
+                    }
+                }
+            }
+            Expr::ScalarSubquery(Subquery { subquery, .. }) => {
+                write!(f, "{}", subquery.schema().field(0).name())
+            }
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                ..
+            }) => {
+                write!(
+                    f,
+                    "{} {} {}",
+                    SchemaDisplay(expr),
+                    if *negated {
+                        "NOT SIMILAR TO"
+                    } else {
+                        "SIMILAR TO"
+                    },
+                    SchemaDisplay(pattern),
+                )?;
+                if let Some(char) = escape_char {
+                    write!(f, " CHAR '{char}'")?;
+                }
+
+                Ok(())
+            }
+            Expr::WindowFunction(WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                window_frame,
+                null_treatment,
+            }) => {
+                let args_name = args.iter().map(|e| format!("{}", SchemaDisplay(e))).collect::<Vec<_>>();
+
+                // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
+                write!(f, "{}({})", fun, args_name.join(","))?;
+
+                if let Some(null_treatment) = null_treatment {
+                    write!(f, " {}", null_treatment)?;
+                }
+
+                if !partition_by.is_empty() {
+                    let partition_by_name = partition_by.iter().map(|e| format!("{}", SchemaDisplay(e))).collect::<Vec<_>>().join(", ");
+                    write!(f, " PARTITION BY [{}]", partition_by_name)?;
+                }
+
+                if !order_by.is_empty() {
+                    let order_by_name = order_by.iter().map(|e| format!("{}", SchemaDisplay(e))).collect::<Vec<_>>().join(", ");
+                    write!(f, " ORDER BY [{}]", order_by_name)?;
+                };
+
+                write!(f, " {window_frame}")
+            }
+            _ => todo!(""),
+        }
+    }
+}
+
+impl<'a> SchemaDisplay<'a> {
+    fn fmt_args(f: &mut Formatter<'_>, args: &[Expr]) -> fmt::Result {
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                // TODO: Use ", " to standardize the formatting of Vec<Expr>,
+                // <https://github.com/apache/datafusion/issues/10364>
+                write!(f, ",")?;
+            }
+            write!(f, "{}", SchemaDisplay(arg))?;
+        }
+        Ok(())
+    }
+}
+
 /// Format expressions for display as part of a logical plan. In many cases, this will produce
 /// similar output to `Expr.name()` except that column names will be prefixed with '#'.
 impl fmt::Display for Expr {
@@ -2558,7 +2577,7 @@ mod test {
         assert_eq!(expected_canonical, format!("{expr}"));
         // note that CAST intentionally has a name that is different from its `Display`
         // representation. CAST does not change the name of expressions.
-        assert_eq!("Float32(1.23)", expr.schema_name()?);
+        assert_eq!("Float32(1.23)", expr.schema_name().to_string());
         Ok(())
     }
 

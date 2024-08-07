@@ -361,8 +361,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let args_name = args
             .iter()
-            .map(Expr::schema_name)
-            .collect::<Result<Vec<_>>>()?;
+            .map(|e| e.schema_name().to_string())
+            .collect::<Vec<_>>();
         // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
         Ok(format!("{}({})", self.name(), args_name.join(",")))
     }

@@ -135,8 +135,8 @@ fn optimize_projections(
             let group_by_expr_existing = aggregate
                 .group_expr
                 .iter()
-                .map(|group_by_expr| group_by_expr.schema_name())
-                .collect::<Result<Vec<_>>>()?;
+                .map(|group_by_expr| group_by_expr.schema_name().to_string())
+                .collect::<Vec<_>>();
 
             let new_group_bys = if let Some(simplest_groupby_indices) =
                 get_required_group_by_exprs_indices(
@@ -1928,8 +1928,8 @@ mod tests {
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.b")],
         ));
-        let col1 = col(max1.schema_name()?);
-        let col2 = col(max2.schema_name()?);
+        let col1 = col(max1.schema_name().to_string());
+        let col2 = col(max2.schema_name().to_string());
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![max1])?
