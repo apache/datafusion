@@ -52,6 +52,7 @@ use std::{any::Any, sync::Arc};
 ///
 /// You can also create expression by [`AggregateExprBuilder`]
 #[allow(clippy::too_many_arguments)]
+#[deprecated(since = "40.0.0", note = "Use `AggregateExprBuilder` instead")]
 pub fn create_aggregate_expr(
     fun: &AggregateUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
@@ -74,41 +75,6 @@ pub fn create_aggregate_expr(
     }
     if is_distinct {
         builder = builder.distinct();
-    }
-
-    builder.build()
-}
-
-#[allow(clippy::too_many_arguments)]
-// This is not for external usage, consider creating with `create_aggregate_expr` instead.
-pub fn create_aggregate_expr_with_dfschema(
-    fun: &AggregateUDF,
-    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    ordering_req: &[PhysicalSortExpr],
-    dfschema: &DFSchema,
-    alias: Option<String>,
-    ignore_nulls: bool,
-    is_distinct: bool,
-    is_reversed: bool,
-) -> Result<Arc<dyn AggregateExpr>> {
-    let mut builder =
-        AggregateExprBuilder::new(Arc::new(fun.clone()), input_phy_exprs.to_vec());
-    builder = builder.order_by(ordering_req.to_vec());
-    builder = builder.dfschema(dfschema.clone());
-    let schema: Schema = dfschema.into();
-    builder = builder.schema(Arc::new(schema));
-    if let Some(alias) = alias {
-        builder = builder.alias(alias);
-    }
-
-    if ignore_nulls {
-        builder = builder.ignore_nulls();
-    }
-    if is_distinct {
-        builder = builder.distinct();
-    }
-    if is_reversed {
-        builder = builder.reversed();
     }
 
     builder.build()
@@ -488,17 +454,18 @@ impl AggregateExpr for AggregateFunctionExpr {
         else {
             return Ok(None);
         };
-        create_aggregate_expr_with_dfschema(
-            &updated_fn,
-            &self.args,
-            &self.ordering_req,
-            &self.dfschema,
-            Some(self.name().to_string()),
-            self.ignore_nulls,
-            self.is_distinct,
-            self.is_reversed,
-        )
-        .map(Some)
+
+        let schema: Schema = self.dfschema.clone().into();
+        AggregateExprBuilder::new(Arc::new(updated_fn), self.args.to_vec())
+            .order_by(self.ordering_req.to_vec())
+            .schema(Arc::new(schema))
+            .dfschema(self.dfschema.clone())
+            .alias(self.name().to_string())
+            .with_ignore_nulls(self.ignore_nulls)
+            .with_distinct(self.is_distinct)
+            .with_reversed(self.is_reversed)
+            .build()
+            .map(Some)
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -515,19 +482,18 @@ impl AggregateExpr for AggregateFunctionExpr {
                     replace_order_by_clause(&mut name);
                 }
                 replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
-                let reverse_aggr = create_aggregate_expr_with_dfschema(
-                    &reverse_udf,
-                    &self.args,
-                    &reverse_ordering_req,
-                    &self.dfschema,
-                    Some(name),
-                    self.ignore_nulls,
-                    self.is_distinct,
-                    !self.is_reversed,
-                )
-                .unwrap();
 
-                Some(reverse_aggr)
+                let schema: Schema = self.dfschema.clone().into();
+                AggregateExprBuilder::new(reverse_udf, self.args.to_vec())
+                    .order_by(reverse_ordering_req.to_vec())
+                    .schema(Arc::new(schema))
+                    .dfschema(self.dfschema.clone())
+                    .alias(name)
+                    .with_ignore_nulls(self.ignore_nulls)
+                    .with_distinct(self.is_distinct)
+                    .with_reversed(!self.is_reversed)
+                    .build()
+                    .ok()
             }
         }
     }
