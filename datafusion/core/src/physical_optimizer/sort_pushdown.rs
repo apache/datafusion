@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::utils::add_sort_above;
@@ -32,15 +31,13 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::tree_node::PlanContext;
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{ConcreteTreeNode, Transformed, TreeNodeRecursion};
 use datafusion_common::{plan_err, JoinSide, Result};
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 #[derive(Default, Clone)]
 pub struct ParentRequirements {
@@ -67,78 +64,27 @@ pub fn assign_initial_requirements(node: &mut SortPushDown) {
     }
 }
 
-/// Prunes unnecessary operators from the plan.
-pub(crate) fn prune_unnecessary_operators(
-    plan: Arc<dyn ExecutionPlan>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    Ok(plan
-        .transform_up(|p| {
-            if let Some(p) = p.as_any().downcast_ref::<PlaceHolderOperatorExec>() {
-                return Ok(Transformed::yes(p.child.clone()));
-            }
-            Ok(Transformed::no(p))
-        })?
-        .data)
+pub(crate) fn call_till_not_early_exit(
+    sort_pushdown: SortPushDown,
+) -> Result<Transformed<SortPushDown>> {
+    let mut result = pushdown_sorts_helper(sort_pushdown)?;
+    while result.tnr == TreeNodeRecursion::Stop {
+        result = pushdown_sorts_helper(result.data)?;
+    }
+    Ok(result)
 }
 
-/// A dummy operator to make sure each node is visited, during top-down pass
-/// even some of the nodes are removed from the plan. When an operator is removed from the plan,
-/// this operator is inserted on top of it. With this insertion at the next iteration, its child will be visited
-/// enabling us to not miss any node.
-/// This operator should be removed after rule ends from the plan.
-struct PlaceHolderOperatorExec {
-    child: Arc<dyn ExecutionPlan>,
+pub(crate) fn pushdown_sorts(sort_pushdown: SortPushDown) -> Result<SortPushDown> {
+    let new_node = call_till_not_early_exit(sort_pushdown)?.data;
+    let (new_node, children) = new_node.take_children();
+    let new_children = children
+        .into_iter()
+        .map(pushdown_sorts)
+        .collect::<Result<Vec<_>>>()?;
+    new_node.with_new_children(new_children)
 }
 
-impl Debug for PlaceHolderOperatorExec {
-    fn fmt(&self, _f: &mut Formatter<'_>) -> std::fmt::Result {
-        unreachable!()
-    }
-}
-
-impl DisplayAs for PlaceHolderOperatorExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "PlaceHolderExec")
-    }
-}
-
-impl ExecutionPlan for PlaceHolderOperatorExec {
-    fn name(&self) -> &str {
-        unreachable!()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        self.child.properties()
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.child]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        debug_assert_eq!(children.len(), 1);
-        Ok(Arc::new(Self {
-            child: children.swap_remove(0),
-        }))
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        unreachable!()
-    }
-}
-
-pub(crate) fn pushdown_sorts(
+pub(crate) fn pushdown_sorts_helper(
     mut requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = &requirements.plan;
@@ -181,18 +127,11 @@ pub(crate) fn pushdown_sorts(
                 fetch,
             };
 
-            let new_plan = Arc::new(PlaceHolderOperatorExec {
-                child: child.plan.clone(),
-            }) as Arc<dyn ExecutionPlan>;
-            let new_reqs = PlanContext::new(
-                new_plan,
-                ParentRequirements {
-                    ordering_requirement: Some(required_ordering),
-                    fetch,
-                },
-                vec![child],
-            );
-            return Ok(Transformed::yes(new_reqs));
+            return Ok(Transformed {
+                data: child,
+                transformed: true,
+                tnr: TreeNodeRecursion::Stop,
+            });
         } else {
             // Can not push down requirements
             requirements.children = vec![child];
