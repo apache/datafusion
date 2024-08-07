@@ -24,7 +24,6 @@ use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
 };
-use sqlparser::ast::BinaryOperator;
 
 use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUDF};
 
@@ -216,7 +215,7 @@ pub trait ExprPlanner: Send + Sync {
 /// custom expressions.
 #[derive(Debug, Clone)]
 pub struct RawBinaryExpr {
-    pub op: BinaryOperator,
+    pub op: sqlparser::ast::BinaryOperator,
     pub left: Expr,
     pub right: Expr,
 }
