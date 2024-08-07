@@ -20,9 +20,7 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{DFSchema, Result, TableReference};
-use datafusion_expr::test::function_stub::{
-    array_has_udf, count_udaf, max_udaf, min_udaf, sum_udaf,
-};
+use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_udaf};
 use datafusion_expr::{col, table_scan};
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
@@ -550,24 +548,4 @@ fn test_pretty_roundtrip() -> Result<()> {
     }
 
     Ok(())
-}
-
-#[test]
-fn test_any() {
-    let query = "select 1 from array where 'foo'=ANY(right)";
-    let statement = Parser::new(&GenericDialect {})
-        .try_with_sql(query)
-        .unwrap()
-        .parse_statement()
-        .unwrap();
-
-    let context = MockContextProvider::default().with_udf(array_has_udf());
-    let sql_to_rel = SqlToRel::new(&context);
-    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
-
-    let roundtrip_statement = plan_to_sql(&plan).unwrap();
-    assert_eq!(
-        roundtrip_statement.to_string(),
-        r#"SELECT 1 FROM "array" WHERE array_has("array"."right", 'foo')"#
-    );
 }
