@@ -55,7 +55,7 @@ pub enum OutputFormat {
 impl Command {
     pub async fn execute(
         &self,
-        ctx: &mut dyn CliSessionContext,
+        ctx: &dyn CliSessionContext,
         print_options: &mut PrintOptions,
     ) -> Result<()> {
         match self {

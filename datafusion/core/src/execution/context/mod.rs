@@ -1352,7 +1352,7 @@ impl SessionContext {
     }
 
     /// Register [`CatalogProviderList`] in [`SessionState`]
-    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogProviderList>) {
+    pub fn register_catalog_list(&self, catalog_list: Arc<dyn CatalogProviderList>) {
         self.state.write().register_catalog_list(catalog_list)
     }
 
@@ -1381,15 +1381,18 @@ impl FunctionRegistry for SessionContext {
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
         self.state.read().udwf(name)
     }
+
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         self.state.write().register_udf(udf)
     }
+
     fn register_udaf(
         &mut self,
         udaf: Arc<AggregateUDF>,
     ) -> Result<Option<Arc<AggregateUDF>>> {
         self.state.write().register_udaf(udaf)
     }
+
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
         self.state.write().register_udwf(udwf)
     }

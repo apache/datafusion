@@ -27,7 +27,7 @@ use futures::executor::block_on;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-async fn query(ctx: &mut SessionContext, sql: &str) {
+async fn query(ctx: &SessionContext, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
