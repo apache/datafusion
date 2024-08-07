@@ -44,8 +44,7 @@ use crate::physical_optimizer::replace_with_order_preserving_variants::{
     replace_with_order_preserving_variants, OrderPreservationContext,
 };
 use crate::physical_optimizer::sort_pushdown::{
-    assign_initial_requirements, prune_unnecessary_operators, pushdown_sorts,
-    SortPushDown,
+    assign_initial_requirements, pushdown_sorts, SortPushDown,
 };
 use crate::physical_optimizer::utils::{
     is_coalesce_partitions, is_limit, is_repartition, is_sort, is_sort_preserving_merge,
@@ -190,13 +189,12 @@ impl PhysicalOptimizerRule for EnforceSorting {
         // missed by the bottom-up traversal:
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
         assign_initial_requirements(&mut sort_pushdown);
-        let adjusted = sort_pushdown.transform_down(pushdown_sorts)?.data;
+        let adjusted = pushdown_sorts(sort_pushdown)?;
         let plan = adjusted
             .plan
             .transform_up(|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
             .data()?;
-        // Prune out unnecessary operators from the plan.
-        prune_unnecessary_operators(plan)
+        Ok(plan)
     }
 
     fn name(&self) -> &str {
@@ -740,10 +738,7 @@ mod tests {
 
                 let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
                 assign_initial_requirements(&mut sort_pushdown);
-                sort_pushdown
-                    .transform_down(pushdown_sorts)
-                    .data()
-                    .and_then(check_integrity)?;
+                check_integrity(pushdown_sorts(sort_pushdown)?)?;
                 // TODO: End state payloads will be checked here.
             }
 
