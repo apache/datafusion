@@ -37,10 +37,9 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
-use datafusion_physical_plan::displayable;
 
 #[derive(Default, Clone)]
-pub struct ParentRequirements{
+pub struct ParentRequirements {
     ordering_requirement: Option<Vec<PhysicalSortRequirement>>,
     fetch: Option<usize>,
 }
@@ -57,57 +56,63 @@ pub type SortPushDown = PlanContext<ParentRequirements>;
 pub fn assign_initial_requirements(node: &mut SortPushDown) {
     let reqs = node.plan.required_input_ordering();
     for (child, requirement) in node.children.iter_mut().zip(reqs) {
-        child.data = ParentRequirements{ordering_requirement: requirement, fetch: None};
+        child.data = ParentRequirements {
+            ordering_requirement: requirement,
+            fetch: None,
+        };
     }
 }
 
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
-    let formatted = displayable(plan.as_ref()).indent(true).to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
-}
-
 /// Get fetch information for the operator.
-fn get_fetch(plan: &Arc<dyn ExecutionPlan>) -> Option<usize>{
-    if let Some(sort) =plan.as_any().downcast_ref::<SortExec>(){
+fn get_fetch(plan: &Arc<dyn ExecutionPlan>) -> Option<usize> {
+    if let Some(sort) = plan.as_any().downcast_ref::<SortExec>() {
         sort.fetch()
     } else {
         None
     }
 }
 
-
 /// Prunes unnecessary operators from the plan.
-pub(crate) fn prune_unnecessary_operators(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>>{
-    Ok(plan.transform_up(|p| {
-        if let Some(sort) = p.as_any().downcast_ref::<SortExec>(){
-            let out_ordering = sort.expr();
-            if sort.input().equivalence_properties().ordering_satisfy(out_ordering) {
-                // Ordering is satisfied
-                let out_fetch = sort.fetch();
-                let in_fetch = get_fetch(sort.input());
-                let can_remove = match (out_fetch, in_fetch) {
-                    (Some(out_fetch), Some(in_fetch)) => {
-                        in_fetch >= out_fetch
-                    },
-                    (None, _) => true,
-                    // Cannot remove, as sort decreases number of rows after processing.
-                    (Some(_), None) => false,
-                };
-                if can_remove{
-                    return Ok(Transformed::yes(sort.input().clone()))
+pub(crate) fn prune_unnecessary_operators(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    Ok(plan
+        .transform_up(|p| {
+            if let Some(sort) = p.as_any().downcast_ref::<SortExec>() {
+                let out_ordering = sort.expr();
+                if sort
+                    .input()
+                    .equivalence_properties()
+                    .ordering_satisfy(out_ordering)
+                {
+                    // Ordering is satisfied
+                    let out_fetch = sort.fetch();
+                    let in_fetch = get_fetch(sort.input());
+                    let can_remove = match (out_fetch, in_fetch) {
+                        (Some(out_fetch), Some(in_fetch)) => in_fetch >= out_fetch,
+                        (None, _) => true,
+                        // Cannot remove, as sort decreases number of rows after processing.
+                        (Some(_), None) => false,
+                    };
+                    if can_remove {
+                        return Ok(Transformed::yes(sort.input().clone()));
+                    }
                 }
             }
-        }
-        Ok(Transformed::no(p))
-    })?.data)
+            Ok(Transformed::no(p))
+        })?
+        .data)
 }
 
 pub(crate) fn pushdown_sorts(
     mut requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = &requirements.plan;
-    let parent_reqs = requirements.data.ordering_requirement.as_deref().unwrap_or(&[]);
+    let parent_reqs = requirements
+        .data
+        .ordering_requirement
+        .as_deref()
+        .unwrap_or(&[]);
     let satisfy_parent = plan
         .equivalence_properties()
         .ordering_satisfy_requirement(parent_reqs);
@@ -132,11 +137,16 @@ pub(crate) fn pushdown_sorts(
         {
             let fetch = get_fetch(&child.plan);
             for (grand_child, order) in child.children.iter_mut().zip(adjusted) {
-                grand_child.data = ParentRequirements{ordering_requirement: order, fetch};
+                grand_child.data = ParentRequirements {
+                    ordering_requirement: order,
+                    fetch,
+                };
             }
             // Can push down requirements
-            child.data = ParentRequirements{ordering_requirement: None, fetch};
-            print_plan(&child.plan);
+            child.data = ParentRequirements {
+                ordering_requirement: None,
+                fetch,
+            };
             return Ok(Transformed::yes(child));
         } else {
             // Can not push down requirements
@@ -158,7 +168,11 @@ pub(crate) fn pushdown_sorts(
         requirements.data.ordering_requirement = None;
     } else {
         // Can not push down requirements, add new `SortExec`:
-        let sort_reqs = requirements.data.ordering_requirement.clone().unwrap_or_default();
+        let sort_reqs = requirements
+            .data
+            .ordering_requirement
+            .clone()
+            .unwrap_or_default();
         let fetch = requirements.data.fetch;
         requirements = add_sort_above(requirements, sort_reqs, fetch);
         assign_initial_requirements(&mut requirements);
@@ -183,21 +197,25 @@ fn pushdown_requirement_to_children(
             RequirementsCompatibility::Compatible(adjusted) => Ok(Some(vec![adjusted])),
             RequirementsCompatibility::NonCompatible => Ok(None),
         }
-    }
-    else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+    } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         println!("trying to pushdown sort exec");
         // println!("parent_required: {:?}", parent_required);
         // println!("sort_exec.properties().eq_properties: {:?}", sort_exec.properties().eq_properties);
-        let sort_req = PhysicalSortRequirement::from_sort_exprs(sort_exec.properties().output_ordering().unwrap_or(&[]));
-        if sort_exec.properties().eq_properties.requirements_compatible(parent_required, &sort_req){
+        let sort_req = PhysicalSortRequirement::from_sort_exprs(
+            sort_exec.properties().output_ordering().unwrap_or(&[]),
+        );
+        if sort_exec
+            .properties()
+            .eq_properties
+            .requirements_compatible(parent_required, &sort_req)
+        {
             println!("compatible, parent_required: {:?}", parent_required);
             debug_assert!(!parent_required.is_empty());
             Ok(Some(vec![Some(parent_required.to_vec())]))
         } else {
             Ok(None)
         }
-    }
-    else if is_union(plan) {
+    } else if is_union(plan) {
         // UnionExec does not have real sort requirements for its input. Here we change the adjusted_request_ordering to UnionExec's output ordering and
         // propagate the sort requirements down to correct the unnecessary descendant SortExec under the UnionExec
         let req = (!parent_required.is_empty()).then(|| parent_required.to_vec());
