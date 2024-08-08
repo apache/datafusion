@@ -529,7 +529,6 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for CHARACTER_LENGTH
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   CHARACTER_LENGTH(column1_utf8view) AS l
@@ -540,7 +539,7 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for CONCAT
-## TODO file ticket
+## TODO https://github.com/apache/datafusion/issues/11836
 query TT
 EXPLAIN SELECT
   concat(column1_utf8view, column2_utf8view) as c
@@ -551,7 +550,7 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for CONCAT_WS
-## TODO file ticket
+## TODO https://github.com/apache/datafusion/issues/11837
 query TT
 EXPLAIN SELECT
   concat_ws(', ', column1_utf8view, column2_utf8view) as c
@@ -562,7 +561,7 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for CONTAINS
-## TODO file ticket
+## TODO https://github.com/apache/datafusion/issues/11838
 query TT
 EXPLAIN SELECT
   CONTAINS(column1_utf8view, 'foo') as c1,
@@ -575,7 +574,7 @@ logical_plan
 03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for ENDS_WITH
-## TODO file ticket
+## TODO https://github.com/apache/datafusion/issues/11852
 query TT
 EXPLAIN SELECT
   ENDS_WITH(column1_utf8view, 'foo') as c1,
@@ -589,7 +588,7 @@ logical_plan
 
 
 ## Ensure no casts for INITCAP
-## TODO file ticket
+## TODO https://github.com/apache/datafusion/issues/11853
 query TT
 EXPLAIN SELECT
   INITCAP(column1_utf8view) as c
@@ -600,7 +599,7 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for LEVENSHTEIN
-## TODO file ticket
+## TODO https://github.com/apache/datafusion/issues/11854
 query TT
 EXPLAIN SELECT
   levenshtein(column1_utf8view, 'foo') as c1,
@@ -613,7 +612,7 @@ logical_plan
 03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for LOWER
-## TODO file ticket
+## TODO https://github.com/apache/datafusion/issues/11855
 query TT
 EXPLAIN SELECT
   LOWER(column1_utf8view) as c1
@@ -624,7 +623,7 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for LTRIM
-## TODO file ticket
+## TODO https://github.com/apache/datafusion/issues/11856
 query TT
 EXPLAIN SELECT
   LTRIM(column1_utf8view) as c1
@@ -635,7 +634,7 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for LPAD
-## TODO file ticket
+## TODO https://github.com/apache/datafusion/issues/11857
 query TT
 EXPLAIN SELECT
   LPAD(column1_utf8view, 12, ' ') as c1
@@ -647,7 +646,7 @@ logical_plan
 
 
 ## Ensure no casts for OCTET_LENGTH
-## TODO file ticket
+## TODO https://github.com/apache/datafusion/issues/11858
 query TT
 EXPLAIN SELECT
   OCTET_LENGTH(column1_utf8view) as c1
@@ -822,8 +821,7 @@ logical_plan
 02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1
 03)----TableScan: test projection=[column1_utf8view]
 
-## Ensure no casts for STARTS_WITH
-## TODO file ticket
+## Ensure no casts on columns for STARTS_WITH
 query TT
 EXPLAIN SELECT
   STARTS_WITH(column1_utf8view, 'foo') as c,
