@@ -71,11 +71,11 @@ pub(crate) fn pushdown_sorts(sort_pushdown: SortPushDown) -> Result<SortPushDown
     let new_children = children
         .into_iter()
         .map(pushdown_sorts)
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<_>>()?;
     new_node.with_new_children(new_children)
 }
 
-pub(crate) fn pushdown_sorts_helper(
+fn pushdown_sorts_helper(
     mut requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = &requirements.plan;
