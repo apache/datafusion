@@ -120,7 +120,6 @@ impl From<&BuiltInWindowFunction> for protobuf::BuiltInWindowFunction {
             BuiltInWindowFunction::Ntile => Self::Ntile,
             BuiltInWindowFunction::CumeDist => Self::CumeDist,
             BuiltInWindowFunction::PercentRank => Self::PercentRank,
-            BuiltInWindowFunction::RowNumber => Self::RowNumber,
             BuiltInWindowFunction::Rank => Self::Rank,
             BuiltInWindowFunction::Lag => Self::Lag,
             BuiltInWindowFunction::Lead => Self::Lead,

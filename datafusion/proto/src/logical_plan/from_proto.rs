@@ -141,7 +141,7 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
 impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
         match built_in_function {
-            protobuf::BuiltInWindowFunction::RowNumber => Self::RowNumber,
+            protobuf::BuiltInWindowFunction::Unspecified => todo!(),
             protobuf::BuiltInWindowFunction::Rank => Self::Rank,
             protobuf::BuiltInWindowFunction::PercentRank => Self::PercentRank,
             protobuf::BuiltInWindowFunction::DenseRank => Self::DenseRank,

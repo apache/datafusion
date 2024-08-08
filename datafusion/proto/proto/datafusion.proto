@@ -481,7 +481,8 @@ message ScalarUDFExprNode {
 }
 
 enum BuiltInWindowFunction {
-  ROW_NUMBER = 0;
+  UNSPECIFIED = 0; // https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum
+  // ROW_NUMBER = 0;
   RANK = 1;
   DENSE_RANK = 2;
   PERCENT_RANK = 3;
