@@ -1098,11 +1098,10 @@ fn ensure_distribution(
         |(mut child, requirement, required_input_ordering, would_benefit, maintains)| {
             // Don't need to apply when the returned row count is not greater than batch size
             let num_rows = child.plan.statistics()?.num_rows;
-            let repartition_beneficial_stats = if num_rows.is_exact().unwrap_or(false) {
-                num_rows
-                    .get_value()
-                    .map(|value| value > &batch_size)
-                    .unwrap() // safe to unwrap since is_exact() is true
+            let repartition_beneficial_stats = if let Some(n_rows) = num_rows.get_value()
+            {
+                // Row count estimate is larger than the batch size.
+                *n_rows > batch_size
             } else {
                 true
             };
