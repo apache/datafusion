@@ -119,7 +119,7 @@ impl ExprBoundaries {
         Ok(ExprBoundaries {
             column,
             interval,
-            distinct_count: col_stats.distinct_count.clone(),
+            distinct_count: col_stats.distinct_count,
         })
     }
 
