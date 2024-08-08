@@ -489,7 +489,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
                                             // TODO: approx_percentile_cont and approx_percentile_cont_weight are not supported for UDAF from protobuf yet.
                                             // TODO: `order by` is not supported for UDAF yet
-                                            AggregateExprBuilder::new(agg_udf, input_phy_expr).schema(Arc::clone(&physical_schema)).name(name).with_ignore_nulls(agg_node.ignore_nulls).with_distinct(agg_node.distinct).build()
+                                            // https://github.com/apache/datafusion/issues/11804
+                                            AggregateExprBuilder::new(agg_udf, input_phy_expr)
+                                                .schema(Arc::clone(&physical_schema))
+                                                .alias(name)
+                                                .with_ignore_nulls(agg_node.ignore_nulls)
+                                                .with_distinct(agg_node.distinct)
+                                                .build()
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {

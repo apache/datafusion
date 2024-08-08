@@ -187,7 +187,7 @@ mod tests {
         let optimizer = Optimizer::with_rules(vec![Arc::new(SimplifyExpressions::new())]);
         let optimized_plan =
             optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
-        let formatted_plan = format!("{optimized_plan:?}");
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(formatted_plan, expected);
         Ok(())
     }
@@ -401,7 +401,7 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b) AS MAX(test.b = Boolean(true)), MIN(test.b)]]\
+        Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b) AS max(test.b = Boolean(true)), min(test.b)]]\
         \n  Projection: test.a, test.c, test.b\
         \n    TableScan: test";
 
@@ -437,7 +437,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule.rewrite(plan, &config).unwrap().data;
-        format!("{optimized_plan:?}")
+        format!("{optimized_plan}")
     }
 
     #[test]

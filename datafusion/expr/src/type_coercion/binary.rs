@@ -890,15 +890,22 @@ fn dictionary_coercion(
 /// 2. Data type of the other side should be able to cast to string type
 fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    string_coercion(lhs_type, rhs_type).or(match (lhs_type, rhs_type) {
-        (Utf8, from_type) | (from_type, Utf8) => {
-            string_concat_internal_coercion(from_type, &Utf8)
+    match (lhs_type, rhs_type) {
+        // If Utf8View is in any side, we coerce to Utf8.
+        // Ref: https://github.com/apache/datafusion/pull/11796
+        (Utf8View, Utf8View | Utf8 | LargeUtf8) | (Utf8 | LargeUtf8, Utf8View) => {
+            Some(Utf8)
         }
-        (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
-            string_concat_internal_coercion(from_type, &LargeUtf8)
-        }
-        _ => None,
-    })
+        _ => string_coercion(lhs_type, rhs_type).or(match (lhs_type, rhs_type) {
+            (Utf8, from_type) | (from_type, Utf8) => {
+                string_concat_internal_coercion(from_type, &Utf8)
+            }
+            (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
+                string_concat_internal_coercion(from_type, &LargeUtf8)
+            }
+            _ => None,
+        }),
+    }
 }
 
 fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {

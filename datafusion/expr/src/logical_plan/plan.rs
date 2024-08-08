@@ -187,7 +187,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # }
 /// ```
 ///
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
     /// SELECT with an expression list) on its input.
@@ -1882,7 +1882,7 @@ impl LogicalPlan {
     }
 }
 
-impl Debug for LogicalPlan {
+impl Display for LogicalPlan {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         self.display_indent().fmt(f)
     }
@@ -2289,6 +2289,19 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+}
+
+impl Debug for TableScan {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("TableScan")
+            .field("table_name", &self.table_name)
+            .field("source", &"...")
+            .field("projection", &self.projection)
+            .field("projected_schema", &self.projected_schema)
+            .field("filters", &self.filters)
+            .field("fetch", &self.fetch)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PartialEq for TableScan {

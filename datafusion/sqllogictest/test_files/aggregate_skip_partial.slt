@@ -1,0 +1,350 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# The main goal of these tests is to verify correctness of transforming
+# input values to state by accumulators, supporting `convert_to_state`.
+
+
+# Setup test data table
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  INT UNSIGNED NOT NULL,
+  c10 BIGINT UNSIGNED NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Prepare settings to skip partial aggregation from the beginning
+statement ok
+set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
+
+statement ok
+set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 1;
+
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+# Grouping by unique fields allows to check all accumulators
+query ITIIII
+SELECT c5, c1,
+       COUNT(),
+       COUNT(CASE WHEN c1 = 'a' THEN c5 ELSE NULL END),
+       COUNT() FILTER (WHERE c1 = 'b'),
+       COUNT(CASE WHEN c1 = 'a' THEN c5 ELSE NULL END) FILTER (WHERE c1 = 'b')
+FROM aggregate_test_100
+GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
+----
+-2141999138 c 1 0 0 0
+-2141451704 a 1 1 0 0
+-2138770630 b 1 0 1 0
+-2117946883 d 1 0 0 0
+-2098805236 c 1 0 0 0
+
+query ITIIII
+SELECT c5, c1,
+       MIN(c5),
+       MIN(CASE WHEN c1 = 'a' THEN c5 ELSE NULL END),
+       MIN(c5) FILTER (WHERE c1 = 'b'),
+       MIN(CASE WHEN c1 = 'a' THEN c5 ELSE NULL END) FILTER (WHERE c1 = 'b')
+FROM aggregate_test_100
+GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
+----
+-2141999138 c -2141999138 NULL NULL NULL
+-2141451704 a -2141451704 -2141451704 NULL NULL
+-2138770630 b -2138770630 NULL -2138770630 NULL
+-2117946883 d -2117946883 NULL NULL NULL
+-2098805236 c -2098805236 NULL NULL NULL
+
+query ITIIII
+SELECT c5, c1,
+       MAX(c5),
+       MAX(CASE WHEN c1 = 'a' THEN c5 ELSE NULL END),
+       MAX(c5) FILTER (WHERE c1 = 'b'),
+       MAX(CASE WHEN c1 = 'a' THEN c5 ELSE NULL END) FILTER (WHERE c1 = 'b')
+FROM aggregate_test_100
+GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
+----
+-2141999138 c -2141999138 NULL NULL NULL
+-2141451704 a -2141451704 -2141451704 NULL NULL
+-2138770630 b -2138770630 NULL -2138770630 NULL
+-2117946883 d -2117946883 NULL NULL NULL
+-2098805236 c -2098805236 NULL NULL NULL
+
+query ITIIII
+SELECT c5, c1,
+       SUM(c5),
+       SUM(CASE WHEN c1 = 'a' THEN c5 ELSE NULL END),
+       SUM(c5) FILTER (WHERE c1 = 'b'),
+       SUM(CASE WHEN c1 = 'a' THEN c5 ELSE NULL END) FILTER (WHERE c1 = 'b')
+FROM aggregate_test_100
+GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
+----
+-2141999138 c -2141999138 NULL NULL NULL
+-2141451704 a -2141451704 -2141451704 NULL NULL
+-2138770630 b -2138770630 NULL -2138770630 NULL
+-2117946883 d -2117946883 NULL NULL NULL
+-2098805236 c -2098805236 NULL NULL NULL
+
+# Prepare settings to always skip aggregation after couple of batches
+statement ok
+set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 10;
+
+statement ok
+set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4;
+
+# Inserting into nullable table with batch_size specified above
+# to prevent creation on single in-memory batch
+statement ok
+CREATE TABLE aggregate_test_100_null (
+  c2  TINYINT NOT NULL,
+  c5  INT NOT NULL,
+  c3  SMALLINT,
+  c11 FLOAT
+);
+
+statement ok
+INSERT INTO aggregate_test_100_null
+SELECT
+  c2,
+  c5,
+  CASE WHEN c1 = 'e' THEN NULL ELSE c3 END as c3,
+  CASE WHEN c1 = 'a' THEN NULL ELSE c11 END as c11
+FROM aggregate_test_100;
+
+# Test count varchar / int / float
+query IIII
+SELECT c2, count(c1), count(c5), count(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 22 22 22
+2 22 22 22
+3 19 19 19
+4 23 23 23
+5 14 14 14
+
+# Test min / max for int / float
+query IIIRR
+SELECT c2, min(c5), max(c5), min(c11), max(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 -1991133944 2143473091 0.064453244 0.89651865
+2 -2138770630 2053379412 0.055064857 0.8315913
+3 -2141999138 2030965207 0.034291923 0.9488028
+4 -1885422396 2064155045 0.028003037 0.7459874
+5 -2117946883 2025611582 0.12559289 0.87989986
+
+# Test sum for int / float
+query IIR
+SELECT c2, sum(c5), sum(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 -438598674 12.153253793716
+2 -8259865364 9.577824473381
+3 1956035476 9.590891361237
+4 16155718643 9.531112968922
+5 6449337880 7.074412226677
+
+# Test count with nullable fields
+query III
+SELECT c2, count(c3), count(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 19 17
+2 17 19
+3 15 13
+4 16 19
+5 12 11
+
+# Test min / max with nullable fields
+query IIIRR
+SELECT c2, min(c3), max(c3), min(c11), max(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 -99 125 0.064453244 0.89651865
+2 -117 122 0.09683716 0.8315913
+3 -101 123 0.034291923 0.94669616
+4 -117 123 0.028003037 0.7085086
+5 -101 118 0.12559289 0.87989986
+
+# Test sum with nullable fields
+query IIR
+SELECT c2, sum(c3), sum(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 367 12.153253793716
+2 184 9.577824473381
+3 395 9.590891361237
+4 29 9.531112968922
+5 -194 7.074412226677
+
+# Enabling PG dialect for filtered aggregates tests
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+# Test count with filter
+query III
+SELECT
+  c2,
+  count(c3) FILTER (WHERE c3 > 0),
+  count(c3) FILTER (WHERE c11 > 10)
+FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 13 0
+2 13 0
+3 13 0
+4 13 0
+5 5 0
+
+# Test min / max with filter
+query III
+SELECT
+  c2,
+  min(c3) FILTER (WHERE c3 > 0),
+  max(c3) FILTER (WHERE c3 < 0)
+FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 12 -5
+2 1 -29
+3 13 -2
+4 3 -38
+5 36 -5
+
+# Test sum with filter
+query II
+SELECT
+  c2,
+  sum(c3) FILTER (WHERE c1 != 'e' AND c3 > 0)
+FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 612
+2 565
+3 466
+4 417
+5 284
+
+# Test count with nullable fields and filter
+query III
+SELECT c2,
+       COUNT(c3) FILTER (WHERE c5 > 0),
+       COUNT(c11) FILTER(WHERE c5 > 0)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 11 6
+2 6 6
+3 8 6
+4 11 14
+5 8 7
+
+# Test count with nullable fields and nullable filter
+query III
+SELECT c2,
+       COUNT(c3) FILTER (WHERE c11 > 0.5),
+       COUNT(c11) FILTER(WHERE c3 > 0)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 10 9
+2 7 8
+3 3 6
+4 3 7
+5 6 3
+
+# Test min / max with nullable fields and filter
+query IIIRR
+SELECT c2,
+       MIN(c3) FILTER (WHERE c5 > 0),
+       MAX(c3) FILTER (WHERE c5 > 0),
+       MIN(c11) FILTER (WHERE c5 < 0),
+       MAX(c11) FILTER (WHERE c5 < 0)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 -99 103 0.2578469 0.89651865
+2 -48 93 0.09683716 0.8315913
+3 -76 123 0.034291923 0.94669616
+4 -117 123 0.06563997 0.57360977
+5 -94 68 0.12559289 0.75173044
+
+# Test min / max with nullable fields and nullable filter
+query III
+SELECT c2,
+       MIN(c3) FILTER (WHERE c11 > 0.5),
+       MAX(c3) FILTER (WHERE c11 > 0.5)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 -99 125
+2 -106 122
+3 -76 73
+4 -117 47
+5 -82 118
+
+# Test sum with nullable field and nullable / non-nullable filters
+query IIIRR
+SELECT c2,
+       SUM(c3) FILTER (WHERE c5 > 0),
+       SUM(c3) FILTER (WHERE c11 < 0.5),
+       SUM(c11) FILTER (WHERE c5 < 0),
+       SUM(c11) FILTER (WHERE c3 > 0)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 -3 77 7.214695632458 5.085060358047
+2 100 77 6.197732746601 3.150197088718
+3 109 211 2.80575042963 2.80632930994
+4 -171 56 2.10740506649 1.939846396446
+5 -86 -76 1.8741710186 1.600569307804
+
+
+statement ok
+DROP TABLE aggregate_test_100_null;
+
+# Test for aggregate functions with different intermediate types
+# Need more than 10 values to trigger skipping
+statement ok
+CREATE TABLE decimal_table(i int, d decimal(10,3)) as
+VALUES (1, 1.1), (2, 2.2), (3, 3.3), (2, 4.4), (1, 5.5);
+
+statement ok
+CREATE TABLE t(id int) as values (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
+
+query IR
+SELECT i, sum(d)
+FROM decimal_table CROSS JOIN t
+GROUP BY i
+ORDER BY i;
+----
+1 66
+2 66
+3 33
+
+statement ok
+DROP TABLE decimal_table;

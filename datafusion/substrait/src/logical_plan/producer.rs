@@ -49,8 +49,7 @@ use datafusion::common::{
 use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
 use datafusion::logical_expr::expr::{
-    AggregateFunctionDefinition, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
-    InSubquery, Sort, WindowFunction,
+    Alias, BinaryExpr, Case, Cast, GroupingSet, InList, InSubquery, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -558,7 +557,7 @@ pub fn to_substrait_rel(
                 rel_type: Some(rel_type),
             }))
         }
-        _ => not_impl_err!("Unsupported operator: {plan:?}"),
+        _ => not_impl_err!("Unsupported operator: {plan}"),
     }
 }
 
@@ -764,9 +763,7 @@ pub fn to_substrait_agg_measure(
     extensions: &mut Extensions,
 ) -> Result<Measure> {
     match expr {
-        Expr::AggregateFunction(expr::AggregateFunction { func_def, args, distinct, filter, order_by, null_treatment: _, }) => {
-            match func_def {
-                AggregateFunctionDefinition::UDF(fun) => {
+        Expr::AggregateFunction(expr::AggregateFunction { func, args, distinct, filter, order_by, null_treatment: _, }) => {
                     let sorts = if let Some(order_by) = order_by {
                         order_by.iter().map(|expr| to_substrait_sort_field(ctx, expr, schema, extensions)).collect::<Result<Vec<_>>>()?
                     } else {
@@ -776,7 +773,7 @@ pub fn to_substrait_agg_measure(
                     for arg in args {
                         arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(ctx, arg, schema, 0, extensions)?)) });
                     }
-                    let function_anchor = extensions.register_function(fun.name().to_string());
+                    let function_anchor = extensions.register_function(func.name().to_string());
                     Ok(Measure {
                         measure: Some(AggregateFunction {
                             function_reference: function_anchor,
@@ -796,8 +793,6 @@ pub fn to_substrait_agg_measure(
                             None => None
                         }
                     })
-                }
-            }
 
         }
         Expr::Alias(Alias{expr,..})=> {

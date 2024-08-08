@@ -209,7 +209,7 @@ fn roundtrip_crossjoin() -> Result<()> {
         \n    TableScan: j1\
         \n    TableScan: j2";
 
-    assert_eq!(format!("{plan_roundtrip:?}"), expected);
+    assert_eq!(format!("{plan_roundtrip}"), expected);
 
     Ok(())
 }
@@ -295,7 +295,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             sql: "SELECT string_count FROM (
                     SELECT
                         j1_id,
-                        MIN(j2_string)
+                        min(j2_string)
                     FROM
                         j1 LEFT OUTER JOIN j2 ON
                                     j1_id = j2_id
@@ -303,7 +303,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
                         j1_id
                 ) AS agg (id, string_count)
             ",
-            expected: r#"SELECT agg.string_count FROM (SELECT j1.j1_id, MIN(j2.j2_string) FROM j1 LEFT JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id) AS agg (id, string_count)"#,
+            expected: r#"SELECT agg.string_count FROM (SELECT j1.j1_id, min(j2.j2_string) FROM j1 LEFT JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id) AS agg (id, string_count)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
@@ -420,7 +420,7 @@ fn test_unnest_logical_plan() -> Result<()> {
         \n    Projection: unnest_table.struct_col AS unnest(unnest_table.struct_col), unnest_table.array_col AS unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
         \n      TableScan: unnest_table";
 
-    assert_eq!(format!("{plan:?}"), expected);
+    assert_eq!(format!("{plan}"), expected);
 
     Ok(())
 }
