@@ -1730,6 +1730,8 @@ pub(crate) mod tests {
             config.optimizer.repartition_file_min_size = $REPARTITION_FILE_MIN_SIZE;
             config.optimizer.prefer_existing_sort = $PREFER_EXISTING_SORT;
             config.optimizer.prefer_existing_union = $PREFER_EXISTING_UNION;
+            // Use a small batch size, to trigger RoundRobin in tests
+            config.execution.batch_size = 1;
 
             // NOTE: These tests verify the joint `EnforceDistribution` + `EnforceSorting` cascade
             //       because they were written prior to the separation of `BasicEnforcement` into
