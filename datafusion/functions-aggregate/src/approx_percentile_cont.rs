@@ -50,10 +50,10 @@ create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
 
 /// Computes the approximate percentile continuous of a set of numbers
 pub fn approx_percentile_cont(
-    expression: datafusion_expr::Expr,
-    percentile: datafusion_expr::Expr,
-    centroids: Option<datafusion_expr::Expr>,
-) -> datafusion_expr::Expr {
+    expression: Expr,
+    percentile: Expr,
+    centroids: Option<Expr>,
+) -> Expr {
     let args = if let Some(centroids) = centroids {
         vec![expression, percentile, centroids]
     } else {
