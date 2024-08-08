@@ -549,3 +549,34 @@ fn test_pretty_roundtrip() -> Result<()> {
 
     Ok(())
 }
+
+fn sql_round_trip(query: &str, expect: &str) {
+    let statement = Parser::new(&GenericDialect {})
+        .try_with_sql(query)
+        .unwrap()
+        .parse_statement()
+        .unwrap();
+
+    let context = MockContextProvider::default();
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan).unwrap();
+    assert_eq!(roundtrip_statement.to_string(), expect);
+}
+
+#[test]
+fn test_interval_lhs_eq() {
+    sql_round_trip(
+        "select interval '2 seconds' = interval '2 seconds'",
+        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' = INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+    );
+}
+
+#[test]
+fn test_interval_lhs_lt() {
+    sql_round_trip(
+        "select interval '2 seconds' < interval '2 seconds'",
+        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' < INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+    );
+}
