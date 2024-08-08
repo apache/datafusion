@@ -35,7 +35,7 @@ STORED AS CSV
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 OPTIONS ('format.has_header' 'true');
 
-# Remove the redundant ordering in the sub query
+# Remove the redundant ordering in the subquery
 
 query TT
 EXPLAIN SELECT c1 FROM (SELECT c1 FROM sink_table ORDER BY c2) AS ttt

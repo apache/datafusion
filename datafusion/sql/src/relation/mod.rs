@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{not_impl_err, plan_err, DFSchema, Result, TableReference};
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -154,9 +155,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 }
 
 fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-    // When a subquery is initialized, we look for the sort options since they might be redundant.
-    // It's only important if the subquery result is affected with the order by statement.
-    // Which are the cases of:
+    // When a subquery is initialized, we look for the sort options since they might be unnecessary.
+    // It's only important if the subquery result is affected by the ORDER BY statement, which can
+    // happen when we have:
     // 1. DISTINCT ON / ARRAY_AGG ... => It's handled as an Aggregate plan and keep the sorting
     // 2. RANK / ROW_NUMBER ... => It's handled as a WindowAggr plan sorting is preserved
     // 3. LIMIT => It's handled as a Sort plan type so that we need to search for it
