@@ -18,10 +18,8 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::utils::add_sort_above;
-use crate::physical_optimizer::utils::{
-    is_limit, is_sort_preserving_merge, is_union, is_window,
-};
+use super::utils::{add_sort_above, is_sort};
+use crate::physical_optimizer::utils::{is_sort_preserving_merge, is_union, is_window};
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils::calculate_join_output_ordering;
 use crate::physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
@@ -64,19 +62,12 @@ pub fn assign_initial_requirements(node: &mut SortPushDown) {
     }
 }
 
-pub(crate) fn call_till_not_early_exit(
-    sort_pushdown: SortPushDown,
-) -> Result<Transformed<SortPushDown>> {
-    let mut result = pushdown_sorts_helper(sort_pushdown)?;
-    while result.tnr == TreeNodeRecursion::Stop {
-        result = pushdown_sorts_helper(result.data)?;
-    }
-    Ok(result)
-}
-
 pub(crate) fn pushdown_sorts(sort_pushdown: SortPushDown) -> Result<SortPushDown> {
-    let new_node = call_till_not_early_exit(sort_pushdown)?.data;
-    let (new_node, children) = new_node.take_children();
+    let mut new_node = pushdown_sorts_helper(sort_pushdown)?;
+    while new_node.tnr == TreeNodeRecursion::Stop {
+        new_node = pushdown_sorts_helper(new_node.data)?;
+    }
+    let (new_node, children) = new_node.data.take_children();
     let new_children = children
         .into_iter()
         .map(pushdown_sorts)
@@ -96,7 +87,7 @@ pub(crate) fn pushdown_sorts_helper(
     let satisfy_parent = plan
         .equivalence_properties()
         .ordering_satisfy_requirement(parent_reqs);
-    if plan.as_any().downcast_ref::<SortExec>().is_some() {
+    if is_sort(plan) {
         let required_ordering = plan
             .output_ordering()
             .map(PhysicalSortRequirement::from_sort_exprs)
@@ -123,7 +114,7 @@ pub(crate) fn pushdown_sorts_helper(
             }
             // Can push down requirements
             child.data = ParentRequirements {
-                ordering_requirement: Some(required_ordering.clone()),
+                ordering_requirement: Some(required_ordering),
                 fetch,
             };
 
@@ -195,11 +186,17 @@ fn pushdown_requirement_to_children(
         } else {
             Ok(None)
         }
-    } else if is_limit(plan) {
+    } else if plan.fetch().is_some()
+        && plan.maintains_input_order().len() == 1
+        && plan.maintains_input_order()[0]
+        && plan.supports_limit_pushdown()
+    {
         let output_req = PhysicalSortRequirement::from_sort_exprs(
             plan.properties().output_ordering().unwrap_or(&[]),
         );
-        // Push down through limit only when requirement is aligned with output ordering.
+        // Push down through operator with fetch when:
+        // - requirement is aligned with output ordering
+        // - it preserves ordering during execution
         if plan
             .properties()
             .eq_properties

@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use crate::common::spawn_buffered;
 use crate::expressions::PhysicalSortExpr;
+use crate::limit::statistics_with_fetch;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
@@ -921,7 +922,13 @@ impl ExecutionPlan for SortExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        statistics_with_fetch(
+            self.input.statistics()?,
+            self.schema(),
+            self.fetch,
+            0,
+            self.properties().partitioning.partition_count(),
+        )
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

@@ -2043,12 +2043,9 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c13]
 physical_plan
 01)ProjectionExec: expr=[array_agg(aggregate_test_100.c13)@0 as array_agg1]
-02)--AggregateExec: mode=Final, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
-03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------SortExec: TopK(fetch=1), expr=[c13@0 ASC NULLS LAST], preserve_partitioning=[false]
-07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c13], has_header=true
+02)--AggregateExec: mode=Single, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
+03)----SortExec: TopK(fetch=1), expr=[c13@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c13], has_header=true
 
 
 query ?
@@ -4094,11 +4091,10 @@ physical_plan
 01)ProjectionExec: expr=[count(*) PARTITION BY [a.a] ORDER BY [a.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as count(*) PARTITION BY [a.a] ORDER BY [a.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
 02)--BoundedWindowAggExec: wdw=[count(*) PARTITION BY [a.a] ORDER BY [a.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "count(*) PARTITION BY [a.a] ORDER BY [a.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
 03)----CoalesceBatchesExec: target_batch_size=4096
-04)------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------CoalesceBatchesExec: target_batch_size=4096
-07)------------FilterExec: a@0 = 1
-08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+04)------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=1
+05)--------CoalesceBatchesExec: target_batch_size=4096
+06)----------FilterExec: a@0 = 1
+07)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query I
 select ROW_NUMBER() over (partition by a) from (select * from a where a = 1);
@@ -4117,11 +4113,10 @@ physical_plan
 01)ProjectionExec: expr=[ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
 02)--BoundedWindowAggExec: wdw=[ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "ROW_NUMBER() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
 03)----CoalesceBatchesExec: target_batch_size=4096
-04)------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------CoalesceBatchesExec: target_batch_size=4096
-07)------------FilterExec: a@0 = 1
-08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+04)------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=1
+05)--------CoalesceBatchesExec: target_batch_size=4096
+06)----------FilterExec: a@0 = 1
+07)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # LAG window function IGNORE/RESPECT NULLS support with ascending order and default offset 1
 query TTTTTT

@@ -174,6 +174,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
         } else {
             adjusted.plan
         };
+
         let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
         let updated_plan = plan_with_pipeline_fixer
             .transform_up(|plan_with_pipeline_fixer| {
@@ -191,11 +192,11 @@ impl PhysicalOptimizerRule for EnforceSorting {
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
         assign_initial_requirements(&mut sort_pushdown);
         let adjusted = pushdown_sorts(sort_pushdown)?;
-        let plan = adjusted
+
+        adjusted
             .plan
             .transform_up(|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
-            .data()?;
-        Ok(plan)
+            .data()
     }
 
     fn name(&self) -> &str {
@@ -282,7 +283,7 @@ fn parallelize_sorts(
         // executors don't require single partition), then we can replace
         // the `CoalescePartitionsExec` + `SortExec` cascade with a `SortExec`
         // + `SortPreservingMergeExec` cascade to parallelize sorting.
-        requirements = remove_corresponding_coalesce_in_sub_plan(requirements)?;
+        requirements = remove_bottleneck_in_subplan(requirements)?;
         // We also need to remove the self node since `remove_corresponding_coalesce_in_sub_plan`
         // deals with the children and their children and so on.
         requirements = requirements.children.swap_remove(0);
@@ -300,7 +301,7 @@ fn parallelize_sorts(
     } else if is_coalesce_partitions(&requirements.plan) {
         // There is an unnecessary `CoalescePartitionsExec` in the plan.
         // This will handle the recursive `CoalescePartitionsExec` plans.
-        requirements = remove_corresponding_coalesce_in_sub_plan(requirements)?;
+        requirements = remove_bottleneck_in_subplan(requirements)?;
         // For the removal of self node which is also a `CoalescePartitionsExec`.
         requirements = requirements.children.swap_remove(0);
 
@@ -496,8 +497,11 @@ fn adjust_window_sort_removal(
     Ok(window_tree)
 }
 
-/// Removes the [`CoalescePartitionsExec`] from the plan in `node`.
-fn remove_corresponding_coalesce_in_sub_plan(
+/// Removes parallelization-reducing, avoidable [`CoalescePartitionsExec`]s from the plan in `node`.
+/// After the removal of such `CoalescePartitionsExec`s from the plan, some of the
+/// `RepartitionExec`s might become redundant. Removes those `RepartitionExec`s from the plan as
+/// well.
+fn remove_bottleneck_in_subplan(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<PlanWithCorrespondingCoalescePartitions> {
     let plan = &requirements.plan;
@@ -518,32 +522,27 @@ fn remove_corresponding_coalesce_in_sub_plan(
             .into_iter()
             .map(|node| {
                 if node.data {
-                    remove_corresponding_coalesce_in_sub_plan(node)
+                    remove_bottleneck_in_subplan(node)
                 } else {
                     Ok(node)
                 }
             })
             .collect::<Result<_>>()?;
     }
-    let mut new_req = requirements.update_plan_from_children()?;
-    if let Some(repartition) = new_req.plan.as_any().downcast_ref::<RepartitionExec>() {
-        let mut can_remove = false;
-        if repartition
-            .input()
-            .output_partitioning()
-            .eq(repartition.partitioning())
-        {
-            // Their partitioning same
-            can_remove = true;
-        } else if let Partitioning::RoundRobinBatch(n_out) = repartition.partitioning() {
-            can_remove =
-                *n_out == repartition.input().output_partitioning().partition_count();
+    let mut new_reqs = requirements.update_plan_from_children()?;
+    if let Some(repartition) = new_reqs.plan.as_any().downcast_ref::<RepartitionExec>() {
+        let input_partitioning = repartition.input().output_partitioning();
+        // We can remove this repartitioning operator if it is now a no-op:
+        let mut can_remove = input_partitioning.eq(repartition.partitioning());
+        // We can also remove it if we ended up with an ineffective RR:
+        if let Partitioning::RoundRobinBatch(n_out) = repartition.partitioning() {
+            can_remove |= *n_out == input_partitioning.partition_count();
         }
         if can_remove {
-            new_req = new_req.children.swap_remove(0)
+            new_reqs = new_reqs.children.swap_remove(0)
         }
     }
-    Ok(new_req)
+    Ok(new_reqs)
 }
 
 /// Updates child to remove the unnecessary sort below it.
@@ -570,10 +569,9 @@ fn remove_corresponding_sort_from_sub_plan(
 ) -> Result<PlanWithCorrespondingSort> {
     // A `SortExec` is always at the bottom of the tree.
     if let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() {
+        // Do not remove sorts with fetch:
         if sort_exec.fetch().is_none() {
             node = node.children.swap_remove(0);
-        } else {
-            // Do not remove the sort with fetch
         }
     } else {
         let mut any_connection = false;

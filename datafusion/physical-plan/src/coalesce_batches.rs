@@ -32,6 +32,7 @@ use futures::stream::{Stream, StreamExt};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 
+use crate::limit::statistics_with_fetch;
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
@@ -212,7 +213,13 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        statistics_with_fetch(
+            self.input.statistics()?,
+            self.schema(),
+            self.fetch,
+            0,
+            self.properties().partitioning.partition_count(),
+        )
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
