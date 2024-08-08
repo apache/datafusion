@@ -337,15 +337,5 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
 }
 
 pub fn collect_array_ref<O: OffsetSizeTrait>(a: ArrayRef) -> Vec<ArrayRef> {
-    a.as_list::<O>()
-        .iter()
-        .flatten()
-        .map(|x| match x.data_type() {
-            // if an element is a list
-            // [[1,2,3]] -> [1,2,3]
-            DataType::List(_) => x.as_list::<i32>().value(0),
-            DataType::LargeList(_) => x.as_list::<i64>().value(0),
-            _ => x,
-        })
-        .collect::<Vec<_>>()
+    a.as_list::<O>().iter().flatten().collect::<Vec<_>>()
 }

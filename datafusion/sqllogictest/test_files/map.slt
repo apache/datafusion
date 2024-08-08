@@ -217,23 +217,15 @@ SELECT map(column5, column6) FROM t;
 {k3: 3}
 {k5: 5}
 
-# TODO: Make me work
-#query
-#SELECT map(column6, column7) FROM t;
-#----
-#{[1,2]: 'POST'}
-#{[3]: 'PUT'}
-#{[5]: NULL}
 
-#query error
-#SELECT map(column7, column6) FROM t;
+query error
+SELECT map(column6, column7) FROM t;
 
-#query
-#SELECT map(column8, column7) FROM t;
-#----
-#{[[1,2,3]]: 'POST'}
-#{[[4]]: 'PUT'}
-#{[[1,2]]: NULL}
+query error
+SELECT map(column7, column6) FROM t;
+
+query error
+SELECT map(column8, column7) FROM t;
 
 query ?
 SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', 30, 'OPTION', 29, 'GET', 27, 'PUT', 25, 'DELETE', 24) AS method_count from t;
