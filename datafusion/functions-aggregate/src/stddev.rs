@@ -344,7 +344,6 @@ mod tests {
             schema,
             dfschema: &dfschema,
             ignore_nulls: false,
-            // sort_exprs: &[],
             ordering_req: &[],
             name: "a",
             is_distinct: false,

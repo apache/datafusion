@@ -15,14 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Operator module contains foundational types that are used to represent operators in DataFusion.
+//! This module contains implementations of operations (unary, binary etc.) for DataFusion expressions.
 
 use crate::expr_fn::binary_expr;
-use crate::Expr;
-use crate::Like;
+use crate::{Expr, Like};
 use datafusion_expr_common::operator::Operator;
-use std::ops;
-use std::ops::Not;
+use std::ops::{self, Not};
 
 /// Support `<expr> + <expr>` fluent style
 impl ops::Add for Expr {

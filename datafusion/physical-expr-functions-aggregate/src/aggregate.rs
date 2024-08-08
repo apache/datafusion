@@ -35,51 +35,6 @@ use datafusion_physical_expr_common::utils::reverse_order_bys;
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
-/// Creates a physical expression of the UDAF, that includes all necessary type coercion.
-/// This function errors when `args`' can't be coerced to a valid argument type of the UDAF.
-///
-/// `input_exprs` and `sort_exprs` are used for customizing Accumulator
-/// whose behavior depends on arguments such as the `ORDER BY`.
-///
-/// For example to call `ARRAY_AGG(x ORDER BY y)` would pass `y` to `sort_exprs`, `x` to `input_exprs`
-///
-/// `input_exprs` and `sort_exprs` are used for customizing Accumulator as the arguments in `AccumulatorArgs`,
-/// if you don't need them it is fine to pass empty slice `&[]`.
-///
-/// `is_reversed` is used to indicate whether the aggregation is running in reverse order,
-/// it could be used to hint Accumulator to accumulate in the reversed order,
-/// you can just set to false if you are not reversing expression
-///
-/// You can also create expression by [`AggregateExprBuilder`]
-#[allow(clippy::too_many_arguments)]
-#[deprecated(since = "40.0.0", note = "Use `AggregateExprBuilder` instead")]
-pub fn create_aggregate_expr(
-    fun: &AggregateUDF,
-    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    ordering_req: &[PhysicalSortExpr],
-    schema: &Schema,
-    name: Option<String>,
-    ignore_nulls: bool,
-    is_distinct: bool,
-) -> Result<Arc<dyn AggregateExpr>> {
-    let mut builder =
-        AggregateExprBuilder::new(Arc::new(fun.clone()), input_phy_exprs.to_vec());
-    builder = builder.order_by(ordering_req.to_vec());
-    builder = builder.schema(Arc::new(schema.clone()));
-    if let Some(name) = name {
-        builder = builder.alias(name);
-    }
-
-    if ignore_nulls {
-        builder = builder.ignore_nulls();
-    }
-    if is_distinct {
-        builder = builder.distinct();
-    }
-
-    builder.build()
-}
-
 /// Builder for physical [`AggregateExpr`]
 ///
 /// `AggregateExpr` contains the information necessary to call
