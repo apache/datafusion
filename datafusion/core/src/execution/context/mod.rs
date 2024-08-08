@@ -544,30 +544,35 @@ impl SessionContext {
                 // stack overflows.
                 match ddl {
                     DdlStatement::CreateExternalTable(cmd) => {
-                        Box::pin(async move { self.create_external_table(&cmd).await })
-                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>
+                        (Box::pin(async move { self.create_external_table(&cmd).await })
+                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>)
+                            .await
                     }
                     DdlStatement::CreateMemoryTable(cmd) => {
-                        Box::pin(self.create_memory_table(cmd))
+                        Box::pin(self.create_memory_table(cmd)).await
                     }
-                    DdlStatement::CreateView(cmd) => Box::pin(self.create_view(cmd)),
+                    DdlStatement::CreateView(cmd) => {
+                        Box::pin(self.create_view(cmd)).await
+                    }
                     DdlStatement::CreateCatalogSchema(cmd) => {
-                        Box::pin(self.create_catalog_schema(cmd))
+                        Box::pin(self.create_catalog_schema(cmd)).await
                     }
                     DdlStatement::CreateCatalog(cmd) => {
-                        Box::pin(self.create_catalog(cmd))
+                        Box::pin(self.create_catalog(cmd)).await
                     }
-                    DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)),
-                    DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)),
+                    DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)).await,
+                    DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)).await,
                     DdlStatement::DropCatalogSchema(cmd) => {
-                        Box::pin(self.drop_schema(cmd))
+                        Box::pin(self.drop_schema(cmd)).await
                     }
                     DdlStatement::CreateFunction(cmd) => {
-                        Box::pin(self.create_function(cmd))
+                        Box::pin(self.create_function(cmd)).await
                     }
-                    DdlStatement::DropFunction(cmd) => Box::pin(self.drop_function(cmd)),
+                    DdlStatement::DropFunction(cmd) => {
+                        Box::pin(self.drop_function(cmd)).await
+                    }
+                    ddl => Ok(DataFrame::new(self.state(), LogicalPlan::Ddl(ddl))),
                 }
-                .await
             }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {

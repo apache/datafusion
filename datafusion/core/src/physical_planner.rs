@@ -182,7 +182,7 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
                     .create_initial_plan(logical_plan, session_state)
                     .await?;
 
-                self.optimize_internal(plan, session_state, |_, _| {})
+                self.optimize_physical_plan(plan, session_state, |_, _| {})
             }
         }
     }
@@ -1742,7 +1742,7 @@ impl DefaultPhysicalPlanner {
                             }
                         }
 
-                        let optimized_plan = self.optimize_internal(
+                        let optimized_plan = self.optimize_physical_plan(
                             input,
                             session_state,
                             |plan, optimizer| {
@@ -1826,7 +1826,7 @@ impl DefaultPhysicalPlanner {
 
     /// Optimize a physical plan by applying each physical optimizer,
     /// calling observer(plan, optimizer after each one)
-    fn optimize_internal<F>(
+    pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         session_state: &SessionState,

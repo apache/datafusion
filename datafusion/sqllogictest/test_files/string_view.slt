@@ -447,3 +447,56 @@ select t.dt from dates t where arrow_cast('2024-01-01', 'Utf8View') < t.dt;
 
 statement ok
 drop table dates;
+
+statement ok
+create table temp as values
+('value1', arrow_cast('rust', 'Utf8View'), arrow_cast('fast', 'Utf8View')),
+('value2', arrow_cast('datafusion', 'Utf8View'), arrow_cast('cool', 'Utf8View'));
+
+query T
+select column2||' is fast' from temp;
+----
+rust is fast
+datafusion is fast
+
+
+query T
+select column2 || ' is ' || column3 from temp;
+----
+rust is fast
+datafusion is cool
+
+query TT
+explain select column2 || 'is' || column3 from temp;
+----
+logical_plan
+01)Projection: CAST(temp.column2 AS Utf8) || Utf8("is") || CAST(temp.column3 AS Utf8)
+02)--TableScan: temp projection=[column2, column3]
+
+
+query TT
+explain select column2||' is fast' from temp;
+----
+logical_plan
+01)Projection: CAST(temp.column2 AS Utf8) || Utf8(" is fast")
+02)--TableScan: temp projection=[column2]
+
+
+query T
+select column2||column3 from temp;
+----
+rustfast
+datafusioncool
+
+query TT
+explain select column2||column3 from temp;
+----
+logical_plan
+01)Projection: CAST(temp.column2 AS Utf8) || CAST(temp.column3 AS Utf8)
+02)--TableScan: temp projection=[column2, column3]
+
+query T
+select column2|| ' ' ||column3 from temp;
+----
+rust fast
+datafusion cool
