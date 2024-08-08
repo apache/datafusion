@@ -22,3 +22,4 @@
 //!
 //! [DataFusion]: https://crates.io/crates/datafusion
 //!
+mod row_number;

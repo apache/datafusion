@@ -17,6 +17,7 @@
 
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
+/*
 use crate::expressions::Column;
 use crate::window::window_expr::NumRowsState;
 use crate::window::BuiltInWindowFunctionExpr;
@@ -164,3 +165,4 @@ mod tests {
         Ok(())
     }
 }
+*/
