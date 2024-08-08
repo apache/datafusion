@@ -54,10 +54,7 @@ use super::listing::ListingTableUrl;
 use crate::error::Result;
 use crate::physical_plan::{DisplayAs, DisplayFormatType};
 use crate::{
-    datasource::{
-        listing::{FileRange, PartitionedFile},
-        object_store::ObjectStoreUrl,
-    },
+    datasource::listing::{FileRange, PartitionedFile},
     physical_plan::display::{display_orderings, ProjectSchemaDisplay},
 };
 
@@ -68,12 +65,13 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use futures::StreamExt;
 use log::debug;
 use object_store::{path::Path, GetOptions, GetRange, ObjectMeta, ObjectStore};
+use url::Url;
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
 pub struct FileSinkConfig {
     /// Object store URL, used to get an ObjectStore instance
-    pub object_store_url: ObjectStoreUrl,
+    pub object_store_url: Url,
     /// A vector of [`PartitionedFile`] structs, each representing a file partition
     pub file_groups: Vec<PartitionedFile>,
     /// Vector of partition paths

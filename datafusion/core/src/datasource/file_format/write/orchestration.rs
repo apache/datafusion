@@ -248,7 +248,8 @@ pub(crate) async fn stateless_multipart_put(
 ) -> Result<u64> {
     let object_store = context
         .runtime_env()
-        .object_store(&config.object_store_url)?;
+        .object_store_registry
+        .get_store(&config.object_store_url)?;
 
     let base_output_path = &config.table_paths[0];
     let part_cols = if !config.table_partition_cols.is_empty() {
