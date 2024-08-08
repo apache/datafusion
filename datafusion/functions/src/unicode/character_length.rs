@@ -44,7 +44,7 @@ impl CharacterLengthFunc {
         Self {
             signature: Signature::uniform(
                 1,
-                vec![Utf8, LargeUtf8],
+                vec![Utf8, LargeUtf8, Utf8View],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("length"), String::from("char_length")],
