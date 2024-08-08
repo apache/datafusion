@@ -22,6 +22,7 @@ use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     Dependency, Result,
 };
+use datafusion_expr::expr::WildcardOptions;
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{
     expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
@@ -420,13 +421,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name: _,
                 arg: FunctionArgExpr::Wildcard,
                 operator: _,
-            } => Ok(Expr::Wildcard { qualifier: None }),
+            } => Ok(Expr::Wildcard {
+                qualifier: None,
+                options: WildcardOptions::default(),
+            }),
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
-            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
-                Ok(Expr::Wildcard { qualifier: None })
-            }
+            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(Expr::Wildcard {
+                qualifier: None,
+                options: WildcardOptions::default(),
+            }),
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }
     }

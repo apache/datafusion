@@ -23,6 +23,7 @@ use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
+use datafusion_expr::expr::WildcardOptions;
 use datafusion_expr::{logical_plan::LogicalPlan, Expr, LogicalPlanBuilder, TableScan};
 
 /// Analyzed rule that inlines TableScan that provide a [`LogicalPlan`]
@@ -93,7 +94,10 @@ fn generate_projection_expr(
             )));
         }
     } else {
-        exprs.push(Expr::Wildcard { qualifier: None });
+        exprs.push(Expr::Wildcard {
+            qualifier: None,
+            options: WildcardOptions::default(),
+        });
     }
     Ok(exprs)
 }
