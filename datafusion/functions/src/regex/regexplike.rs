@@ -76,6 +76,8 @@ impl ScalarUDFImpl for RegexpLikeFunc {
 
         Ok(match &arg_types[0] {
             Null => Null,
+            // Type coercion is done by DataFusion based on signature, so if we
+            // get here, the first argument is always a string
             _ => Boolean,
         })
     }
