@@ -112,9 +112,10 @@ impl AggregateUDFImpl for NthValueAgg {
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
+        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
         NthValueAccumulator::try_new(
             n,
-            &acc_args.input_types[0],
+            &data_type,
             &ordering_dtypes,
             acc_args.ordering_req.to_vec(),
         )

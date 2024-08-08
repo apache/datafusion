@@ -68,9 +68,6 @@ pub struct AccumulatorArgs<'a> {
     /// ```
     pub is_distinct: bool,
 
-    /// The input types of the aggregate function.
-    pub input_types: &'a [DataType],
-
     /// The physical expression of arguments the aggregate function takes.
     pub exprs: &'a [Arc<dyn PhysicalExpr>],
 }

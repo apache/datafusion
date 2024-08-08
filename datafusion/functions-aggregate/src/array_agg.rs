@@ -114,16 +114,14 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
+
         if acc_args.is_distinct {
-            return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
-                &acc_args.input_types[0],
-            )?));
+            return Ok(Box::new(DistinctArrayAggAccumulator::try_new(&data_type)?));
         }
 
         if acc_args.ordering_req.is_empty() {
-            return Ok(Box::new(ArrayAggAccumulator::try_new(
-                &acc_args.input_types[0],
-            )?));
+            return Ok(Box::new(ArrayAggAccumulator::try_new(&data_type)?));
         }
 
         let ordering_dtypes = acc_args
@@ -133,7 +131,7 @@ impl AggregateUDFImpl for ArrayAgg {
             .collect::<Result<Vec<_>>>()?;
 
         OrderSensitiveArrayAggAccumulator::try_new(
-            &acc_args.input_types[0],
+            &data_type,
             &ordering_dtypes,
             acc_args.ordering_req.to_vec(),
             acc_args.is_reversed,

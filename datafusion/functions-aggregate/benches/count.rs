@@ -20,7 +20,6 @@ use arrow::datatypes::Int32Type;
 use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_common::DFSchema;
 use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_expr::expressions::col;
@@ -28,17 +27,14 @@ use std::sync::Arc;
 
 fn prepare_accumulator() -> Box<dyn GroupsAccumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Int32, true)]));
-    let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
     let accumulator_args = AccumulatorArgs {
         data_type: &DataType::Int64,
         schema: &schema,
-        dfschema: &df_schema,
         ignore_nulls: false,
         ordering_req: &[],
         is_reversed: false,
         name: "COUNT(f)",
         is_distinct: false,
-        input_types: &[DataType::Int32],
         exprs: &[col("f", &schema).unwrap()],
     };
     let count_fn = Count::new();

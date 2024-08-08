@@ -104,7 +104,8 @@ impl ApproxPercentileCont {
             None
         };
 
-        let accumulator: ApproxPercentileAccumulator = match &args.input_types[0] {
+        let data_type = args.exprs[0].data_type(args.schema)?;
+        let accumulator: ApproxPercentileAccumulator = match data_type {
             t @ (DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32

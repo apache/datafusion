@@ -269,16 +269,12 @@ impl Accumulator for StddevAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
+    use super::*;
     use arrow::{array::*, datatypes::*};
-
-    use datafusion_common::DFSchema;
     use datafusion_expr::AggregateUDF;
     use datafusion_functions_aggregate_common::utils::get_accum_scalar_values_as_arrays;
     use datafusion_physical_expr::expressions::col;
-
-    use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn stddev_f64_merge_1() -> Result<()> {
@@ -325,30 +321,25 @@ mod tests {
         agg2: Arc<AggregateUDF>,
         schema: &Schema,
     ) -> Result<ScalarValue> {
-        let dfschema = DFSchema::empty();
         let args1 = AccumulatorArgs {
             data_type: &DataType::Float64,
             schema,
-            dfschema: &dfschema,
             ignore_nulls: false,
             ordering_req: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            input_types: &[DataType::Float64],
             exprs: &[col("a", schema)?],
         };
 
         let args2 = AccumulatorArgs {
             data_type: &DataType::Float64,
             schema,
-            dfschema: &dfschema,
             ignore_nulls: false,
             ordering_req: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            input_types: &[DataType::Float64],
             exprs: &[col("a", schema)?],
         };
 
