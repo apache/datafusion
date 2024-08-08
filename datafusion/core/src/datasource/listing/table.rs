@@ -24,19 +24,18 @@ use std::{any::Any, sync::Arc};
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
 
-use crate::catalog::TableProvider;
-use crate::datasource::{create_ordering, get_statistics_with_limit, TableType};
+use super::ListingTableUrl;
+use crate::datasource::{create_ordering, get_statistics_with_limit};
 use crate::datasource::{
     file_format::{file_compression_type::FileCompressionType, FileFormat},
-    listing::ListingTableUrl,
     physical_plan::{FileScanConfig, FileSinkConfig},
 };
-use crate::{
-    error::{DataFusionError, Result},
-    execution::context::SessionState,
-    logical_expr::{utils::conjunction, Expr, TableProviderFilterPushDown},
-    physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
-};
+use crate::execution::context::SessionState;
+use datafusion_catalog::TableProvider;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::TableType;
+use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
+use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
@@ -1051,12 +1050,12 @@ mod tests {
     use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
-    use crate::physical_plan::collect;
     use crate::prelude::*;
     use crate::{
         assert_batches_eq,
         test::{columns, object_store::register_test_store},
     };
+    use datafusion_physical_plan::collect;
 
     use arrow::record_batch::RecordBatch;
     use arrow_schema::SortOptions;
@@ -1154,10 +1153,8 @@ mod tests {
         let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let schema = options.infer_schema(&state, &table_path).await.unwrap();
 
-        use crate::{
-            datasource::file_format::parquet::ParquetFormat,
-            physical_plan::expressions::col as physical_col,
-        };
+        use crate::datasource::file_format::parquet::ParquetFormat;
+        use datafusion_physical_plan::expressions::col as physical_col;
         use std::ops::Add;
 
         // (file_sort_order, expected_result)
