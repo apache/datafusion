@@ -425,6 +425,438 @@ logical_plan
 01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
 02)--TableScan: test projection=[column1_utf8view]
 
+# Ensure string functions use native StringView implementation
+# and do not fall back to Utf8 or LargeUtf8
+# Should see no casts to Utf8 in the plans below
+
+## Ensure no casts for LIKE/ILIKE
+query TT
+EXPLAIN SELECT
+  column1_utf8view like 'foo' as "like",
+  column1_utf8view ilike 'foo' as "ilike"
+FROM test;
+----
+logical_plan
+01)Projection: test.column1_utf8view LIKE Utf8View("foo") AS like, test.column1_utf8view ILIKE Utf8View("foo") AS ilike
+02)--TableScan: test projection=[column1_utf8view]
+
+
+
+## Ensure no casts for ASCII
+
+### ASCII
+
+# Test ASCII with utf8view against utf8view, utf8, and largeutf8
+# (should be no casts)
+query TT
+EXPLAIN SELECT
+  ASCII(column1_utf8view) as c1,
+  ASCII(column2_utf8) as c2,
+  ASCII(column2_large_utf8) as c3
+FROM test;
+----
+logical_plan
+01)Projection: ascii(test.column1_utf8view) AS c1, ascii(test.column2_utf8) AS c2, ascii(test.column2_large_utf8) AS c3
+02)--TableScan: test projection=[column2_utf8, column2_large_utf8, column1_utf8view]
+
+query III
+SELECT
+  ASCII(column1_utf8view) as c1,
+  ASCII(column2_utf8) as c2,
+  ASCII(column2_large_utf8) as c3
+FROM test;
+----
+65 88 88
+88 88 88
+82 82 82
+NULL 82 82
+
+query TT
+EXPLAIN SELECT
+  ASCII(column1_utf8) as c1,
+  ASCII(column1_large_utf8) as c2,
+  ASCII(column2_utf8view) as c3,
+  ASCII('hello') as c4,
+  ASCII(arrow_cast('world', 'Utf8View')) as c5
+FROM test;
+----
+logical_plan
+01)Projection: ascii(test.column1_utf8) AS c1, ascii(test.column1_large_utf8) AS c2, ascii(test.column2_utf8view) AS c3, Int32(104) AS c4, Int32(119) AS c5
+02)--TableScan: test projection=[column1_utf8, column1_large_utf8, column2_utf8view]
+
+query IIIII
+SELECT
+  ASCII(column1_utf8) as c1,
+  ASCII(column1_large_utf8) as c2,
+  ASCII(column2_utf8view) as c3,
+  ASCII('hello') as c4,
+  ASCII(arrow_cast('world', 'Utf8View')) as c5
+FROM test;
+----
+65 65 88 104 119
+88 88 88 104 119
+82 82 82 104 119
+NULL NULL 82 104 119
+
+# Test ASCII with literals cast to Utf8View
+query TT
+EXPLAIN SELECT
+  ASCII(arrow_cast('äöüß', 'Utf8View')) as c1,
+  ASCII(arrow_cast('', 'Utf8View')) as c2,
+  ASCII(arrow_cast(NULL, 'Utf8View')) as c3
+FROM test;
+----
+logical_plan
+01)Projection: Int32(228) AS c1, Int32(0) AS c2, Int32(NULL) AS c3
+02)--TableScan: test projection=[]
+
+query III
+SELECT
+  ASCII(arrow_cast('äöüß', 'Utf8View')) as c1,
+  ASCII(arrow_cast('', 'Utf8View')) as c2,
+  ASCII(arrow_cast(NULL, 'Utf8View')) as c3
+----
+228 0 NULL
+
+## Ensure no casts for BTRIM
+query TT
+EXPLAIN SELECT
+  BTRIM(column1_utf8view, 'foo') AS l
+FROM test;
+----
+logical_plan
+01)Projection: btrim(CAST(test.column1_utf8view AS Utf8), Utf8("foo")) AS l
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for CHARACTER_LENGTH
+query TT
+EXPLAIN SELECT
+  CHARACTER_LENGTH(column1_utf8view) AS l
+FROM test;
+----
+logical_plan
+01)Projection: character_length(test.column1_utf8view) AS l
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for CONCAT
+## TODO https://github.com/apache/datafusion/issues/11836
+query TT
+EXPLAIN SELECT
+  concat(column1_utf8view, column2_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: concat(CAST(test.column1_utf8view AS Utf8), CAST(test.column2_utf8view AS Utf8)) AS c
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+## Ensure no casts for CONCAT_WS
+## TODO https://github.com/apache/datafusion/issues/11837
+query TT
+EXPLAIN SELECT
+  concat_ws(', ', column1_utf8view, column2_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: concat_ws(Utf8(", "), CAST(test.column1_utf8view AS Utf8), CAST(test.column2_utf8view AS Utf8)) AS c
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+## Ensure no casts for CONTAINS
+## TODO https://github.com/apache/datafusion/issues/11838
+query TT
+EXPLAIN SELECT
+  CONTAINS(column1_utf8view, 'foo') as c1,
+  CONTAINS(column2_utf8view, column2_utf8view) as c2
+FROM test;
+----
+logical_plan
+01)Projection: contains(CAST(test.column1_utf8view AS Utf8), Utf8("foo")) AS c1, contains(__common_expr_1, __common_expr_1) AS c2
+02)--Projection: CAST(test.column2_utf8view AS Utf8) AS __common_expr_1, test.column1_utf8view
+03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+## Ensure no casts for ENDS_WITH
+## TODO https://github.com/apache/datafusion/issues/11852
+query TT
+EXPLAIN SELECT
+  ENDS_WITH(column1_utf8view, 'foo') as c1,
+  ENDS_WITH(column2_utf8view, column2_utf8view) as c2
+FROM test;
+----
+logical_plan
+01)Projection: ends_with(CAST(test.column1_utf8view AS Utf8), Utf8("foo")) AS c1, ends_with(__common_expr_1, __common_expr_1) AS c2
+02)--Projection: CAST(test.column2_utf8view AS Utf8) AS __common_expr_1, test.column1_utf8view
+03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+
+## Ensure no casts for INITCAP
+## TODO https://github.com/apache/datafusion/issues/11853
+query TT
+EXPLAIN SELECT
+  INITCAP(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: initcap(CAST(test.column1_utf8view AS Utf8)) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for LEVENSHTEIN
+## TODO https://github.com/apache/datafusion/issues/11854
+query TT
+EXPLAIN SELECT
+  levenshtein(column1_utf8view, 'foo') as c1,
+  levenshtein(column1_utf8view, column2_utf8view) as c2
+FROM test;
+----
+logical_plan
+01)Projection: levenshtein(__common_expr_1, Utf8("foo")) AS c1, levenshtein(__common_expr_1, CAST(test.column2_utf8view AS Utf8)) AS c2
+02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
+03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+## Ensure no casts for LOWER
+## TODO https://github.com/apache/datafusion/issues/11855
+query TT
+EXPLAIN SELECT
+  LOWER(column1_utf8view) as c1
+FROM test;
+----
+logical_plan
+01)Projection: lower(CAST(test.column1_utf8view AS Utf8)) AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for LTRIM
+## TODO https://github.com/apache/datafusion/issues/11856
+query TT
+EXPLAIN SELECT
+  LTRIM(column1_utf8view) as c1
+FROM test;
+----
+logical_plan
+01)Projection: ltrim(CAST(test.column1_utf8view AS Utf8)) AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for LPAD
+## TODO https://github.com/apache/datafusion/issues/11857
+query TT
+EXPLAIN SELECT
+  LPAD(column1_utf8view, 12, ' ') as c1
+FROM test;
+----
+logical_plan
+01)Projection: lpad(CAST(test.column1_utf8view AS Utf8), Int64(12), Utf8(" ")) AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+
+## Ensure no casts for OCTET_LENGTH
+## TODO https://github.com/apache/datafusion/issues/11858
+query TT
+EXPLAIN SELECT
+  OCTET_LENGTH(column1_utf8view) as c1
+FROM test;
+----
+logical_plan
+01)Projection: octet_length(CAST(test.column1_utf8view AS Utf8)) AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for OVERLAY
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  OVERLAY(column1_utf8view PLACING 'foo' FROM 2 ) as c1
+FROM test;
+----
+logical_plan
+01)Projection: overlay(CAST(test.column1_utf8view AS Utf8), Utf8("foo"), Int64(2)) AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for REGEXP_LIKE
+query TT
+EXPLAIN SELECT
+  REGEXP_LIKE(column1_utf8view, '^https?://(?:www\.)?([^/]+)/.*$') AS k
+FROM test;
+----
+logical_plan
+01)Projection: regexp_like(CAST(test.column1_utf8view AS Utf8), Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for REGEXP_MATCH
+query TT
+EXPLAIN SELECT
+  REGEXP_MATCH(column1_utf8view, '^https?://(?:www\.)?([^/]+)/.*$') AS k
+FROM test;
+----
+logical_plan
+01)Projection: regexp_match(CAST(test.column1_utf8view AS Utf8), Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for REGEXP_REPLACE
+query TT
+EXPLAIN SELECT
+  REGEXP_REPLACE(column1_utf8view, '^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k
+FROM test;
+----
+logical_plan
+01)Projection: regexp_replace(test.column1_utf8view, Utf8("^https?://(?:www\.)?([^/]+)/.*$"), Utf8("\1")) AS k
+02)--TableScan: test projection=[column1_utf8view]
+
+
+## Ensure no casts for REPEAT
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  REPEAT(column1_utf8view, 2) as c1
+FROM test;
+----
+logical_plan
+01)Projection: repeat(CAST(test.column1_utf8view AS Utf8), Int64(2)) AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for REPLACE
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  REPLACE(column1_utf8view, 'foo', 'bar') as c1,
+  REPLACE(column1_utf8view, column2_utf8view, 'bar') as c2
+FROM test;
+----
+logical_plan
+01)Projection: replace(__common_expr_1, Utf8("foo"), Utf8("bar")) AS c1, replace(__common_expr_1, CAST(test.column2_utf8view AS Utf8), Utf8("bar")) AS c2
+02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
+03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+## Ensure no casts for REVERSE
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  REVERSE(column1_utf8view) as c1
+FROM test;
+----
+logical_plan
+01)Projection: reverse(CAST(test.column1_utf8view AS Utf8)) AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for RTRIM
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  RTRIM(column1_utf8view) as c1,
+  RTRIM(column1_utf8view, 'foo') as c2
+FROM test;
+----
+logical_plan
+01)Projection: rtrim(__common_expr_1) AS c1, rtrim(__common_expr_1, Utf8("foo")) AS c2
+02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1
+03)----TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for RIGHT
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  RIGHT(column1_utf8view, 3) as c2
+FROM test;
+----
+logical_plan
+01)Projection: right(CAST(test.column1_utf8view AS Utf8), Int64(3)) AS c2
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for RPAD
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  RPAD(column1_utf8view, 1) as c1,
+  RPAD(column1_utf8view, 2, column2_utf8view) as c2
+FROM test;
+----
+logical_plan
+01)Projection: rpad(__common_expr_1, Int64(1)) AS c1, rpad(__common_expr_1, Int64(2), CAST(test.column2_utf8view AS Utf8)) AS c2
+02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
+03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+
+## Ensure no casts for RTRIM
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  RTRIM(column1_utf8view) as c,
+  RTRIM(column1_utf8view, column2_utf8view) as c1
+FROM test;
+----
+logical_plan
+01)Projection: rtrim(__common_expr_1) AS c, rtrim(__common_expr_1, CAST(test.column2_utf8view AS Utf8)) AS c1
+02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
+03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+## Ensure no casts for SPLIT_PART
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  SPLIT_PART(column1_utf8view, 'f', 1) as c
+FROM test;
+----
+logical_plan
+01)Projection: split_part(CAST(test.column1_utf8view AS Utf8), Utf8("f"), Int64(1)) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for STRPOS
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  STRPOS(column1_utf8view, 'f') as c,
+  STRPOS(column1_utf8view, column2_utf8view) as c2
+FROM test;
+----
+logical_plan
+01)Projection: strpos(__common_expr_1, Utf8("f")) AS c, strpos(__common_expr_1, CAST(test.column2_utf8view AS Utf8)) AS c2
+02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
+03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+## Ensure no casts for SUBSTR
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  SUBSTR(column1_utf8view, 1) as c,
+  SUBSTR(column1_utf8view, 1 ,2) as c2
+FROM test;
+----
+logical_plan
+01)Projection: substr(__common_expr_1, Int64(1)) AS c, substr(__common_expr_1, Int64(1), Int64(2)) AS c2
+02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1
+03)----TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts on columns for STARTS_WITH
+query TT
+EXPLAIN SELECT
+  STARTS_WITH(column1_utf8view, 'foo') as c,
+  STARTS_WITH(column1_utf8view, column2_utf8view) as c2
+FROM test;
+----
+logical_plan
+01)Projection: starts_with(test.column1_utf8view, Utf8View("foo")) AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+## Ensure no casts for TRANSLATE
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  TRANSLATE(column1_utf8view, 'foo', 'bar') as c
+FROM test;
+----
+logical_plan
+01)Projection: translate(CAST(test.column1_utf8view AS Utf8), Utf8("foo"), Utf8("bar")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for FIND_IN_SET
+## TODO file ticket
+query TT
+EXPLAIN SELECT
+  FIND_IN_SET(column1_utf8view, 'a,b,c,d') as c
+FROM test;
+----
+logical_plan
+01)Projection: find_in_set(CAST(test.column1_utf8view AS Utf8), Utf8("a,b,c,d")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+
+
+
 statement ok
 drop table test;
 
@@ -500,102 +932,3 @@ select column2|| ' ' ||column3 from temp;
 ----
 rust fast
 datafusion cool
-
-### ASCII
-# Setup the initial test data
-statement ok
-create table test_source as values
-    ('Andrew', 'X'),
-    ('Xiangpeng', 'Xiangpeng'),
-    ('Raphael', 'R'),
-    (NULL, 'R');
-
-# Table with the different combination of column types
-statement ok
-create table test as
-SELECT
-  arrow_cast(column1, 'Utf8') as column1_utf8,
-  arrow_cast(column2, 'Utf8') as column2_utf8,
-  arrow_cast(column1, 'LargeUtf8') as column1_large_utf8,
-  arrow_cast(column2, 'LargeUtf8') as column2_large_utf8,
-  arrow_cast(column1, 'Utf8View') as column1_utf8view,
-  arrow_cast(column2, 'Utf8View') as column2_utf8view
-FROM test_source;
-
-# Test ASCII with utf8view against utf8view, utf8, and largeutf8
-# (should be no casts)
-query TT
-EXPLAIN SELECT
-  ASCII(column1_utf8view) as c1,
-  ASCII(column2_utf8) as c2,
-  ASCII(column2_large_utf8) as c3
-FROM test;
-----
-logical_plan
-01)Projection: ascii(test.column1_utf8view) AS c1, ascii(test.column2_utf8) AS c2, ascii(test.column2_large_utf8) AS c3
-02)--TableScan: test projection=[column2_utf8, column2_large_utf8, column1_utf8view]
-
-query III
-SELECT
-  ASCII(column1_utf8view) as c1,
-  ASCII(column2_utf8) as c2,
-  ASCII(column2_large_utf8) as c3
-FROM test;
-----
-65 88 88
-88 88 88
-82 82 82
-NULL 82 82
-
-query TT
-EXPLAIN SELECT
-  ASCII(column1_utf8) as c1,
-  ASCII(column1_large_utf8) as c2,
-  ASCII(column2_utf8view) as c3,
-  ASCII('hello') as c4,
-  ASCII(arrow_cast('world', 'Utf8View')) as c5
-FROM test;
-----
-logical_plan
-01)Projection: ascii(test.column1_utf8) AS c1, ascii(test.column1_large_utf8) AS c2, ascii(test.column2_utf8view) AS c3, Int32(104) AS c4, Int32(119) AS c5
-02)--TableScan: test projection=[column1_utf8, column1_large_utf8, column2_utf8view]
-
-query IIIII
-SELECT
-  ASCII(column1_utf8) as c1,
-  ASCII(column1_large_utf8) as c2,
-  ASCII(column2_utf8view) as c3,
-  ASCII('hello') as c4,
-  ASCII(arrow_cast('world', 'Utf8View')) as c5
-FROM test;
-----
-65 65 88 104 119
-88 88 88 104 119
-82 82 82 104 119
-NULL NULL 82 104 119
-
-# Test ASCII with literals cast to Utf8View
-query TT
-EXPLAIN SELECT
-  ASCII(arrow_cast('äöüß', 'Utf8View')) as c1,
-  ASCII(arrow_cast('', 'Utf8View')) as c2,
-  ASCII(arrow_cast(NULL, 'Utf8View')) as c3
-FROM test;
-----
-logical_plan
-01)Projection: Int32(228) AS c1, Int32(0) AS c2, Int32(NULL) AS c3
-02)--TableScan: test projection=[]
-
-query III
-SELECT
-  ASCII(arrow_cast('äöüß', 'Utf8View')) as c1,
-  ASCII(arrow_cast('', 'Utf8View')) as c2,
-  ASCII(arrow_cast(NULL, 'Utf8View')) as c3
-----
-228 0 NULL
-
-statement ok
-drop table test;
-
-statement ok
-drop table test_source;
