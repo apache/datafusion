@@ -29,6 +29,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ArrayRef};
 use futures::stream::{Stream, StreamExt};
 
+use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 
@@ -212,7 +213,12 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        let mut statistics = self.input.statistics()?;
+        // When fetch is used output rows generated will be precise.
+        if let Some(fetch) = self.fetch {
+            statistics.num_rows = Precision::Exact(fetch);
+        }
+        Ok(statistics)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
