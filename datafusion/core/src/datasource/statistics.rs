@@ -58,7 +58,7 @@ pub async fn get_statistics_with_limit(
 
     if let Some(first_file) = all_files.next().await {
         let (mut file, file_stats) = first_file?;
-        file.statistics = Some(file_stats.as_ref().clone());
+        file.statistics = Some(file_stats.clone());
         result_files.push(file);
 
         // First file, we set them directly from the file statistics.
@@ -83,7 +83,7 @@ pub async fn get_statistics_with_limit(
         if conservative_num_rows <= limit.unwrap_or(usize::MAX) {
             while let Some(current) = all_files.next().await {
                 let (mut file, file_stats) = current?;
-                file.statistics = Some(file_stats.as_ref().clone());
+                file.statistics = Some(file_stats.clone());
                 result_files.push(file);
                 if !collect_stats {
                     continue;
