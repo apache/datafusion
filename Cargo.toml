@@ -25,6 +25,7 @@ members = [
     "datafusion/expr",
     "datafusion/execution",
     "datafusion/functions-aggregate",
+    "datafusion/functions-window",
     "datafusion/functions",
     "datafusion/functions-nested",
     "datafusion/optimizer",
