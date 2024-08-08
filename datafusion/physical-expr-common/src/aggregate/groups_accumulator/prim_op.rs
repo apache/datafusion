@@ -184,7 +184,8 @@ where
                     "initial_values underlying buffer must not be shared"
                 )
             })?
-            .map_err(DataFusionError::from)?;
+            .map_err(DataFusionError::from)?
+            .with_data_type(self.data_type.clone());
 
         Ok(vec![Arc::new(state_values)])
     }

@@ -492,7 +492,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                             // https://github.com/apache/datafusion/issues/11804
                                             AggregateExprBuilder::new(agg_udf, input_phy_expr)
                                                 .schema(Arc::clone(&physical_schema))
-                                                .name(name)
+                                                .alias(name)
                                                 .with_ignore_nulls(agg_node.ignore_nulls)
                                                 .with_distinct(agg_node.distinct)
                                                 .build()

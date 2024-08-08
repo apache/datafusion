@@ -112,7 +112,7 @@ pub fn aggr_test_schema() -> SchemaRef {
 
 /// Register session context for the aggregate_test_100.csv file
 pub async fn register_aggregate_csv(
-    ctx: &mut SessionContext,
+    ctx: &SessionContext,
     table_name: &str,
 ) -> Result<()> {
     let schema = aggr_test_schema();
@@ -128,8 +128,8 @@ pub async fn register_aggregate_csv(
 
 /// Create a table from the aggregate_test_100.csv file with the specified name
 pub async fn test_table_with_name(name: &str) -> Result<DataFrame> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx, name).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx, name).await?;
     ctx.table(name).await
 }
 
@@ -432,7 +432,7 @@ impl TestAggregate {
     pub fn count_expr(&self, schema: &Schema) -> Arc<dyn AggregateExpr> {
         AggregateExprBuilder::new(count_udaf(), vec![self.column()])
             .schema(Arc::new(schema.clone()))
-            .name(self.column_name())
+            .alias(self.column_name())
             .build()
             .unwrap()
     }
