@@ -37,18 +37,18 @@ use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
+/// This is a "data class" we use within the [`EnforceSorting`] rule to push
+/// down [`SortExec`] in the plan. In some cases, we can reduce the total
+/// computational cost by pushing down `SortExec`s through some executors. The
+/// object carries the parent required ordering, fetch value of the parent node as its data.
+///
+/// [`EnforceSorting`]: crate::physical_optimizer::enforce_sorting::EnforceSorting
 #[derive(Default, Clone)]
 pub struct ParentRequirements {
     ordering_requirement: Option<Vec<PhysicalSortRequirement>>,
     fetch: Option<usize>,
 }
 
-/// This is a "data class" we use within the [`EnforceSorting`] rule to push
-/// down [`SortExec`] in the plan. In some cases, we can reduce the total
-/// computational cost by pushing down `SortExec`s through some executors. The
-/// object carries the parent required ordering as its data.
-///
-/// [`EnforceSorting`]: crate::physical_optimizer::enforce_sorting::EnforceSorting
 pub type SortPushDown = PlanContext<ParentRequirements>;
 
 /// Assigns the ordering requirement of the root node to the its children.
@@ -187,8 +187,7 @@ fn pushdown_requirement_to_children(
             Ok(None)
         }
     } else if plan.fetch().is_some()
-        && plan.maintains_input_order().len() == 1
-        && plan.maintains_input_order()[0]
+        && plan.maintains_input_order().iter().all(|maintain| *maintain)
         && plan.supports_limit_pushdown()
     {
         let output_req = PhysicalSortRequirement::from_sort_exprs(
