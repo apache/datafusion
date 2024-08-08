@@ -500,3 +500,103 @@ select column2|| ' ' ||column3 from temp;
 ----
 rust fast
 datafusion cool
+
+
+### ASCII
+# Setup the initial test data
+statement ok
+create table test_source as values
+    ('Andrew', 'X'),
+    ('Xiangpeng', 'Xiangpeng'),
+    ('Raphael', 'R'),
+    (NULL, 'R');
+
+# Table with the different combination of column types
+statement ok
+create table test as
+SELECT
+  arrow_cast(column1, 'Utf8') as column1_utf8,
+  arrow_cast(column2, 'Utf8') as column2_utf8,
+  arrow_cast(column1, 'LargeUtf8') as column1_large_utf8,
+  arrow_cast(column2, 'LargeUtf8') as column2_large_utf8,
+  arrow_cast(column1, 'Utf8View') as column1_utf8view,
+  arrow_cast(column2, 'Utf8View') as column2_utf8view
+FROM test_source;
+
+# Test ASCII with utf8view against utf8view, utf8, and largeutf8
+# (should be no casts)
+query TT
+EXPLAIN SELECT
+  ASCII(column1_utf8view) as c1,
+  ASCII(column2_utf8) as c2,
+  ASCII(column2_large_utf8) as c3
+FROM test;
+----
+logical_plan
+01)Projection: ascii(test.column1_utf8view) AS c1, ascii(test.column2_utf8) AS c2, ascii(test.column2_large_utf8) AS c3
+02)--TableScan: test projection=[column2_utf8, column2_large_utf8, column1_utf8view]
+
+query III
+SELECT
+  ASCII(column1_utf8view) as c1,
+  ASCII(column2_utf8) as c2,
+  ASCII(column2_large_utf8) as c3
+FROM test;
+----
+65 88 88
+88 88 88
+82 82 82
+NULL 82 82
+
+query TT
+EXPLAIN SELECT
+  ASCII(column1_utf8) as c1,
+  ASCII(column1_large_utf8) as c2,
+  ASCII(column2_utf8view) as c3,
+  ASCII('hello') as c4,
+  ASCII(arrow_cast('world', 'Utf8View')) as c5
+FROM test;
+----
+logical_plan
+01)Projection: ascii(test.column1_utf8) AS c1, ascii(test.column1_large_utf8) AS c2, ascii(test.column2_utf8view) AS c3, Int32(104) AS c4, Int32(119) AS c5
+02)--TableScan: test projection=[column1_utf8, column1_large_utf8, column2_utf8view]
+
+query IIIII
+SELECT
+  ASCII(column1_utf8) as c1,
+  ASCII(column1_large_utf8) as c2,
+  ASCII(column2_utf8view) as c3,
+  ASCII('hello') as c4,
+  ASCII(arrow_cast('world', 'Utf8View')) as c5
+FROM test;
+----
+65 65 88 104 119
+88 88 88 104 119
+82 82 82 104 119
+NULL NULL 82 104 119
+
+# Test ASCII with literals cast to Utf8View
+query TT
+EXPLAIN SELECT
+  ASCII(arrow_cast('äöüß', 'Utf8View')) as c1,
+  ASCII(arrow_cast('', 'Utf8View')) as c2,
+  ASCII(arrow_cast(NULL, 'Utf8View')) as c3
+FROM test;
+----
+logical_plan
+01)Projection: Int32(228) AS c1, Int32(0) AS c2, Int32(NULL) AS c3
+02)--TableScan: test projection=[]
+
+query III
+SELECT
+  ASCII(arrow_cast('äöüß', 'Utf8View')) as c1,
+  ASCII(arrow_cast('', 'Utf8View')) as c2,
+  ASCII(arrow_cast(NULL, 'Utf8View')) as c3
+----
+228 0 NULL
+
+statement ok
+drop table test;
+
+statement ok
+drop table test_source;
