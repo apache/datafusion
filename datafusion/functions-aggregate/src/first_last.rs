@@ -126,7 +126,7 @@ impl AggregateUDFImpl for FirstValue {
             acc_args.ordering_req.is_empty() || self.requirement_satisfied;
 
         FirstValueAccumulator::try_new(
-            acc_args.data_type,
+            acc_args.return_type,
             &ordering_dtypes,
             acc_args.ordering_req.to_vec(),
             acc_args.ignore_nulls,
@@ -420,7 +420,7 @@ impl AggregateUDFImpl for LastValue {
             acc_args.ordering_req.is_empty() || self.requirement_satisfied;
 
         LastValueAccumulator::try_new(
-            acc_args.data_type,
+            acc_args.return_type,
             &ordering_dtypes,
             acc_args.ordering_req.to_vec(),
             acc_args.ignore_nulls,

@@ -84,7 +84,7 @@ macro_rules! accumulator_helper {
 /// `is_distinct` is boolean value indicating whether the operation is distinct or not.
 macro_rules! downcast_bitwise_accumulator {
     ($args:ident, $opr:expr, $is_distinct: expr) => {
-        match $args.data_type {
+        match $args.return_type {
             DataType::Int8 => accumulator_helper!(Int8Type, $opr, $is_distinct),
             DataType::Int16 => accumulator_helper!(Int16Type, $opr, $is_distinct),
             DataType::Int32 => accumulator_helper!(Int32Type, $opr, $is_distinct),
@@ -98,7 +98,7 @@ macro_rules! downcast_bitwise_accumulator {
                     "{} not supported for {}: {}",
                     stringify!($opr),
                     $args.name,
-                    $args.data_type
+                    $args.return_type
                 )
             }
         }
@@ -224,7 +224,7 @@ impl AggregateUDFImpl for BitwiseOperation {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        let data_type = args.data_type;
+        let data_type = args.return_type;
         let operation = &self.operation;
         downcast_integer! {
             data_type => (group_accumulator_helper, data_type, operation),

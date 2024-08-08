@@ -149,14 +149,14 @@ impl AggregateUDFImpl for BoolAnd {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        match args.data_type {
+        match args.return_type {
             DataType::Boolean => {
                 Ok(Box::new(BooleanGroupsAccumulator::new(|x, y| x && y)))
             }
             _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 args.name,
-                args.data_type
+                args.return_type
             ),
         }
     }
@@ -269,14 +269,14 @@ impl AggregateUDFImpl for BoolOr {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        match args.data_type {
+        match args.return_type {
             DataType::Boolean => {
                 Ok(Box::new(BooleanGroupsAccumulator::new(|x, y| x || y)))
             }
             _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 args.name,
-                args.data_type
+                args.return_type
             ),
         }
     }

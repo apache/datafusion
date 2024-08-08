@@ -246,7 +246,7 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let acc_args = AccumulatorArgs {
-            data_type: &self.data_type,
+            return_type: &self.data_type,
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: &self.ordering_req,
@@ -261,7 +261,7 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let args = AccumulatorArgs {
-            data_type: &self.data_type,
+            return_type: &self.data_type,
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: &self.ordering_req,
@@ -331,7 +331,7 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn groups_accumulator_supported(&self) -> bool {
         let args = AccumulatorArgs {
-            data_type: &self.data_type,
+            return_type: &self.data_type,
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: &self.ordering_req,
@@ -345,7 +345,7 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         let args = AccumulatorArgs {
-            data_type: &self.data_type,
+            return_type: &self.data_type,
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: &self.ordering_req,

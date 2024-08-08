@@ -29,7 +29,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct AccumulatorArgs<'a> {
     /// The return type of the aggregate function.
-    pub data_type: &'a DataType,
+    pub return_type: &'a DataType,
 
     /// The schema of the input arguments
     pub schema: &'a Schema,

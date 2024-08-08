@@ -322,7 +322,7 @@ mod tests {
         schema: &Schema,
     ) -> Result<ScalarValue> {
         let args1 = AccumulatorArgs {
-            data_type: &DataType::Float64,
+            return_type: &DataType::Float64,
             schema,
             ignore_nulls: false,
             ordering_req: &[],
@@ -333,7 +333,7 @@ mod tests {
         };
 
         let args2 = AccumulatorArgs {
-            data_type: &DataType::Float64,
+            return_type: &DataType::Float64,
             schema,
             ignore_nulls: false,
             ordering_req: &[],

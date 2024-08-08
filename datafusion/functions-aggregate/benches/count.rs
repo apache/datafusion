@@ -28,7 +28,7 @@ use std::sync::Arc;
 fn prepare_accumulator() -> Box<dyn GroupsAccumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Int32, true)]));
     let accumulator_args = AccumulatorArgs {
-        data_type: &DataType::Int64,
+        return_type: &DataType::Int64,
         schema: &schema,
         ignore_nulls: false,
         ordering_req: &[],
