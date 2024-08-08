@@ -117,8 +117,8 @@ pub fn serialize_physical_window_expr(
         let expr = built_in_window_expr.get_built_in_func_expr();
         let built_in_fn_expr = expr.as_any();
 
-        let builtin_fn =
-        if let Some(rank_expr) = built_in_fn_expr.downcast_ref::<Rank>() {
+        let builtin_fn = if let Some(rank_expr) = built_in_fn_expr.downcast_ref::<Rank>()
+        {
             match rank_expr.get_type() {
                 RankType::Basic => protobuf::BuiltInWindowFunction::Rank,
                 RankType::Dense => protobuf::BuiltInWindowFunction::DenseRank,

@@ -25,7 +25,7 @@ use std::sync::Arc;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Placeholder, Sort as SortExpr, };
+use crate::expr::{Placeholder, Sort as SortExpr};
 use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -35,9 +35,9 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr,
-    CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
-    TableProviderFilterPushDown, TableSource,
+    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Expr,
+    ExprSchemable, LogicalPlanBuilder, Operator, TableProviderFilterPushDown,
+    TableSource,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};

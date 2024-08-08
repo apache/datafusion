@@ -127,7 +127,7 @@ impl BuiltInWindowFunction {
             })?;
 
         match self {
-             BuiltInWindowFunction::Rank
+            BuiltInWindowFunction::Rank
             | BuiltInWindowFunction::DenseRank
             | BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
             BuiltInWindowFunction::PercentRank | BuiltInWindowFunction::CumeDist => {
@@ -145,7 +145,7 @@ impl BuiltInWindowFunction {
     pub fn signature(&self) -> Signature {
         // note: the physical expression must accept the type returned by this function or the execution panics.
         match self {
-             BuiltInWindowFunction::Rank
+            BuiltInWindowFunction::Rank
             | BuiltInWindowFunction::DenseRank
             | BuiltInWindowFunction::PercentRank
             | BuiltInWindowFunction::CumeDist => Signature::any(0, Volatility::Immutable),
