@@ -17,7 +17,7 @@
 
 [package]
 name = "datafusion-functions-aggregate-common"
-description = "Common aggregate function packages for the DataFusion query engine"
+description = "Utility functions for implementing aggregate functions for the DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }

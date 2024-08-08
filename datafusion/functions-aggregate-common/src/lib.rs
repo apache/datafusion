@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Aggregate Function Common packages for [DataFusion]
-//! This package could be used to build for 3rd party aggregate function
+//! Common Aggregate functionality for [DataFusion]
+//!
+//! This crate contains traits and utilities commonly used to implement aggregate functions
+//! They are kept in their own crate to avoid physical expressions depending on logical expressions.
 //!
 //! [DataFusion]: <https://crates.io/crates/datafusion>
 

@@ -138,8 +138,6 @@ pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(Column::new_with_schema(name, schema)?))
 }
 
-// TODO: Move expressions out of physical-expr?
-
 /// Rewrites an expression according to new schema; i.e. changes the columns it
 /// refers to with the column at corresponding index in the new schema. Returns
 /// an error if the given schema has fewer columns than the original schema.

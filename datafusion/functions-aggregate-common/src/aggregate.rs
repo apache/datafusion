@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains the trait `AggregateExpr` which defines the interface all aggregate expressions
+//! [`AggregateExpr`] which defines the interface all aggregate expressions
 //! (built-in and custom) need to satisfy.
 
 use crate::order::AggregateOrderSensitivity;

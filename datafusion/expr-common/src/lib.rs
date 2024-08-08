@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Logical Expr Common packages for [DataFusion]
+//! Logical Expr types and traits for [DataFusion]
+//!
+//! This crate contains types and traits that are used by both Logical and Physical expressions.
+//! They are kept in their own crate to avoid physical expressions depending on logical expressions.
+//!  
 //!
 //! [DataFusion]: <https://crates.io/crates/datafusion>
 
