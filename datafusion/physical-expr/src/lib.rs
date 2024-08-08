@@ -18,7 +18,28 @@
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
-pub mod aggregate;
+// Backward compatibility
+pub mod aggregate {
+    pub(crate) mod groups_accumulator {
+        #[allow(unused_imports)]
+        pub(crate) mod accumulate {
+            pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+        }
+        pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+            accumulate::NullState, GroupsAccumulatorAdapter,
+        };
+    }
+    pub(crate) mod stats {
+        pub use datafusion_functions_aggregate_common::stats::StatsType;
+    }
+    pub mod utils {
+        pub use datafusion_functions_aggregate_common::utils::{
+            adjust_output_array, down_cast_any_ref, get_accum_scalar_values_as_arrays,
+            get_sort_options, ordering_fields, DecimalAverager, Hashable,
+        };
+    }
+    pub use datafusion_functions_aggregate_common::aggregate::AggregateExpr;
+}
 pub mod analysis;
 pub mod binary_map {
     pub use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
