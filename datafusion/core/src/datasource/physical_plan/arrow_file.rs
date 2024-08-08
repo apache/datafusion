@@ -331,11 +331,9 @@ impl FileOpener for ArrowOpener {
                             .into_iter()
                             .zip(recordbatch_results)
                             .filter_map(move |(block, data)| {
-                                match decoder.read_record_batch(&block, &data.into()) {
-                                    Ok(Some(record_batch)) => Some(Ok(record_batch)),
-                                    Ok(None) => None,
-                                    Err(err) => Some(Err(err)),
-                                }
+                                decoder
+                                    .read_record_batch(&block, &data.into())
+                                    .transpose()
                             }),
                     )
                     .boxed())
