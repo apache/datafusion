@@ -96,7 +96,7 @@ git checkout mybranch
 This produces results like:
 
 ```shell
-Comparing main and mybranh
+Comparing main and mybran
 --------------------
 Benchmark tpch.json
 --------------------
