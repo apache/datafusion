@@ -70,20 +70,17 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     }
 
+    let fields: Fields = names
+        .into_iter()
+        .zip(&values)
+        .map(|(name, value)| Arc::new(Field::new(name, value.data_type().clone(), true)))
+        .collect::<Vec<_>>()
+        .into();
+
     let arrays = ColumnarValue::values_to_arrays(&values)?;
 
-    let fields = names
-        .into_iter()
-        .zip(arrays)
-        .map(|(name, value)| {
-            (
-                Arc::new(Field::new(name, value.data_type().clone(), true)),
-                value,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    Ok(ColumnarValue::Array(Arc::new(StructArray::from(fields))))
+    let struct_array = StructArray::new(fields, arrays, None);
+    Ok(ColumnarValue::Array(Arc::new(struct_array)))
 }
 
 #[derive(Debug)]
@@ -163,5 +160,75 @@ impl ScalarUDFImpl for NamedStructFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         named_struct_expr(args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{BooleanArray, Float64Array, Int64Array};
+    use datafusion_common::cast::as_struct_array;
+    use datafusion_common::ScalarValue;
+
+    #[test]
+    fn test_named_struct() {
+        // struct(1, 2.0, true) = { "foo": 1, "bar": 2.0, "baz": true }
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("foo".into()))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("bar".into()))),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("baz".into()))),
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))),
+        ];
+        let r#struct = named_struct_expr(&args)
+            .expect("failed to initialize function struct")
+            .into_array(1)
+            .expect("Failed to convert to array");
+        let result =
+            as_struct_array(&r#struct).expect("failed to initialize function struct");
+
+        assert_eq!(result.columns().len(), 3);
+        assert_eq!(
+            &Int64Array::from(vec![1]),
+            Arc::clone(result.column_by_name("foo").unwrap())
+                .as_any()
+                .downcast_ref::<_>()
+                .unwrap()
+        );
+        assert_eq!(
+            &Float64Array::from(vec![2.0]),
+            Arc::clone(result.column_by_name("bar").unwrap())
+                .as_any()
+                .downcast_ref::<_>()
+                .unwrap()
+        );
+        assert_eq!(
+            &BooleanArray::from(vec![true]),
+            Arc::clone(result.column_by_name("baz").unwrap())
+                .as_any()
+                .downcast_ref::<_>()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_named_struct_bad_args() {
+        // Odd number of arguments
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("foo".into()))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("bar".into()))),
+        ];
+        assert!(named_struct_expr(&args).is_err());
+
+        // Column names and values in wrong order
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("foo".into()))),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("bar".into()))),
+        ];
+        assert!(named_struct_expr(&args).is_err());
     }
 }
