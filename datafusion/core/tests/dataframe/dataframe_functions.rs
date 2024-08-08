@@ -395,13 +395,13 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     assert_batches_eq!(expected, &batches);
 
     // with number of centroids set
-    let expr = approx_percentile_cont(col("b"), lit(0.5), Some(lit(10)));
+    let expr = approx_percentile_cont(col("b"), lit(0.5), Some(lit(2)));
     let expected = [
-        "+-------------------------------------------------------+",
-        "| approx_percentile_cont(test.b,Float64(0.5),Int32(10)) |",
-        "+-------------------------------------------------------+",
-        "| 10                                                    |",
-        "+-------------------------------------------------------+",
+        "+------------------------------------------------------+",
+        "| approx_percentile_cont(test.b,Float64(0.5),Int32(2)) |",
+        "+------------------------------------------------------+",
+        "| 30                                                   |",
+        "+------------------------------------------------------+",
     ];
 
     let df = create_test_table().await?;
