@@ -1605,7 +1605,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
                         .order_by(ordering_reqs.to_vec())
                         .schema(Arc::new(schema))
-                        .dfschema(logical_input_schema.clone())
                         .alias(name)
                         .with_ignore_nulls(ignore_nulls)
                         .with_distinct(*distinct)

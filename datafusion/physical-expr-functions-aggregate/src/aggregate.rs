@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{internal_err, not_impl_err, DFSchema, Result};
+use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::expr::create_function_physical_name;
 use datafusion_expr::AggregateUDF;
 use datafusion_expr::ReversedUDAF;
@@ -47,8 +47,6 @@ pub struct AggregateExprBuilder {
     alias: Option<String>,
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
-    /// Datafusion Schema for the aggregate function
-    dfschema: DFSchema,
     /// The physical order by expressions
     ordering_req: LexOrdering,
     /// Whether to ignore null values
@@ -66,7 +64,6 @@ impl AggregateExprBuilder {
             args,
             alias: None,
             schema: Arc::new(Schema::empty()),
-            dfschema: DFSchema::empty(),
             ordering_req: vec![],
             ignore_nulls: false,
             is_distinct: false,
@@ -80,7 +77,6 @@ impl AggregateExprBuilder {
             args,
             alias,
             schema,
-            dfschema,
             ordering_req,
             ignore_nulls,
             is_distinct,
@@ -125,7 +121,6 @@ impl AggregateExprBuilder {
             data_type,
             name,
             schema: Arc::unwrap_or_clone(schema),
-            dfschema,
             ordering_req,
             ignore_nulls,
             ordering_fields,
@@ -142,11 +137,6 @@ impl AggregateExprBuilder {
 
     pub fn schema(mut self, schema: SchemaRef) -> Self {
         self.schema = schema;
-        self
-    }
-
-    pub fn dfschema(mut self, dfschema: DFSchema) -> Self {
-        self.dfschema = dfschema;
         self
     }
 
@@ -195,7 +185,6 @@ pub struct AggregateFunctionExpr {
     data_type: DataType,
     name: String,
     schema: Schema,
-    dfschema: DFSchema,
     // The physical order by expressions
     ordering_req: LexOrdering,
     // Whether to ignore null values
@@ -259,7 +248,6 @@ impl AggregateExpr for AggregateFunctionExpr {
         let acc_args = AccumulatorArgs {
             data_type: &self.data_type,
             schema: &self.schema,
-            dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: &self.ordering_req,
             is_distinct: self.is_distinct,
@@ -276,7 +264,6 @@ impl AggregateExpr for AggregateFunctionExpr {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
             schema: &self.schema,
-            dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: &self.ordering_req,
             is_distinct: self.is_distinct,
@@ -348,7 +335,6 @@ impl AggregateExpr for AggregateFunctionExpr {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
             schema: &self.schema,
-            dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: &self.ordering_req,
             is_distinct: self.is_distinct,
@@ -364,7 +350,6 @@ impl AggregateExpr for AggregateFunctionExpr {
         let args = AccumulatorArgs {
             data_type: &self.data_type,
             schema: &self.schema,
-            dfschema: &self.dfschema,
             ignore_nulls: self.ignore_nulls,
             ordering_req: &self.ordering_req,
             is_distinct: self.is_distinct,
@@ -410,11 +395,9 @@ impl AggregateExpr for AggregateFunctionExpr {
             return Ok(None);
         };
 
-        let schema: Schema = self.dfschema.clone().into();
         AggregateExprBuilder::new(Arc::new(updated_fn), self.args.to_vec())
             .order_by(self.ordering_req.to_vec())
-            .schema(Arc::new(schema))
-            .dfschema(self.dfschema.clone())
+            .schema(Arc::new(self.schema.clone()))
             .alias(self.name().to_string())
             .with_ignore_nulls(self.ignore_nulls)
             .with_distinct(self.is_distinct)
@@ -438,11 +421,9 @@ impl AggregateExpr for AggregateFunctionExpr {
                 }
                 replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
 
-                let schema: Schema = self.dfschema.clone().into();
                 AggregateExprBuilder::new(reverse_udf, self.args.to_vec())
                     .order_by(reverse_ordering_req.to_vec())
-                    .schema(Arc::new(schema))
-                    .dfschema(self.dfschema.clone())
+                    .schema(Arc::new(self.schema.clone()))
                     .alias(name)
                     .with_ignore_nulls(self.ignore_nulls)
                     .with_distinct(self.is_distinct)

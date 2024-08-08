@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::Result;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::{
     physical_expr::PhysicalExpr, sort_expr::PhysicalSortExpr,
 };
+use std::sync::Arc;
 
 /// [`AccumulatorArgs`] contains information about how an aggregate
 /// function was called, including the types of its arguments and any optional
@@ -34,9 +33,6 @@ pub struct AccumulatorArgs<'a> {
 
     /// The schema of the input arguments
     pub schema: &'a Schema,
-
-    /// The schema of the input arguments
-    pub dfschema: &'a DFSchema,
 
     /// Whether to ignore nulls.
     ///
