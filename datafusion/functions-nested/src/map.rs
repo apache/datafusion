@@ -25,7 +25,7 @@ use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_schema::{DataType, Field, SchemaBuilder};
 
-use datafusion_common::{exec_err, internal_err, ExprSchema, ScalarValue};
+use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
@@ -174,19 +174,7 @@ impl ScalarUDFImpl for MapFunc {
         &self.signature
     }
 
-    fn return_type(
-        &self,
-        _arg_types: &[DataType],
-    ) -> datafusion_common::Result<DataType> {
-        internal_err!("map: return_type called instead of return_type_from_exprs")
-    }
-
-    fn return_type_from_exprs(
-        &self,
-        _args: &[Expr],
-        _schema: &dyn ExprSchema,
-        arg_types: &[DataType],
-    ) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
         if arg_types.len() % 2 != 0 {
             return exec_err!(
                 "map requires an even number of arguments, got {} instead",
