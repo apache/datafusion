@@ -49,7 +49,7 @@ use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
 pub async fn exec_from_commands(
-    ctx: &mut dyn CliSessionContext,
+    ctx: &dyn CliSessionContext,
     commands: Vec<String>,
     print_options: &PrintOptions,
 ) -> Result<()> {
@@ -62,7 +62,7 @@ pub async fn exec_from_commands(
 
 /// run and execute SQL statements and commands from a file, against a context with the given print options
 pub async fn exec_from_lines(
-    ctx: &mut dyn CliSessionContext,
+    ctx: &dyn CliSessionContext,
     reader: &mut BufReader<File>,
     print_options: &PrintOptions,
 ) -> Result<()> {
@@ -102,7 +102,7 @@ pub async fn exec_from_lines(
 }
 
 pub async fn exec_from_files(
-    ctx: &mut dyn CliSessionContext,
+    ctx: &dyn CliSessionContext,
     files: Vec<String>,
     print_options: &PrintOptions,
 ) -> Result<()> {
@@ -121,7 +121,7 @@ pub async fn exec_from_files(
 
 /// run and execute SQL statements and commands against a context with the given print options
 pub async fn exec_from_repl(
-    ctx: &mut dyn CliSessionContext,
+    ctx: &dyn CliSessionContext,
     print_options: &mut PrintOptions,
 ) -> rustyline::Result<()> {
     let mut rl = Editor::new()?;
@@ -204,7 +204,7 @@ pub async fn exec_from_repl(
 }
 
 pub(super) async fn exec_and_print(
-    ctx: &mut dyn CliSessionContext,
+    ctx: &dyn CliSessionContext,
     print_options: &PrintOptions,
     sql: String,
 ) -> Result<()> {
@@ -300,7 +300,7 @@ fn config_file_type_from_str(ext: &str) -> Option<ConfigFileType> {
 }
 
 async fn create_plan(
-    ctx: &mut dyn CliSessionContext,
+    ctx: &dyn CliSessionContext,
     statement: Statement,
 ) -> Result<LogicalPlan, DataFusionError> {
     let mut plan = ctx.session_state().statement_to_plan(statement).await?;
@@ -473,7 +473,7 @@ mod tests {
             "cos://bucket/path/file.parquet",
             "gcs://bucket/path/file.parquet",
         ];
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let task_ctx = ctx.task_ctx();
         let dialect = &task_ctx.session_config().options().sql_parser.dialect;
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
@@ -488,7 +488,7 @@ mod tests {
             let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
             for statement in statements {
                 //Should not fail
-                let mut plan = create_plan(&mut ctx, statement).await?;
+                let mut plan = create_plan(&ctx, statement).await?;
                 if let LogicalPlan::Copy(copy_to) = &mut plan {
                     assert_eq!(copy_to.output_url, location);
                     assert_eq!(copy_to.file_type.get_ext(), "parquet".to_string());

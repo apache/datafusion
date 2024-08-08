@@ -27,7 +27,7 @@ use futures::executor::block_on;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-async fn query(ctx: &mut SessionContext, sql: &str) {
+async fn query(ctx: &SessionContext, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
@@ -70,25 +70,25 @@ fn criterion_benchmark(c: &mut Criterion) {
     let batch_size = 4096; // 2^12
 
     c.bench_function("filter_array", |b| {
-        let mut ctx = create_context(array_len, batch_size).unwrap();
-        b.iter(|| block_on(query(&mut ctx, "select f32, f64 from t where f32 >= f64")))
+        let ctx = create_context(array_len, batch_size).unwrap();
+        b.iter(|| block_on(query(&ctx, "select f32, f64 from t where f32 >= f64")))
     });
 
     c.bench_function("filter_scalar", |b| {
-        let mut ctx = create_context(array_len, batch_size).unwrap();
+        let ctx = create_context(array_len, batch_size).unwrap();
         b.iter(|| {
             block_on(query(
-                &mut ctx,
+                &ctx,
                 "select f32, f64 from t where f32 >= 250 and f64 > 250",
             ))
         })
     });
 
     c.bench_function("filter_scalar in list", |b| {
-        let mut ctx = create_context(array_len, batch_size).unwrap();
+        let ctx = create_context(array_len, batch_size).unwrap();
         b.iter(|| {
             block_on(query(
-                &mut ctx,
+                &ctx,
                 "select f32, f64 from t where f32 in (10, 20, 30, 40)",
             ))
         })
