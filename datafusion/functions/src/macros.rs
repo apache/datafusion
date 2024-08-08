@@ -75,9 +75,8 @@ macro_rules! make_udf_function {
         static $GNAME: std::sync::OnceLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
             std::sync::OnceLock::new();
 
-        /// Return a [`ScalarUDF`] for [`$UDF`]
-        ///
-        /// [`ScalarUDF`]: datafusion_expr::ScalarUDF
+        #[doc = "Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) for "]
+        #[doc = stringify!($UDF)]
         pub fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
             $GNAME
                 .get_or_init(|| {

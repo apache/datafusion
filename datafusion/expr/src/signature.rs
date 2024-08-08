@@ -145,6 +145,9 @@ pub enum ArrayFunctionSignature {
     /// The function takes a single argument that must be a List/LargeList/FixedSizeList
     /// or something that can be coerced to one of those types.
     Array,
+    /// Specialized Signature for MapArray
+    /// The function takes a single argument that must be a MapArray
+    MapArray,
 }
 
 impl std::fmt::Display for ArrayFunctionSignature {
@@ -164,6 +167,9 @@ impl std::fmt::Display for ArrayFunctionSignature {
             }
             ArrayFunctionSignature::Array => {
                 write!(f, "array")
+            }
+            ArrayFunctionSignature::MapArray => {
+                write!(f, "map_array")
             }
         }
     }
@@ -266,9 +272,10 @@ impl Signature {
         }
     }
 
-    pub fn numeric(num: usize, volatility: Volatility) -> Self {
+    /// A specified number of numeric arguments
+    pub fn numeric(arg_count: usize, volatility: Volatility) -> Self {
         Self {
-            type_signature: TypeSignature::Numeric(num),
+            type_signature: TypeSignature::Numeric(arg_count),
             volatility,
         }
     }

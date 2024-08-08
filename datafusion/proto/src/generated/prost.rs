@@ -488,7 +488,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -508,9 +508,6 @@ pub mod logical_expr_node {
         /// binary expressions
         #[prost(message, tag = "4")]
         BinaryExpr(super::BinaryExprNode),
-        /// aggregate expressions
-        #[prost(message, tag = "5")]
-        AggregateExpr(::prost::alloc::boxed::Box<super::AggregateExprNode>),
         /// null checks
         #[prost(message, tag = "6")]
         IsNullExpr(::prost::alloc::boxed::Box<super::IsNull>),
@@ -733,20 +730,6 @@ pub struct InListNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AggregateExprNode {
-    #[prost(enumeration = "AggregateFunction", tag = "1")]
-    pub aggr_function: i32,
-    #[prost(message, repeated, tag = "2")]
-    pub expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
-    #[prost(bool, tag = "3")]
-    pub distinct: bool,
-    #[prost(message, optional, boxed, tag = "4")]
-    pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, repeated, tag = "5")]
-    pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateUdfExprNode {
     #[prost(string, tag = "1")]
     pub fun_name: ::prost::alloc::string::String,
@@ -785,7 +768,7 @@ pub struct WindowExprNode {
     pub window_frame: ::core::option::Option<WindowFrame>,
     #[prost(bytes = "vec", optional, tag = "10")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(oneof = "window_expr_node::WindowFunction", tags = "1, 2, 3, 9")]
+    #[prost(oneof = "window_expr_node::WindowFunction", tags = "2, 3, 9")]
     pub window_function: ::core::option::Option<window_expr_node::WindowFunction>,
 }
 /// Nested message and enum types in `WindowExprNode`.
@@ -793,8 +776,6 @@ pub mod window_expr_node {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum WindowFunction {
-        #[prost(enumeration = "super::AggregateFunction", tag = "1")]
-        AggrFunction(i32),
         #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
         BuiltInFunction(i32),
         #[prost(string, tag = "3")]
@@ -1301,7 +1282,7 @@ pub struct PhysicalAggregateExprNode {
     pub ignore_nulls: bool,
     #[prost(bytes = "vec", optional, tag = "7")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
+    #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "4")]
     pub aggregate_function: ::core::option::Option<
         physical_aggregate_expr_node::AggregateFunction,
     >,
@@ -1311,8 +1292,6 @@ pub mod physical_aggregate_expr_node {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum AggregateFunction {
-        #[prost(enumeration = "super::AggregateFunction", tag = "1")]
-        AggrFunction(i32),
         #[prost(string, tag = "4")]
         UserDefinedAggrFunction(::prost::alloc::string::String),
     }
@@ -1332,7 +1311,7 @@ pub struct PhysicalWindowExprNode {
     pub name: ::prost::alloc::string::String,
     #[prost(bytes = "vec", optional, tag = "9")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "1, 2, 3")]
+    #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "2, 3")]
     pub window_function: ::core::option::Option<
         physical_window_expr_node::WindowFunction,
     >,
@@ -1342,8 +1321,6 @@ pub mod physical_window_expr_node {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum WindowFunction {
-        #[prost(enumeration = "super::AggregateFunction", tag = "1")]
-        AggrFunction(i32),
         #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
         BuiltInFunction(i32),
         #[prost(string, tag = "3")]
@@ -1938,65 +1915,6 @@ pub struct PartitionStats {
     pub num_bytes: i64,
     #[prost(message, repeated, tag = "4")]
     pub column_stats: ::prost::alloc::vec::Vec<super::datafusion_common::ColumnStats>,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum AggregateFunction {
-    Min = 0,
-    /// SUM = 2;
-    /// AVG = 3;
-    /// COUNT = 4;
-    /// APPROX_DISTINCT = 5;
-    /// ARRAY_AGG = 6;
-    /// VARIANCE = 7;
-    /// VARIANCE_POP = 8;
-    /// COVARIANCE = 9;
-    /// COVARIANCE_POP = 10;
-    /// STDDEV = 11;
-    /// STDDEV_POP = 12;
-    /// CORRELATION = 13;
-    /// APPROX_PERCENTILE_CONT = 14;
-    /// APPROX_MEDIAN = 15;
-    /// APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
-    /// GROUPING = 17;
-    /// MEDIAN = 18;
-    /// BIT_AND = 19;
-    /// BIT_OR = 20;
-    /// BIT_XOR = 21;
-    ///   BOOL_AND = 22;
-    ///   BOOL_OR = 23;
-    /// REGR_SLOPE = 26;
-    /// REGR_INTERCEPT = 27;
-    /// REGR_COUNT = 28;
-    /// REGR_R2 = 29;
-    /// REGR_AVGX = 30;
-    /// REGR_AVGY = 31;
-    /// REGR_SXX = 32;
-    /// REGR_SYY = 33;
-    /// REGR_SXY = 34;
-    /// STRING_AGG = 35;
-    /// NTH_VALUE_AGG = 36;
-    Max = 1,
-}
-impl AggregateFunction {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            AggregateFunction::Min => "MIN",
-            AggregateFunction::Max => "MAX",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "MIN" => Some(Self::Min),
-            "MAX" => Some(Self::Max),
-            _ => None,
-        }
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

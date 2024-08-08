@@ -52,6 +52,7 @@
 //! ```rust
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
+//! # use datafusion::functions_aggregate::expr_fn::min;
 //! # use datafusion::arrow::record_batch::RecordBatch;
 //!
 //! # #[tokio::main]
@@ -75,7 +76,7 @@
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
-//!     "| a | MIN(?table?.b) |",
+//!     "| a | min(?table?.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
 //!     "+---+----------------+"
@@ -113,7 +114,7 @@
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
-//!     "| a | MIN(example.b) |",
+//!     "| a | min(example.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
 //!     "+---+----------------+"

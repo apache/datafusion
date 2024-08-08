@@ -5351,6 +5351,25 @@ true false true false false false true true false false true false true
 #----
 #true false true false false false true true false false true false true
 
+# any operator
+query ?
+select column3 from arrays where 'L'=any(column3);
+----
+[L, o, r, e, m]
+
+query I
+select count(*) from arrays where 'L'=any(column3);
+----
+1
+
+query I
+select count(*) from arrays where 'X'=any(column3);
+----
+0
+
+query error DataFusion error: Error during planning: Unsupported AnyOp: '>', only '=' is supported
+select count(*) from arrays where 'X'>any(column3);
+
 ## array_distinct
 
 #TODO: https://github.com/apache/datafusion/issues/7142

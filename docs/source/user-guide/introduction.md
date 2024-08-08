@@ -114,6 +114,7 @@ Here are some active projects using DataFusion:
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
 - [ROAPI](https://github.com/roapi/roapi)
+- [Sail](https://github.com/lakehq/sail) Unifying stream, batch, and AI workloads with Apache Spark compatibility
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
 - [Spice.ai](https://github.com/spiceai/spiceai) Unified SQL query interface & materialization engine
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products

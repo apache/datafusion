@@ -17,6 +17,8 @@
 
 //! Collection of testing utility functions that are leveraged by the query optimizer rules
 
+use std::any::Any;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
@@ -47,10 +49,14 @@ use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::tree_node::PlanContext;
+use datafusion_physical_plan::{
+    displayable, DisplayAs, DisplayFormatType, PlanProperties,
+};
 
 use async_trait::async_trait;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -352,6 +358,97 @@ pub fn sort_exec(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
     Arc::new(SortExec::new(sort_exprs, input))
+}
+
+/// A test [`ExecutionPlan`] whose requirements can be configured.
+#[derive(Debug)]
+pub struct RequirementsTestExec {
+    required_input_ordering: Vec<PhysicalSortExpr>,
+    maintains_input_order: bool,
+    input: Arc<dyn ExecutionPlan>,
+}
+
+impl RequirementsTestExec {
+    pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+        Self {
+            required_input_ordering: vec![],
+            maintains_input_order: true,
+            input,
+        }
+    }
+
+    /// sets the required input ordering
+    pub fn with_required_input_ordering(
+        mut self,
+        required_input_ordering: Vec<PhysicalSortExpr>,
+    ) -> Self {
+        self.required_input_ordering = required_input_ordering;
+        self
+    }
+
+    /// set the maintains_input_order flag
+    pub fn with_maintains_input_order(mut self, maintains_input_order: bool) -> Self {
+        self.maintains_input_order = maintains_input_order;
+        self
+    }
+
+    /// returns this ExecutionPlan as an Arc<dyn ExecutionPlan>
+    pub fn into_arc(self) -> Arc<dyn ExecutionPlan> {
+        Arc::new(self)
+    }
+}
+
+impl DisplayAs for RequirementsTestExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "RequiredInputOrderingExec")
+    }
+}
+
+impl ExecutionPlan for RequirementsTestExec {
+    fn name(&self) -> &str {
+        "RequiredInputOrderingExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        self.input.properties()
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        let requirement =
+            PhysicalSortRequirement::from_sort_exprs(&self.required_input_ordering);
+        vec![Some(requirement)]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![self.maintains_input_order]
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_eq!(children.len(), 1);
+        Ok(RequirementsTestExec::new(children[0].clone())
+            .with_required_input_ordering(self.required_input_ordering.clone())
+            .with_maintains_input_order(self.maintains_input_order)
+            .into_arc())
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unimplemented!("Test exec does not support execution")
+    }
 }
 
 /// A [`PlanContext`] object is susceptible to being left in an inconsistent state after

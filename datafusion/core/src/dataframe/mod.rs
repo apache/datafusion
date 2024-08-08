@@ -53,9 +53,11 @@ use datafusion_common::{
 };
 use datafusion_expr::{case, is_null, lit};
 use datafusion_expr::{
-    max, min, utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
+    utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
-use datafusion_functions_aggregate::expr_fn::{avg, count, median, stddev, sum};
+use datafusion_functions_aggregate::expr_fn::{
+    avg, count, max, median, min, stddev, sum,
+};
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
@@ -144,6 +146,7 @@ impl Default for DataFrameWriteOptions {
 /// ```
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
+/// # use datafusion::functions_aggregate::expr_fn::min;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
@@ -407,6 +410,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion::functions_aggregate::expr_fn::min;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
@@ -1546,7 +1550,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// # use datafusion_common::ScalarValue;
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// # ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let results = ctx
     ///   .sql("SELECT a FROM example WHERE b = $1")
@@ -2056,7 +2060,7 @@ mod tests {
 
         assert_batches_sorted_eq!(
             ["+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
-                "| c1 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) | avg(aggregate_test_100.c12) | sum(aggregate_test_100.c12) | count(aggregate_test_100.c12) | count(DISTINCT aggregate_test_100.c12) |",
+                "| c1 | min(aggregate_test_100.c12) | max(aggregate_test_100.c12) | avg(aggregate_test_100.c12) | sum(aggregate_test_100.c12) | count(aggregate_test_100.c12) | count(DISTINCT aggregate_test_100.c12) |",
                 "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
                 "| a  | 0.02182578039211991         | 0.9800193410444061          | 0.48754517466109415         | 10.238448667882977          | 21                            | 21                                     |",
                 "| b  | 0.04893135681998029         | 0.9185813970744787          | 0.41040709263815384         | 7.797734760124923           | 19                            | 19                                     |",
@@ -2549,7 +2553,7 @@ mod tests {
         \n    TableScan: a\
         \n  Projection: b.c1, b.c2\
         \n    TableScan: b";
-        assert_eq!(expected_plan, format!("{:?}", join.logical_plan()));
+        assert_eq!(expected_plan, format!("{}", join.logical_plan()));
 
         Ok(())
     }
@@ -2568,7 +2572,7 @@ mod tests {
         let expected_plan = "CrossJoin:\
         \n  TableScan: a projection=[c1], full_filters=[Boolean(NULL)]\
         \n  TableScan: b projection=[c1]";
-        assert_eq!(expected_plan, format!("{:?}", join.into_optimized_plan()?));
+        assert_eq!(expected_plan, format!("{}", join.into_optimized_plan()?));
 
         // JOIN ON expression must be boolean type
         let join = left.join_on(right, JoinType::Inner, Some(lit("TRUE")))?;
@@ -2645,8 +2649,8 @@ mod tests {
 
     #[tokio::test]
     async fn registry() -> Result<()> {
-        let mut ctx = SessionContext::new();
-        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
+        let ctx = SessionContext::new();
+        register_aggregate_csv(&ctx, "aggregate_test_100").await?;
 
         // declare the udf
         let my_fn: ScalarFunctionImplementation =
@@ -2779,8 +2783,8 @@ mod tests {
 
     /// Create a logical plan from a SQL query
     async fn create_plan(sql: &str) -> Result<LogicalPlan> {
-        let mut ctx = SessionContext::new();
-        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
+        let ctx = SessionContext::new();
+        register_aggregate_csv(&ctx, "aggregate_test_100").await?;
         Ok(ctx.sql(sql).await?.into_unoptimized_plan())
     }
 
@@ -2910,7 +2914,7 @@ mod tests {
         \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1\
         \n        TableScan: t2",
-            format!("{:?}", df_with_column.logical_plan())
+            format!("{}", df_with_column.logical_plan())
         );
 
         assert_eq!(
@@ -2923,7 +2927,7 @@ mod tests {
         \n          TableScan: aggregate_test_100 projection=[c1]\
         \n        SubqueryAlias: t2\
         \n          TableScan: aggregate_test_100 projection=[c1]",
-            format!("{:?}", df_with_column.clone().into_optimized_plan()?)
+            format!("{}", df_with_column.clone().into_optimized_plan()?)
         );
 
         let df_results = df_with_column.collect().await?;
@@ -3105,7 +3109,7 @@ mod tests {
         \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1\
         \n        TableScan: t2",
-                   format!("{:?}", df_renamed.logical_plan())
+                   format!("{}", df_renamed.logical_plan())
         );
 
         assert_eq!("\
@@ -3117,7 +3121,7 @@ mod tests {
         \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]\
         \n        SubqueryAlias: t2\
         \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]",
-                   format!("{:?}", df_renamed.clone().into_optimized_plan()?)
+                   format!("{}", df_renamed.clone().into_optimized_plan()?)
         );
 
         let df_results = df_renamed.collect().await?;
@@ -3143,9 +3147,9 @@ mod tests {
                 "datafusion.sql_parser.enable_ident_normalization".to_owned(),
                 "false".to_owned(),
             )]))?;
-        let mut ctx = SessionContext::new_with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let name = "aggregate_test_100";
-        register_aggregate_csv(&mut ctx, name).await?;
+        register_aggregate_csv(&ctx, name).await?;
         let df = ctx.table(name);
 
         let df = df
@@ -3302,7 +3306,7 @@ mod tests {
 
         assert_eq!(
             "TableScan: ?table? projection=[c2, c3, sum]",
-            format!("{:?}", cached_df.clone().into_optimized_plan()?)
+            format!("{}", cached_df.clone().into_optimized_plan()?)
         );
 
         let df_results = df.collect().await?;

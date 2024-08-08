@@ -233,11 +233,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run cargo doc
-        run: |
-          export RUSTDOCFLAGS="-D warnings -A rustdoc::private-intra-doc-links"
-          cargo doc --document-private-items --no-deps --workspace
-          cd datafusion-cli
-          cargo doc --document-private-items --no-deps
+        run: ci/scripts/rust_docs.sh
 
   linux-wasm-pack:
     name: build with wasm-pack
@@ -566,18 +562,32 @@ jobs:
       - name: Check datafusion
         working-directory: datafusion/core
         run: |
-          # If you encounter an error with any of the commands below
-          # it means some crate in your dependency tree has a higher 
-          # MSRV (Min Supported Rust Version) than the one specified 
-          # in the `rust-version` key of `Cargo.toml`. Check your 
-          # dependencies or update the version in `Cargo.toml`
-          cargo msrv verify
+          # If you encounter an error with any of the commands below it means
+          # your code or some crate in the dependency tree has a higher MSRV
+          # (Min Supported Rust Version) than the one specified in the
+          # `rust-version` key of `Cargo.toml`.
+          #
+          # To reproduce: 
+          # 1. Install the version of Rust that is failing. Example: 
+          #    rustup install 1.76.0
+          # 2. Run the command that failed with that version. Example:
+          #    cargo +1.76.0 check -p datafusion
+          # 
+          # To resolve, either:
+          # 1. Change your code to use older Rust features, 
+          # 2. Revert dependency update
+          # 3. Update the MSRV version in `Cargo.toml`
+          #
+          # Please see the DataFusion Rust Version Compatibility Policy before
+          # updating Cargo.toml. You may have to update the code instead. 
+          # https://github.com/apache/datafusion/blob/main/README.md#rust-version-compatibility-policy
+          cargo msrv --output-format json --log-target stdout verify
       - name: Check datafusion-substrait
         working-directory: datafusion/substrait
-        run: cargo msrv verify
+        run: cargo msrv --output-format json --log-target stdout verify
       - name: Check datafusion-proto
         working-directory: datafusion/proto
-        run: cargo msrv verify
+        run: cargo msrv --output-format json --log-target stdout verify
       - name: Check datafusion-cli
         working-directory: datafusion-cli
-        run: cargo msrv verify
+        run: cargo msrv --output-format json --log-target stdout verify

@@ -310,3 +310,161 @@ VALUES (MAP(['a'], [1])), (MAP(['b'], [2])), (MAP(['c', 'a'], [3, 1]))
 {a: 1}
 {b: 2}
 {c: 3, a: 1}
+
+query ?
+SELECT MAP {'a':1, 'b':2, 'c':3};
+----
+{a: 1, b: 2, c: 3}
+
+query ?
+SELECT MAP {'a':1, 'b':2, 'c':3 } FROM t;
+----
+{a: 1, b: 2, c: 3}
+{a: 1, b: 2, c: 3}
+{a: 1, b: 2, c: 3}
+
+query I
+SELECT MAP {'a':1, 'b':2, 'c':3}['a'];
+----
+1
+
+query I
+SELECT MAP {'a':1, 'b':2, 'c':3 }['a'] FROM t;
+----
+1
+1
+1
+
+# TODO(https://github.com/sqlparser-rs/sqlparser-rs/pull/1361): support parsing an empty map. Enable this after upgrading sqlparser-rs.
+# query ?
+# SELECT MAP {};
+# ----
+# {}
+
+# values contain null
+query ?
+SELECT MAP {'a': 1, 'b': null};
+----
+{a: 1, b: }
+
+# keys contain null
+query error DataFusion error: Execution error: map key cannot be null
+SELECT MAP {'a': 1, null: 2}
+
+# array as key
+query ?
+SELECT MAP {[1,2,3]:1, [2,4]:2};
+----
+ {[1, 2, 3]: 1, [2, 4]: 2}
+
+# array with different type as key
+# expect to fail due to type coercion error
+query error
+SELECT MAP {[1,2,3]:1, ['a', 'b']:2};
+
+# array as value
+query ?
+SELECT MAP {'a':[1,2,3], 'b':[2,4]};
+----
+{a: [1, 2, 3], b: [2, 4]}
+
+# array with different type as value
+# expect to fail due to type coercion error
+query error
+SELECT MAP {'a':[1,2,3], 'b':['a', 'b']};
+
+# struct as key
+query ?
+SELECT MAP {{'a':1, 'b':2}:1, {'a':3, 'b':4}:2};
+----
+{{a: 1, b: 2}: 1, {a: 3, b: 4}: 2}
+
+# struct with different fields as key
+# expect to fail due to type coercion error
+query error
+SELECT MAP {{'a':1, 'b':2}:1, {'c':3, 'd':4}:2};
+
+# struct as value
+query ?
+SELECT MAP {'a':{'b':1, 'c':2}, 'b':{'b':3, 'c':4}};
+----
+{a: {b: 1, c: 2}, b: {b: 3, c: 4}}
+
+# struct with different fields as value
+# expect to fail due to type coercion error
+query error
+SELECT MAP {'a':{'b':1, 'c':2}, 'b':{'c':3, 'd':4}};
+
+# map as key
+query ?
+SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 };
+----
+{{1: a, 2: b}: 1, {1: c, 2: d}: 2}
+
+# map with different keys as key
+query ?
+SELECT MAP { MAP {1:'a', 2:'b', 3:'c'}:1, MAP {2:'c', 4:'d'}:2 };
+----
+ {{1: a, 2: b, 3: c}: 1, {2: c, 4: d}: 2}
+
+# map as value
+query ?
+SELECT MAP {1: MAP {1:'a', 2:'b'}, 2: MAP {1:'c', 2:'d'} };
+----
+{1: {1: a, 2: b}, 2: {1: c, 2: d}}
+
+# map with different keys as value
+query ?
+SELECT MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} };
+----
+{a: {1: a, 2: b, 3: c}, b: {2: c, 4: d}}
+
+# complex map for each row
+query ?
+SELECT MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} } from t;
+----
+{a: {1: a, 2: b, 3: c}, b: {2: c, 4: d}}
+{a: {1: a, 2: b, 3: c}, b: {2: c, 4: d}}
+{a: {1: a, 2: b, 3: c}, b: {2: c, 4: d}}
+
+# access map with non-existent key
+query ?
+SELECT MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} }['c'];
+----
+NULL
+
+# access map with null key
+query error
+SELECT MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} }[NULL];
+
+query ?
+SELECT MAP { 'a': 1, 2: 3 };
+----
+{a: 1, 2: 3}
+
+# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
+# query ?
+# SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[1];
+# ----
+# a
+
+# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
+# query ?
+# SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {1:'a', 2:'b'}];
+# ----
+# 1
+
+# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
+# query ?
+# SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
+# ----
+# 33
+
+## cardinality
+
+# cardinality scalar function
+query IIII
+select cardinality(map([1, 2, 3], ['a', 'b', 'c'])), cardinality(MAP {'a': 1, 'b': null}), cardinality(MAP([],[])),
+       cardinality(MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} });
+----
+3 2 0 2

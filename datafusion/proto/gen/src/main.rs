@@ -33,6 +33,7 @@ fn main() -> Result<(), String> {
         .file_descriptor_set_path(&descriptor_path)
         .out_dir(out_dir)
         .compile_well_known_types()
+        .protoc_arg("--experimental_allow_proto3_optional")
         .extern_path(".google.protobuf", "::pbjson_types")
         .compile_protos(&[proto_path], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {e}"))?;
@@ -52,7 +53,11 @@ fn main() -> Result<(), String> {
     let prost = proto_dir.join("src/datafusion.rs");
     let pbjson = proto_dir.join("src/datafusion.serde.rs");
     let common_path = proto_dir.join("src/datafusion_common.rs");
-
+    println!(
+        "Copying {} to {}",
+        prost.clone().display(),
+        proto_dir.join("src/generated/prost.rs").display()
+    );
     std::fs::copy(prost, proto_dir.join("src/generated/prost.rs")).unwrap();
     std::fs::copy(pbjson, proto_dir.join("src/generated/pbjson.rs")).unwrap();
     std::fs::copy(

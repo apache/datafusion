@@ -337,7 +337,7 @@ impl Unparser<'_> {
                 escape_char: escape_char.map(|c| c.to_string()),
             }),
             Expr::AggregateFunction(agg) => {
-                let func_name = agg.func_def.name();
+                let func_name = agg.func.name();
 
                 let args = self.function_args_to_sql(&agg.args)?;
                 let filter = match &agg.filter {
@@ -522,8 +522,9 @@ impl Unparser<'_> {
         }
     }
 
-    /// This function can convert more [`Expr`] types than `expr_to_sql`, returning an [`Unparsed`]
-    /// like `Sort` expressions to `OrderByExpr` expressions.
+    /// This function can convert more [`Expr`] types than `expr_to_sql`,
+    /// returning an [`Unparsed`] like `Sort` expressions to `OrderByExpr`
+    /// expressions.
     pub fn expr_to_unparsed(&self, expr: &Expr) -> Result<Unparsed> {
         match expr {
             Expr::Sort(Sort {

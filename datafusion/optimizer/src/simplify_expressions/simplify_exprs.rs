@@ -160,6 +160,7 @@ mod tests {
         ExprSchemable, JoinType,
     };
     use datafusion_expr::{or, BinaryExpr, Cast, Operator};
+    use datafusion_functions_aggregate::expr_fn::{max, min};
 
     use crate::test::{assert_fields_eq, test_table_scan_with_name};
     use crate::OptimizerContext;
@@ -186,7 +187,7 @@ mod tests {
         let optimizer = Optimizer::with_rules(vec![Arc::new(SimplifyExpressions::new())]);
         let optimized_plan =
             optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
-        let formatted_plan = format!("{optimized_plan:?}");
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(formatted_plan, expected);
         Ok(())
     }
@@ -395,15 +396,12 @@ mod tests {
             .project(vec![col("a"), col("c"), col("b")])?
             .aggregate(
                 vec![col("a"), col("c")],
-                vec![
-                    datafusion_expr::max(col("b").eq(lit(true))),
-                    datafusion_expr::min(col("b")),
-                ],
+                vec![max(col("b").eq(lit(true))), min(col("b"))],
             )?
             .build()?;
 
         let expected = "\
-        Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b) AS MAX(test.b = Boolean(true)), MIN(test.b)]]\
+        Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b) AS max(test.b = Boolean(true)), min(test.b)]]\
         \n  Projection: test.a, test.c, test.b\
         \n    TableScan: test";
 
@@ -439,7 +437,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule.rewrite(plan, &config).unwrap().data;
-        format!("{optimized_plan:?}")
+        format!("{optimized_plan}")
     }
 
     #[test]
