@@ -3116,6 +3116,31 @@ select (now() - now()) < interval '1 seconds';
 true
 
 query B
+select (now() - now()) <= interval '1 seconds';
+----
+true
+
+query B
+select (now() - now()) = interval '0 seconds';
+----
+true
+
+query B
+select (now() - now()) != interval '1 seconds';
+----
+true
+
+query B
+select (now() - now()) > interval '-1 seconds';
+----
+true
+
+query B
+select (now() - now()) >= interval '-1 seconds';
+----
+true
+
+query B
 select arrow_cast(123, 'Duration(Nanosecond)') < interval '200 nanoseconds';
 ----
 true
