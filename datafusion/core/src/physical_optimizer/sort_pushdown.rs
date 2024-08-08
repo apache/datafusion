@@ -187,7 +187,10 @@ fn pushdown_requirement_to_children(
             Ok(None)
         }
     } else if plan.fetch().is_some()
-        && plan.maintains_input_order().iter().all(|maintain| *maintain)
+        && plan
+            .maintains_input_order()
+            .iter()
+            .all(|maintain| *maintain)
         && plan.supports_limit_pushdown()
     {
         let output_req = PhysicalSortRequirement::from_sort_exprs(
