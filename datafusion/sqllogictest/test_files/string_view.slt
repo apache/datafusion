@@ -425,6 +425,41 @@ logical_plan
 01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
 02)--TableScan: test projection=[column1_utf8view]
 
+### Initcap
+
+# Create a table with lowercase strings
+statement ok
+CREATE TABLE test_lowercase AS SELECT
+  lower(column1_utf8) as column1_utf8_lower,
+  lower(column1_large_utf8) as column1_large_utf8_lower,
+  lower(column1_utf8view) as column1_utf8view_lower
+FROM test;
+
+# Test INITCAP with utf8view, utf8, and largeutf8
+# Should not cast anything
+query TT
+EXPLAIN SELECT
+  INITCAP(column1_utf8view_lower) as c1,
+  INITCAP(column1_utf8_lower) as c2,
+  INITCAP(column1_large_utf8_lower) as c3
+FROM test_lowercase;
+----
+logical_plan
+01)Projection: initcap(test_lowercase.column1_utf8view_lower) AS c1, initcap(test_lowercase.column1_utf8_lower) AS c2, initcap(test_lowercase.column1_large_utf8_lower) AS c3
+02)--TableScan: test_lowercase projection=[column1_utf8_lower, column1_large_utf8_lower, column1_utf8view_lower]
+
+query TTT
+SELECT
+  INITCAP(column1_utf8view_lower) as c1,
+  INITCAP(column1_utf8_lower) as c2,
+  INITCAP(column1_large_utf8_lower) as c3
+FROM test_lowercase;
+----
+Andrew Andrew Andrew    
+Xiangpeng Xiangpeng Xiangpeng
+Raphael Raphael Raphael
+NULL NULL NULL
+
 statement ok
 drop table test;
 
