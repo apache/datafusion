@@ -76,11 +76,6 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "LocalLimitExec: fetch=3",
-        "metrics=[output_rows=3, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
         "ProjectionExec: expr=[count(*)",
         "metrics=[output_rows=1, elapsed_compute="
     );

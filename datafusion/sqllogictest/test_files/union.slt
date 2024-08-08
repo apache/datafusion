@@ -405,11 +405,11 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [c9@1 DESC], fetch=5
 02)--UnionExec
-03)----SortExec: expr=[c9@1 DESC], preserve_partitioning=[true]
+03)----SortExec: TopK(fetch=5), expr=[c9@1 DESC], preserve_partitioning=[true]
 04)------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], has_header=true
-07)----SortExec: expr=[c9@1 DESC], preserve_partitioning=[true]
+07)----SortExec: TopK(fetch=5), expr=[c9@1 DESC], preserve_partitioning=[true]
 08)------ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Int64) as c9]
 09)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 10)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
@@ -456,6 +456,71 @@ physical_plan
 13)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
 14)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 15)----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# Union with limit push down 3 children test case
+query TT
+EXPLAIN
+               SELECT count(*) as cnt FROM
+                 (SELECT count(*), c1
+                  FROM aggregate_test_100
+                  WHERE c13 != 'C2GT5KVyOPZpgKVl110TyZO0NcJ434'
+                  GROUP BY c1
+                  ORDER BY c1
+                  ) AS a
+                 UNION ALL
+               SELECT 1 as cnt
+                 UNION ALL
+               SELECT lead(c1, 1) OVER () as cnt FROM (select 1 as c1) AS b
+               LIMIT 3
+----
+logical_plan
+01)Limit: skip=0, fetch=3
+02)--Union
+03)----Projection: count(*) AS cnt
+04)------Limit: skip=0, fetch=3
+05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+06)----------SubqueryAlias: a
+07)------------Projection:
+08)--------------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
+09)----------------Projection: aggregate_test_100.c1
+10)------------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
+11)--------------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
+12)----Projection: Int64(1) AS cnt
+13)------Limit: skip=0, fetch=3
+14)--------EmptyRelation
+15)----Projection: LEAD(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS cnt
+16)------Limit: skip=0, fetch=3
+17)--------WindowAggr: windowExpr=[[LEAD(b.c1, Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+18)----------SubqueryAlias: b
+19)------------Projection: Int64(1) AS c1
+20)--------------EmptyRelation
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=3
+02)--CoalescePartitionsExec
+03)----UnionExec
+04)------ProjectionExec: expr=[count(*)@0 as cnt]
+05)--------GlobalLimitExec: skip=0, fetch=3
+06)----------AggregateExec: mode=Final, gby=[], aggr=[count(*)]
+07)------------CoalescePartitionsExec
+08)--------------AggregateExec: mode=Partial, gby=[], aggr=[count(*)]
+09)----------------ProjectionExec: expr=[]
+10)------------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
+11)--------------------CoalesceBatchesExec: target_batch_size=2
+12)----------------------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
+13)------------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
+14)--------------------------ProjectionExec: expr=[c1@0 as c1]
+15)----------------------------CoalesceBatchesExec: target_batch_size=2
+16)------------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
+17)--------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+18)----------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
+19)------ProjectionExec: expr=[1 as cnt]
+20)--------GlobalLimitExec: skip=0, fetch=3
+21)----------PlaceholderRowExec
+22)------ProjectionExec: expr=[LEAD(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
+23)--------GlobalLimitExec: skip=0, fetch=3
+24)----------BoundedWindowAggExec: wdw=[LEAD(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "LEAD(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
+25)------------ProjectionExec: expr=[1 as c1]
+26)--------------PlaceholderRowExec
 
 
 ########

@@ -234,7 +234,14 @@ fn try_push_down_limit(
         } else {
             // Swap current with child
             let new_limit = limit_exec.with_child(grandchild.clone());
-            let new_child = child.clone().with_new_children(vec![new_limit.into()])?;
+            let mut new_grandchildren = vec![new_limit.into()];
+            // Protect other grand children
+            if grandchildren.len() > 1 {
+                for grand_child in grandchildren.into_iter().skip(1) {
+                    new_grandchildren.push(grand_child.clone())
+                }
+            }
+            let new_child = child.clone().with_new_children(new_grandchildren)?;
             Ok(Some(new_child))
         }
     } else {
@@ -293,7 +300,7 @@ fn add_fetch_to_children(
                     let new_children =
                         add_fetch_to_children(latest_fetch, &child.children());
                     let new_children =
-                        updated_children(new_children, children.to_owned());
+                        updated_children(new_children, child.children().to_owned());
                     Some(Arc::clone(child).with_new_children(new_children).ok()?)
                 } else {
                     Some(Arc::clone(child))
