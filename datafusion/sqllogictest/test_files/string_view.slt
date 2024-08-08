@@ -536,7 +536,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: character_length(CAST(test.column1_utf8view AS Utf8)) AS l
+01)Projection: character_length(test.column1_utf8view) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for CONCAT
@@ -934,5 +934,3 @@ select column2|| ' ' ||column3 from temp;
 ----
 rust fast
 datafusion cool
-
-
