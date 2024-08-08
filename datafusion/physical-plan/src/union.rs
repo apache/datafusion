@@ -260,6 +260,13 @@ impl ExecutionPlan for UnionExec {
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false; self.children().len()]
     }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        // UnionExec is supporting limit_pushdown because it's only applicable with
+        // SortPreservingMergeExec plan. Since SortExec does not support limit_pushdowm
+        // it's not possible to lose sorting in UnionExec's children.
+        true
+    }
 }
 
 /// Combines multiple input streams by interleaving them.
