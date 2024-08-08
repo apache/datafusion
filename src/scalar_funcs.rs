@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{cmp::min, sync::Arc};
-
 use arrow::{
     array::{
-        ArrayRef, AsArray, Decimal128Builder, Float32Array, Float64Array, GenericStringArray,
-        Int16Array, Int32Array, Int64Array, Int64Builder, Int8Array, OffsetSizeTrait,
+        ArrayRef, AsArray, Decimal128Builder, Float32Array, Float64Array, Int16Array, Int32Array,
+        Int64Array, Int64Builder, Int8Array, OffsetSizeTrait,
     },
     datatypes::{validate_decimal_precision, Decimal128Type, Int64Type},
 };
+use arrow_array::builder::GenericStringBuilder;
 use arrow_array::{Array, ArrowNativeTypeOp, BooleanArray, Decimal128Array};
 use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION};
 use datafusion::{functions::math::round::round, physical_plan::ColumnarValue};
@@ -35,7 +34,8 @@ use num::{
     integer::{div_ceil, div_floor},
     BigInt, Signed, ToPrimitive,
 };
-use unicode_segmentation::UnicodeSegmentation;
+use std::fmt::Write;
+use std::{cmp::min, sync::Arc};
 
 mod unhex;
 pub use unhex::spark_unhex;
@@ -387,52 +387,54 @@ pub fn spark_round(
 }
 
 /// Similar to DataFusion `rpad`, but not to truncate when the string is already longer than length
-pub fn spark_rpad(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
+pub fn spark_read_side_padding(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
     match args {
         [ColumnarValue::Array(array), ColumnarValue::Scalar(ScalarValue::Int32(Some(length)))] => {
-            match args[0].data_type() {
-                DataType::Utf8 => spark_rpad_internal::<i32>(array, *length),
-                DataType::LargeUtf8 => spark_rpad_internal::<i64>(array, *length),
+            match array.data_type() {
+                DataType::Utf8 => spark_read_side_padding_internal::<i32>(array, *length),
+                DataType::LargeUtf8 => spark_read_side_padding_internal::<i64>(array, *length),
                 // TODO: handle Dictionary types
                 other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {other:?} for function rpad",
+                    "Unsupported data type {other:?} for function read_side_padding",
                 ))),
             }
         }
         other => Err(DataFusionError::Internal(format!(
-            "Unsupported arguments {other:?} for function rpad",
+            "Unsupported arguments {other:?} for function read_side_padding",
         ))),
     }
 }
 
-fn spark_rpad_internal<T: OffsetSizeTrait>(
+fn spark_read_side_padding_internal<T: OffsetSizeTrait>(
     array: &ArrayRef,
     length: i32,
 ) -> Result<ColumnarValue, DataFusionError> {
     let string_array = as_generic_string_array::<T>(array)?;
+    let length = 0.max(length) as usize;
+    let space_string = " ".repeat(length);
 
-    let result = string_array
-        .iter()
-        .map(|string| match string {
+    let mut builder =
+        GenericStringBuilder::<T>::with_capacity(string_array.len(), string_array.len() * length);
+
+    for string in string_array.iter() {
+        match string {
             Some(string) => {
-                let length = if length < 0 { 0 } else { length as usize };
-                if length == 0 {
-                    Ok(Some("".to_string()))
+                // It looks Spark's UTF8String is closer to chars rather than graphemes
+                // https://stackoverflow.com/a/46290728
+                let char_len = string.chars().count();
+                if length <= char_len {
+                    builder.append_value(string);
                 } else {
-                    let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                    if length < graphemes.len() {
-                        Ok(Some(string.to_string()))
-                    } else {
-                        let mut s = string.to_string();
-                        s.push_str(" ".repeat(length - graphemes.len()).as_str());
-                        Ok(Some(s))
-                    }
+                    // write_str updates only the value buffer, not null nor offset buffer
+                    // This is convenient for concatenating str(s)
+                    builder.write_str(string)?;
+                    builder.append_value(&space_string[char_len..]);
                 }
             }
-            _ => Ok(None),
-        })
-        .collect::<Result<GenericStringArray<T>, DataFusionError>>()?;
-    Ok(ColumnarValue::Array(Arc::new(result)))
+            _ => builder.append_null(),
+        }
+    }
+    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
 
 // Let Decimal(p3, s3) as return type i.e. Decimal(p1, s1) / Decimal(p2, s2) = Decimal(p3, s3).
