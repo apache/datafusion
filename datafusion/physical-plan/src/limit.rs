@@ -189,7 +189,7 @@ impl ExecutionPlan for GlobalLimitExec {
             self.schema(),
             self.fetch,
             self.skip,
-            self.properties().partitioning.partition_count(),
+            1,
         )
     }
 
@@ -325,7 +325,7 @@ impl ExecutionPlan for LocalLimitExec {
             self.schema(),
             Some(self.fetch),
             0,
-            self.properties().partitioning.partition_count(),
+            1,
         )
     }
 
@@ -703,7 +703,7 @@ mod tests {
 
         let row_count =
             row_number_inexact_statistics_for_global_limit(400, Some(10)).await?;
-        assert_eq!(row_count, Precision::Inexact(0));
+        assert_eq!(row_count, Precision::Exact(0));
 
         let row_count =
             row_number_inexact_statistics_for_global_limit(398, Some(10)).await?;
@@ -730,7 +730,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_number_statistics_for_local_limit() -> Result<()> {
         let row_count = row_number_statistics_for_local_limit(4, 10).await?;
-        assert_eq!(row_count, Precision::Exact(40));
+        assert_eq!(row_count, Precision::Exact(10));
 
         Ok(())
     }

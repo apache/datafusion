@@ -1152,7 +1152,7 @@ SELECT (SELECT c from ordered_table ORDER BY c LIMIT 1) UNION ALL (SELECT 23 as 
 statement ok
 set datafusion.execution.use_row_number_estimates_to_optimize_partitioning = true;
 
-# Do not increase partition number after fetch 1. As this will be unnecessary.
+# Do not increase the number of partitions after fetch one, as this will be unnecessary.
 query TT
 EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
   FROM ordered_table
@@ -1172,7 +1172,7 @@ physical_plan
 statement ok
 set datafusion.execution.use_row_number_estimates_to_optimize_partitioning = false;
 
-# Iartition number after fetch 1. Since this estimate is not exact.
+# Here, we have multiple partitions after fetch one, since the row count estimate is not exact.
 query TT
 EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
   FROM ordered_table

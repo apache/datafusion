@@ -400,14 +400,15 @@ fn analyze_immediate_sort_removal(
                 // Replace the sort with a sort-preserving merge:
                 let expr = sort_exec.expr().to_vec();
                 Arc::new(SortPreservingMergeExec::new(expr, sort_input.clone())) as _
-            } else if let Some(fetch) = sort_exec.fetch() {
-                // Remove the sort, when its fetch is None:
-                node.children = node.children.swap_remove(0).children;
-                Arc::new(LocalLimitExec::new(sort_input.clone(), fetch))
             } else {
-                // Remove the sort, when its fetch is None:
+                // Remove the sort:
                 node.children = node.children.swap_remove(0).children;
-                sort_input.clone()
+                if let Some(fetch) = sort_exec.fetch() {
+                    // If the sort has a fetch, we need to add a limit:
+                    Arc::new(LocalLimitExec::new(sort_input.clone(), fetch))
+                } else {
+                    sort_input.clone()
+                }
             };
             for child in node.children.iter_mut() {
                 child.data = false;
