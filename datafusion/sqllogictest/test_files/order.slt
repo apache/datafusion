@@ -1149,6 +1149,9 @@ SELECT (SELECT c from ordered_table ORDER BY c LIMIT 1) UNION ALL (SELECT 23 as 
 0
 23
 
+statement ok
+set datafusion.execution.use_row_number_estimate_to_optimize_partitioning = true;
+
 # Do not increase partition number after fetch 1. As this will be unnecessary.
 query TT
 EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
@@ -1163,6 +1166,8 @@ logical_plan
 04)------TableScan: ordered_table projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
-02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
+02)--SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
+
+statement ok
+set datafusion.execution.use_row_number_estimate_to_optimize_partitioning = false;
