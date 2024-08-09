@@ -108,7 +108,7 @@ struct SkipAggregationProbe {
     /// Aggregation ratio check performed when the number of input rows exceeds
     /// this threshold (from `SessionConfig`)
     probe_rows_threshold: usize,
-    /// Maximum ratio of `input_rows` / `num_groups` to continue aggregation
+    /// Maximum ratio of `num_groups` to `input_rows` for continuing aggregation
     /// (from `SessionConfig`). If the ratio exceeds this value, aggregation
     /// is skipped and input rows are directly converted to output
     probe_ratio_threshold: f64,
