@@ -1365,12 +1365,12 @@ pub fn project_with_column_index(
 
 /// Union two logical plans.
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
-    // Use the schema from the left input temporarily, and later rely on the analyzer
-    // to coerce it to a common schema.
-    let schema = left_plan.schema().clone();
+    // Temporarily use the schema from the left input and later rely on the analyzer to
+    // coerce the two schemas into a common one.
+    let schema = Arc::clone(left_plan.schema());
     Ok(LogicalPlan::Union(Union {
         inputs: vec![Arc::new(left_plan), Arc::new(right_plan)],
-        schema: schema,
+        schema,
     }))
 }
 

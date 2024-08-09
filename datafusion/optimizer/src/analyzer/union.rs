@@ -96,7 +96,7 @@ pub(crate) fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
     let new_inputs = union_plan
         .inputs
         .iter()
-        .map(|plan| coerce_plan_expr_for_schema(&plan, &union_schema).map(Arc::new))
+        .map(|plan| coerce_plan_expr_for_schema(plan, &union_schema).map(Arc::new))
         .collect::<Result<Vec<_>>>()?;
     Ok(LogicalPlan::Union(Union {
         inputs: new_inputs,
@@ -172,4 +172,9 @@ fn coerce_exprs_for_schema(
             Ok(new_expr)
         })
         .collect::<Result<_>>()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
 }
