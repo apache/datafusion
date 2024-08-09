@@ -1122,11 +1122,6 @@ mod tests {
             "  SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
-        // TODO: We can pushdown top sort into below to produce following plan:
-        //  let expected_optimized = [
-        //     "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
-        //     "  MemoryExec: partitions=1, partition_sizes=[0]",
-        //  ];
         let expected_optimized = [
             "LocalLimitExec: fetch=2",
             "  SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
