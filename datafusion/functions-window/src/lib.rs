@@ -22,4 +22,32 @@
 //!
 //! [DataFusion]: https://crates.io/crates/datafusion
 //!
+use std::sync::Arc;
+
+use log::debug;
+
+use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::WindowUDF;
+
 mod row_number;
+
+/// Returns all default window functions
+pub fn all_default_window_functions() -> Vec<Arc<WindowUDF>> {
+    vec![row_number::row_number_udwf()]
+}
+/// Registers all enabled packages with a [`FunctionRegistry`]
+pub fn register_all(
+    registry: &mut dyn FunctionRegistry,
+) -> datafusion_common::Result<()> {
+    let functions: Vec<Arc<WindowUDF>> = all_default_window_functions();
+
+    functions.into_iter().try_for_each(|udf| {
+        let existing_udwf = registry.register_udwf(udf)?;
+        if let Some(existing_udwf) = existing_udwf {
+            debug!("Overwrite existing UDWF: {}", existing_udwf.name());
+        }
+        Ok(()) as datafusion_common::Result<()>
+    })?;
+
+    Ok(())
+}
