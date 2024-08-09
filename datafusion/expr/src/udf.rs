@@ -17,23 +17,19 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
-use std::any::Any;
-use std::fmt::{self, Debug, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
-
-use arrow::datatypes::DataType;
-
-use datafusion_common::{not_impl_err, ExprSchema, Result};
-
 use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
-use crate::interval_arithmetic::Interval;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
     ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
 };
+use arrow::datatypes::DataType;
+use datafusion_common::{not_impl_err, ExprSchema, Result};
 use datafusion_expr_common::interval_arithmetic::Interval;
+use std::any::Any;
+use std::fmt::{self, Debug, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 
 /// Logical representation of a Scalar User Defined Function.
 ///

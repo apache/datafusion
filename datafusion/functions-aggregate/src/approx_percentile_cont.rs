@@ -38,7 +38,8 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ColumnarValue, Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, ColumnarValue, Expr, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,

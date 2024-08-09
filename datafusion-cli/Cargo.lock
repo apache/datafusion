@@ -1291,7 +1291,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr-common"
-version = "40.0.0"
+version = "41.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1343,7 +1343,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate-common"
-version = "40.0.0"
+version = "41.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1435,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-functions-aggregate"
-version = "40.0.0"
+version = "41.0.0"
 dependencies = [
  "ahash",
  "arrow",
