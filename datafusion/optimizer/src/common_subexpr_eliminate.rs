@@ -1108,7 +1108,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_, '_> {
                     self.down_index += 1;
                 }
 
-                let expr_name = expr.display_name()?;
+                let expr_name = expr.schema_name().to_string();
                 let (_, expr_alias) =
                     self.common_exprs.entry(expr_id).or_insert_with(|| {
                         let expr_alias = self.alias_generator.next(CSE_PREFIX);

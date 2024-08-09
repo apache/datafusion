@@ -717,7 +717,10 @@ impl DataFrame {
                             {
                                 let column =
                                     batchs[0].column_by_name(field.name()).unwrap();
-                                if field.data_type().is_numeric() {
+
+                                if column.data_type().is_null() {
+                                    Arc::new(StringArray::from(vec!["null"]))
+                                } else if field.data_type().is_numeric() {
                                     cast(column, &DataType::Float64)?
                                 } else {
                                     cast(column, &DataType::Utf8)?
@@ -1550,7 +1553,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// # use datafusion_common::ScalarValue;
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// # ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let results = ctx
     ///   .sql("SELECT a FROM example WHERE b = $1")
@@ -2649,8 +2652,8 @@ mod tests {
 
     #[tokio::test]
     async fn registry() -> Result<()> {
-        let mut ctx = SessionContext::new();
-        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
+        let ctx = SessionContext::new();
+        register_aggregate_csv(&ctx, "aggregate_test_100").await?;
 
         // declare the udf
         let my_fn: ScalarFunctionImplementation =
@@ -2783,8 +2786,8 @@ mod tests {
 
     /// Create a logical plan from a SQL query
     async fn create_plan(sql: &str) -> Result<LogicalPlan> {
-        let mut ctx = SessionContext::new();
-        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
+        let ctx = SessionContext::new();
+        register_aggregate_csv(&ctx, "aggregate_test_100").await?;
         Ok(ctx.sql(sql).await?.into_unoptimized_plan())
     }
 
@@ -3147,9 +3150,9 @@ mod tests {
                 "datafusion.sql_parser.enable_ident_normalization".to_owned(),
                 "false".to_owned(),
             )]))?;
-        let mut ctx = SessionContext::new_with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let name = "aggregate_test_100";
-        register_aggregate_csv(&mut ctx, name).await?;
+        register_aggregate_csv(&ctx, name).await?;
         let df = ctx.table(name);
 
         let df = df

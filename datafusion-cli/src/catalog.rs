@@ -240,7 +240,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
             ctx.state().catalog_list().clone(),
             ctx.state_weak_ref(),

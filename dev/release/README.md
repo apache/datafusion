@@ -124,20 +124,31 @@ Here are the commands that could be used to prepare the `38.0.0` release:
 
 Checkout the main commit to be released
 
-```
+```shell
 git fetch apache
 git checkout apache/main
 ```
 
-Update datafusion version in `datafusion/Cargo.toml` to `38.0.0`:
+Manually update the datafusion version in the root `Cargo.toml` to `38.0.0`.
 
+Run `cargo update` in the root directory and also in `datafusion-cli`:
+
+```shell
+cargo update
+cd datafustion-cli
+cargo update
+cd ..
 ```
-./dev/update_datafusion_versions.py 38.0.0
+
+Run `cargo test` to re-generate some example files:
+
+```shell
+cargo test
 ```
 
 Lastly commit the version change:
 
-```
+```shell
 git commit -a -m 'Update version'
 ```
 
@@ -193,7 +204,7 @@ For the release to become "official" it needs at least three PMC members to vote
 
 The `dev/release/verify-release-candidate.sh` is a script in this repository that can assist in the verification process. Run it like:
 
-```
+```shell
 ./dev/release/verify-release-candidate.sh 38.0.0 0
 ```
 
@@ -222,7 +233,7 @@ Congratulations! The release is now official!
 
 Tag the same release candidate commit with the final release tag
 
-```
+```shell
 git co apache/38.0.0-rc0
 git tag 38.0.0
 git push apache 38.0.0

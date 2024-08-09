@@ -36,9 +36,9 @@ query TT
 explain select uc2 from (select unnest(column2) as uc2, column1 from v) where column1 = 2;
 ----
 logical_plan
-01)Projection: unnest(v.column2) AS uc2
-02)--Unnest: lists[unnest(v.column2)] structs[]
-03)----Projection: v.column2 AS unnest(v.column2), v.column1
+01)Projection: UNNEST(v.column2) AS uc2
+02)--Unnest: lists[UNNEST(v.column2)] structs[]
+03)----Projection: v.column2 AS UNNEST(v.column2), v.column1
 04)------Filter: v.column1 = Int64(2)
 05)--------TableScan: v projection=[column1, column2]
 
@@ -53,11 +53,11 @@ query TT
 explain select uc2 from (select unnest(column2) as uc2, column1 from v) where uc2 > 3;
 ----
 logical_plan
-01)Projection: unnest(v.column2) AS uc2
-02)--Filter: unnest(v.column2) > Int64(3)
-03)----Projection: unnest(v.column2)
-04)------Unnest: lists[unnest(v.column2)] structs[]
-05)--------Projection: v.column2 AS unnest(v.column2), v.column1
+01)Projection: UNNEST(v.column2) AS uc2
+02)--Filter: UNNEST(v.column2) > Int64(3)
+03)----Projection: UNNEST(v.column2)
+04)------Unnest: lists[UNNEST(v.column2)] structs[]
+05)--------Projection: v.column2 AS UNNEST(v.column2), v.column1
 06)----------TableScan: v projection=[column1, column2]
 
 query II
@@ -71,10 +71,10 @@ query TT
 explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 AND column1 = 2;
 ----
 logical_plan
-01)Projection: unnest(v.column2) AS uc2, v.column1
-02)--Filter: unnest(v.column2) > Int64(3)
-03)----Unnest: lists[unnest(v.column2)] structs[]
-04)------Projection: v.column2 AS unnest(v.column2), v.column1
+01)Projection: UNNEST(v.column2) AS uc2, v.column1
+02)--Filter: UNNEST(v.column2) > Int64(3)
+03)----Unnest: lists[UNNEST(v.column2)] structs[]
+04)------Projection: v.column2 AS UNNEST(v.column2), v.column1
 05)--------Filter: v.column1 = Int64(2)
 06)----------TableScan: v projection=[column1, column2]
 
@@ -90,10 +90,10 @@ query TT
 explain select uc2, column1 from  (select unnest(column2) as uc2, column1 from v) where uc2 > 3 OR column1 = 2;
 ----
 logical_plan
-01)Projection: unnest(v.column2) AS uc2, v.column1
-02)--Filter: unnest(v.column2) > Int64(3) OR v.column1 = Int64(2)
-03)----Unnest: lists[unnest(v.column2)] structs[]
-04)------Projection: v.column2 AS unnest(v.column2), v.column1
+01)Projection: UNNEST(v.column2) AS uc2, v.column1
+02)--Filter: UNNEST(v.column2) > Int64(3) OR v.column1 = Int64(2)
+03)----Unnest: lists[UNNEST(v.column2)] structs[]
+04)------Projection: v.column2 AS UNNEST(v.column2), v.column1
 05)--------TableScan: v projection=[column1, column2]
 
 statement ok
@@ -112,10 +112,10 @@ query TT
 explain select * from (select column1, unnest(column2) as o from d) where o['a'] = 1;
 ----
 logical_plan
-01)Projection: d.column1, unnest(d.column2) AS o
-02)--Filter: get_field(unnest(d.column2), Utf8("a")) = Int64(1)
-03)----Unnest: lists[unnest(d.column2)] structs[]
-04)------Projection: d.column1, d.column2 AS unnest(d.column2)
+01)Projection: d.column1, UNNEST(d.column2) AS o
+02)--Filter: get_field(UNNEST(d.column2), Utf8("a")) = Int64(1)
+03)----Unnest: lists[UNNEST(d.column2)] structs[]
+04)------Projection: d.column1, d.column2 AS UNNEST(d.column2)
 05)--------TableScan: d projection=[column1, column2]
 
 

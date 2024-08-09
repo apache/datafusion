@@ -408,7 +408,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                         "Error IPC message while deserializing ScalarValue::List: {e}"
                     ))
                 })?;
-                let buffer = Buffer::from(arrow_data);
+                let buffer = Buffer::from(arrow_data.as_slice());
 
                 let ipc_batch = message.header_as_record_batch().ok_or_else(|| {
                     Error::General(
@@ -423,7 +423,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                             "Error IPC message while deserializing ScalarValue::List dictionary message: {e}"
                         ))
                     })?;
-                    let buffer = Buffer::from(arrow_data);
+                    let buffer = Buffer::from(arrow_data.as_slice());
 
                     let dict_batch = message.header_as_dictionary_batch().ok_or_else(|| {
                         Error::General(

@@ -1531,7 +1531,7 @@ pub fn create_window_expr(
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
-        _ => (e.display_name()?, e),
+        _ => (e.schema_name().to_string(), e),
     };
     create_window_expr_with_name(e, name, logical_schema, execution_props)
 }
@@ -1629,7 +1629,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (Some(name.clone()), expr.as_ref()),
-        Expr::AggregateFunction(_) => (e.display_name().ok(), e),
+        Expr::AggregateFunction(_) => (Some(e.schema_name().to_string()), e),
         _ => (None, e),
     };
 
