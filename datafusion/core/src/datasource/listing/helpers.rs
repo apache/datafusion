@@ -21,11 +21,11 @@ use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 
+use super::ListingTableUrl;
 use super::PartitionedFile;
-use crate::datasource::listing::ListingTableUrl;
 use crate::execution::context::SessionState;
-use crate::logical_expr::{BinaryExpr, Operator};
-use crate::{error::Result, scalar::ScalarValue};
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{BinaryExpr, Operator};
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, StringBuilder},
@@ -518,8 +518,8 @@ mod tests {
 
     use futures::StreamExt;
 
-    use crate::logical_expr::{case, col, lit, Expr};
     use crate::test::object_store::make_test_store_and_state;
+    use datafusion_expr::{case, col, lit, Expr};
 
     use super::*;
 

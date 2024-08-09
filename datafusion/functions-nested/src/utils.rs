@@ -32,7 +32,7 @@ use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 
 use core::any::type_name;
 use datafusion_common::DataFusionError;
-use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionImplementation};
+use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
@@ -251,11 +251,6 @@ pub(crate) fn compute_array_dims(
             _ => return Ok(Some(res)),
         }
     }
-}
-
-/// Returns the name of the argument at index `i`, or an empty string if the index is out of bounds.
-pub(super) fn get_arg_name(args: &[Expr], i: usize) -> String {
-    args.get(i).map(ToString::to_string).unwrap_or_default()
 }
 
 #[cfg(test)]

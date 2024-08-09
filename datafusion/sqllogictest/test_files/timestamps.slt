@@ -3109,6 +3109,68 @@ SELECT * FROM VALUES
 2024-02-01T08:00:00Z
 2023-12-31T23:00:00Z
 
+# interval vs. duration comparison
+query B
+select (now() - now()) < interval '1 seconds';
+----
+true
+
+query B
+select (now() - now()) <= interval '1 seconds';
+----
+true
+
+query B
+select (now() - now()) = interval '0 seconds';
+----
+true
+
+query B
+select (now() - now()) != interval '1 seconds';
+----
+true
+
+query B
+select (now() - now()) > interval '-1 seconds';
+----
+true
+
+query B
+select (now() - now()) >= interval '-1 seconds';
+----
+true
+
+query B
+select arrow_cast(123, 'Duration(Nanosecond)') < interval '200 nanoseconds';
+----
+true
+
+query B
+select arrow_cast(123, 'Duration(Nanosecond)') < interval '100 nanoseconds';
+----
+false
+
+query B
+select arrow_cast(123, 'Duration(Nanosecond)') < interval '1 seconds';
+----
+true
+
+query B
+select interval '1 seconds' < arrow_cast(123, 'Duration(Nanosecond)')
+----
+false
+
+# interval as LHS
+query B
+select interval '2 seconds' = interval '2 seconds';
+----
+true
+
+query B
+select interval '1 seconds' < interval '2 seconds';
+----
+true
+
 statement ok
 drop table t;
 

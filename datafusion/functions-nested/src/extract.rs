@@ -40,7 +40,7 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::utils::{get_arg_name, make_scalar_function};
+use crate::utils::make_scalar_function;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(
@@ -97,11 +97,24 @@ impl ScalarUDFImpl for ArrayElement {
     }
 
     fn display_name(&self, args: &[Expr]) -> Result<String> {
-        Ok(format!(
-            "{}[{}]",
-            get_arg_name(args, 0),
-            get_arg_name(args, 1)
-        ))
+        let args_name = args.iter().map(ToString::to_string).collect::<Vec<_>>();
+        if args_name.len() != 2 {
+            return exec_err!("expect 2 args, got {}", args_name.len());
+        }
+
+        Ok(format!("{}[{}]", args_name[0], args_name[1]))
+    }
+
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        let args_name = args
+            .iter()
+            .map(|e| e.schema_name().to_string())
+            .collect::<Vec<_>>();
+        if args_name.len() != 2 {
+            return exec_err!("expect 2 args, got {}", args_name.len());
+        }
+
+        Ok(format!("{}[{}]", args_name[0], args_name[1]))
     }
 
     fn signature(&self) -> &Signature {
@@ -254,14 +267,24 @@ impl ScalarUDFImpl for ArraySlice {
     }
 
     fn display_name(&self, args: &[Expr]) -> Result<String> {
-        Ok(format!(
-            "{}[{}]",
-            get_arg_name(args, 0),
-            (1..args.len())
-                .map(|i| get_arg_name(args, i))
-                .collect::<Vec<String>>()
-                .join(":")
-        ))
+        let args_name = args.iter().map(ToString::to_string).collect::<Vec<_>>();
+        if let Some((arr, indexes)) = args_name.split_first() {
+            Ok(format!("{arr}[{}]", indexes.join(":")))
+        } else {
+            exec_err!("no argument")
+        }
+    }
+
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        let args_name = args
+            .iter()
+            .map(|e| e.schema_name().to_string())
+            .collect::<Vec<_>>();
+        if let Some((arr, indexes)) = args_name.split_first() {
+            Ok(format!("{arr}[{}]", indexes.join(":")))
+        } else {
+            exec_err!("no argument")
+        }
     }
 
     fn name(&self) -> &str {
