@@ -774,17 +774,24 @@ logical_plan
 14)--------------Values: (Int64(0)), (Int64(1))
 physical_plan
 01)SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
-02)--UnionExec
-03)----SortExec: expr=[t@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----InterleaveExec
 04)------ProjectionExec: expr=[0 as m, t@0 as t]
-05)--------AggregateExec: mode=SinglePartitioned, gby=[t@0 as t], aggr=[]
-06)----------ProjectionExec: expr=[column1@0 as t]
-07)------------ValuesExec
-08)----SortExec: expr=[t@1 ASC NULLS LAST], preserve_partitioning=[false]
-09)------ProjectionExec: expr=[1 as m, t@0 as t]
-10)--------AggregateExec: mode=SinglePartitioned, gby=[t@0 as t], aggr=[]
-11)----------ProjectionExec: expr=[column1@0 as t]
-12)------------ValuesExec
+05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+09)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
+10)------------------ProjectionExec: expr=[column1@0 as t]
+11)--------------------ValuesExec
+12)------ProjectionExec: expr=[1 as m, t@0 as t]
+13)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
+14)----------CoalesceBatchesExec: target_batch_size=8192
+15)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
+16)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+17)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
+18)------------------ProjectionExec: expr=[column1@0 as t]
+19)--------------------ValuesExec
 
 #####
 # Multi column sorting with lists
@@ -1156,5 +1163,6 @@ logical_plan
 04)------TableScan: ordered_table projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
-02)--SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true

@@ -333,6 +333,11 @@ config_namespace! {
         /// Number of input rows partial aggregation partition should process, before
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
+
+        /// Should DataFusion use row number estimate at the input to decide whether increasing
+        /// parallelism is beneficial or not. By default, only exact row number (not estimates)
+        /// are used for decision. Setting this flag to `true` will more likely produce better plans.
+        pub use_row_number_estimate_to_optimize_partitioning: bool, default = false
     }
 }
 

@@ -1048,6 +1048,7 @@ fn get_repartition_status_flags(
     requirements: &[Distribution],
     children: &[&Arc<dyn ExecutionPlan>],
     batch_size: usize,
+    should_use_estimates: bool,
 ) -> Result<Vec<RepartitionRequirementStatus>> {
     debug_assert_eq!(requirements.len(), children.len());
     let mut repartition_status_flags = vec![];
@@ -1057,7 +1058,12 @@ fn get_repartition_status_flags(
         let roundrobin_beneficial = if let Some(n_rows) = num_rows.get_value() {
             // Row count estimate is larger than the batch size.
             // Adding repartition is desirable for this case
-            *n_rows > batch_size
+            // According to `should_use_estimates` flag, we can either use exact and inexact row numbers or only exact row numbers for this decision.
+            if should_use_estimates || num_rows.is_exact().unwrap() {
+                *n_rows > batch_size
+            } else {
+                true
+            }
         } else {
             true
         };
@@ -1113,6 +1119,9 @@ fn ensure_distribution(
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
     let batch_size = config.execution.batch_size;
+    let should_use_estimates = config
+        .execution
+        .use_row_number_estimate_to_optimize_partitioning;
     let is_unbounded = dist_context.plan.execution_mode().is_unbounded();
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
@@ -1149,6 +1158,7 @@ fn ensure_distribution(
         &plan.required_input_distribution(),
         &plan.children(),
         batch_size,
+        should_use_estimates,
     )?;
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
