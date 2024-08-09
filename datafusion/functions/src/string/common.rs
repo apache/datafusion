@@ -19,7 +19,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, GenericStringArray,
+    new_null_array, Array, ArrayDataBuilder, ArrayRef, GenericStringArray,
     GenericStringBuilder, OffsetSizeTrait, StringArray,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
