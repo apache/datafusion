@@ -19,4 +19,5 @@
 
 pub mod accumulate;
 pub mod bool_op;
+pub mod nulls;
 pub mod prim_op;
