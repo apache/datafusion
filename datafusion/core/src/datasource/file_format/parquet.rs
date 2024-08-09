@@ -332,7 +332,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
@@ -342,6 +342,11 @@ impl FileFormat for ParquetFormat {
             table_schema,
             object,
             self.metadata_size_hint(),
+            state
+                .config_options()
+                .execution
+                .parquet
+                .schema_force_string_view,
         )
         .await?;
         Ok(stats)
@@ -481,9 +486,10 @@ async fn fetch_statistics(
     table_schema: SchemaRef,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
+    force_string_view: bool,
 ) -> Result<Statistics> {
     let metadata = fetch_parquet_metadata(store, file, metadata_size_hint).await?;
-    statistics_from_parquet_meta_calc(&metadata, table_schema)
+    statistics_from_parquet_meta_calc(&metadata, table_schema, force_string_view)
 }
 
 /// Convert statistics in  [`ParquetMetaData`] into [`Statistics`] using ['StatisticsConverter`]
@@ -493,6 +499,7 @@ async fn fetch_statistics(
 pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
+    force_string_view: bool,
 ) -> Result<Statistics> {
     let row_groups_metadata = metadata.row_groups();
 
@@ -514,10 +521,13 @@ pub fn statistics_from_parquet_meta_calc(
     statistics.total_byte_size = Precision::Exact(total_byte_size);
 
     let file_metadata = metadata.file_metadata();
-    let file_schema = parquet_to_arrow_schema(
+    let mut file_schema = parquet_to_arrow_schema(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
+    if force_string_view {
+        file_schema = transform_schema_to_view(&file_schema);
+    }
 
     statistics.column_statistics = if has_statistics {
         let (mut max_accs, mut min_accs) = create_max_min_accs(&table_schema);
@@ -578,7 +588,7 @@ pub async fn statistics_from_parquet_meta(
     metadata: &ParquetMetaData,
     table_schema: SchemaRef,
 ) -> Result<Statistics> {
-    statistics_from_parquet_meta_calc(metadata, table_schema)
+    statistics_from_parquet_meta_calc(metadata, table_schema, false)
 }
 
 fn summarize_min_max_null_counts(
@@ -1278,8 +1288,20 @@ mod tests {
         let format = ParquetFormat::default();
         let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
 
-        let stats =
-            fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
+        let use_string_view = ctx
+            .config_options()
+            .execution
+            .parquet
+            .schema_force_string_view;
+
+        let stats = fetch_statistics(
+            store.as_ref(),
+            schema.clone(),
+            &meta[0],
+            None,
+            use_string_view,
+        )
+        .await?;
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -1287,7 +1309,9 @@ mod tests {
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
         assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
-        let stats = fetch_statistics(store.as_ref(), schema, &meta[1], None).await?;
+        let stats =
+            fetch_statistics(store.as_ref(), schema, &meta[1], None, use_string_view)
+                .await?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
         let c2_stats = &stats.column_statistics[1];
@@ -1460,15 +1484,25 @@ mod tests {
 
         let session = SessionContext::new();
         let ctx = session.state();
+        let use_string_view = ctx
+            .config_options()
+            .execution
+            .parquet
+            .schema_force_string_view;
         let format = ParquetFormat::default().with_metadata_size_hint(Some(9));
         let schema = format
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
             .unwrap();
 
-        let stats =
-            fetch_statistics(store.upcast().as_ref(), schema.clone(), &meta[0], Some(9))
-                .await?;
+        let stats = fetch_statistics(
+            store.upcast().as_ref(),
+            schema.clone(),
+            &meta[0],
+            Some(9),
+            use_string_view,
+        )
+        .await?;
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -1500,6 +1534,7 @@ mod tests {
             schema.clone(),
             &meta[0],
             Some(size_hint),
+            use_string_view,
         )
         .await?;
 
@@ -1548,7 +1583,15 @@ mod tests {
 
         // Fetch statistics for first file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
-        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
+        let stats = statistics_from_parquet_meta_calc(
+            &pq_meta,
+            schema.clone(),
+            state
+                .config_options()
+                .execution
+                .parquet
+                .schema_force_string_view,
+        )?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
 
         // column c_dic
@@ -1590,25 +1633,49 @@ mod tests {
         let format = ParquetFormat::default();
         let schema = format.infer_schema(&state, &store, &files).await.unwrap();
 
+        let use_string_view = state
+            .config_options()
+            .execution
+            .parquet
+            .schema_force_string_view;
+
         let null_i64 = ScalarValue::Int64(None);
-        let null_utf8 = ScalarValue::Utf8(None);
+        let null_utf8 = if use_string_view {
+            ScalarValue::Utf8View(None)
+        } else {
+            ScalarValue::Utf8(None)
+        };
 
         // Fetch statistics for first file
+
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
-        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
+        let stats =
+            statistics_from_parquet_meta_calc(&pq_meta, schema.clone(), use_string_view)?;
         //
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1
         let c1_stats = &stats.column_statistics[0];
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
-        assert_eq!(
-            c1_stats.max_value,
-            Precision::Exact(ScalarValue::Utf8(Some("bar".to_string())))
-        );
-        assert_eq!(
-            c1_stats.min_value,
-            Precision::Exact(ScalarValue::Utf8(Some("Foo".to_string())))
-        );
+        if use_string_view {
+            assert_eq!(
+                c1_stats.max_value,
+                Precision::Exact(ScalarValue::Utf8View(Some("bar".to_string())))
+            );
+            assert_eq!(
+                c1_stats.min_value,
+                Precision::Exact(ScalarValue::Utf8View(Some("Foo".to_string())))
+            );
+        } else {
+            assert_eq!(
+                c1_stats.max_value,
+                Precision::Exact(ScalarValue::Utf8(Some("bar".to_string())))
+            );
+            assert_eq!(
+                c1_stats.min_value,
+                Precision::Exact(ScalarValue::Utf8(Some("Foo".to_string())))
+            );
+        }
+
         // column c2: missing from the file so the table treats all 3 rows as null
         let c2_stats = &stats.column_statistics[1];
         assert_eq!(c2_stats.null_count, Precision::Exact(3));
@@ -1617,7 +1684,8 @@ mod tests {
 
         // Fetch statistics for second file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[1], None).await?;
-        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
+        let stats =
+            statistics_from_parquet_meta_calc(&pq_meta, schema.clone(), use_string_view)?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1: missing from the file so the table treats all 3 rows as null
         let c1_stats = &stats.column_statistics[0];
