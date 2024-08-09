@@ -1031,6 +1031,50 @@ fn replace_order_preserving_variants(
     context.update_plan_from_children()
 }
 
+fn repartition_desired_flags(
+    requirements: &[Distribution],
+    children: &[&Arc<dyn ExecutionPlan>],
+    batch_size: usize,
+) -> Result<Vec<bool>> {
+    debug_assert_eq!(requirements.len(), children.len());
+    let mut desired_flags = vec![];
+    for (child, requirement) in children.iter().zip(requirements) {
+        // Don't need to apply when the returned row count is not greater than batch size
+        let num_rows = child.statistics()?.num_rows;
+        let mut desired = if let Some(n_rows) = num_rows.get_value() {
+            // Row count estimate is larger than the batch size.
+            // Adding repartition is desirable for this case
+            *n_rows > batch_size
+        } else {
+            true
+        };
+        let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
+        if is_hash && child.output_partitioning().partition_count() > 1 {
+            // when input partitioning is larger than 1 for hash requirement.
+            // re-partitioning is desired
+            desired = true;
+        }
+        desired_flags.push((is_hash, desired));
+    }
+    // Align beneficial flags for hash partitions
+    if desired_flags
+        .iter()
+        .any(|(is_hash, beneficial)| *is_hash && *beneficial)
+    {
+        // There is at least one hash requirement, which is beneficial to add according to stats
+        // In this case, turn all beneficial flags for hash to true. To produce aligned children.
+        for (is_hash, beneficial) in &mut desired_flags {
+            if *is_hash {
+                *beneficial = true;
+            }
+        }
+    }
+    Ok(desired_flags
+        .into_iter()
+        .map(|(_is_hash, beneficial)| beneficial)
+        .collect())
+}
+
 /// This function checks whether we need to add additional data exchange
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
@@ -1082,6 +1126,11 @@ fn ensure_distribution(
         }
     };
 
+    let repartition_beneficial_stats = repartition_desired_flags(
+        &plan.required_input_distribution(),
+        &plan.children(),
+        batch_size,
+    )?;
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
     // - Satisfy the distribution requirements of every child, if it is not
@@ -1092,20 +1141,18 @@ fn ensure_distribution(
         plan.required_input_distribution().iter(),
         plan.required_input_ordering().iter(),
         plan.benefits_from_input_partitioning(),
-        plan.maintains_input_order()
+        plan.maintains_input_order(),
+        repartition_beneficial_stats.into_iter()
     )
     .map(
-        |(mut child, requirement, required_input_ordering, would_benefit, maintains)| {
-            // Don't need to apply when the returned row count is not greater than batch size
-            let num_rows = child.plan.statistics()?.num_rows;
-            let repartition_beneficial_stats = if let Some(n_rows) = num_rows.get_value()
-            {
-                // Row count estimate is larger than the batch size.
-                *n_rows > batch_size
-            } else {
-                true
-            };
-
+        |(
+            mut child,
+            requirement,
+            required_input_ordering,
+            would_benefit,
+            maintains,
+            repartition_beneficial_stats,
+        )| {
             let add_roundrobin = enable_round_robin
                 // Operator benefits from partitioning (e.g. filter):
                 && (would_benefit && repartition_beneficial_stats)
@@ -1133,7 +1180,13 @@ fn ensure_distribution(
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
                     }
-                    child = add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
+                    // When repartitioning is not beneficial and input partition count is 1. Hash partitioning is unnecessary
+                    if repartition_beneficial_stats
+                        || child.plan.output_partitioning().partition_count() != 1
+                    {
+                        child =
+                            add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
+                    }
                 }
                 Distribution::UnspecifiedDistribution => {
                     if add_roundrobin {

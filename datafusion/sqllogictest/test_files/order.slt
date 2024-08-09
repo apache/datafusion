@@ -774,22 +774,17 @@ logical_plan
 14)--------------Values: (Int64(0)), (Int64(1))
 physical_plan
 01)SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
-02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST], preserve_partitioning=[true]
-03)----InterleaveExec
+02)--UnionExec
+03)----SortExec: expr=[t@1 ASC NULLS LAST], preserve_partitioning=[false]
 04)------ProjectionExec: expr=[0 as m, t@0 as t]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
-09)----------------ProjectionExec: expr=[column1@0 as t]
-10)------------------ValuesExec
-11)------ProjectionExec: expr=[1 as m, t@0 as t]
-12)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
-13)----------CoalesceBatchesExec: target_batch_size=8192
-14)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
-15)--------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
-16)----------------ProjectionExec: expr=[column1@0 as t]
-17)------------------ValuesExec
+05)--------AggregateExec: mode=SinglePartitioned, gby=[t@0 as t], aggr=[]
+06)----------ProjectionExec: expr=[column1@0 as t]
+07)------------ValuesExec
+08)----SortExec: expr=[t@1 ASC NULLS LAST], preserve_partitioning=[false]
+09)------ProjectionExec: expr=[1 as m, t@0 as t]
+10)--------AggregateExec: mode=SinglePartitioned, gby=[t@0 as t], aggr=[]
+11)----------ProjectionExec: expr=[column1@0 as t]
+12)------------ValuesExec
 
 #####
 # Multi column sorting with lists

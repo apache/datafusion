@@ -3667,16 +3667,17 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=2
 03)----HashJoinExec: mode=Partitioned, join_type=Full, on=[(e@0, c@0)]
 04)------CoalesceBatchesExec: target_batch_size=2
-05)--------RepartitionExec: partitioning=Hash([e@0], 2), input_partitions=1
-06)----------ProjectionExec: expr=[1 as e, 3 as f]
-07)------------PlaceholderRowExec
-08)------CoalesceBatchesExec: target_batch_size=2
-09)--------RepartitionExec: partitioning=Hash([c@0], 2), input_partitions=2
-10)----------UnionExec
-11)------------ProjectionExec: expr=[1 as c, 2 as d]
-12)--------------PlaceholderRowExec
-13)------------ProjectionExec: expr=[1 as c, 3 as d]
-14)--------------PlaceholderRowExec
+05)--------RepartitionExec: partitioning=Hash([e@0], 2), input_partitions=2
+06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------ProjectionExec: expr=[1 as e, 3 as f]
+08)--------------PlaceholderRowExec
+09)------CoalesceBatchesExec: target_batch_size=2
+10)--------RepartitionExec: partitioning=Hash([c@0], 2), input_partitions=2
+11)----------UnionExec
+12)------------ProjectionExec: expr=[1 as c, 2 as d]
+13)--------------PlaceholderRowExec
+14)------------ProjectionExec: expr=[1 as c, 3 as d]
+15)--------------PlaceholderRowExec
 
 query IIII rowsort
 SELECT * FROM (
