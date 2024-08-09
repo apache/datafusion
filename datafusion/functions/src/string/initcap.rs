@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
@@ -73,9 +73,7 @@ impl ScalarUDFImpl for InitcapFunc {
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(initcap::<i32>, vec![])(args),
             DataType::LargeUtf8 => make_scalar_function(initcap::<i64>, vec![])(args),
-            DataType::Utf8View => {
-                make_scalar_function(initcap_utf8view::<i32>, vec![])(args)
-            }
+            DataType::Utf8View => make_scalar_function(initcap_utf8view, vec![])(args),
             other => {
                 exec_err!("Unsupported data type {other:?} for function initcap")
             }
@@ -97,13 +95,13 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
-fn initcap_utf8view<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_view_array = as_string_view_array(&args[0])?;
 
     let result = string_view_array
         .iter()
         .map(initcap_string)
-        .collect::<GenericStringArray<T>>();
+        .collect::<StringArray>();
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -174,6 +172,16 @@ mod tests {
                 "hi THOMAS".to_string()
             )))],
             Ok(Some("Hi Thomas")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            InitcapFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                "hi THOMAS wIth M0re ThAN 12 ChaRs".to_string()
+            )))],
+            Ok(Some("Hi Thomas With M0re Than 12 Chars")),
             &str,
             Utf8,
             StringArray
