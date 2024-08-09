@@ -1099,6 +1099,37 @@ mod tests {
     async fn test_remove_unnecessary_sort7() -> Result<()> {
         let schema = create_test_schema()?;
         let source = memory_exec(&schema);
+        let input = Arc::new(
+            SortExec::new(vec![
+                sort_expr("non_nullable_col", &schema),
+                sort_expr("nullable_col", &schema),
+            ], source),
+        );
+
+        let physical_plan = Arc::new(
+            SortExec::new(vec![
+                sort_expr("non_nullable_col", &schema),
+            ], input).with_fetch(Some(2)),
+        ) as Arc<dyn ExecutionPlan>;
+
+        let expected_input = [
+            "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
+            "  SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        let expected_optimized = [
+            "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
+            "  MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_unnecessary_sort8() -> Result<()> {
+        let schema = create_test_schema()?;
+        let source = memory_exec(&schema);
         let input = Arc::new(SortExec::new(
             vec![sort_expr("non_nullable_col", &schema)],
             source,

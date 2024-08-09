@@ -1072,7 +1072,7 @@ struct RepartitionRequirementStatus {
 ///     hash_necessary: true
 /// }
 /// ```
-fn get_repartition_status_flags(
+fn get_repartition_requirement_status(
     requirements: &[Distribution],
     children: &[&Arc<dyn ExecutionPlan>],
     batch_size: usize,
@@ -1174,7 +1174,7 @@ fn ensure_distribution(
         }
     };
 
-    let repartition_status_flags = get_repartition_status_flags(
+    let repartition_status_flags = get_repartition_requirement_status(
         &plan.required_input_distribution(),
         &plan.children(),
         batch_size,

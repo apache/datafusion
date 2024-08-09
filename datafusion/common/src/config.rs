@@ -336,8 +336,9 @@ config_namespace! {
 
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
-        /// only exact row numbers (not estimates) are used for decision.
+        /// only exact row numbers (not estimates) are used for this decision.
         /// Setting this flag to `true` will likely produce better plans.
+        /// if the source of statistics is accurate.
         /// We plan to make this the default in the future.
         pub use_row_number_estimates_to_optimize_partitioning: bool, default = false
     }
