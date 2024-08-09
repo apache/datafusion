@@ -39,8 +39,8 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
 };
-use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use datafusion_physical_expr_common::aggregate::utils::Hashable;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use datafusion_functions_aggregate_common::utils::Hashable;
 
 make_udaf_expr_and_func!(
     Sum,
@@ -58,14 +58,18 @@ make_udaf_expr_and_func!(
 /// `helper` is a macro accepting (ArrowPrimitiveType, DataType)
 macro_rules! downcast_sum {
     ($args:ident, $helper:ident) => {
-        match $args.data_type {
-            DataType::UInt64 => $helper!(UInt64Type, $args.data_type),
-            DataType::Int64 => $helper!(Int64Type, $args.data_type),
-            DataType::Float64 => $helper!(Float64Type, $args.data_type),
-            DataType::Decimal128(_, _) => $helper!(Decimal128Type, $args.data_type),
-            DataType::Decimal256(_, _) => $helper!(Decimal256Type, $args.data_type),
+        match $args.return_type {
+            DataType::UInt64 => $helper!(UInt64Type, $args.return_type),
+            DataType::Int64 => $helper!(Int64Type, $args.return_type),
+            DataType::Float64 => $helper!(Float64Type, $args.return_type),
+            DataType::Decimal128(_, _) => $helper!(Decimal128Type, $args.return_type),
+            DataType::Decimal256(_, _) => $helper!(Decimal256Type, $args.return_type),
             _ => {
-                not_impl_err!("Sum not supported for {}: {}", $args.name, $args.data_type)
+                not_impl_err!(
+                    "Sum not supported for {}: {}",
+                    $args.name,
+                    $args.return_type
+                )
             }
         }
     };

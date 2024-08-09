@@ -58,7 +58,7 @@ use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    displayable, udaf, windows, AggregateExpr, ExecutionPlan, ExecutionPlanProperties,
+    displayable, windows, AggregateExpr, ExecutionPlan, ExecutionPlanProperties,
     InputOrderMode, Partitioning, PhysicalExpr, WindowExpr,
 };
 
@@ -73,7 +73,8 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
-    self, physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
+    self, create_function_physical_name, physical_name, AggregateFunction, Alias,
+    GroupingSet, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -83,6 +84,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
@@ -1559,6 +1561,17 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             order_by,
             null_treatment,
         }) => {
+            let name = if let Some(name) = name {
+                name
+            } else {
+                create_function_physical_name(
+                    func.name(),
+                    *distinct,
+                    args,
+                    order_by.as_ref(),
+                )?
+            };
+
             let physical_args =
                 create_physical_exprs(args, logical_input_schema, execution_props)?;
             let filter = match filter {
@@ -1575,7 +1588,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 == NullTreatment::IgnoreNulls;
 
             let (agg_expr, filter, order_by) = {
-                let sort_exprs = order_by.clone().unwrap_or(vec![]);
                 let physical_sort_exprs = match order_by {
                     Some(exprs) => Some(create_physical_sort_exprs(
                         exprs,
@@ -1588,18 +1600,15 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 let ordering_reqs: Vec<PhysicalSortExpr> =
                     physical_sort_exprs.clone().unwrap_or(vec![]);
 
-                let agg_expr = udaf::create_aggregate_expr_with_dfschema(
-                    func,
-                    &physical_args,
-                    args,
-                    &sort_exprs,
-                    &ordering_reqs,
-                    logical_input_schema,
-                    name,
-                    ignore_nulls,
-                    *distinct,
-                    false,
-                )?;
+                let schema: Schema = logical_input_schema.clone().into();
+                let agg_expr =
+                    AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
+                        .order_by(ordering_reqs.to_vec())
+                        .schema(Arc::new(schema))
+                        .alias(name)
+                        .with_ignore_nulls(ignore_nulls)
+                        .with_distinct(*distinct)
+                        .build()?;
 
                 (agg_expr, filter, physical_sort_exprs)
             };
