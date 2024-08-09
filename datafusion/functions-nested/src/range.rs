@@ -166,7 +166,10 @@ impl ScalarUDFImpl for GenSeries {
             Int64 => make_scalar_function(|args| gen_range_inner(args, true))(args),
             Date32 => make_scalar_function(|args| gen_range_date(args, true))(args),
             dt => {
-                exec_err!("unsupported type for range. Expected Int64 or Date32, got: {}", dt)
+                exec_err!(
+                    "unsupported type for range. Expected Int64 or Date32, got: {}",
+                    dt
+                )
             }
         }
     }
