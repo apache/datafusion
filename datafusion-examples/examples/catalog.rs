@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     let dir_a = prepare_example_data()?;
     let dir_b = prepare_example_data()?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let state = ctx.state();
     let catlist = Arc::new(CustomCatalogProviderList::new());
 

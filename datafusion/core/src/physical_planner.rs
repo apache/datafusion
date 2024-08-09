@@ -180,7 +180,7 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
                     .create_initial_plan(logical_plan, session_state)
                     .await?;
 
-                self.optimize_internal(plan, session_state, |_, _| {})
+                self.optimize_physical_plan(plan, session_state, |_, _| {})
             }
         }
     }
@@ -1529,7 +1529,7 @@ pub fn create_window_expr(
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
-        _ => (e.display_name()?, e),
+        _ => (e.schema_name().to_string(), e),
     };
     create_window_expr_with_name(e, name, logical_schema, execution_props)
 }
@@ -1620,7 +1620,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (Some(name.clone()), expr.as_ref()),
-        Expr::AggregateFunction(_) => (e.display_name().ok(), e),
+        Expr::AggregateFunction(_) => (Some(e.schema_name().to_string()), e),
         _ => (None, e),
     };
 
@@ -1732,7 +1732,7 @@ impl DefaultPhysicalPlanner {
                             }
                         }
 
-                        let optimized_plan = self.optimize_internal(
+                        let optimized_plan = self.optimize_physical_plan(
                             input,
                             session_state,
                             |plan, optimizer| {
@@ -1816,7 +1816,7 @@ impl DefaultPhysicalPlanner {
 
     /// Optimize a physical plan by applying each physical optimizer,
     /// calling observer(plan, optimizer after each one)
-    fn optimize_internal<F>(
+    pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         session_state: &SessionState,

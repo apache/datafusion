@@ -28,11 +28,12 @@ use datafusion_common::{
     assert_contains, DataFusionError, ParamValues, Result, ScalarValue,
 };
 use datafusion_expr::{
+    col,
     dml::CopyTo,
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
-    ColumnarValue, CreateExternalTable, DdlStatement, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, CreateExternalTable, CreateIndex, DdlStatement, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -4424,6 +4425,35 @@ fn test_parse_escaped_string_literal_value() {
         logical_plan(sql).unwrap_err().strip_backtrace(),
         "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column: 25\")"
     )
+}
+
+#[test]
+fn plan_create_index() {
+    let sql =
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_name ON test USING btree (name, age DESC)";
+    let plan = logical_plan_with_options(sql, ParserOptions::default()).unwrap();
+    match plan {
+        LogicalPlan::Ddl(DdlStatement::CreateIndex(CreateIndex {
+            name,
+            table,
+            using,
+            columns,
+            unique,
+            if_not_exists,
+            ..
+        })) => {
+            assert_eq!(name, Some("idx_name".to_string()));
+            assert_eq!(format!("{table}"), "test");
+            assert_eq!(using, Some("btree".to_string()));
+            assert_eq!(
+                columns,
+                vec![col("name").sort(true, false), col("age").sort(false, true),]
+            );
+            assert!(unique);
+            assert!(if_not_exists);
+        }
+        _ => panic!("wrong plan type"),
+    }
 }
 
 fn assert_field_not_found(err: DataFusionError, name: &str) {

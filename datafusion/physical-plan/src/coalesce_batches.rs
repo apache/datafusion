@@ -492,8 +492,10 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
             if actual_buffer_size > (ideal_buffer_size * 2) {
                 // We set the block size to `ideal_buffer_size` so that the new StringViewArray only has one buffer, which accelerate later concat_batches.
                 // See https://github.com/apache/arrow-rs/issues/6094 for more details.
-                let mut builder = StringViewBuilder::with_capacity(s.len())
-                    .with_block_size(ideal_buffer_size as u32);
+                let mut builder = StringViewBuilder::with_capacity(s.len());
+                if ideal_buffer_size > 0 {
+                    builder = builder.with_block_size(ideal_buffer_size as u32);
+                }
 
                 for v in s.iter() {
                     builder.append_option(v);
@@ -802,7 +804,7 @@ mod tests {
     impl StringViewTest {
         /// Create a `StringViewArray` with the parameters specified in this struct
         fn build(self) -> StringViewArray {
-            let mut builder = StringViewBuilder::with_capacity(100);
+            let mut builder = StringViewBuilder::with_capacity(100).with_block_size(8192);
             loop {
                 for &v in self.strings.iter() {
                     builder.append_option(v);

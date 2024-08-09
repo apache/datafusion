@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::context::SessionState;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_optimizer::OptimizerConfig;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};

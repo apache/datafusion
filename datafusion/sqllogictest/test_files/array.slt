@@ -1137,7 +1137,7 @@ from arrays_values_without_nulls;
 ## array_element (aliases: array_extract, list_extract, list_element)
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: Error during planning: array_element does not support zero arguments.
+query error DataFusion error: Error during planning: Error during planning: array_element does not support zero arguments
 select array_element();
 
 # array_element error
@@ -1979,7 +1979,7 @@ select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
 [6.0] [6.0] [] []
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: Error during planning: array_slice does not support zero arguments.
+query error DataFusion error: Error during planning: Error during planning: array_slice does not support zero arguments
 select array_slice();
 
 
@@ -5350,6 +5350,25 @@ true false true false false false true true false false true false true
 #;
 #----
 #true false true false false false true true false false true false true
+
+# any operator
+query ?
+select column3 from arrays where 'L'=any(column3);
+----
+[L, o, r, e, m]
+
+query I
+select count(*) from arrays where 'L'=any(column3);
+----
+1
+
+query I
+select count(*) from arrays where 'X'=any(column3);
+----
+0
+
+query error DataFusion error: Error during planning: Unsupported AnyOp: '>', only '=' is supported
+select count(*) from arrays where 'X'>any(column3);
 
 ## array_distinct
 
