@@ -15,10 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::compute::take;
 use arrow::record_batch::RecordBatch;
-use arrow_array::types::Int32Type;
-use arrow_array::{Array, DictionaryArray, StructArray};
+use arrow_array::{Array, StructArray};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::logical_expr::ColumnarValue;
 use datafusion_common::{DataFusionError, Result as DataFusionResult, ScalarValue};
@@ -35,12 +33,24 @@ use crate::utils::down_cast_any_ref;
 #[derive(Debug, Hash)]
 pub struct CreateNamedStruct {
     values: Vec<Arc<dyn PhysicalExpr>>,
-    data_type: DataType,
+    names: Vec<String>,
 }
 
 impl CreateNamedStruct {
-    pub fn new(values: Vec<Arc<dyn PhysicalExpr>>, data_type: DataType) -> Self {
-        Self { values, data_type }
+    pub fn new(values: Vec<Arc<dyn PhysicalExpr>>, names: Vec<String>) -> Self {
+        Self { values, names }
+    }
+
+    fn fields(&self, schema: &Schema) -> DataFusionResult<Vec<Field>> {
+        self.values
+            .iter()
+            .zip(&self.names)
+            .map(|(expr, name)| {
+                let data_type = expr.data_type(schema)?;
+                let nullable = expr.nullable(schema)?;
+                Ok(Field::new(name, data_type, nullable))
+            })
+            .collect()
     }
 }
 
@@ -49,8 +59,9 @@ impl PhysicalExpr for CreateNamedStruct {
         self
     }
 
-    fn data_type(&self, _input_schema: &Schema) -> DataFusionResult<DataType> {
-        Ok(self.data_type.clone())
+    fn data_type(&self, input_schema: &Schema) -> DataFusionResult<DataType> {
+        let fields = self.fields(input_schema)?;
+        Ok(DataType::Struct(fields.into()))
     }
 
     fn nullable(&self, _input_schema: &Schema) -> DataFusionResult<bool> {
@@ -64,32 +75,9 @@ impl PhysicalExpr for CreateNamedStruct {
             .map(|expr| expr.evaluate(batch))
             .collect::<datafusion_common::Result<Vec<_>>>()?;
         let arrays = ColumnarValue::values_to_arrays(&values)?;
-        // TODO it would be more efficient if we could preserve dictionaries within the
-        // struct array but for now we unwrap them to avoid runtime errors
-        // https://github.com/apache/datafusion-comet/issues/755
-        let arrays = arrays
-            .iter()
-            .map(|array| {
-                if let Some(dict_array) =
-                    array.as_any().downcast_ref::<DictionaryArray<Int32Type>>()
-                {
-                    take(dict_array.values().as_ref(), dict_array.keys(), None)
-                } else {
-                    Ok(Arc::clone(array))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let fields = match &self.data_type {
-            DataType::Struct(fields) => fields,
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Expected struct data type, got {:?}",
-                    self.data_type
-                )))
-            }
-        };
+        let fields = self.fields(&batch.schema())?;
         Ok(ColumnarValue::Array(Arc::new(StructArray::new(
-            fields.clone(),
+            fields.into(),
             arrays,
             None,
         ))))
@@ -105,14 +93,14 @@ impl PhysicalExpr for CreateNamedStruct {
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(CreateNamedStruct::new(
             children.clone(),
-            self.data_type.clone(),
+            self.names.clone(),
         )))
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {
         let mut s = state;
         self.values.hash(&mut s);
-        self.data_type.hash(&mut s);
+        self.names.hash(&mut s);
         self.hash(&mut s);
     }
 }
@@ -121,8 +109,8 @@ impl Display for CreateNamedStruct {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "CreateNamedStruct [values: {:?}, data_type: {:?}]",
-            self.values, self.data_type
+            "CreateNamedStruct [values: {:?}, names: {:?}]",
+            self.values, self.names
         )
     }
 }
@@ -136,7 +124,9 @@ impl PartialEq<dyn Any> for CreateNamedStruct {
                     .iter()
                     .zip(x.values.iter())
                     .all(|(a, b)| a.eq(b))
-                    && self.data_type.eq(&x.data_type)
+                    && self.values.len() == x.values.len()
+                    && self.names.iter().zip(x.names.iter()).all(|(a, b)| a.eq(b))
+                    && self.names.len() == x.names.len()
             })
             .unwrap_or(false)
     }
@@ -246,7 +236,7 @@ impl PartialEq<dyn Any> for GetStructField {
 mod test {
     use super::CreateNamedStruct;
     use arrow_array::{Array, DictionaryArray, Int32Array, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Fields, Schema};
+    use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::Result;
     use datafusion_expr::ColumnarValue;
     use datafusion_physical_expr_common::expressions::column::Column;
@@ -261,9 +251,8 @@ mod test {
         let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
         let schema = Schema::new(vec![Field::new("a", data_type, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)])?;
-        let data_type =
-            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, false)]));
-        let x = CreateNamedStruct::new(vec![Arc::new(Column::new("a", 0))], data_type);
+        let field_names = vec!["a".to_string()];
+        let x = CreateNamedStruct::new(vec![Arc::new(Column::new("a", 0))], field_names);
         let ColumnarValue::Array(x) = x.evaluate(&batch)? else {
             unreachable!()
         };
@@ -279,9 +268,8 @@ mod test {
         let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let schema = Schema::new(vec![Field::new("a", data_type, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)])?;
-        let data_type =
-            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Utf8, false)]));
-        let x = CreateNamedStruct::new(vec![Arc::new(Column::new("a", 0))], data_type);
+        let field_names = vec!["a".to_string()];
+        let x = CreateNamedStruct::new(vec![Arc::new(Column::new("a", 0))], field_names);
         let ColumnarValue::Array(x) = x.evaluate(&batch)? else {
             unreachable!()
         };
