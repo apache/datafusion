@@ -406,7 +406,7 @@ impl<'a> PagesPruningStatistics<'a> {
             converter,
             column_index,
             offset_index,
-            page_offsets,
+            page_offsets: &page_offsets.page_locations,
         })
     }
 
