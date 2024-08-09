@@ -399,6 +399,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
+
+    /// Gets the fetch count for the operator, `None` means there is no fetch.
+    fn fetch(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// Extension trait provides an easy API to fetch various properties of
