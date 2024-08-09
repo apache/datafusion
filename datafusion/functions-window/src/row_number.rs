@@ -26,6 +26,18 @@ use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 
+/// Singleton instance of `row_number`, ensures the UDWF is only created once.
+static STATIC_RowNumber: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
+    std::sync::OnceLock::new();
+
+pub fn row_number_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
+    STATIC_RowNumber
+        .get_or_init(|| {
+            std::sync::Arc::new(datafusion_expr::WindowUDF::from(RowNumber::default()))
+        })
+        .clone()
+}
+
 /// row_number expression
 #[derive(Debug)]
 struct RowNumber {
@@ -38,6 +50,12 @@ impl RowNumber {
         Self {
             signature: Signature::any(0, Volatility::Immutable),
         }
+    }
+}
+
+impl Default for RowNumber {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
