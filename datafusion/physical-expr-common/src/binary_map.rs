@@ -60,7 +60,7 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
 
     /// Return the contents of this set and replace it with a new empty
     /// set with the same output type
-    pub(super) fn take(&mut self) -> Self {
+    pub fn take(&mut self) -> Self {
         Self(self.0.take())
     }
 

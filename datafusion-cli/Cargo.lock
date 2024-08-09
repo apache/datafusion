@@ -1153,6 +1153,7 @@ dependencies = [
  "datafusion-optimizer",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
+ "datafusion-physical-expr-functions-aggregate",
  "datafusion-physical-optimizer",
  "datafusion-physical-plan",
  "datafusion-sql",
@@ -1278,11 +1279,23 @@ dependencies = [
  "arrow-buffer",
  "chrono",
  "datafusion-common",
+ "datafusion-expr-common",
+ "datafusion-functions-aggregate-common",
+ "datafusion-physical-expr-common",
  "paste",
  "serde_json",
  "sqlparser",
  "strum 0.26.3",
  "strum_macros 0.26.4",
+]
+
+[[package]]
+name = "datafusion-expr-common"
+version = "41.0.0"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "paste",
 ]
 
 [[package]]
@@ -1320,10 +1333,24 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-functions-aggregate-common",
+ "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "log",
  "paste",
  "sqlparser",
+]
+
+[[package]]
+name = "datafusion-functions-aggregate-common"
+version = "41.0.0"
+dependencies = [
+ "ahash",
+ "arrow",
+ "datafusion-common",
+ "datafusion-expr-common",
+ "datafusion-physical-expr-common",
+ "rand",
 ]
 
 [[package]]
@@ -1380,6 +1407,8 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-expr-common",
+ "datafusion-functions-aggregate-common",
  "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.14.5",
@@ -1399,8 +1428,22 @@ dependencies = [
  "ahash",
  "arrow",
  "datafusion-common",
- "datafusion-expr",
+ "datafusion-expr-common",
  "hashbrown 0.14.5",
+ "rand",
+]
+
+[[package]]
+name = "datafusion-physical-expr-functions-aggregate"
+version = "41.0.0"
+dependencies = [
+ "ahash",
+ "arrow",
+ "datafusion-common",
+ "datafusion-expr",
+ "datafusion-expr-common",
+ "datafusion-functions-aggregate-common",
+ "datafusion-physical-expr-common",
  "rand",
 ]
 
@@ -1431,8 +1474,10 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions-aggregate",
+ "datafusion-functions-aggregate-common",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
+ "datafusion-physical-expr-functions-aggregate",
  "futures",
  "half",
  "hashbrown 0.14.5",

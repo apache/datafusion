@@ -34,11 +34,8 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, ExprFunctionExt,
     Signature, TypeSignature, Volatility,
 };
-use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
-use datafusion_physical_expr_common::sort_expr::{
-    limited_convert_logical_sort_exprs_to_physical_with_dfschema, LexOrdering,
-    PhysicalSortExpr,
-};
+use datafusion_functions_aggregate_common::utils::get_sort_options;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 create_func!(FirstValue, first_value_udaf);
 
@@ -117,24 +114,21 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let ordering_req = limited_convert_logical_sort_exprs_to_physical_with_dfschema(
-            acc_args.sort_exprs,
-            acc_args.dfschema,
-        )?;
-
-        let ordering_dtypes = ordering_req
+        let ordering_dtypes = acc_args
+            .ordering_req
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
         // When requirement is empty, or it is signalled by outside caller that
         // the ordering requirement is/will be satisfied.
-        let requirement_satisfied = ordering_req.is_empty() || self.requirement_satisfied;
+        let requirement_satisfied =
+            acc_args.ordering_req.is_empty() || self.requirement_satisfied;
 
         FirstValueAccumulator::try_new(
-            acc_args.data_type,
+            acc_args.return_type,
             &ordering_dtypes,
-            ordering_req,
+            acc_args.ordering_req.to_vec(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -416,22 +410,19 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let ordering_req = limited_convert_logical_sort_exprs_to_physical_with_dfschema(
-            acc_args.sort_exprs,
-            acc_args.dfschema,
-        )?;
-
-        let ordering_dtypes = ordering_req
+        let ordering_dtypes = acc_args
+            .ordering_req
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
-        let requirement_satisfied = ordering_req.is_empty() || self.requirement_satisfied;
+        let requirement_satisfied =
+            acc_args.ordering_req.is_empty() || self.requirement_satisfied;
 
         LastValueAccumulator::try_new(
-            acc_args.data_type,
+            acc_args.return_type,
             &ordering_dtypes,
-            ordering_req,
+            acc_args.ordering_req.to_vec(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
