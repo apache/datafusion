@@ -43,7 +43,7 @@ impl OctetLengthFunc {
         Self {
             signature: Signature::uniform(
                 1,
-                vec![Utf8, LargeUtf8],
+                vec![Utf8, LargeUtf8, Utf8View],
                 Volatility::Immutable,
             ),
         }
@@ -83,6 +83,9 @@ impl ScalarUDFImpl for OctetLengthFunc {
                 ))),
                 ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
                     ScalarValue::Int64(v.as_ref().map(|x| x.len() as i64)),
+                )),
+                ScalarValue::Utf8View(v) => Ok(ColumnarValue::Scalar(
+                    ScalarValue::Int32(v.as_ref().map(|x| x.len() as i32)),
                 )),
                 _ => unreachable!(),
             },
@@ -172,6 +175,36 @@ mod tests {
             OctetLengthFunc::new(),
             &[ColumnarValue::Scalar(ScalarValue::Utf8(None))],
             Ok(None),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            OctetLengthFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                String::from("joséjoséjoséjosé")
+            )))],
+            Ok(Some(20)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            OctetLengthFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                String::from("josé")
+            )))],
+            Ok(Some(5)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            OctetLengthFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                String::from("")
+            )))],
+            Ok(Some(0)),
             i32,
             Int32,
             Int32Array
