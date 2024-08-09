@@ -153,7 +153,7 @@ fn to_substrait_type(data_type: &DataType, nullable: bool) -> Result<Type> {
                 nullability,
             })),
         }),
-        DataType::Utf8 => Ok(Type {
+        DataType::Utf8 | DataType::Utf8View => Ok(Type {
             kind: Some(Kind::String(SubstraitString {
                 type_variation_reference: 0,
                 nullability,
