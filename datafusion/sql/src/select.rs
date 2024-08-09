@@ -27,7 +27,7 @@ use crate::utils::{
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_common::{Column, UnnestOptions};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::{
@@ -211,7 +211,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 None => (base_plan.clone(), select_exprs.clone(), having_expr_opt)
             }
         };
-
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
             LogicalPlanBuilder::from(plan)
                 .filter(having_expr_post_aggr)?
@@ -778,9 +777,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Rewrite the HAVING expression to use the columns produced by the
         // aggregation.
         let having_expr_post_aggr = if let Some(having_expr) = having_expr_opt {
-            let having_expr_post_aggr =
-                rebase_expr(having_expr, &aggr_projection_exprs, input)?;
-
+            let having_expr_post_aggr = match having_expr {
+                Expr::Literal(ScalarValue::Boolean(Some(false))) => {
+                    having_expr.to_owned()
+                }
+                _ => rebase_expr(having_expr, &aggr_projection_exprs, input)?,
+            };
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
                 &[having_expr_post_aggr.clone()],
