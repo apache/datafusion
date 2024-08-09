@@ -98,7 +98,7 @@ mod tests {
             \n      Projection: FILENAME_PLACEHOLDER_1.s_acctbal, FILENAME_PLACEHOLDER_1.s_name, FILENAME_PLACEHOLDER_3.n_name, FILENAME_PLACEHOLDER_0.p_partkey, FILENAME_PLACEHOLDER_0.p_mfgr, FILENAME_PLACEHOLDER_1.s_address, FILENAME_PLACEHOLDER_1.s_phone, FILENAME_PLACEHOLDER_1.s_comment\
             \n        Filter: FILENAME_PLACEHOLDER_0.p_partkey = FILENAME_PLACEHOLDER_2.ps_partkey AND FILENAME_PLACEHOLDER_1.s_suppkey = FILENAME_PLACEHOLDER_2.ps_suppkey AND FILENAME_PLACEHOLDER_0.p_size = Int32(15) AND FILENAME_PLACEHOLDER_0.p_type LIKE CAST(Utf8(\"%BRASS\") AS Utf8) AND FILENAME_PLACEHOLDER_1.s_nationkey = FILENAME_PLACEHOLDER_3.n_nationkey AND FILENAME_PLACEHOLDER_3.n_regionkey = FILENAME_PLACEHOLDER_4.r_regionkey AND FILENAME_PLACEHOLDER_4.r_name = CAST(Utf8(\"EUROPE\") AS Utf8) AND FILENAME_PLACEHOLDER_2.ps_supplycost = (<subquery>)\
             \n          Subquery:\
-            \n            Aggregate: groupBy=[[]], aggr=[[MIN(FILENAME_PLACEHOLDER_5.ps_supplycost)]]\
+            \n            Aggregate: groupBy=[[]], aggr=[[min(FILENAME_PLACEHOLDER_5.ps_supplycost)]]\
             \n              Projection: FILENAME_PLACEHOLDER_5.ps_supplycost\
             \n                Filter: FILENAME_PLACEHOLDER_5.ps_partkey = FILENAME_PLACEHOLDER_5.ps_partkey AND FILENAME_PLACEHOLDER_6.s_suppkey = FILENAME_PLACEHOLDER_5.ps_suppkey AND FILENAME_PLACEHOLDER_6.s_nationkey = FILENAME_PLACEHOLDER_7.n_nationkey AND FILENAME_PLACEHOLDER_7.n_regionkey = FILENAME_PLACEHOLDER_8.r_regionkey AND FILENAME_PLACEHOLDER_8.r_name = CAST(Utf8(\"EUROPE\") AS Utf8)\
             \n                  Inner Join:  Filter: Boolean(true)\
@@ -358,8 +358,8 @@ mod tests {
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
         let plan_str = format!("{}", plan);
-        assert_eq!(plan_str, "Projection: Decimal128(Some(10000),5,2) * sum(CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE CAST(Utf8(\"PROMO%\") AS Utf8) THEN FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount ELSE Decimal128(Some(0),19,0) END) / sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount) AS PROMO_REVENUE\
-        \n  Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE CAST(Utf8(\"PROMO%\") AS Utf8) THEN FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount ELSE Decimal128(Some(0),19,0) END), sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount)]]\
+        assert_eq!(plan_str, "Projection: Decimal128(Some(10000),5,2) * sum(CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE Utf8(\"PROMO%\") THEN FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount ELSE Decimal128(Some(0),19,0) END) / sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount) AS PROMO_REVENUE\
+        \n  Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE Utf8(\"PROMO%\") THEN FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount ELSE Decimal128(Some(0),19,0) END), sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount)]]\
         \n    Projection: CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE CAST(Utf8(\"PROMO%\") AS Utf8) THEN FILENAME_PLACEHOLDER_0.l_extendedprice * (CAST(Int32(1) AS Decimal128(19, 0)) - FILENAME_PLACEHOLDER_0.l_discount) ELSE Decimal128(Some(0),19,0) END, FILENAME_PLACEHOLDER_0.l_extendedprice * (CAST(Int32(1) AS Decimal128(19, 0)) - FILENAME_PLACEHOLDER_0.l_discount)\
         \n      Filter: FILENAME_PLACEHOLDER_0.l_partkey = FILENAME_PLACEHOLDER_1.p_partkey AND FILENAME_PLACEHOLDER_0.l_shipdate >= Date32(\"1995-09-01\") AND FILENAME_PLACEHOLDER_0.l_shipdate < CAST(Utf8(\"1995-10-01\") AS Date32)\
         \n        Inner Join:  Filter: Boolean(true)\

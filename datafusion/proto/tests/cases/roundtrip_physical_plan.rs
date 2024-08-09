@@ -24,7 +24,7 @@ use std::vec;
 
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
-use datafusion::physical_expr_common::aggregate::AggregateExprBuilder;
+use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use datafusion_functions_aggregate::min_max::max_udaf;
 use prost::Message;
 
@@ -296,7 +296,7 @@ fn roundtrip_window() -> Result<()> {
             vec![cast(col("b", &schema)?, &schema, DataType::Float64)?],
         )
         .schema(Arc::clone(&schema))
-        .name("avg(b)")
+        .alias("avg(b)")
         .build()?,
         &[],
         &[],
@@ -312,7 +312,7 @@ fn roundtrip_window() -> Result<()> {
     let args = vec![cast(col("a", &schema)?, &schema, DataType::Float64)?];
     let sum_expr = AggregateExprBuilder::new(sum_udaf(), args)
         .schema(Arc::clone(&schema))
-        .name("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING")
+        .alias("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING")
         .build()?;
 
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
@@ -346,17 +346,17 @@ fn rountrip_aggregate() -> Result<()> {
 
     let avg_expr = AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
         .schema(Arc::clone(&schema))
-        .name("AVG(b)")
+        .alias("AVG(b)")
         .build()?;
     let nth_expr =
         AggregateExprBuilder::new(nth_value_udaf(), vec![col("b", &schema)?, lit(1u64)])
             .schema(Arc::clone(&schema))
-            .name("NTH_VALUE(b, 1)")
+            .alias("NTH_VALUE(b, 1)")
             .build()?;
     let str_agg_expr =
         AggregateExprBuilder::new(string_agg_udaf(), vec![col("b", &schema)?, lit(1u64)])
             .schema(Arc::clone(&schema))
-            .name("NTH_VALUE(b, 1)")
+            .alias("NTH_VALUE(b, 1)")
             .build()?;
 
     let test_cases: Vec<Vec<Arc<dyn AggregateExpr>>> = vec![
@@ -396,7 +396,7 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
         vec![
             AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
-                .name("AVG(b)")
+                .alias("AVG(b)")
                 .build()?,
         ];
 
@@ -463,7 +463,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         vec![
             AggregateExprBuilder::new(Arc::new(udaf), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
-                .name("example_agg")
+                .alias("example_agg")
                 .build()?,
         ];
 
@@ -914,7 +914,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         vec![udf_expr.clone() as Arc<dyn PhysicalExpr>],
     )
     .schema(schema.clone())
-    .name("max")
+    .alias("max")
     .build()?;
 
     let window = Arc::new(WindowAggExec::try_new(
@@ -965,7 +965,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
 
     let aggr_expr = AggregateExprBuilder::new(Arc::clone(&udaf), aggr_args.clone())
         .schema(Arc::clone(&schema))
-        .name("aggregate_udf")
+        .alias("aggregate_udf")
         .build()?;
 
     let filter = Arc::new(FilterExec::try_new(
@@ -990,7 +990,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
 
     let aggr_expr = AggregateExprBuilder::new(udaf, aggr_args.clone())
         .schema(Arc::clone(&schema))
-        .name("aggregate_udf")
+        .alias("aggregate_udf")
         .distinct()
         .ignore_nulls()
         .build()?;

@@ -60,6 +60,7 @@ pub mod aggregates;
 pub mod create_drop;
 pub mod explain_analyze;
 pub mod joins;
+mod path_partition;
 pub mod select;
 mod sql_api;
 

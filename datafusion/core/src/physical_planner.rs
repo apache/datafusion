@@ -19,7 +19,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fmt::Write;
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -59,7 +58,7 @@ use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    displayable, udaf, windows, AggregateExpr, ExecutionPlan, ExecutionPlanProperties,
+    displayable, windows, AggregateExpr, ExecutionPlan, ExecutionPlanProperties,
     InputOrderMode, Partitioning, PhysicalExpr, WindowExpr,
 };
 
@@ -74,11 +73,10 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
-    self, AggregateFunction, Alias, Between, BinaryExpr, Cast, GroupingSet, InList, Like,
-    TryCast, WindowFunction,
+    self, create_function_physical_name, physical_name, AggregateFunction, Alias,
+    GroupingSet, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
-use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
     DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, StringifiedPlan,
@@ -86,6 +84,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
@@ -96,265 +95,6 @@ use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use sqlparser::ast::NullTreatment;
 use tokio::sync::Mutex;
-
-fn create_function_physical_name(
-    fun: &str,
-    distinct: bool,
-    args: &[Expr],
-    order_by: Option<&Vec<Expr>>,
-) -> Result<String> {
-    let names: Vec<String> = args
-        .iter()
-        .map(|e| create_physical_name(e, false))
-        .collect::<Result<_>>()?;
-
-    let distinct_str = match distinct {
-        true => "DISTINCT ",
-        false => "",
-    };
-
-    let phys_name = format!("{}({}{})", fun, distinct_str, names.join(","));
-
-    Ok(order_by
-        .map(|order_by| format!("{} ORDER BY [{}]", phys_name, expr_vec_fmt!(order_by)))
-        .unwrap_or(phys_name))
-}
-
-fn physical_name(e: &Expr) -> Result<String> {
-    create_physical_name(e, true)
-}
-
-fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
-    match e {
-        Expr::Unnest(_) => {
-            internal_err!(
-                "Expr::Unnest should have been converted to LogicalPlan::Unnest"
-            )
-        }
-        Expr::Column(c) => {
-            if is_first_expr {
-                Ok(c.name.clone())
-            } else {
-                Ok(c.flat_name())
-            }
-        }
-        Expr::Alias(Alias { name, .. }) => Ok(name.clone()),
-        Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
-        Expr::Literal(value) => Ok(format!("{value:?}")),
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-            let left = create_physical_name(left, false)?;
-            let right = create_physical_name(right, false)?;
-            Ok(format!("{left} {op} {right}"))
-        }
-        Expr::Case(case) => {
-            let mut name = "CASE ".to_string();
-            if let Some(e) = &case.expr {
-                let _ = write!(name, "{} ", create_physical_name(e, false)?);
-            }
-            for (w, t) in &case.when_then_expr {
-                let _ = write!(
-                    name,
-                    "WHEN {} THEN {} ",
-                    create_physical_name(w, false)?,
-                    create_physical_name(t, false)?
-                );
-            }
-            if let Some(e) = &case.else_expr {
-                let _ = write!(name, "ELSE {} ", create_physical_name(e, false)?);
-            }
-            name += "END";
-            Ok(name)
-        }
-        Expr::Cast(Cast { expr, .. }) => {
-            // CAST does not change the expression name
-            create_physical_name(expr, false)
-        }
-        Expr::TryCast(TryCast { expr, .. }) => {
-            // CAST does not change the expression name
-            create_physical_name(expr, false)
-        }
-        Expr::Not(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("NOT {expr}"))
-        }
-        Expr::Negative(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("(- {expr})"))
-        }
-        Expr::IsNull(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS NULL"))
-        }
-        Expr::IsNotNull(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS NOT NULL"))
-        }
-        Expr::IsTrue(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS TRUE"))
-        }
-        Expr::IsFalse(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS FALSE"))
-        }
-        Expr::IsUnknown(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS UNKNOWN"))
-        }
-        Expr::IsNotTrue(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS NOT TRUE"))
-        }
-        Expr::IsNotFalse(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS NOT FALSE"))
-        }
-        Expr::IsNotUnknown(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS NOT UNKNOWN"))
-        }
-        Expr::ScalarFunction(fun) => fun.func.display_name(&fun.args),
-        Expr::WindowFunction(WindowFunction {
-            fun,
-            args,
-            order_by,
-            ..
-        }) => {
-            create_function_physical_name(&fun.to_string(), false, args, Some(order_by))
-        }
-        Expr::AggregateFunction(AggregateFunction {
-            func,
-            distinct,
-            args,
-            filter: _,
-            order_by,
-            null_treatment: _,
-        }) => {
-            create_function_physical_name(func.name(), *distinct, args, order_by.as_ref())
-        }
-        Expr::GroupingSet(grouping_set) => match grouping_set {
-            GroupingSet::Rollup(exprs) => Ok(format!(
-                "ROLLUP ({})",
-                exprs
-                    .iter()
-                    .map(|e| create_physical_name(e, false))
-                    .collect::<Result<Vec<_>>>()?
-                    .join(", ")
-            )),
-            GroupingSet::Cube(exprs) => Ok(format!(
-                "CUBE ({})",
-                exprs
-                    .iter()
-                    .map(|e| create_physical_name(e, false))
-                    .collect::<Result<Vec<_>>>()?
-                    .join(", ")
-            )),
-            GroupingSet::GroupingSets(lists_of_exprs) => {
-                let mut strings = vec![];
-                for exprs in lists_of_exprs {
-                    let exprs_str = exprs
-                        .iter()
-                        .map(|e| create_physical_name(e, false))
-                        .collect::<Result<Vec<_>>>()?
-                        .join(", ");
-                    strings.push(format!("({exprs_str})"));
-                }
-                Ok(format!("GROUPING SETS ({})", strings.join(", ")))
-            }
-        },
-
-        Expr::InList(InList {
-            expr,
-            list,
-            negated,
-        }) => {
-            let expr = create_physical_name(expr, false)?;
-            let list = list.iter().map(|expr| create_physical_name(expr, false));
-            if *negated {
-                Ok(format!("{expr} NOT IN ({list:?})"))
-            } else {
-                Ok(format!("{expr} IN ({list:?})"))
-            }
-        }
-        Expr::Exists { .. } => {
-            not_impl_err!("EXISTS is not yet supported in the physical plan")
-        }
-        Expr::InSubquery(_) => {
-            not_impl_err!("IN subquery is not yet supported in the physical plan")
-        }
-        Expr::ScalarSubquery(_) => {
-            not_impl_err!("Scalar subqueries are not yet supported in the physical plan")
-        }
-        Expr::Between(Between {
-            expr,
-            negated,
-            low,
-            high,
-        }) => {
-            let expr = create_physical_name(expr, false)?;
-            let low = create_physical_name(low, false)?;
-            let high = create_physical_name(high, false)?;
-            if *negated {
-                Ok(format!("{expr} NOT BETWEEN {low} AND {high}"))
-            } else {
-                Ok(format!("{expr} BETWEEN {low} AND {high}"))
-            }
-        }
-        Expr::Like(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-            case_insensitive,
-        }) => {
-            let expr = create_physical_name(expr, false)?;
-            let pattern = create_physical_name(pattern, false)?;
-            let op_name = if *case_insensitive { "ILIKE" } else { "LIKE" };
-            let escape = if let Some(char) = escape_char {
-                format!("CHAR '{char}'")
-            } else {
-                "".to_string()
-            };
-            if *negated {
-                Ok(format!("{expr} NOT {op_name} {pattern}{escape}"))
-            } else {
-                Ok(format!("{expr} {op_name} {pattern}{escape}"))
-            }
-        }
-        Expr::SimilarTo(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-            case_insensitive: _,
-        }) => {
-            let expr = create_physical_name(expr, false)?;
-            let pattern = create_physical_name(pattern, false)?;
-            let escape = if let Some(char) = escape_char {
-                format!("CHAR '{char}'")
-            } else {
-                "".to_string()
-            };
-            if *negated {
-                Ok(format!("{expr} NOT SIMILAR TO {pattern}{escape}"))
-            } else {
-                Ok(format!("{expr} SIMILAR TO {pattern}{escape}"))
-            }
-        }
-        Expr::Sort { .. } => {
-            internal_err!("Create physical name does not support sort expression")
-        }
-        Expr::Wildcard { .. } => {
-            internal_err!("Create physical name does not support wildcard")
-        }
-        Expr::Placeholder(_) => {
-            internal_err!("Create physical name does not support placeholder")
-        }
-        Expr::OuterReferenceColumn(_, _) => {
-            internal_err!("Create physical name does not support OuterReferenceColumn")
-        }
-    }
-}
 
 /// Physical query planner that converts a `LogicalPlan` to an
 /// `ExecutionPlan` suitable for execution.
@@ -442,7 +182,7 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
                     .create_initial_plan(logical_plan, session_state)
                     .await?;
 
-                self.optimize_internal(plan, session_state, |_, _| {})
+                self.optimize_physical_plan(plan, session_state, |_, _| {})
             }
         }
     }
@@ -1791,7 +1531,7 @@ pub fn create_window_expr(
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
-        _ => (e.display_name()?, e),
+        _ => (e.schema_name().to_string(), e),
     };
     create_window_expr_with_name(e, name, logical_schema, execution_props)
 }
@@ -1807,7 +1547,7 @@ type AggregateExprWithOptionalArgs = (
 /// Create an aggregate expression with a name from a logical expression
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
-    name: impl Into<String>,
+    name: Option<String>,
     logical_input_schema: &DFSchema,
     _physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
@@ -1821,6 +1561,17 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             order_by,
             null_treatment,
         }) => {
+            let name = if let Some(name) = name {
+                name
+            } else {
+                create_function_physical_name(
+                    func.name(),
+                    *distinct,
+                    args,
+                    order_by.as_ref(),
+                )?
+            };
+
             let physical_args =
                 create_physical_exprs(args, logical_input_schema, execution_props)?;
             let filter = match filter {
@@ -1837,7 +1588,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 == NullTreatment::IgnoreNulls;
 
             let (agg_expr, filter, order_by) = {
-                let sort_exprs = order_by.clone().unwrap_or(vec![]);
                 let physical_sort_exprs = match order_by {
                     Some(exprs) => Some(create_physical_sort_exprs(
                         exprs,
@@ -1850,18 +1600,15 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 let ordering_reqs: Vec<PhysicalSortExpr> =
                     physical_sort_exprs.clone().unwrap_or(vec![]);
 
-                let agg_expr = udaf::create_aggregate_expr_with_dfschema(
-                    func,
-                    &physical_args,
-                    args,
-                    &sort_exprs,
-                    &ordering_reqs,
-                    logical_input_schema,
-                    name,
-                    ignore_nulls,
-                    *distinct,
-                    false,
-                )?;
+                let schema: Schema = logical_input_schema.clone().into();
+                let agg_expr =
+                    AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
+                        .order_by(ordering_reqs.to_vec())
+                        .schema(Arc::new(schema))
+                        .alias(name)
+                        .with_ignore_nulls(ignore_nulls)
+                        .with_distinct(*distinct)
+                        .build()?;
 
                 (agg_expr, filter, physical_sort_exprs)
             };
@@ -1881,9 +1628,9 @@ pub fn create_aggregate_expr_and_maybe_filter(
 ) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
-        Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
-        Expr::AggregateFunction(_) => (e.display_name().unwrap_or(physical_name(e)?), e),
-        _ => (physical_name(e)?, e),
+        Expr::Alias(Alias { expr, name, .. }) => (Some(name.clone()), expr.as_ref()),
+        Expr::AggregateFunction(_) => (Some(e.schema_name().to_string()), e),
+        _ => (None, e),
     };
 
     create_aggregate_expr_with_name_and_maybe_filter(
@@ -1994,7 +1741,7 @@ impl DefaultPhysicalPlanner {
                             }
                         }
 
-                        let optimized_plan = self.optimize_internal(
+                        let optimized_plan = self.optimize_physical_plan(
                             input,
                             session_state,
                             |plan, optimizer| {
@@ -2078,7 +1825,7 @@ impl DefaultPhysicalPlanner {
 
     /// Optimize a physical plan by applying each physical optimizer,
     /// calling observer(plan, optimizer after each one)
-    fn optimize_internal<F>(
+    pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         session_state: &SessionState,

@@ -25,6 +25,7 @@ use arrow::util::pretty::pretty_format_batches;
 use arrow_array::types::Int64Type;
 use datafusion::common::Result;
 use datafusion::datasource::MemTable;
+use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -35,7 +36,6 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor}
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
@@ -107,7 +107,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         vec![
             AggregateExprBuilder::new(sum_udaf(), vec![col("d", &schema).unwrap()])
                 .schema(Arc::clone(&schema))
-                .name("sum1")
+                .alias("sum1")
                 .build()
                 .unwrap(),
         ];

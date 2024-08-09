@@ -102,8 +102,8 @@ async fn describe_null() -> Result<()> {
         "| null_count | 0    | 1    |",
         "| mean       | null | null |",
         "| std        | null | null |",
-        "| min        | null | null |",
-        "| max        | null | null |",
+        "| min        | a    | null |",
+        "| max        | a    | null |",
         "| median     | null | null |",
         "+------------+------+------+"
     ];

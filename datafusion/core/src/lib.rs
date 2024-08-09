@@ -76,7 +76,7 @@
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
-//!     "| a | MIN(?table?.b) |",
+//!     "| a | min(?table?.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
 //!     "+---+----------------+"
@@ -114,7 +114,7 @@
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
-//!     "| a | MIN(example.b) |",
+//!     "| a | min(example.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
 //!     "+---+----------------+"
@@ -554,6 +554,11 @@ pub mod optimizer {
 /// re-export of [`datafusion_physical_expr`] crate
 pub mod physical_expr_common {
     pub use datafusion_physical_expr_common::*;
+}
+
+/// re-export of [`datafusion_physical_expr_functions_aggregate`] crate
+pub mod physical_expr_functions_aggregate {
+    pub use datafusion_physical_expr_functions_aggregate::*;
 }
 
 /// re-export of [`datafusion_physical_expr`] crate

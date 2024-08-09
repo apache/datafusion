@@ -23,13 +23,16 @@ members = [
     "datafusion/catalog",
     "datafusion/core",
     "datafusion/expr",
+    "datafusion/expr-common",
     "datafusion/execution",
-    "datafusion/functions-aggregate",
     "datafusion/functions",
+    "datafusion/functions-aggregate",
+    "datafusion/functions-aggregate-common",
     "datafusion/functions-nested",
     "datafusion/optimizer",
-    "datafusion/physical-expr-common",
     "datafusion/physical-expr",
+    "datafusion/physical-expr-common",
+    "datafusion/physical-expr-functions-aggregate",
     "datafusion/physical-optimizer",
     "datafusion/physical-plan",
     "datafusion/proto",
@@ -55,7 +58,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
 rust-version = "1.76"
-version = "40.0.0"
+version = "41.0.0"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -88,25 +91,28 @@ bytes = "1.4"
 chrono = { version = "0.4.34", default-features = false }
 ctor = "0.2.0"
 dashmap = "6.0.1"
-datafusion = { path = "datafusion/core", version = "40.0.0", default-features = false }
-datafusion-catalog = { path = "datafusion/catalog", version = "40.0.0" }
-datafusion-common = { path = "datafusion/common", version = "40.0.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common-runtime", version = "40.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "40.0.0" }
-datafusion-expr = { path = "datafusion/expr", version = "40.0.0" }
-datafusion-functions = { path = "datafusion/functions", version = "40.0.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "40.0.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "40.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "40.0.0", default-features = false }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "40.0.0", default-features = false }
-datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "40.0.0", default-features = false }
-datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "40.0.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "40.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "40.0.0" }
-datafusion-proto-common = { path = "datafusion/proto-common", version = "40.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "40.0.0" }
-datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "40.0.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "40.0.0" }
+datafusion = { path = "datafusion/core", version = "41.0.0", default-features = false }
+datafusion-catalog = { path = "datafusion/catalog", version = "41.0.0" }
+datafusion-common = { path = "datafusion/common", version = "41.0.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "41.0.0" }
+datafusion-execution = { path = "datafusion/execution", version = "41.0.0" }
+datafusion-expr = { path = "datafusion/expr", version = "41.0.0" }
+datafusion-expr-common = { path = "datafusion/expr-common", version = "41.0.0" }
+datafusion-functions = { path = "datafusion/functions", version = "41.0.0" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "41.0.0" }
+datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "41.0.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "41.0.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "41.0.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "41.0.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "41.0.0", default-features = false }
+datafusion-physical-expr-functions-aggregate = { path = "datafusion/physical-expr-functions-aggregate", version = "41.0.0" }
+datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "41.0.0" }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "41.0.0" }
+datafusion-proto = { path = "datafusion/proto", version = "41.0.0" }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "41.0.0" }
+datafusion-sql = { path = "datafusion/sql", version = "41.0.0" }
+datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "41.0.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "41.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
@@ -116,7 +122,7 @@ indexmap = "2.0.0"
 itertools = "0.12"
 log = "^0.4"
 num_cpus = "1.13.0"
-object_store = { version = "0.10.1", default-features = false }
+object_store = { version = "0.10.2", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "52.2.0", default-features = false, features = [
     "arrow",
@@ -125,7 +131,7 @@ parquet = { version = "52.2.0", default-features = false, features = [
 ] }
 rand = "0.8"
 regex = "1.8"
-rstest = "0.21.0"
+rstest = "0.22.0"
 serde_json = "1"
 sqlparser = { version = "0.49", features = ["visitor"] }
 tempfile = "3"

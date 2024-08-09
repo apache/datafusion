@@ -49,9 +49,9 @@ async fn round_trip_parse_sql_expr() -> Result<()> {
         "((a = 10) AND b NOT IN (20, 30))",
         "sum(a)",
         "(sum(a) + 1)",
-        "(MIN(a) + MAX(b))",
-        "(MIN(a) + (MAX(b) * sum(c)))",
-        "(MIN(a) + ((MAX(b) * sum(c)) / 10))",
+        "(min(a) + max(b))",
+        "(min(a) + (max(b) * sum(c)))",
+        "(min(a) + ((max(b) * sum(c)) / 10))",
     ];
 
     for test in tests {

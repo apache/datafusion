@@ -175,7 +175,7 @@ async fn main_inner() -> Result<()> {
 
     let runtime_env = create_runtime_env(rt_config.clone())?;
 
-    let mut ctx =
+    let ctx =
         SessionContext::new_with_config_rt(session_config.clone(), Arc::new(runtime_env));
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that knows how to open files
@@ -212,20 +212,20 @@ async fn main_inner() -> Result<()> {
 
     if commands.is_empty() && files.is_empty() {
         if !rc.is_empty() {
-            exec::exec_from_files(&mut ctx, rc, &print_options).await?;
+            exec::exec_from_files(&ctx, rc, &print_options).await?;
         }
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
-        return exec::exec_from_repl(&mut ctx, &mut print_options)
+        return exec::exec_from_repl(&ctx, &mut print_options)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)));
     }
 
     if !files.is_empty() {
-        exec::exec_from_files(&mut ctx, files, &print_options).await?;
+        exec::exec_from_files(&ctx, files, &print_options).await?;
     }
 
     if !commands.is_empty() {
-        exec::exec_from_commands(&mut ctx, commands, &print_options).await?;
+        exec::exec_from_commands(&ctx, commands, &print_options).await?;
     }
 
     Ok(())

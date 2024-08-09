@@ -28,12 +28,12 @@ use crate::aggregates::{
     PhysicalGroupBy,
 };
 use crate::common::IPCWriter;
-use crate::metrics::{BaselineMetrics, RecordOutput};
+use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge;
 use crate::spill::read_spill_as_stream;
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{aggregates, ExecutionPlan, PhysicalExpr};
+use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
@@ -119,10 +119,22 @@ struct SkipAggregationProbe {
     /// Flag indicating further updates of `SkipAggregationProbe` state won't
     /// make any effect (set either while probing or on probing completion)
     is_locked: bool,
+
+    /// Number of rows where state was output without aggregation.
+    ///
+    /// * If 0, all input rows were aggregated (should_skip was always false)
+    ///
+    /// * if greater than zero, the number of rows which were output directly
+    ///   without aggregation
+    skipped_aggregation_rows: metrics::Count,
 }
 
 impl SkipAggregationProbe {
-    fn new(probe_rows_threshold: usize, probe_ratio_threshold: f64) -> Self {
+    fn new(
+        probe_rows_threshold: usize,
+        probe_ratio_threshold: f64,
+        skipped_aggregation_rows: metrics::Count,
+    ) -> Self {
         Self {
             input_rows: 0,
             num_groups: 0,
@@ -130,6 +142,7 @@ impl SkipAggregationProbe {
             probe_ratio_threshold,
             should_skip: false,
             is_locked: false,
+            skipped_aggregation_rows,
         }
     }
 
@@ -161,6 +174,11 @@ impl SkipAggregationProbe {
     fn forbid_skipping(&mut self) {
         self.should_skip = false;
         self.is_locked = true;
+    }
+
+    /// Record the number of rows that were output directly without aggregation
+    fn record_skipped(&mut self, batch: &RecordBatch) {
+        self.skipped_aggregation_rows.add(batch.num_rows());
     }
 }
 
@@ -475,17 +493,17 @@ impl GroupedHashAggregateStream {
                 .all(|acc| acc.supports_convert_to_state())
             && agg_group_by.is_single()
         {
+            let options = &context.session_config().options().execution;
+            let probe_rows_threshold =
+                options.skip_partial_aggregation_probe_rows_threshold;
+            let probe_ratio_threshold =
+                options.skip_partial_aggregation_probe_ratio_threshold;
+            let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
+                .counter("skipped_aggregation_rows", partition);
             Some(SkipAggregationProbe::new(
-                context
-                    .session_config()
-                    .options()
-                    .execution
-                    .skip_partial_aggregation_probe_rows_threshold,
-                context
-                    .session_config()
-                    .options()
-                    .execution
-                    .skip_partial_aggregation_probe_ratio_threshold,
+                probe_rows_threshold,
+                probe_ratio_threshold,
+                skipped_aggregation_rows,
             ))
         } else {
             None
@@ -613,6 +631,9 @@ impl Stream for GroupedHashAggregateStream {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         Some(Ok(batch)) => {
                             let _timer = elapsed_compute.timer();
+                            if let Some(probe) = self.skip_aggregation_probe.as_mut() {
+                                probe.record_skipped(&batch);
+                            }
                             let states = self.transform_to_states(batch)?;
                             return Poll::Ready(Some(Ok(
                                 states.record_output(&self.baseline_metrics)
@@ -637,11 +658,7 @@ impl Stream for GroupedHashAggregateStream {
                         (
                             if self.input_done {
                                 ExecutionState::Done
-                            } else if self
-                                .skip_aggregation_probe
-                                .as_ref()
-                                .is_some_and(|probe| probe.should_skip())
-                            {
+                            } else if self.should_skip_aggregation() {
                                 ExecutionState::SkippingAggregation
                             } else {
                                 ExecutionState::ReadingInput
@@ -957,12 +974,13 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    // Updates skip aggregation probe state.
-    // In case stream has any spills, the probe is forcefully set to
-    // forbid aggregation skipping, and locked, since spilling resets
-    // total number of unique groups.
-    //
-    // Note: currently spilling is not supported for Partial aggregation
+    /// Updates skip aggregation probe state.
+    ///
+    /// In case stream has any spills, the probe is forcefully set to
+    /// forbid aggregation skipping, and locked, since spilling resets
+    /// total number of unique groups.
+    ///
+    /// Note: currently spilling is not supported for Partial aggregation
     fn update_skip_aggregation_probe(&mut self, input_rows: usize) {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if !self.spill_state.spills.is_empty() {
@@ -973,8 +991,8 @@ impl GroupedHashAggregateStream {
         };
     }
 
-    // In case the probe indicates that aggregation may be
-    // skipped, forces stream to produce currently accumulated output.
+    /// In case the probe indicates that aggregation may be
+    /// skipped, forces stream to produce currently accumulated output.
     fn switch_to_skip_aggregation(&mut self) -> Result<()> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
@@ -986,7 +1004,15 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    // Transforms input batch to intermediate aggregate state, without grouping it
+    /// Returns true if the aggregation probe indicates that aggregation
+    /// should be skipped.
+    fn should_skip_aggregation(&self) -> bool {
+        self.skip_aggregation_probe
+            .as_ref()
+            .is_some_and(|probe| probe.should_skip())
+    }
+
+    /// Transforms input batch to intermediate aggregate state, without grouping it
     fn transform_to_states(&self, batch: RecordBatch) -> Result<RecordBatch> {
         let group_values = evaluate_group_by(&self.group_by, &batch)?;
         let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;

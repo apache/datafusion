@@ -146,7 +146,7 @@ For filters that can be pushed down, they'll be passed to the `scan` method as t
 In order to use the custom table provider, we need to register it with DataFusion. This is done by creating a `TableProvider` and registering it with the `SessionContext`.
 
 ```rust
-let mut ctx = SessionContext::new();
+let ctx = SessionContext::new();
 
 let custom_table_provider = CustomDataSource::new();
 ctx.register_table("custom_table", Arc::new(custom_table_provider));
