@@ -20,7 +20,6 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::array::ArrayData;
-use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_schema::{DataType, Field, SchemaBuilder};
@@ -278,8 +277,8 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     let mut offset_buffer = vec![O::usize_as(0)];
     let mut running_offset = O::usize_as(0);
 
-    let keys = collect_array_ref::<O>(keys);
-    let values = collect_array_ref::<O>(values);
+    let keys = datafusion_common::utils::list_to_arrays::<O>(keys);
+    let values = datafusion_common::utils::list_to_arrays::<O>(values);
 
     let mut key_array_vec = vec![];
     let mut value_array_vec = vec![];
@@ -292,6 +291,9 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
 
     // concatenate all the arrays
     let flattened_keys = arrow::compute::concat(key_array_vec.as_ref())?;
+    if flattened_keys.null_count() > 0 {
+        return exec_err!("keys cannot be null");
+    }
     let flattened_values = arrow::compute::concat(value_array_vec.as_ref())?;
 
     let fields = vec![
@@ -322,8 +324,4 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()))
     .build()?;
     Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
-}
-
-pub fn collect_array_ref<O: OffsetSizeTrait>(a: ArrayRef) -> Vec<ArrayRef> {
-    a.as_list::<O>().iter().flatten().collect::<Vec<_>>()
 }

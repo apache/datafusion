@@ -199,9 +199,9 @@ SELECT MAP(arrow_cast(make_array('POST', 'HEAD', 'PATCH'), 'LargeList(Utf8)'), a
 
 statement ok
 create table t as values
-('a', 1, 'k1', 10, ['k1', 'k2'], [1, 2], 'POST', [[1,2,3]]),
-('b', 2, 'k3', 30, ['k3'], [3], 'PUT', [[4]]),
-('d', 4, 'k5', 50, ['k5'], [5], null, [[1,2]]);
+('a', 1, 'k1', 10, ['k1', 'k2'], [1, 2], 'POST', [[1,2,3]], ['a']),
+('b', 2, 'k3', 30, ['k3'], [3], 'PUT', [[4]], ['b']),
+('d', 4, 'k5', 50, ['k5'], [5], null, [[1,2]], ['c']);
 
 query ?
 SELECT make_map(column1, column2, column3, column4) FROM t;
@@ -216,6 +216,13 @@ SELECT map(column5, column6) FROM t;
 {k1: 1, k2: 2}
 {k3: 3}
 {k5: 5}
+
+query ?
+SELECT map(column8, column9) FROM t;
+----
+{[1, 2, 3]: a}
+{[4]: b}
+{[1, 2]: c}
 
 query error
 SELECT map(column6, column7) FROM t;
@@ -233,6 +240,9 @@ select Map {column8: column7} from t;
 {[[1, 2, 3]]: POST}
 {[[4]]: PUT}
 {[[1, 2]]: }
+
+query error
+select Map {column7: column8} from t;
 
 query ?
 SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', 30, 'OPTION', 29, 'GET', 27, 'PUT', 25, 'DELETE', 24) AS method_count from t;
