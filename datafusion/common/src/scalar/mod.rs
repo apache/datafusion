@@ -801,9 +801,13 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     let values_array = value.to_array_of_size(1)?;
 
     // Create a key array with `size` elements, each of 0
-    let key_array: PrimitiveArray<K> = std::iter::repeat(Some(K::default_value()))
-        .take(size)
-        .collect();
+    let key_array: PrimitiveArray<K> = std::iter::repeat(if value.is_null() {
+        None
+    } else {
+        Some(K::default_value())
+    })
+    .take(size)
+    .collect();
 
     // create a new DictionaryArray
     //
@@ -6673,5 +6677,16 @@ mod tests {
             UnionMode::Dense,
         );
         assert!(dense_scalar.is_null());
+    }
+
+    #[test]
+    fn null_dictionary_scalar_produces_null_dictionary_array() {
+        let dictionary_scalar = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Null),
+        );
+        assert!(dictionary_scalar.is_null());
+        let dictionary_array = dictionary_scalar.to_array().unwrap();
+        assert!(dictionary_array.is_null(0));
     }
 }
