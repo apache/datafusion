@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn filter_false() -> Result<()> {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(false)));
+        let filter_expr = lit(false);
 
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn filter_false_nested() -> Result<()> {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(false)));
+        let filter_expr = lit(false);
 
         let table_scan = test_table_scan()?;
         let plan1 = LogicalPlanBuilder::from(table_scan.clone())
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn filter_true() -> Result<()> {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(true)));
+        let filter_expr = lit(true);
 
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn filter_true_nested() -> Result<()> {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(true)));
+        let filter_expr = lit(true);
 
         let table_scan = test_table_scan()?;
         let plan1 = LogicalPlanBuilder::from(table_scan.clone())

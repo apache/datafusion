@@ -31,7 +31,7 @@ use datafusion_common::{plan_err, Column, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
-use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{expr, lit, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -282,9 +282,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     )?;
                     if !expr_result_map_for_count_bug.is_empty() {
                         // has count bug
-                        let un_matched_row =
-                            Expr::Literal(ScalarValue::Boolean(Some(true)))
-                                .alias(UN_MATCHED_ROW_INDICATOR);
+                        let un_matched_row = lit(true).alias(UN_MATCHED_ROW_INDICATOR);
                         // add the unmatched rows indicator to the Aggregation's group expressions
                         missing_exprs.push(un_matched_row);
                     }
