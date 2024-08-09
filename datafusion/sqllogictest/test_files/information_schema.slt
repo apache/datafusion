@@ -215,7 +215,7 @@ datafusion.execution.sort_spill_reservation_bytes 10485760
 datafusion.execution.split_file_groups_by_statistics false
 datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
-datafusion.execution.use_row_number_estimate_to_optimize_partitioning false
+datafusion.execution.use_row_number_estimates_to_optimize_partitioning false
 datafusion.explain.logical_plan_only false
 datafusion.explain.physical_plan_only false
 datafusion.explain.show_schema false
@@ -305,7 +305,7 @@ datafusion.execution.sort_spill_reservation_bytes 10485760 Specifies the reserve
 datafusion.execution.split_file_groups_by_statistics false Attempt to eliminate sorts by packing & sorting files with non-overlapping statistics into the same file groups. Currently experimental
 datafusion.execution.target_partitions 7 Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system
 datafusion.execution.time_zone +00:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
-datafusion.execution.use_row_number_estimate_to_optimize_partitioning false Should DataFusion use row number estimate at the input to decide whether increasing parallelism is beneficial or not. By default, only exact row number (not estimates) are used for decision. Setting this flag to `true` will more likely produce better plans.
+datafusion.execution.use_row_number_estimates_to_optimize_partitioning false Should DataFusion use row number estimates at the input to decide whether increasing parallelism is beneficial or not. By default, only exact row numbers (not estimates) are used for decision. Setting this flag to `true` will likely produce better plans. We plan to make this the default in the future.
 datafusion.explain.logical_plan_only false When set to true, the explain statement will only print logical plans
 datafusion.explain.physical_plan_only false When set to true, the explain statement will only print physical plans
 datafusion.explain.show_schema false When set to true, the explain statement will print schema information

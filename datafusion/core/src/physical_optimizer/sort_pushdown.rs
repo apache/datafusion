@@ -40,7 +40,8 @@ use datafusion_physical_expr::{
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
 /// computational cost by pushing down `SortExec`s through some executors. The
-/// object carries the parent required ordering, fetch value of the parent node as its data.
+/// object carries the parent required ordering and the (optional) fetch value
+/// of the parent node as its data.
 ///
 /// [`EnforceSorting`]: crate::physical_optimizer::enforce_sorting::EnforceSorting
 #[derive(Default, Clone)]
@@ -187,11 +188,11 @@ fn pushdown_requirement_to_children(
             Ok(None)
         }
     } else if plan.fetch().is_some()
+        && plan.supports_limit_pushdown()
         && plan
             .maintains_input_order()
             .iter()
             .all(|maintain| *maintain)
-        && plan.supports_limit_pushdown()
     {
         let output_req = PhysicalSortRequirement::from_sort_exprs(
             plan.properties().output_ordering().unwrap_or(&[]),

@@ -44,6 +44,7 @@ use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use arrow::compute::SortOptions;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
@@ -1031,19 +1032,46 @@ fn replace_order_preserving_variants(
     context.update_plan_from_children()
 }
 
-/// A struct to keep track of RepartitionRequirement status for each child node.
+/// A struct to keep track of repartition requirements for each child node.
 struct RepartitionRequirementStatus {
-    roundrobin_beneficial: bool,
+    /// Designates whether round robin partitioning is beneficial according to
+    /// the statistical information we have on the number of rows.
+    roundrobin_beneficial_stats: bool,
+    /// Designates whether hash partitioning is necessary.
     hash_necessary: bool,
 }
 
-/// Calculates the `RepartitionRequirementStatus` for each children to generate consistent requirements.
-/// As an example, for hash exec left children might produce `RepartitionRequirementStatus{roundrobin_beneficial: true, hash_necessary: true}`
-/// and right children might produce: `RepartitionRequirementStatus{roundrobin_beneficial: false, hash_necessary: false}`.
-/// When target partitions=4, left child might produce `Hash(vec![expr], 4)` and right child might produce `Hash(vec![expr], 4)`. However,
-/// for correct operation we need consistent hashes accross children. This util turns right child status:
-/// from `RepartitionRequirementStatus{roundrobin_beneficial: false, hash_necessary: false}` into
-/// `RepartitionRequirementStatus{roundrobin_beneficial: false, hash_necessary: true}` to generate consistent plan.
+/// Calculates the `RepartitionRequirementStatus` for each children to generate
+/// consistent and sensible (in terms of performance) distribution requirements.
+/// As an example, a hash join's left (build) child might produce
+///
+/// ```text
+/// RepartitionRequirementStatus {
+///     roundrobin_beneficial: true,
+///     hash_necessary: true
+/// }
+/// ```
+///
+/// while its right (probe) child might have very few rows and produce:
+///
+/// ```text
+/// RepartitionRequirementStatus {
+///     roundrobin_beneficial: false,
+///     hash_necessary: false
+/// }
+/// ```
+///
+/// These statuses are not consistent as all children should agree on hash
+/// partitioning. This function aligns the statuses to generate consistent
+/// hash partitions for each children. After alignment, the right child's
+/// status would turn into:
+///
+/// ```text
+/// RepartitionRequirementStatus {
+///     roundrobin_beneficial: false,
+///     hash_necessary: true
+/// }
+/// ```
 fn get_repartition_status_flags(
     requirements: &[Distribution],
     children: &[&Arc<dyn ExecutionPlan>],
@@ -1053,41 +1081,33 @@ fn get_repartition_status_flags(
     debug_assert_eq!(requirements.len(), children.len());
     let mut repartition_status_flags = vec![];
     for (child, requirement) in children.iter().zip(requirements) {
-        // Don't need to apply when the returned row count is not greater than batch size
-        let num_rows = child.statistics()?.num_rows;
-        let roundrobin_beneficial = if let Some(n_rows) = num_rows.get_value() {
-            // Row count estimate is larger than the batch size.
-            // Adding repartition is desirable for this case
-            // According to `should_use_estimates` flag, we can either use exact and inexact row numbers or only exact row numbers for this decision.
-            if should_use_estimates || num_rows.is_exact().unwrap() {
-                *n_rows > batch_size
-            } else {
-                true
-            }
-        } else {
-            true
+        // Decide whether adding a round robin is beneficial depending on
+        // the statistical information we have on the number of rows:
+        let roundrobin_beneficial = match child.statistics()?.num_rows {
+            Precision::Exact(n_rows) => n_rows > batch_size,
+            Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
+            Precision::Absent => true,
         };
         let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
-        let mut hash_necessary = false;
-        if is_hash && child.output_partitioning().partition_count() > 1 {
-            // when input partitioning is larger than 1 for hash requirement.
-            // re-partitioning is desired
-            hash_necessary = true;
-        }
+        // Hash re-partitioning is necessary when the input has more than one
+        // partitions:
+        let hash_necessary = is_hash && child.output_partitioning().partition_count() > 1;
         repartition_status_flags.push((
             is_hash,
             RepartitionRequirementStatus {
-                roundrobin_beneficial,
+                roundrobin_beneficial_stats: roundrobin_beneficial,
                 hash_necessary,
             },
         ));
     }
-    // Align hash necessary flags for hash partitions to generate consistent hash partitions at each children
+    // Align hash necessary flags for hash partitions to generate consistent
+    // hash partitions at each children:
     if repartition_status_flags.iter().any(|(is_hash, status)| {
-        *is_hash && (status.hash_necessary || status.roundrobin_beneficial)
+        *is_hash && (status.hash_necessary || status.roundrobin_beneficial_stats)
     }) {
-        // There is at least one hash requirement, which is necessary or beneficial according to stats
-        // In this case, turn all necessary flags for hash to true, to produce aligned children.
+        // When there is at least one hash requirement that is necessary or
+        // beneficial according to statistics, make all children require hash
+        // repartitioning:
         for (is_hash, status) in &mut repartition_status_flags {
             if *is_hash {
                 status.hash_necessary = true;
@@ -1096,7 +1116,7 @@ fn get_repartition_status_flags(
     }
     Ok(repartition_status_flags
         .into_iter()
-        .map(|(_is_hash, status)| status)
+        .map(|(_, status)| status)
         .collect())
 }
 
@@ -1121,7 +1141,7 @@ fn ensure_distribution(
     let batch_size = config.execution.batch_size;
     let should_use_estimates = config
         .execution
-        .use_row_number_estimate_to_optimize_partitioning;
+        .use_row_number_estimates_to_optimize_partitioning;
     let is_unbounded = dist_context.plan.execution_mode().is_unbounded();
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
@@ -1181,7 +1201,7 @@ fn ensure_distribution(
             would_benefit,
             maintains,
             RepartitionRequirementStatus {
-                roundrobin_beneficial,
+                roundrobin_beneficial_stats: roundrobin_beneficial,
                 hash_necessary,
             },
         )| {
