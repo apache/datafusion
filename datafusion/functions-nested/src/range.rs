@@ -31,6 +31,7 @@ use datafusion_expr::{
     ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use std::any::Any;
+use std::iter::from_fn;
 use std::sync::Arc;
 
 make_udf_expr_and_func!(
@@ -342,15 +343,15 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
         }
         let mut new_date = start;
 
-        let mut values: Vec<Option<i32>> = vec![];
-        loop {
-            if neg && new_date < stop || !neg && new_date > stop {
-                break;
+        let values = from_fn(|| {
+            if (neg && new_date < stop) || (!neg && new_date > stop) {
+                None
+            } else {
+                let current_date = new_date;
+                new_date = Date32Type::add_month_day_nano(new_date, step);
+                Some(Some(current_date))
             }
-
-            values.push(Some(new_date));
-            new_date = Date32Type::add_month_day_nano(new_date, step);
-        }
+        });
 
         list_builder.append_value(values);
         list_builder.append(true);
