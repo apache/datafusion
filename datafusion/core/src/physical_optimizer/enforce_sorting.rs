@@ -65,6 +65,7 @@ use datafusion_physical_expr::{Partitioning, PhysicalSortExpr, PhysicalSortRequi
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
+use datafusion_physical_plan::limit::LocalLimitExec;
 
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
@@ -399,8 +400,12 @@ fn analyze_immediate_sort_removal(
                 // Replace the sort with a sort-preserving merge:
                 let expr = sort_exec.expr().to_vec();
                 Arc::new(SortPreservingMergeExec::new(expr, sort_input.clone())) as _
+            } else if let Some(fetch) = sort_exec.fetch(){
+                // Remove the sort, when its fetch is None:
+                node.children = node.children.swap_remove(0).children;
+                Arc::new(LocalLimitExec::new(sort_input.clone(), fetch))
             } else {
-                // Remove the sort:
+                // Remove the sort, when its fetch is None:
                 node.children = node.children.swap_remove(0).children;
                 sort_input.clone()
             };
@@ -1117,9 +1122,15 @@ mod tests {
             "  SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
+        // TODO: We can pushdown top sort into below to produce following plan:
+        //  let expected_optimized = [
+        //     "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
+        //     "  MemoryExec: partitions=1, partition_sizes=[0]",
+        //  ];
         let expected_optimized = [
-            "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
-            "  MemoryExec: partitions=1, partition_sizes=[0]",
+            "LocalLimitExec: fetch=2",
+            "  SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 

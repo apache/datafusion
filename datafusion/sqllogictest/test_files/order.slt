@@ -1150,7 +1150,7 @@ SELECT (SELECT c from ordered_table ORDER BY c LIMIT 1) UNION ALL (SELECT 23 as 
 23
 
 statement ok
-set datafusion.execution.use_row_number_estimate_to_optimize_partitioning = true;
+set datafusion.execution.use_row_number_estimates_to_optimize_partitioning = true;
 
 # Do not increase partition number after fetch 1. As this will be unnecessary.
 query TT
@@ -1170,7 +1170,7 @@ physical_plan
 03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
 
 statement ok
-set datafusion.execution.use_row_number_estimate_to_optimize_partitioning = false;
+set datafusion.execution.use_row_number_estimates_to_optimize_partitioning = false;
 
 # Iartition number after fetch 1. Since this estimate is not exact.
 query TT
