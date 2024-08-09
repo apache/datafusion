@@ -18,13 +18,11 @@
 //! [`ScalarUDFImpl`] definitions for range and gen_series functions.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Array, ArrayRef, Int64Array, ListArray};
+use arrow::array::{Array, ArrayRef, Date32Builder, Int64Array, ListArray, ListBuilder};
 use arrow::datatypes::{DataType, Field};
 use arrow_array::types::{Date32Type, IntervalMonthDayNanoType};
-use arrow_array::{Date32Array, NullArray};
-use arrow_buffer::{
-    BooleanBufferBuilder, IntervalMonthDayNano, NullBuffer, OffsetBuffer,
-};
+use arrow_array::NullArray;
+use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_schema::DataType::{Date32, Int64, Interval, List};
 use arrow_schema::IntervalUnit::MonthDayNano;
 use datafusion_common::cast::{as_date32_array, as_int64_array, as_interval_mdn_array};
@@ -166,8 +164,8 @@ impl ScalarUDFImpl for GenSeries {
         match args[0].data_type() {
             Int64 => make_scalar_function(|args| gen_range_inner(args, true))(args),
             Date32 => make_scalar_function(|args| gen_range_date(args, true))(args),
-            _ => {
-                exec_err!("unsupported type for range")
+            dt => {
+                exec_err!("unsupported type for range: {}", dt)
             }
         }
     }
@@ -311,39 +309,54 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
         Some(as_interval_mdn_array(&args[2])?),
     );
 
-    let mut values = vec![];
-    let mut offsets = vec![0];
+    // values are date32s
+    let values_builder = Date32Builder::new();
+    let mut list_builder = ListBuilder::new(values_builder);
+
     for (idx, stop) in stop_array.iter().enumerate() {
         let mut stop = stop.unwrap_or(0);
-        let start = start_array.as_ref().map(|x| x.value(idx)).unwrap_or(0);
-        let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(
-            IntervalMonthDayNano {
-                months: 0,
-                days: 0,
-                nanoseconds: 1,
-            },
-        );
+
+        let start = if let Some(start_array_values) = start_array {
+            start_array_values.value(idx)
+        } else {
+            list_builder.append_null();
+            continue;
+        };
+
+        let step = if let Some(step) = step_array {
+            step.value(idx)
+        } else {
+            list_builder.append_null();
+            continue;
+        };
+
         let (months, days, _) = IntervalMonthDayNanoType::to_parts(step);
+
+        if months == 0 && days == 0 {
+            return exec_err!("Cannot generate date range less than 1 day.");
+        }
+
         let neg = months < 0 || days < 0;
         if !include_upper {
             stop = Date32Type::subtract_month_day_nano(stop, step);
         }
         let mut new_date = start;
+
+        let mut values: Vec<Option<i32>> = vec![];
         loop {
             if neg && new_date < stop || !neg && new_date > stop {
                 break;
             }
-            values.push(new_date);
+
+            values.push(Some(new_date));
             new_date = Date32Type::add_month_day_nano(new_date, step);
         }
-        offsets.push(values.len() as i32);
+
+        list_builder.append_value(values);
+        list_builder.append(true);
     }
 
-    let arr = Arc::new(ListArray::try_new(
-        Arc::new(Field::new("item", Date32, true)),
-        OffsetBuffer::new(offsets.into()),
-        Arc::new(Date32Array::from(values)),
-        None,
-    )?);
+    let arr = Arc::new(list_builder.finish());
+
     Ok(arr)
 }

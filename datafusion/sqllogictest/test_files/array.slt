@@ -1971,7 +1971,7 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), co
 # `from` may be larger than `to` and `stride` is positive
 query ????
 select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
-       array_slice(a, 3, 2, 1), array_slice(a, 3, 2) 
+       array_slice(a, 3, 2, 1), array_slice(a, 3, 2)
   from (values ([1.0, 2.0, 3.0, 3.0]), ([4.0, 5.0, 3.0]), ([6.0])) t(a);
 ----
 [] [] [] []
@@ -5711,7 +5711,7 @@ select
 
 # Test range for other edge cases
 query ????????
-select 
+select
   range(9223372036854775807, 9223372036854775807, -1) as c1,
   range(9223372036854775807, 9223372036854775806, -1) as c2,
   range(9223372036854775807, 9223372036854775807, 1) as c3,
@@ -5832,6 +5832,9 @@ select generate_series(DATE '1993-03-01', DATE '1989-04-01', INTERVAL '1' YEAR)
 ----
 []
 
+query error DataFusion error: Execution error: Cannot generate date range less than 1 day.
+select generate_series(DATE '2000-01-01', DATE '2000-01-03', INTERVAL '1' HOUR)
+
 # Test generate_series with zero step
 query error DataFusion error: Execution error: step can't be 0 for function generate_series\(start \[, stop, step\]\)
 select generate_series(1, 1, 0);
@@ -5849,7 +5852,7 @@ select
 
 # Test generate_series for other edge cases
 query ????
-select 
+select
   generate_series(9223372036854775807, 9223372036854775807, -1) as c1,
   generate_series(9223372036854775807, 9223372036854775807, 1) as c2,
   generate_series(-9223372036854775808, -9223372036854775808, -1) as c3,
