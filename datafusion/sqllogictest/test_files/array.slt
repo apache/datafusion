@@ -5902,7 +5902,6 @@ select generate_series(NULL)
 ----
 NULL
 
-<<<<<<< HEAD
 # Test generate_series with a table of values
 statement ok
 CREATE TABLE date_table(
@@ -5944,8 +5943,6 @@ DataFusion error: Internal error: could not cast value to arrow_array::array::pr
 This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
 
-=======
->>>>>>> f05f2903c (Add a few more tests)
 ## array_except
 
 statement ok

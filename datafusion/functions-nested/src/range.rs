@@ -357,7 +357,6 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
         });
 
         list_builder.append_value(values);
-        list_builder.append(true);
     }
 
     let arr = Arc::new(list_builder.finish());
