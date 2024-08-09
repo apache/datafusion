@@ -16,7 +16,7 @@
 # under the License.
 
 [workspace]
-exclude = ["datafusion-cli", "dev/depcheck", ]
+exclude = ["datafusion-cli", "dev/depcheck"]
 members = [
     "datafusion/common",
     "datafusion/common-runtime",
