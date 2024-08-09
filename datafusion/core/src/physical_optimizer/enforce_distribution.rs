@@ -1031,17 +1031,30 @@ fn replace_order_preserving_variants(
     context.update_plan_from_children()
 }
 
-fn repartition_desired_flags(
+/// A struct to keep track of RepartitionRequirement status for each child node.
+struct RepartitionRequirementStatus {
+    roundrobin_beneficial: bool,
+    hash_necessary: bool,
+}
+
+/// Calculates the `RepartitionRequirementStatus` for each children to generate consistent requirements.
+/// As an example, for hash exec left children might produce `RepartitionRequirementStatus{roundrobin_beneficial: true, hash_necessary: true}`
+/// and right children might produce: `RepartitionRequirementStatus{roundrobin_beneficial: false, hash_necessary: false}`.
+/// When target partitions=4, left child might produce `Hash(vec![expr], 4)` and right child might produce `Hash(vec![expr], 4)`. However,
+/// for correct operation we need consistent hashes accross children. This util turns right child status:
+/// from `RepartitionRequirementStatus{roundrobin_beneficial: false, hash_necessary: false}` into
+/// `RepartitionRequirementStatus{roundrobin_beneficial: false, hash_necessary: true}` to generate consistent plan.
+fn get_repartition_status_flags(
     requirements: &[Distribution],
     children: &[&Arc<dyn ExecutionPlan>],
     batch_size: usize,
-) -> Result<Vec<bool>> {
+) -> Result<Vec<RepartitionRequirementStatus>> {
     debug_assert_eq!(requirements.len(), children.len());
-    let mut desired_flags = vec![];
+    let mut repartition_status_flags = vec![];
     for (child, requirement) in children.iter().zip(requirements) {
         // Don't need to apply when the returned row count is not greater than batch size
         let num_rows = child.statistics()?.num_rows;
-        let mut desired = if let Some(n_rows) = num_rows.get_value() {
+        let roundrobin_beneficial = if let Some(n_rows) = num_rows.get_value() {
             // Row count estimate is larger than the batch size.
             // Adding repartition is desirable for this case
             *n_rows > batch_size
@@ -1049,29 +1062,35 @@ fn repartition_desired_flags(
             true
         };
         let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
+        let mut hash_necessary = false;
         if is_hash && child.output_partitioning().partition_count() > 1 {
             // when input partitioning is larger than 1 for hash requirement.
             // re-partitioning is desired
-            desired = true;
+            hash_necessary = true;
         }
-        desired_flags.push((is_hash, desired));
+        repartition_status_flags.push((
+            is_hash,
+            RepartitionRequirementStatus {
+                roundrobin_beneficial,
+                hash_necessary,
+            },
+        ));
     }
-    // Align beneficial flags for hash partitions
-    if desired_flags
-        .iter()
-        .any(|(is_hash, beneficial)| *is_hash && *beneficial)
-    {
-        // There is at least one hash requirement, which is beneficial to add according to stats
-        // In this case, turn all beneficial flags for hash to true. To produce aligned children.
-        for (is_hash, beneficial) in &mut desired_flags {
+    // Align hash necessary flags for hash partitions to generate consistent hash partitions at each children
+    if repartition_status_flags.iter().any(|(is_hash, status)| {
+        *is_hash && (status.hash_necessary || status.roundrobin_beneficial)
+    }) {
+        // There is at least one hash requirement, which is necessary or beneficial according to stats
+        // In this case, turn all necessary flags for hash to true, to produce aligned children.
+        for (is_hash, status) in &mut repartition_status_flags {
             if *is_hash {
-                *beneficial = true;
+                status.hash_necessary = true;
             }
         }
     }
-    Ok(desired_flags
+    Ok(repartition_status_flags
         .into_iter()
-        .map(|(_is_hash, beneficial)| beneficial)
+        .map(|(_is_hash, status)| status)
         .collect())
 }
 
@@ -1126,7 +1145,7 @@ fn ensure_distribution(
         }
     };
 
-    let repartition_beneficial_stats = repartition_desired_flags(
+    let repartition_status_flags = get_repartition_status_flags(
         &plan.required_input_distribution(),
         &plan.children(),
         batch_size,
@@ -1142,7 +1161,7 @@ fn ensure_distribution(
         plan.required_input_ordering().iter(),
         plan.benefits_from_input_partitioning(),
         plan.maintains_input_order(),
-        repartition_beneficial_stats.into_iter()
+        repartition_status_flags.into_iter()
     )
     .map(
         |(
@@ -1151,17 +1170,20 @@ fn ensure_distribution(
             required_input_ordering,
             would_benefit,
             maintains,
-            repartition_beneficial_stats,
+            RepartitionRequirementStatus {
+                roundrobin_beneficial,
+                hash_necessary,
+            },
         )| {
             let add_roundrobin = enable_round_robin
                 // Operator benefits from partitioning (e.g. filter):
-                && (would_benefit && repartition_beneficial_stats)
+                && (would_benefit && roundrobin_beneficial)
                 // Unless partitioning increases the partition count, it is not beneficial:
                 && child.plan.output_partitioning().partition_count() < target_partitions;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
-            if repartition_file_scans && repartition_beneficial_stats {
+            if repartition_file_scans && roundrobin_beneficial {
                 if let Some(new_child) =
                     child.plan.repartitioned(target_partitions, config)?
                 {
@@ -1180,10 +1202,8 @@ fn ensure_distribution(
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
                     }
-                    // When repartitioning is not beneficial and input partition count is 1. Hash partitioning is unnecessary
-                    if repartition_beneficial_stats
-                        || child.plan.output_partitioning().partition_count() != 1
-                    {
+                    // When inserting hash is necessary to satisy hash requirement, insert hash repartition.
+                    if hash_necessary {
                         child =
                             add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
                     }
