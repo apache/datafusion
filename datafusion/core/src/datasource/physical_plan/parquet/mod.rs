@@ -354,7 +354,7 @@ impl ParquetExecBuilder {
             schema_adapter_factory,
         } = self;
 
-        let base_config = file_scan_config;
+        let mut base_config = file_scan_config;
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
         base_config.file_groups, base_config.projection, predicate, base_config.limit);
 
@@ -391,6 +391,12 @@ impl ParquetExecBuilder {
             &projected_output_ordering,
             &base_config,
         );
+
+        base_config
+            .file_groups
+            .iter_mut()
+            .for_each(|g| g.iter_mut().for_each(|f| f.statistics = None));
+
         ParquetExec {
             base_config,
             projected_statistics,
