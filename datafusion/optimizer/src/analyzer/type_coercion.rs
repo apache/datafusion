@@ -47,10 +47,11 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, Operator, ScalarUDF,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, LogicalPlan, Operator,
+    ScalarUDF, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
+use crate::analyzer::union::coerce_union;
 use crate::analyzer::AnalyzerRule;
 use crate::utils::NamePreserver;
 
@@ -120,8 +121,8 @@ fn analyze_internal(
         expr.rewrite(&mut expr_rewrite)?
             .map_data(|expr| original_name.restore(expr))
     })?
-    // coerce join expressions specially
-    .map_data(|plan| expr_rewrite.coerce_joins(plan))?
+    // some plans need to be rewritten after the expressions have been updated
+    .map_data(|plan| expr_rewrite.coerce_plan(plan))?
     // recompute the schema after the expressions have been rewritten as the types may have changed
     .map_data(|plan| plan.recompute_schema())
 }
@@ -135,6 +136,14 @@ impl<'a> TypeCoercionRewriter<'a> {
         Self { schema }
     }
 
+    fn coerce_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        match plan {
+            LogicalPlan::Join(join) => self.coerce_join(join),
+            LogicalPlan::Union(union) => coerce_union(union),
+            _ => Ok(plan),
+        }
+    }
+
     /// Coerce join equality expressions and join filter
     ///
     /// Joins must be treated specially as their equality expressions are stored
@@ -143,11 +152,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     ///
     /// For example, on_exprs like `t1.a = t2.b AND t1.x = t2.y` will be stored
     /// as a list of `(t1.a, t2.b), (t1.x, t2.y)`
-    fn coerce_joins(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
-        let LogicalPlan::Join(mut join) = plan else {
-            return Ok(plan);
-        };
-
+    fn coerce_join(&mut self, mut join: Join) -> Result<LogicalPlan> {
         join.on = join
             .on
             .into_iter()

@@ -20,7 +20,6 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::iter::zip;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
@@ -36,7 +35,7 @@ use crate::logical_plan::{
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
-use crate::type_coercion::binary::{comparison_coercion, values_coercion};
+use crate::type_coercion::binary::values_coercion;
 use crate::utils::{
     can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
     expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
@@ -1366,68 +1365,12 @@ pub fn project_with_column_index(
 
 /// Union two logical plans.
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
-    let left_col_num = left_plan.schema().fields().len();
-
-    // check union plan length same.
-    let right_col_num = right_plan.schema().fields().len();
-    if right_col_num != left_col_num {
-        return plan_err!(
-            "Union queries must have the same number of columns, (left is {left_col_num}, right is {right_col_num})");
-    }
-
-    // create union schema
-    let union_qualified_fields =
-        zip(left_plan.schema().iter(), right_plan.schema().iter())
-            .map(
-                |((left_qualifier, left_field), (_right_qualifier, right_field))| {
-                    let nullable = left_field.is_nullable() || right_field.is_nullable();
-                    let data_type = comparison_coercion(
-                        left_field.data_type(),
-                        right_field.data_type(),
-                    )
-                    .ok_or_else(|| {
-                        plan_datafusion_err!(
-                "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
-                right_field.name(),
-                right_field.data_type(),
-                left_field.name(),
-                left_field.data_type()
-                )
-                    })?;
-                    Ok((
-                        left_qualifier.cloned(),
-                        Arc::new(Field::new(left_field.name(), data_type, nullable)),
-                    ))
-                },
-            )
-            .collect::<Result<Vec<_>>>()?;
-    let union_schema =
-        DFSchema::new_with_metadata(union_qualified_fields, HashMap::new())?;
-
-    let inputs = vec![left_plan, right_plan]
-        .into_iter()
-        .map(|p| {
-            let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
-            match plan {
-                LogicalPlan::Projection(Projection { expr, input, .. }) => {
-                    Ok(Arc::new(project_with_column_index(
-                        expr,
-                        input,
-                        Arc::new(union_schema.clone()),
-                    )?))
-                }
-                other_plan => Ok(Arc::new(other_plan)),
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    if inputs.is_empty() {
-        return plan_err!("Empty UNION");
-    }
-
+    // Use the schema from the left input temporarily, and later rely on the analyzer
+    // to coerce it to a common schema.
+    let schema = left_plan.schema().clone();
     Ok(LogicalPlan::Union(Union {
-        inputs,
-        schema: Arc::new(union_schema),
+        inputs: vec![Arc::new(left_plan), Arc::new(right_plan)],
+        schema: schema,
     }))
 }
 
