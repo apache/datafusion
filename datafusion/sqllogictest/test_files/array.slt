@@ -5923,6 +5923,7 @@ select generate_series(start, '1993-03-01'::date, INTERVAL '1 year') from date_t
 [1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
 
 
+# https://github.com/apache/datafusion/issues/11922
 query error
 select generate_series(start, '1993-03-01', INTERVAL '1 year') from date_table;
 ----
