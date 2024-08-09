@@ -28,7 +28,6 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::{not, or_kleene};
-use arrow::compute::kernels::cmp::eq;
 use arrow::compute::take;
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
@@ -41,7 +40,8 @@ use datafusion_common::hash_utils::HashValue;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue,
 };
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Operator};
+use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
 use hashbrown::hash_map::RawEntryMut;
@@ -361,7 +361,11 @@ impl PhysicalExpr for InListExpr {
                     |result, expr| -> Result<BooleanArray> {
                         Ok(or_kleene(
                             &result,
-                            &eq(&value, &expr?.into_array(num_rows)?)?,
+                            &compare_op_for_nested(
+                                Operator::Eq,
+                                &value,
+                                &expr?.into_array(num_rows)?,
+                            )?,
                         )?)
                     },
                 )?;

@@ -218,9 +218,6 @@ select named_struct('field_a', 1, 'field_b', 2);
 ----
 {field_a: 1, field_b: 2}
 
-statement ok
-drop table values;
-
 query T
 select arrow_typeof(named_struct('first', 1, 'second', 2, 'third', 3));
 ----
@@ -236,3 +233,44 @@ query ?
 select {'animal': {'cat': 1, 'dog': 2, 'bird': {'parrot': 3, 'canary': 1}}, 'genre': {'fiction': ['mystery', 'sci-fi', 'fantasy'], 'non-fiction': {'biography': 5, 'history': 7, 'science': {'physics': 2, 'biology': 3}}}, 'vehicle': {'car': {'sedan': 4, 'suv': 2}, 'bicycle': 3, 'boat': ['sailboat', 'motorboat']}, 'weather': {'sunny': True, 'temperature': 25.5, 'wind': {'speed': 10, 'direction': 'NW'}}};
 ----
 {animal: {cat: 1, dog: 2, bird: {parrot: 3, canary: 1}}, genre: {fiction: [mystery, sci-fi, fantasy], non-fiction: {biography: 5, history: 7, science: {physics: 2, biology: 3}}}, vehicle: {car: {sedan: 4, suv: 2}, bicycle: 3, boat: [sailboat, motorboat]}, weather: {sunny: true, temperature: 25.5, wind: {speed: 10, direction: NW}}}
+
+# test tuple as struct
+query B
+select ('x', 'y') = ('x', 'y');
+----
+true
+
+query B
+select ('x', 'y') = ('y', 'x');
+----
+false
+
+query error DataFusion error: Error during planning: Cannot infer common argument type for comparison operation Struct.*
+select ('x', 'y') = ('x', 'y', 'z');
+
+query B
+select ('x', 'y') IN (('x', 'y'));
+----
+true
+
+query B
+select ('x', 'y') IN (('x', 'y'), ('y', 'x'));
+----
+true
+
+query I
+select a from values where (a, c) = (1, 'a');
+----
+1
+
+query I
+select a from values where (a, c) IN ((1, 'a'), (2, 'b'));
+----
+1
+2
+
+statement ok
+drop table values;
+
+statement ok
+drop table struct_values;
