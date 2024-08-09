@@ -20,8 +20,8 @@
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
-use datafusion_common::arrow::array::ArrayRef;
 
+use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
@@ -66,7 +66,7 @@ impl WindowUDFImpl for RowNumber {
 /// State for the 'ROW_NUMBER' built-in window function.
 #[derive(Debug)]
 struct NumRowsEvaluator {
-    n_rows: usize
+    n_rows: usize,
 }
 
 impl PartitionEvaluator for NumRowsEvaluator {
@@ -92,7 +92,11 @@ impl PartitionEvaluator for NumRowsEvaluator {
         todo!()
     }
 
-    fn evaluate(&mut self, _values: &[ArrayRef], _range: &Range<usize>) -> Result<ScalarValue> {
+    fn evaluate(
+        &mut self,
+        _values: &[ArrayRef],
+        _range: &Range<usize>,
+    ) -> Result<ScalarValue> {
         self.n_rows += 1;
         Ok(ScalarValue::UInt64(Some(self.n_rows as u64)))
     }
