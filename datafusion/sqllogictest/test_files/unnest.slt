@@ -539,21 +539,21 @@ query TT
 explain select unnest(unnest(unnest(column3)['c1'])), column3 from recursive_unnest_table;
 ----
 logical_plan
-01)Unnest: lists[unnest(unnest(unnest(recursive_unnest_table.column3)[c1]))] structs[]
-02)--Projection: unnest(unnest(recursive_unnest_table.column3)[c1]) AS unnest(unnest(unnest(recursive_unnest_table.column3)[c1])), recursive_unnest_table.column3
-03)----Unnest: lists[unnest(unnest(recursive_unnest_table.column3)[c1])] structs[]
-04)------Projection: get_field(unnest(recursive_unnest_table.column3), Utf8("c1")) AS unnest(unnest(recursive_unnest_table.column3)[c1]), recursive_unnest_table.column3
-05)--------Unnest: lists[unnest(recursive_unnest_table.column3)] structs[]
-06)----------Projection: recursive_unnest_table.column3 AS unnest(recursive_unnest_table.column3), recursive_unnest_table.column3
+01)Unnest: lists[UNNEST(UNNEST(UNNEST(recursive_unnest_table.column3)[c1]))] structs[]
+02)--Projection: UNNEST(UNNEST(recursive_unnest_table.column3)[c1]) AS UNNEST(UNNEST(UNNEST(recursive_unnest_table.column3)[c1])), recursive_unnest_table.column3
+03)----Unnest: lists[UNNEST(UNNEST(recursive_unnest_table.column3)[c1])] structs[]
+04)------Projection: get_field(UNNEST(recursive_unnest_table.column3), Utf8("c1")) AS UNNEST(UNNEST(recursive_unnest_table.column3)[c1]), recursive_unnest_table.column3
+05)--------Unnest: lists[UNNEST(recursive_unnest_table.column3)] structs[]
+06)----------Projection: recursive_unnest_table.column3 AS UNNEST(recursive_unnest_table.column3), recursive_unnest_table.column3
 07)------------TableScan: recursive_unnest_table projection=[column3]
 physical_plan
 01)UnnestExec
-02)--ProjectionExec: expr=[unnest(unnest(recursive_unnest_table.column3)[c1])@0 as unnest(unnest(unnest(recursive_unnest_table.column3)[c1])), column3@1 as column3]
+02)--ProjectionExec: expr=[UNNEST(UNNEST(recursive_unnest_table.column3)[c1])@0 as UNNEST(UNNEST(UNNEST(recursive_unnest_table.column3)[c1])), column3@1 as column3]
 03)----UnnestExec
-04)------ProjectionExec: expr=[get_field(unnest(recursive_unnest_table.column3)@0, c1) as unnest(unnest(recursive_unnest_table.column3)[c1]), column3@1 as column3]
+04)------ProjectionExec: expr=[get_field(UNNEST(recursive_unnest_table.column3)@0, c1) as UNNEST(UNNEST(recursive_unnest_table.column3)[c1]), column3@1 as column3]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------UnnestExec
-07)------------ProjectionExec: expr=[column3@0 as unnest(recursive_unnest_table.column3), column3@0 as column3]
+07)------------ProjectionExec: expr=[column3@0 as UNNEST(recursive_unnest_table.column3), column3@0 as column3]
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 ## group by unnest
