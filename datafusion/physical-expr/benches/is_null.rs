@@ -20,8 +20,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::builder::Int32Builder;
 use arrow_schema::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_physical_expr::expressions::{IsNotNullExpr, IsNullExpr};
-use datafusion_physical_expr_common::expressions::column::Column;
+use datafusion_physical_expr::expressions::{Column, IsNotNullExpr, IsNullExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 

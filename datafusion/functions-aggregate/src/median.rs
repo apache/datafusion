@@ -38,7 +38,7 @@ use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     Signature, Volatility,
 };
-use datafusion_physical_expr_common::aggregate::utils::Hashable;
+use datafusion_functions_aggregate_common::utils::Hashable;
 
 make_udaf_expr_and_func!(
     Median,
@@ -133,7 +133,7 @@ impl AggregateUDFImpl for Median {
             };
         }
 
-        let dt = &acc_args.input_types[0];
+        let dt = acc_args.exprs[0].data_type(acc_args.schema)?;
         downcast_integer! {
             dt => (helper, dt),
             DataType::Float16 => helper!(Float16Type, dt),

@@ -18,10 +18,14 @@
 //! Function module contains typing and signature for built-in and user defined functions.
 
 use crate::ColumnarValue;
-use crate::{Accumulator, Expr, PartitionEvaluator};
-use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{DFSchema, Result};
+use crate::{Expr, PartitionEvaluator};
+use arrow::datatypes::DataType;
+use datafusion_common::Result;
 use std::sync::Arc;
+
+pub use datafusion_functions_aggregate_common::accumulator::{
+    AccumulatorArgs, AccumulatorFactoryFunction, StateFieldsArgs,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Hint {
@@ -45,86 +49,6 @@ pub type ScalarFunctionImplementation =
 /// Factory that returns the functions's return type given the input argument types
 pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
-
-/// [`AccumulatorArgs`] contains information about how an aggregate
-/// function was called, including the types of its arguments and any optional
-/// ordering expressions.
-#[derive(Debug)]
-pub struct AccumulatorArgs<'a> {
-    /// The return type of the aggregate function.
-    pub data_type: &'a DataType,
-
-    /// The schema of the input arguments
-    pub schema: &'a Schema,
-
-    /// The schema of the input arguments
-    pub dfschema: &'a DFSchema,
-
-    /// Whether to ignore nulls.
-    ///
-    /// SQL allows the user to specify `IGNORE NULLS`, for example:
-    ///
-    /// ```sql
-    /// SELECT FIRST_VALUE(column1) IGNORE NULLS FROM t;
-    /// ```
-    pub ignore_nulls: bool,
-
-    /// The expressions in the `ORDER BY` clause passed to this aggregator.
-    ///
-    /// SQL allows the user to specify the ordering of arguments to the
-    /// aggregate using an `ORDER BY`. For example:
-    ///
-    /// ```sql
-    /// SELECT FIRST_VALUE(column1 ORDER BY column2) FROM t;
-    /// ```
-    ///
-    /// If no `ORDER BY` is specified, `sort_exprs`` will be empty.
-    pub sort_exprs: &'a [Expr],
-
-    /// Whether the aggregation is running in reverse order
-    pub is_reversed: bool,
-
-    /// The name of the aggregate expression
-    pub name: &'a str,
-
-    /// Whether the aggregate function is distinct.
-    ///
-    /// ```sql
-    /// SELECT COUNT(DISTINCT column1) FROM t;
-    /// ```
-    pub is_distinct: bool,
-
-    /// The input types of the aggregate function.
-    pub input_types: &'a [DataType],
-
-    /// The logical expression of arguments the aggregate function takes.
-    pub input_exprs: &'a [Expr],
-}
-
-/// [`StateFieldsArgs`] contains information about the fields that an
-/// aggregate function's accumulator should have. Used for [`AggregateUDFImpl::state_fields`].
-///
-/// [`AggregateUDFImpl::state_fields`]: crate::udaf::AggregateUDFImpl::state_fields
-pub struct StateFieldsArgs<'a> {
-    /// The name of the aggregate function.
-    pub name: &'a str,
-
-    /// The input types of the aggregate function.
-    pub input_types: &'a [DataType],
-
-    /// The return type of the aggregate function.
-    pub return_type: &'a DataType,
-
-    /// The ordering fields of the aggregate function.
-    pub ordering_fields: &'a [Field],
-
-    /// Whether the aggregate function is distinct.
-    pub is_distinct: bool,
-}
-
-/// Factory that returns an accumulator for the given aggregate function.
-pub type AccumulatorFactoryFunction =
-    Arc<dyn Fn(AccumulatorArgs) -> Result<Box<dyn Accumulator>> + Send + Sync>;
 
 /// Factory that creates a PartitionEvaluator for the given window
 /// function
