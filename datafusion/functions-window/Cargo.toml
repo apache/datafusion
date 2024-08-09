@@ -36,3 +36,8 @@ name = "datafusion_functions_window"
 path = "src/lib.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }

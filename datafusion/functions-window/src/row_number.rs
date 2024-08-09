@@ -17,6 +17,90 @@
 
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
+use std::any::Any;
+use std::fmt::Debug;
+use std::ops::Range;
+use datafusion_common::arrow::array::ArrayRef;
+
+use datafusion_common::arrow::datatypes::DataType;
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+
+/// row_number expression
+#[derive(Debug)]
+struct RowNumber {
+    signature: Signature,
+}
+
+impl RowNumber {
+    /// Create a new ROW_NUMBER function
+    fn new() -> Self {
+        Self {
+            signature: Signature::any(0, Volatility::Immutable),
+        }
+    }
+}
+
+impl WindowUDFImpl for RowNumber {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "row_number"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::UInt64)
+    }
+
+    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        todo!()
+    }
+}
+
+/// State for the 'ROW_NUMBER' built-in window function.
+#[derive(Debug)]
+struct NumRowsEvaluator {
+    n_rows: usize
+}
+
+impl PartitionEvaluator for NumRowsEvaluator {
+    fn is_causal(&self) -> bool {
+        // The row_number function doesn't need "future" values to emit results:
+        true
+    }
+
+    fn evaluate_all(&mut self, values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+        // # Implementation Table
+        //
+        // |[`uses_window_frame`]|[`supports_bounded_execution`]|[`include_rank`]|function_to_implement|
+        // |---|---|----|----|
+        // |false (default)      |false (default)               |false (default)   | [`evaluate_all`]           |
+        //
+        // The row_number function:
+        //  - false: does not use values from the window frame
+        //  - true: supports bounded execution
+        //  - false: cannot be evaluated only from rank
+        //
+        // Because row_number supports bounded execution as per the implementation table the
+        // the `evaluate_all` does not require an implementation.
+        todo!()
+    }
+
+    fn evaluate(&mut self, _values: &[ArrayRef], _range: &Range<usize>) -> Result<ScalarValue> {
+        self.n_rows += 1;
+        Ok(ScalarValue::UInt64(Some(self.n_rows as u64)))
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
+}
 /*
 use crate::expressions::Column;
 use crate::window::window_expr::NumRowsState;
