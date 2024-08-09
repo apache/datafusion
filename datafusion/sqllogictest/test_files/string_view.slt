@@ -550,7 +550,7 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test BTRIM outputs
-query TTT
+query TTTT
 SELECT
   BTRIM(column1_utf8view, 'foo') AS l1,
   BTRIM(column1_utf8view, 'A') AS l2,

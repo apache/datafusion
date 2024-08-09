@@ -49,7 +49,7 @@ impl Display for TrimType {
 pub(crate) fn general_trim<T: OffsetSizeTrait>(
     args: &[ArrayRef],
     trim_type: TrimType,
-    string_view_pat: bool,
+    use_string_view: bool,
 ) -> Result<ArrayRef> {
     let func = match trim_type {
         TrimType::Left => |input, pattern: &str| {
@@ -69,7 +69,7 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
         },
     };
 
-    if string_view_pat {
+    if use_string_view {
         string_view_trim::<T>(trim_type, func, args)
     } else {
         string_trim::<T>(trim_type, func, args)
