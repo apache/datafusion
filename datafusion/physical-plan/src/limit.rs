@@ -473,6 +473,7 @@ mod tests {
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use arrow_array::RecordBatchOptions;
     use arrow_schema::Schema;
+    use datafusion_common::stats::Precision;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalExpr;
 

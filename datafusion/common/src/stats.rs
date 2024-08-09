@@ -331,11 +331,14 @@ impl Statistics {
                 } else {
                     // if the input is greater than "fetch+skip", the num_rows will be the "fetch",
                     // but we won't be able to predict the other statistics
-                    if !input_stats.num_rows.is_exact().unwrap_or(false) || fetch.is_none() {
+                    if !input_stats.num_rows.is_exact().unwrap_or(false)
+                        || fetch.is_none()
+                    {
                         // If the input stats are inexact, the output stats must be too.
                         // If the fetch value is `usize::MAX` because no LIMIT was specified,
                         // we also can't represent it as an exact value.
-                        fetched_row_number_stats = fetched_row_number_stats.into_inexact();
+                        fetched_row_number_stats =
+                            fetched_row_number_stats.into_inexact();
                     }
                     fetched_row_number_stats
                 }

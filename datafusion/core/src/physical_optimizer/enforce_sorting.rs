@@ -62,10 +62,10 @@ use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::{Partitioning, PhysicalSortExpr, PhysicalSortRequirement};
+use datafusion_physical_plan::limit::LocalLimitExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
-use datafusion_physical_plan::limit::LocalLimitExec;
 
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
@@ -400,7 +400,7 @@ fn analyze_immediate_sort_removal(
                 // Replace the sort with a sort-preserving merge:
                 let expr = sort_exec.expr().to_vec();
                 Arc::new(SortPreservingMergeExec::new(expr, sort_input.clone())) as _
-            } else if let Some(fetch) = sort_exec.fetch(){
+            } else if let Some(fetch) = sort_exec.fetch() {
                 // Remove the sort, when its fetch is None:
                 node.children = node.children.swap_remove(0).children;
                 Arc::new(LocalLimitExec::new(sort_input.clone(), fetch))
@@ -1104,17 +1104,17 @@ mod tests {
     async fn test_remove_unnecessary_sort7() -> Result<()> {
         let schema = create_test_schema()?;
         let source = memory_exec(&schema);
-        let input = Arc::new(
-            SortExec::new(vec![
+        let input = Arc::new(SortExec::new(
+            vec![
                 sort_expr("non_nullable_col", &schema),
                 sort_expr("nullable_col", &schema),
-            ], source),
-        );
+            ],
+            source,
+        ));
 
         let physical_plan = Arc::new(
-            SortExec::new(vec![
-                sort_expr("non_nullable_col", &schema),
-            ], input).with_fetch(Some(2)),
+            SortExec::new(vec![sort_expr("non_nullable_col", &schema)], input)
+                .with_fetch(Some(2)),
         ) as Arc<dyn ExecutionPlan>;
 
         let expected_input = [
