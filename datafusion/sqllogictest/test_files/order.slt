@@ -1171,3 +1171,21 @@ physical_plan
 
 statement ok
 set datafusion.execution.use_row_number_estimate_to_optimize_partitioning = false;
+
+# Iartition number after fetch 1. Since this estimate is not exact.
+query TT
+EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
+  FROM ordered_table
+  ORDER BY a ASC LIMIT 1
+);
+----
+logical_plan
+01)Projection: ordered_table.a + ordered_table.b AS sum1
+02)--Limit: skip=0, fetch=1
+03)----Sort: ordered_table.a ASC NULLS LAST, fetch=1
+04)------TableScan: ordered_table projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[a@0 + b@1 as sum1]
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
