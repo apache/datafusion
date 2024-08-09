@@ -646,14 +646,13 @@ logical_plan
 
 
 ## Ensure no casts for OCTET_LENGTH
-## TODO https://github.com/apache/datafusion/issues/11858
 query TT
 EXPLAIN SELECT
   OCTET_LENGTH(column1_utf8view) as c1
 FROM test;
 ----
 logical_plan
-01)Projection: octet_length(CAST(test.column1_utf8view AS Utf8)) AS c1
+01)Projection: octet_length(test.column1_utf8view) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for OVERLAY
