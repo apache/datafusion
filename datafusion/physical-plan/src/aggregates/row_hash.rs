@@ -113,11 +113,11 @@ struct SkipAggregationProbe {
     /// is skipped and input rows are directly converted to output
     probe_ratio_threshold: f64,
 
-    /// Flag indicating further data aggregation mey be skipped (decision made
+    /// Flag indicating further data aggregation may be skipped (decision made
     /// when probing complete)
     should_skip: bool,
     /// Flag indicating further updates of `SkipAggregationProbe` state won't
-    /// make any effect (decision made when probing complete)
+    /// make any effect (set either while probing or on probing completion)
     is_locked: bool,
 }
 
