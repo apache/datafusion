@@ -33,7 +33,7 @@ SELECT char_length('josé')
 ----
 4
 
-query ?
+query I
 SELECT char_length(NULL)
 ----
 NULL
@@ -53,7 +53,7 @@ SELECT character_length('josé')
 ----
 4
 
-query ?
+query I
 SELECT character_length(NULL)
 ----
 NULL
@@ -93,12 +93,12 @@ SELECT left('abcde', CAST(NULL AS INT))
 ----
 NULL
 
-query ?
+query T
 SELECT left(NULL, 2)
 ----
 NULL
 
-query ?
+query T
 SELECT left(NULL, CAST(NULL AS INT))
 ----
 NULL
@@ -128,7 +128,7 @@ SELECT length(arrow_cast('josé', 'Dictionary(Int32, Utf8)'))
 ----
 4
 
-query ?
+query I
 SELECT length(NULL)
 ----
 NULL
@@ -193,12 +193,12 @@ SELECT lpad('xyxhi', 3)
 ----
 xyx
 
-query ?
+query T
 SELECT lpad(NULL, 0)
 ----
 NULL
 
-query ?
+query T
 SELECT lpad(NULL, 5, 'xy')
 ----
 NULL
@@ -218,7 +218,7 @@ SELECT reverse('loẅks')
 ----
 sk̈wol
 
-query ?
+query T
 SELECT reverse(NULL)
 ----
 NULL
@@ -258,12 +258,12 @@ SELECT right('abcde', CAST(NULL AS INT))
 ----
 NULL
 
-query ?
+query T
 SELECT right(NULL, 2)
 ----
 NULL
 
-query ?
+query T
 SELECT right(NULL, CAST(NULL AS INT))
 ----
 NULL
@@ -348,7 +348,7 @@ SELECT strpos('joséésoj', 'abc')
 ----
 0
 
-query ?
+query I
 SELECT strpos(NULL, 'abc')
 ----
 NULL
@@ -429,7 +429,7 @@ SELECT translate(arrow_cast('12345', 'Dictionary(Int32, Utf8)'), '143', 'ax')
 ----
 a2x5
 
-query ?
+query T
 SELECT translate(NULL, '143', 'ax')
 ----
 NULL
@@ -923,12 +923,12 @@ SELECT levenshtein('kitten', NULL)
 ----
 NULL
 
-query ?
+query I
 SELECT levenshtein(NULL, 'sitting')
 ----
 NULL
 
-query ?
+query I
 SELECT levenshtein(NULL, NULL)
 ----
 NULL
@@ -1015,7 +1015,7 @@ arrow 1 arrow
 arrow 2 arrow
 
 # Test substring_index with NULL values
-query ?TT?
+query TTTT
 SELECT
   substring_index(NULL, '.', 1),
   substring_index('arrow.apache.org', NULL, 1),
@@ -1094,7 +1094,7 @@ SELECT find_in_set('', '')
 ----
 1
 
-query ?
+query I
 SELECT find_in_set(NULL, 'a,b,c,d')
 ----
 NULL
@@ -1105,7 +1105,7 @@ SELECT find_in_set('a', NULL)
 NULL
 
 
-query ?
+query I
 SELECT find_in_set(NULL, NULL)
 ----
 NULL

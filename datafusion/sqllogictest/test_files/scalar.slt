@@ -706,7 +706,7 @@ select power(2, 0), power(2, 1), power(2, 2);
 1 2 4
 
 # power scalar nulls
-query R rowsort
+query I rowsort
 select power(null, 64);
 ----
 NULL
@@ -718,7 +718,7 @@ select power(2, null);
 NULL
 
 # power scalar nulls #2
-query R rowsort
+query I rowsort
 select power(null, null);
 ----
 NULL
@@ -1720,7 +1720,7 @@ CREATE TABLE test(
 (-14, -14, -14.5, -14.5),
 (NULL, NULL, NULL, NULL);
 
-query RRRRIR rowsort
+query IRRRIR rowsort
 SELECT power(i32, exp_i) as power_i32,
        power(i64, exp_f) as power_i64,
        pow(f32, exp_i) as power_f32,
@@ -1895,7 +1895,7 @@ select 100000 where position('legend' in 'league of legend') = 11;
 100000
 
 # test null
-query ?
+query I
 select position(null in null)
 ----
 NULL

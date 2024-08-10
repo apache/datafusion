@@ -115,14 +115,14 @@ CREATE TABLE src_table_2 (
 (7, 'ggg', 700, 2),
 (8, 'hhh', 800, 2);
 
-query ITII
+query I
 COPY  src_table_1 TO 'test_files/scratch/csv_files/csv_partitions/1.csv'
 STORED AS CSV;
 ----
 4
 
 
-query ITII
+query I
 COPY  src_table_2 TO 'test_files/scratch/csv_files/csv_partitions/2.csv'
 STORED AS CSV;
 ----
@@ -175,7 +175,7 @@ CREATE TABLE table_with_necessary_quoting (
 (4, 'h|h|h');
 
 # quote is required because `|` is delimiter and part of the data
-query IT
+query I
 COPY table_with_necessary_quoting TO 'test_files/scratch/csv_files/table_with_necessary_quoting.csv'
 STORED AS csv
 OPTIONS ('format.quote' '~',
@@ -247,7 +247,7 @@ id2 "value2"
 id3 "value3"
 
 # ensure that double quote option is used when writing to csv
-query TT
+query I
 COPY csv_with_double_quote TO 'test_files/scratch/csv_files/table_with_double_quotes.csv'
 STORED AS csv
 OPTIONS ('format.double_quote' 'true');
@@ -271,7 +271,7 @@ id2 "value2"
 id3 "value3"
 
 # ensure when double quote option is disabled that quotes are escaped instead
-query TT
+query I
 COPY csv_with_double_quote TO 'test_files/scratch/csv_files/table_with_escaped_quotes.csv'
 STORED AS csv
 OPTIONS ('format.double_quote' 'false', 'format.escape' '#');
