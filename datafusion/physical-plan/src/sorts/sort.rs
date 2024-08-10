@@ -921,7 +921,7 @@ impl ExecutionPlan for SortExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -933,6 +933,10 @@ impl ExecutionPlan for SortExec {
             fetch: limit,
             cache: self.cache.clone(),
         }))
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 }
 

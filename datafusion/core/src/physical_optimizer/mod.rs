@@ -21,7 +21,6 @@
 //! "Repartition" or "Sortedness"
 //!
 //! [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
-pub mod aggregate_statistics;
 pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
 pub mod enforce_distribution;

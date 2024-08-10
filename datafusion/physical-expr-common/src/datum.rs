@@ -22,7 +22,8 @@ use arrow::compute::SortOptions;
 use arrow::error::ArrowError;
 use datafusion_common::internal_err;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Operator};
+use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_expr_common::operator::Operator;
 use std::sync::Arc;
 
 /// Applies a binary [`Datum`] kernel `f` to `lhs` and `rhs`

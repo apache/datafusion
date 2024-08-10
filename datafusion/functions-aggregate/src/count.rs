@@ -16,13 +16,14 @@
 // under the License.
 
 use ahash::RandomState;
-use datafusion_physical_expr_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
+use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use std::collections::HashSet;
 use std::ops::BitAnd;
 use std::{fmt::Debug, sync::Arc};
 
 use arrow::{
     array::{ArrayRef, AsArray},
+    compute,
     datatypes::{
         DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
         Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
@@ -46,14 +47,12 @@ use datafusion_expr::{
     EmitTo, GroupsAccumulator, Signature, Volatility,
 };
 use datafusion_expr::{Expr, ReversedUDAF, TypeSignature};
-use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
-use datafusion_physical_expr_common::{
-    aggregate::count_distinct::{
-        BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
-        PrimitiveDistinctCountAccumulator,
-    },
-    binary_map::OutputType,
+use datafusion_functions_aggregate_common::aggregate::count_distinct::{
+    BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
+    PrimitiveDistinctCountAccumulator,
 };
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
+use datafusion_physical_expr_common::binary_map::OutputType;
 
 make_udaf_expr_and_func!(
     Count,
@@ -144,11 +143,11 @@ impl AggregateUDFImpl for Count {
             return Ok(Box::new(CountAccumulator::new()));
         }
 
-        if acc_args.input_exprs.len() > 1 {
+        if acc_args.exprs.len() > 1 {
             return not_impl_err!("COUNT DISTINCT with multiple arguments");
         }
 
-        let data_type = &acc_args.input_types[0];
+        let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
         Ok(match data_type {
             // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
             DataType::Int8 => Box::new(
@@ -270,7 +269,7 @@ impl AggregateUDFImpl for Count {
         if args.is_distinct {
             return false;
         }
-        args.input_exprs.len() == 1
+        args.exprs.len() == 1
     }
 
     fn create_groups_accumulator(
@@ -438,6 +437,71 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         let counts = emit_to.take_needed(&mut self.counts);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
         Ok(vec![Arc::new(counts) as ArrayRef])
+    }
+
+    /// Converts an input batch directly to a state batch
+    ///
+    /// The state of `COUNT` is always a single Int64Array:
+    /// * `1` (for non-null, non filtered values)
+    /// * `0` (for null values)
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let values = &values[0];
+
+        let state_array = match (values.logical_nulls(), opt_filter) {
+            (None, None) => {
+                // In case there is no nulls in input and no filter, returning array of 1
+                Arc::new(Int64Array::from_value(1, values.len()))
+            }
+            (Some(nulls), None) => {
+                // If there are any nulls in input values -- casting `nulls` (true for values, false for nulls)
+                // of input array to Int64
+                let nulls = BooleanArray::new(nulls.into_inner(), None);
+                compute::cast(&nulls, &DataType::Int64)?
+            }
+            (None, Some(filter)) => {
+                // If there is only filter
+                // - applying filter null mask to filter values by bitand filter values and nulls buffers
+                //   (using buffers guarantees absence of nulls in result)
+                // - casting result of bitand to Int64 array
+                let (filter_values, filter_nulls) = filter.clone().into_parts();
+
+                let state_buf = match filter_nulls {
+                    Some(filter_nulls) => &filter_values & filter_nulls.inner(),
+                    None => filter_values,
+                };
+
+                let boolean_state = BooleanArray::new(state_buf, None);
+                compute::cast(&boolean_state, &DataType::Int64)?
+            }
+            (Some(nulls), Some(filter)) => {
+                // For both input nulls and filter
+                // - applying filter null mask to filter values by bitand filter values and nulls buffers
+                //   (using buffers guarantees absence of nulls in result)
+                // - applying values null mask to filter buffer by another bitand on filter result and
+                //   nulls from input values
+                // - casting result to Int64 array
+                let (filter_values, filter_nulls) = filter.clone().into_parts();
+
+                let filter_buf = match filter_nulls {
+                    Some(filter_nulls) => &filter_values & filter_nulls.inner(),
+                    None => filter_values,
+                };
+                let state_buf = &filter_buf & nulls.inner();
+
+                let boolean_state = BooleanArray::new(state_buf, None);
+                compute::cast(&boolean_state, &DataType::Int64)?
+            }
+        };
+
+        Ok(vec![state_array])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {

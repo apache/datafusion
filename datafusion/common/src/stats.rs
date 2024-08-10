@@ -19,9 +19,9 @@
 
 use std::fmt::{self, Debug, Display};
 
-use crate::ScalarValue;
+use crate::{Result, ScalarValue};
 
-use arrow_schema::Schema;
+use arrow_schema::{Schema, SchemaRef};
 
 /// Represents a value with a degree of certainty. `Precision` is used to
 /// propagate information the precision of statistical values.
@@ -247,21 +247,96 @@ impl Statistics {
 
     /// If the exactness of a [`Statistics`] instance is lost, this function relaxes
     /// the exactness of all information by converting them [`Precision::Inexact`].
-    pub fn into_inexact(self) -> Self {
-        Statistics {
-            num_rows: self.num_rows.to_inexact(),
-            total_byte_size: self.total_byte_size.to_inexact(),
-            column_statistics: self
-                .column_statistics
-                .into_iter()
-                .map(|cs| ColumnStatistics {
-                    null_count: cs.null_count.to_inexact(),
-                    max_value: cs.max_value.to_inexact(),
-                    min_value: cs.min_value.to_inexact(),
-                    distinct_count: cs.distinct_count.to_inexact(),
-                })
-                .collect::<Vec<_>>(),
+    pub fn to_inexact(mut self) -> Self {
+        self.num_rows = self.num_rows.to_inexact();
+        self.total_byte_size = self.total_byte_size.to_inexact();
+        self.column_statistics = self
+            .column_statistics
+            .into_iter()
+            .map(|s| s.to_inexact())
+            .collect();
+        self
+    }
+
+    /// Calculates the statistics after `fetch` and `skip` operations apply.
+    /// Here, `self` denotes per-partition statistics. Use the `n_partitions`
+    /// parameter to compute global statistics in a multi-partition setting.
+    pub fn with_fetch(
+        mut self,
+        schema: SchemaRef,
+        fetch: Option<usize>,
+        skip: usize,
+        n_partitions: usize,
+    ) -> Result<Self> {
+        let fetch_val = fetch.unwrap_or(usize::MAX);
+
+        self.num_rows = match self {
+            Statistics {
+                num_rows: Precision::Exact(nr),
+                ..
+            }
+            | Statistics {
+                num_rows: Precision::Inexact(nr),
+                ..
+            } => {
+                // Here, the inexact case gives us an upper bound on the number of rows.
+                if nr <= skip {
+                    // All input data will be skipped:
+                    Precision::Exact(0)
+                } else if nr <= fetch_val && skip == 0 {
+                    // If the input does not reach the `fetch` globally, and `skip`
+                    // is zero (meaning the input and output are identical), return
+                    // input stats as is.
+                    // TODO: Can input stats still be used, but adjusted, when `skip`
+                    //       is non-zero?
+                    return Ok(self);
+                } else if nr - skip <= fetch_val {
+                    // After `skip` input rows are skipped, the remaining rows are
+                    // less than or equal to the `fetch` values, so `num_rows` must
+                    // equal the remaining rows.
+                    check_num_rows(
+                        (nr - skip).checked_mul(n_partitions),
+                        // We know that we have an estimate for the number of rows:
+                        self.num_rows.is_exact().unwrap(),
+                    )
+                } else {
+                    // At this point we know that we were given a `fetch` value
+                    // as the `None` case would go into the branch above. Since
+                    // the input has more rows than `fetch + skip`, the number
+                    // of rows will be the `fetch`, but we won't be able to
+                    // predict the other statistics.
+                    check_num_rows(
+                        fetch_val.checked_mul(n_partitions),
+                        // We know that we have an estimate for the number of rows:
+                        self.num_rows.is_exact().unwrap(),
+                    )
+                }
+            }
+            Statistics {
+                num_rows: Precision::Absent,
+                ..
+            } => check_num_rows(fetch.and_then(|v| v.checked_mul(n_partitions)), false),
+        };
+        self.column_statistics = Statistics::unknown_column(&schema);
+        self.total_byte_size = Precision::Absent;
+        Ok(self)
+    }
+}
+
+/// Creates an estimate of the number of rows in the output using the given
+/// optional value and exactness flag.
+fn check_num_rows(value: Option<usize>, is_exact: bool) -> Precision<usize> {
+    if let Some(value) = value {
+        if is_exact {
+            Precision::Exact(value)
+        } else {
+            // If the input stats are inexact, so are the output stats.
+            Precision::Inexact(value)
         }
+    } else {
+        // If the estimate is not available (e.g. due to an overflow), we can
+        // not produce a reliable estimate.
+        Precision::Absent
     }
 }
 
@@ -336,13 +411,24 @@ impl ColumnStatistics {
     }
 
     /// Returns a [`ColumnStatistics`] instance having all [`Precision::Absent`] parameters.
-    pub fn new_unknown() -> ColumnStatistics {
-        ColumnStatistics {
+    pub fn new_unknown() -> Self {
+        Self {
             null_count: Precision::Absent,
             max_value: Precision::Absent,
             min_value: Precision::Absent,
             distinct_count: Precision::Absent,
         }
+    }
+
+    /// If the exactness of a [`ColumnStatistics`] instance is lost, this
+    /// function relaxes the exactness of all information by converting them
+    /// [`Precision::Inexact`].
+    pub fn to_inexact(mut self) -> Self {
+        self.null_count = self.null_count.to_inexact();
+        self.max_value = self.max_value.to_inexact();
+        self.min_value = self.min_value.to_inexact();
+        self.distinct_count = self.distinct_count.to_inexact();
+        self
     }
 }
 

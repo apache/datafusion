@@ -1137,7 +1137,7 @@ from arrays_values_without_nulls;
 ## array_element (aliases: array_extract, list_extract, list_element)
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: Error during planning: array_element does not support zero arguments.
+query error DataFusion error: Error during planning: Error during planning: array_element does not support zero arguments
 select array_element();
 
 # array_element error
@@ -1979,7 +1979,7 @@ select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
 [6.0] [6.0] [] []
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: Error during planning: array_slice does not support zero arguments.
+query error DataFusion error: Error during planning: Error during planning: array_slice does not support zero arguments
 select array_slice();
 
 
@@ -5351,6 +5351,25 @@ true false true false false false true true false false true false true
 #----
 #true false true false false false true true false false true false true
 
+# any operator
+query ?
+select column3 from arrays where 'L'=any(column3);
+----
+[L, o, r, e, m]
+
+query I
+select count(*) from arrays where 'L'=any(column3);
+----
+1
+
+query I
+select count(*) from arrays where 'X'=any(column3);
+----
+0
+
+query error DataFusion error: Error during planning: Unsupported AnyOp: '>', only '=' is supported
+select count(*) from arrays where 'X'>any(column3);
+
 ## array_distinct
 
 #TODO: https://github.com/apache/datafusion/issues/7142
@@ -5870,6 +5889,46 @@ query ?
 select generate_series(NULL)
 ----
 NULL
+
+# Test generate_series with a table of values
+statement ok
+CREATE TABLE date_table(
+  start DATE,
+  stop DATE,
+  step INTERVAL
+) AS VALUES
+  (DATE '1992-01-01', DATE '1993-01-02', INTERVAL '1' MONTH),
+  (DATE '1993-02-01', DATE '1993-01-01', INTERVAL '-1' DAY),
+  (DATE '1989-04-01', DATE '1993-03-01', INTERVAL '1' YEAR);
+
+query ?
+select generate_series(start, stop, step) from date_table;
+----
+[1992-01-01, 1992-02-01, 1992-03-01, 1992-04-01, 1992-05-01, 1992-06-01, 1992-07-01, 1992-08-01, 1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01]
+[1993-02-01, 1993-01-31, 1993-01-30, 1993-01-29, 1993-01-28, 1993-01-27, 1993-01-26, 1993-01-25, 1993-01-24, 1993-01-23, 1993-01-22, 1993-01-21, 1993-01-20, 1993-01-19, 1993-01-18, 1993-01-17, 1993-01-16, 1993-01-15, 1993-01-14, 1993-01-13, 1993-01-12, 1993-01-11, 1993-01-10, 1993-01-09, 1993-01-08, 1993-01-07, 1993-01-06, 1993-01-05, 1993-01-04, 1993-01-03, 1993-01-02, 1993-01-01]
+[1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
+
+query ?
+select generate_series(start, stop, INTERVAL '1 year') from date_table;
+----
+[1992-01-01, 1993-01-01]
+[]
+[1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
+
+query ?
+select generate_series(start, '1993-03-01'::date, INTERVAL '1 year') from date_table;
+----
+[1992-01-01, 1993-01-01]
+[1993-02-01]
+[1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
+
+
+# https://github.com/apache/datafusion/issues/11922
+query error
+select generate_series(start, '1993-03-01', INTERVAL '1 year') from date_table;
+----
+DataFusion error: Internal error: could not cast value to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::Date32Type>.
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
 
 ## array_except

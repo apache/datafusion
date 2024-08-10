@@ -45,11 +45,16 @@ use crate::prelude::{CsvReadOptions, SessionContext};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::TableReference;
+use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_physical_expr::{
+    expressions, AggregateExpr, EquivalenceProperties, PhysicalExpr,
+};
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use futures::Stream;
 use tempfile::TempDir;
 // backwards compatibility
@@ -107,7 +112,7 @@ pub fn aggr_test_schema() -> SchemaRef {
 
 /// Register session context for the aggregate_test_100.csv file
 pub async fn register_aggregate_csv(
-    ctx: &mut SessionContext,
+    ctx: &SessionContext,
     table_name: &str,
 ) -> Result<()> {
     let schema = aggr_test_schema();
@@ -123,8 +128,8 @@ pub async fn register_aggregate_csv(
 
 /// Create a table from the aggregate_test_100.csv file with the specified name
 pub async fn test_table_with_name(name: &str) -> Result<DataFrame> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx, name).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx, name).await?;
     ctx.table(name).await
 }
 
@@ -401,4 +406,58 @@ pub fn bounded_stream(batch: RecordBatch, limit: usize) -> SendableRecordBatchSt
         limit,
         batch,
     })
+}
+
+/// Describe the type of aggregate being tested
+pub enum TestAggregate {
+    /// Testing COUNT(*) type aggregates
+    CountStar,
+
+    /// Testing for COUNT(column) aggregate
+    ColumnA(Arc<Schema>),
+}
+
+impl TestAggregate {
+    /// Create a new COUNT(*) aggregate
+    pub fn new_count_star() -> Self {
+        Self::CountStar
+    }
+
+    /// Create a new COUNT(column) aggregate
+    pub fn new_count_column(schema: &Arc<Schema>) -> Self {
+        Self::ColumnA(schema.clone())
+    }
+
+    /// Return appropriate expr depending if COUNT is for col or table (*)
+    pub fn count_expr(&self, schema: &Schema) -> Arc<dyn AggregateExpr> {
+        AggregateExprBuilder::new(count_udaf(), vec![self.column()])
+            .schema(Arc::new(schema.clone()))
+            .alias(self.column_name())
+            .build()
+            .unwrap()
+    }
+
+    /// what argument would this aggregate need in the plan?
+    fn column(&self) -> Arc<dyn PhysicalExpr> {
+        match self {
+            Self::CountStar => expressions::lit(COUNT_STAR_EXPANSION),
+            Self::ColumnA(s) => expressions::col("a", s).unwrap(),
+        }
+    }
+
+    /// What name would this aggregate produce in a plan?
+    pub fn column_name(&self) -> &'static str {
+        match self {
+            Self::CountStar => "COUNT(*)",
+            Self::ColumnA(_) => "COUNT(a)",
+        }
+    }
+
+    /// What is the expected count?
+    pub fn expected_count(&self) -> i64 {
+        match self {
+            TestAggregate::CountStar => 3,
+            TestAggregate::ColumnA(_) => 2,
+        }
+    }
 }

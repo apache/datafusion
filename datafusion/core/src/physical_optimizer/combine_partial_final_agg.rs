@@ -177,7 +177,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 
     /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
@@ -280,7 +280,7 @@ mod tests {
     ) -> Arc<dyn AggregateExpr> {
         AggregateExprBuilder::new(count_udaf(), vec![expr])
             .schema(Arc::new(schema.clone()))
-            .name(name)
+            .alias(name)
             .build()
             .unwrap()
     }
@@ -364,7 +364,7 @@ mod tests {
             vec![
                 AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
                     .schema(Arc::clone(&schema))
-                    .name("Sum(b)")
+                    .alias("Sum(b)")
                     .build()
                     .unwrap(),
             ];

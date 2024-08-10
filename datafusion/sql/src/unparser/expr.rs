@@ -342,7 +342,7 @@ impl Unparser<'_> {
                 escape_char: escape_char.map(|c| c.to_string()),
             }),
             Expr::AggregateFunction(agg) => {
-                let func_name = agg.func_def.name();
+                let func_name = agg.func.name();
 
                 let args = self.function_args_to_sql(&agg.args)?;
                 let filter = match &agg.filter {

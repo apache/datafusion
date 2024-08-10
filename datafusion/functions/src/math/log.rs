@@ -261,10 +261,10 @@ mod tests {
                     .expect("failed to convert result to a Float64Array");
 
                 assert_eq!(floats.len(), 4);
-                assert_eq!(floats.value(0), 3.0);
-                assert_eq!(floats.value(1), 2.0);
-                assert_eq!(floats.value(2), 4.0);
-                assert_eq!(floats.value(3), 4.0);
+                assert!((floats.value(0) - 3.0).abs() < 1e-10);
+                assert!((floats.value(1) - 2.0).abs() < 1e-10);
+                assert!((floats.value(2) - 4.0).abs() < 1e-10);
+                assert!((floats.value(3) - 4.0).abs() < 1e-10);
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
@@ -291,10 +291,10 @@ mod tests {
                     .expect("failed to convert result to a Float32Array");
 
                 assert_eq!(floats.len(), 4);
-                assert_eq!(floats.value(0), 3.0);
-                assert_eq!(floats.value(1), 2.0);
-                assert_eq!(floats.value(2), 4.0);
-                assert_eq!(floats.value(3), 4.0);
+                assert!((floats.value(0) - 3.0).abs() < f32::EPSILON);
+                assert!((floats.value(1) - 2.0).abs() < f32::EPSILON);
+                assert!((floats.value(2) - 4.0).abs() < f32::EPSILON);
+                assert!((floats.value(3) - 4.0).abs() < f32::EPSILON);
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")

@@ -31,8 +31,8 @@ use datafusion_common::{
 };
 use datafusion_expr::builder::project_with_column_index;
 use datafusion_expr::expr::{
-    self, AggregateFunctionDefinition, Between, BinaryExpr, Case, Exists, InList,
-    InSubquery, Like, ScalarFunction, WindowFunction,
+    self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
+    WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -428,31 +428,29 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 )))
             }
             Expr::AggregateFunction(expr::AggregateFunction {
-                func_def,
+                func,
                 args,
                 distinct,
                 filter,
                 order_by,
                 null_treatment,
-            }) => match func_def {
-                AggregateFunctionDefinition::UDF(fun) => {
-                    let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
-                        args,
-                        self.schema,
-                        &fun,
-                    )?;
-                    Ok(Transformed::yes(Expr::AggregateFunction(
-                        expr::AggregateFunction::new_udf(
-                            fun,
-                            new_expr,
-                            distinct,
-                            filter,
-                            order_by,
-                            null_treatment,
-                        ),
-                    )))
-                }
-            },
+            }) => {
+                let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
+                    args,
+                    self.schema,
+                    &func,
+                )?;
+                Ok(Transformed::yes(Expr::AggregateFunction(
+                    expr::AggregateFunction::new_udf(
+                        func,
+                        new_expr,
+                        distinct,
+                        filter,
+                        order_by,
+                        null_treatment,
+                    ),
+                )))
+            }
             Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
@@ -1077,9 +1075,7 @@ mod test {
         let expr = col("a").in_list(vec![lit(1_i32), lit(4_i8), lit(8_i64)], false);
         let empty = empty_with_type(DataType::Int64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        let expected =
-            "Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)]) AS a IN (Map { iter: Iter([Literal(Int32(1)), Literal(Int8(4)), Literal(Int64(8))]) })\
-             \n  EmptyRelation";
+        let expected = "Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)])\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         // a in (1,4,8), a is decimal
@@ -1092,9 +1088,7 @@ mod test {
             )?),
         }));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        let expected =
-            "Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))]) AS a IN (Map { iter: Iter([Literal(Int32(1)), Literal(Int8(4)), Literal(Int64(8))]) })\
-             \n  EmptyRelation";
+        let expected = "Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))])\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
 
@@ -1187,8 +1181,7 @@ mod test {
         let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
-        let expected = "Projection: a LIKE CAST(NULL AS Utf8) AS a LIKE NULL\
-             \n  EmptyRelation";
+        let expected = "Projection: a LIKE CAST(NULL AS Utf8)\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         let expr = Box::new(col("a"));
@@ -1216,8 +1209,7 @@ mod test {
         let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
-        let expected = "Projection: a ILIKE CAST(NULL AS Utf8) AS a ILIKE NULL\
-             \n  EmptyRelation";
+        let expected = "Projection: a ILIKE CAST(NULL AS Utf8)\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
         let expr = Box::new(col("a"));
