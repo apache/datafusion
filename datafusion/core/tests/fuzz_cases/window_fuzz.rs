@@ -253,7 +253,6 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
 
     let partitionby_exprs = vec![];
     let orderby_exprs = vec![];
-    let logical_exprs = vec![];
     // Window frame starts with "UNBOUNDED PRECEDING":
     let start_bound = WindowFrameBound::Preceding(ScalarValue::UInt64(None));
 
@@ -284,7 +283,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                 let window_expr = create_window_expr(
                     &window_fn,
                     fn_name.to_string(),
-                    &logical_exprs,
+                    &args,
                     &partitionby_exprs,
                     &orderby_exprs,
                     Arc::new(window_frame),
