@@ -29,7 +29,7 @@ use log::debug;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::WindowUDF;
 
-mod row_number;
+pub mod row_number;
 
 /// Returns all default window functions
 pub fn all_default_window_functions() -> Vec<Arc<WindowUDF>> {
