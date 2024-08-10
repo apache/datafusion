@@ -2020,7 +2020,8 @@ pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSc
         input.schema().metadata().clone(),
     )?;
     schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
-        exprs, input,
+        exprs,
+        find_base_plan(input),
     )?)?;
     Ok(Arc::new(schema))
 }
@@ -2789,7 +2790,7 @@ fn calc_func_dependencies_for_project(
                 .unwrap_or(vec![]),
         })
         .collect::<Vec<_>>();
-    let len = exprlist_len(exprs, wildcard_fields);
+    let len = exprlist_len(exprs, wildcard_fields)?;
     Ok(input
         .schema()
         .functional_dependencies()

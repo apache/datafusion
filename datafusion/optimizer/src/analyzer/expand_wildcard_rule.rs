@@ -113,7 +113,8 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     };
                     projected_expr.extend(replaced);
                 } else {
-                    let expanded = expand_wildcard(input.schema(), input, None)?;
+                    let expanded =
+                        expand_wildcard(input.schema(), input, Some(&options))?;
                     // If there is a REPLACE statement, replace that column with the given
                     // replace expression. Column name remains the same.
                     let replaced = if let Some(replace) = options.opt_replace {
