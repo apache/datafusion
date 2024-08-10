@@ -2555,6 +2555,27 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
     }
 }
 
+/// Checks if expression is constant, and can be eliminated from group by.
+///
+/// Intended to be used only within this rule, helper function, which heavily
+/// reiles on `SimplifyExpressions` result.
+pub fn is_constant_expression(expr: &Expr) -> bool {
+    match expr {
+        Expr::Alias(e) => is_constant_expression(&e.expr),
+        Expr::BinaryExpr(e) => {
+            is_constant_expression(&e.left) && is_constant_expression(&e.right)
+        }
+        Expr::Literal(_) => true,
+        Expr::ScalarFunction(e) => {
+            matches!(
+                e.func.signature().volatility,
+                Volatility::Immutable | Volatility::Stable
+            ) && e.args.iter().all(is_constant_expression)
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;

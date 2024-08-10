@@ -5554,3 +5554,32 @@ query I??III?T
 select count(null), min(null), max(null), bit_and(NULL), bit_or(NULL), bit_xor(NULL), nth_value(NULL, 1), string_agg(NULL, ',');
 ----
 0 NULL NULL NULL NULL NULL NULL NULL
+
+statement ok
+create table t1(v1 int);
+
+query R
+SELECT AVG(v1) FROM t1 having false;
+----
+
+query TT
+explain SELECT AVG(v1) FROM t1 GROUP BY false having false;
+----
+logical_plan EmptyRelation
+physical_plan EmptyExec
+
+
+query TT
+EXPLAIN SELECT AVG(v1) FROM t1 GROUP BY 1 != 1 having 1 != 1;
+----
+logical_plan EmptyRelation
+physical_plan EmptyExec
+
+query TT
+EXPLAIN SELECT AVG(v1) FROM t1 GROUP BY 1 + 1 = -1 having 1 + 1 = -1;
+----
+logical_plan EmptyRelation
+physical_plan EmptyExec
+
+statement ok
+drop table t1;

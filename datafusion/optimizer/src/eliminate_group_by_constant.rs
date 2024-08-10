@@ -21,7 +21,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
-use datafusion_expr::{Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
+use datafusion_expr::expr::is_constant_expression;
+use datafusion_expr::{Aggregate, LogicalPlan, LogicalPlanBuilder};
 
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
 /// and places additional projection on top of aggregation, to preserve
@@ -88,27 +89,6 @@ impl OptimizerRule for EliminateGroupByConstant {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::BottomUp)
-    }
-}
-
-/// Checks if expression is constant, and can be eliminated from group by.
-///
-/// Intended to be used only within this rule, helper function, which heavily
-/// reiles on `SimplifyExpressions` result.
-fn is_constant_expression(expr: &Expr) -> bool {
-    match expr {
-        Expr::Alias(e) => is_constant_expression(&e.expr),
-        Expr::BinaryExpr(e) => {
-            is_constant_expression(&e.left) && is_constant_expression(&e.right)
-        }
-        Expr::Literal(_) => true,
-        Expr::ScalarFunction(e) => {
-            matches!(
-                e.func.signature().volatility,
-                Volatility::Immutable | Volatility::Stable
-            ) && e.args.iter().all(is_constant_expression)
-        }
-        _ => false,
     }
 }
 
