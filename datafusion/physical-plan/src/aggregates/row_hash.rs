@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::vec;
+use std::{mem, vec};
 
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
@@ -67,6 +67,9 @@ pub(crate) enum ExecutionState {
     ///
     /// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
     SkippingAggregation,
+
+    SkippingAggregationOutput(Vec<RecordBatch>),
+
     /// All input has been consumed and all groups have been emitted
     Done,
 }
@@ -387,6 +390,10 @@ pub(crate) struct GroupedHashAggregateStream {
     /// Optional probe for skipping data aggregation, if supported by
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
+
+    skip_buffer: Vec<RecordBatch>,
+
+    skip_buffer_idx: usize,
 }
 
 impl GroupedHashAggregateStream {
@@ -527,6 +534,8 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
+            skip_buffer: Vec::new(),
+            skip_buffer_idx: 0,
         })
     }
 }
@@ -633,9 +642,8 @@ impl Stream for GroupedHashAggregateStream {
                                 probe.record_skipped(&batch);
                             }
                             let states = self.transform_to_states(batch)?;
-                            return Poll::Ready(Some(Ok(
-                                states.record_output(&self.baseline_metrics)
-                            )));
+
+                            self.skip_buffer.push(states);
                         }
                         Some(Err(e)) => {
                             // inner had error, return to caller
@@ -643,7 +651,8 @@ impl Stream for GroupedHashAggregateStream {
                         }
                         None => {
                             // inner is done, switching to `Done` state
-                            self.exec_state = ExecutionState::Done;
+                            let buffered_record_batch = mem::take(&mut self.skip_buffer);
+                            self.exec_state = ExecutionState::SkippingAggregationOutput(buffered_record_batch);
                         }
                     }
                 }
@@ -673,6 +682,19 @@ impl Stream for GroupedHashAggregateStream {
                     };
                     return Poll::Ready(Some(Ok(
                         output_batch.record_output(&self.baseline_metrics)
+                    )));
+                }
+
+                ExecutionState::SkippingAggregationOutput(record_batches) => {
+                    if self.skip_buffer_idx == self.skip_buffer.len() {
+                        self.exec_state = ExecutionState::Done;
+                        continue;
+                    }
+
+                    let batch  = record_batches[self.skip_buffer_idx].clone();
+                    self.skip_buffer_idx += 1;
+                    return Poll::Ready(Some(Ok(
+                        batch.record_output(&self.baseline_metrics)
                     )));
                 }
 
