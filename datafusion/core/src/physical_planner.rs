@@ -664,6 +664,7 @@ impl DefaultPhysicalPlanner {
                 input,
                 group_expr,
                 aggr_expr,
+                is_global_group_by,
                 ..
             }) => {
                 // Initially need to perform the aggregate and then merge the partitions
@@ -693,14 +694,17 @@ impl DefaultPhysicalPlanner {
                 let (aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
                     multiunzip(agg_filter);
 
-                let initial_aggr = Arc::new(AggregateExec::try_new(
-                    AggregateMode::Partial,
-                    groups.clone(),
-                    aggregates.clone(),
-                    filters.clone(),
-                    input_exec,
-                    physical_input_schema.clone(),
-                )?);
+                let initial_aggr = Arc::new(
+                    AggregateExec::try_new(
+                        AggregateMode::Partial,
+                        groups.clone(),
+                        aggregates.clone(),
+                        filters.clone(),
+                        input_exec,
+                        physical_input_schema.clone(),
+                    )?
+                    .with_is_global_group_by(*is_global_group_by),
+                );
 
                 // update group column indices based on partial aggregate plan evaluation
                 let final_group: Vec<Arc<dyn PhysicalExpr>> =
@@ -734,14 +738,17 @@ impl DefaultPhysicalPlanner {
                         .collect(),
                 );
 
-                Arc::new(AggregateExec::try_new(
-                    next_partition_mode,
-                    final_grouping_set,
-                    updated_aggregates,
-                    filters,
-                    initial_aggr,
-                    physical_input_schema.clone(),
-                )?)
+                Arc::new(
+                    AggregateExec::try_new(
+                        next_partition_mode,
+                        final_grouping_set,
+                        updated_aggregates,
+                        filters,
+                        initial_aggr,
+                        physical_input_schema.clone(),
+                    )?
+                    .with_is_global_group_by(*is_global_group_by),
+                )
             }
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
                 .create_project_physical_exec(

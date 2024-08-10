@@ -200,7 +200,11 @@ fn optimize_projections(
                     new_group_bys,
                     new_aggr_expr,
                 )
-                .map(LogicalPlan::Aggregate)
+                .map(|f| {
+                    LogicalPlan::Aggregate(
+                        f.with_is_global_group_by(aggregate.is_global_group_by),
+                    )
+                })
             });
         }
         LogicalPlan::Window(window) => {

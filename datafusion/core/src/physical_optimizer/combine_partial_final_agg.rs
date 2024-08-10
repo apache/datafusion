@@ -94,7 +94,11 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                             input_agg_exec.input_schema(),
                                         )
                                         .map(|combined_agg| {
-                                            combined_agg.with_limit(agg_exec.limit())
+                                            combined_agg
+                                                .with_limit(agg_exec.limit())
+                                                .with_is_global_group_by(
+                                                    agg_exec.is_global_group_by(),
+                                                )
                                         })
                                         .ok()
                                         .map(Arc::new)

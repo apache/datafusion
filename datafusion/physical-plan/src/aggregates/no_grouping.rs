@@ -74,6 +74,8 @@ impl AggregateStream {
         let agg_schema = Arc::clone(&agg.schema);
         let agg_filter_expr = agg.filter_expr.clone();
 
+        let is_global_group_by = agg.is_global_group_by;
+
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(&context))?;
 
@@ -102,7 +104,7 @@ impl AggregateStream {
             reservation,
             finished: false,
         };
-        let stream = futures::stream::unfold(inner, |mut this| async move {
+        let stream = futures::stream::unfold(inner, move |mut this| async move {
             if this.finished {
                 return None;
             }
@@ -140,11 +142,21 @@ impl AggregateStream {
                         let result =
                             finalize_aggregation(&mut this.accumulators, &this.mode)
                                 .and_then(|columns| {
-                                    RecordBatch::try_new(
-                                        Arc::clone(&this.schema),
-                                        columns,
-                                    )
-                                    .map_err(Into::into)
+                                    //println!("null count is {:?} \n columns[0].len() is {:?} \n columns len is {:?}", columns[0].null_count(), columns[0].len(), columns.len());
+                                    if columns[0].null_count() == columns[0].len()
+                                        && columns.len() == 1
+                                        && is_global_group_by
+                                    {
+                                        Ok(RecordBatch::new_empty(Arc::clone(
+                                            &this.schema,
+                                        )))
+                                    } else {
+                                        RecordBatch::try_new(
+                                            Arc::clone(&this.schema),
+                                            columns,
+                                        )
+                                        .map_err(Into::into)
+                                    }
                                 })
                                 .record_output(&this.baseline_metrics);
 
@@ -153,7 +165,6 @@ impl AggregateStream {
                         result
                     }
                 };
-
                 this.finished = true;
                 return Some((result, this));
             }

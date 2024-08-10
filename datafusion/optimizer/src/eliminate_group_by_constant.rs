@@ -64,11 +64,14 @@ impl OptimizerRule for EliminateGroupByConstant {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
-                let simplified_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
-                    aggregate.input,
-                    nonconst_group_expr.into_iter().cloned().collect(),
-                    aggregate.aggr_expr.clone(),
-                )?);
+                let simplified_aggregate = LogicalPlan::Aggregate(
+                    Aggregate::try_new(
+                        aggregate.input,
+                        nonconst_group_expr.into_iter().cloned().collect(),
+                        aggregate.aggr_expr.clone(),
+                    )?
+                    .with_is_global_group_by(aggregate.is_global_group_by),
+                );
 
                 let projection_expr =
                     aggregate.group_expr.into_iter().chain(aggregate.aggr_expr);

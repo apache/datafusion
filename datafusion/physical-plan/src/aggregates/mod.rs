@@ -274,6 +274,12 @@ pub struct AggregateExec {
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
     cache: PlanProperties,
+
+    /// use this parameter for situation like group by true, since the group
+    /// expr is optimized to None in the optimizer and we could not tell if a
+    /// AggregateExec has group by or not, which influence the final result set
+    /// (whether return a null or a empty set) see <https://github.com/apache/datafusion/issues/11748>
+    pub is_global_group_by: bool,
 }
 
 impl AggregateExec {
@@ -295,6 +301,7 @@ impl AggregateExec {
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
+            is_global_group_by: false,
         }
     }
 
@@ -427,12 +434,19 @@ impl AggregateExec {
             limit: None,
             input_order_mode,
             cache,
+            is_global_group_by: false,
         })
     }
 
     /// Aggregation mode (full, partial)
     pub fn mode(&self) -> &AggregateMode {
         &self.mode
+    }
+
+    // is global_group_by
+    pub fn with_is_global_group_by(mut self, is_global_group_by: bool) -> Self {
+        self.is_global_group_by = is_global_group_by;
+        self
     }
 
     /// Set the `limit` of this AggExec
@@ -473,6 +487,11 @@ impl AggregateExec {
     /// number of rows soft limit of the AggregateExec
     pub fn limit(&self) -> Option<usize> {
         self.limit
+    }
+
+    /// whether it is a global group by exec
+    pub fn is_global_group_by(&self) -> bool {
+        self.is_global_group_by
     }
 
     fn execute_typed(
@@ -718,7 +737,8 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&children[0]),
             Arc::clone(&self.input_schema),
             Arc::clone(&self.schema),
-        )?;
+        )?
+        .with_is_global_group_by(self.is_global_group_by);
         me.limit = self.limit;
 
         Ok(Arc::new(me))

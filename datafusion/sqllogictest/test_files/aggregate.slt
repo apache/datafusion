@@ -5581,5 +5581,22 @@ EXPLAIN SELECT AVG(v1) FROM t1 GROUP BY 1 + 1 = -1 having 1 + 1 = -1;
 logical_plan EmptyRelation
 physical_plan EmptyExec
 
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false having true;
+----
+
+query I
+SELECT SUM(v1) FROM t1 GROUP BY false having 1 = 1;
+----
+
+
+statement ok
+insert into t1 values(1);
+
+query I
+SELECT SUM(v1) FROM t1 GROUP BY false having 1 = 1;
+----
+1
+
 statement ok
 drop table t1;

@@ -114,12 +114,14 @@ impl TreeNode for LogicalPlan {
                 group_expr,
                 aggr_expr,
                 schema,
+                is_global_group_by,
             }) => rewrite_arc(input, f)?.update_data(|input| {
                 LogicalPlan::Aggregate(Aggregate {
                     input,
                     group_expr,
                     aggr_expr,
                     schema,
+                    is_global_group_by,
                 })
             }),
             LogicalPlan::Sort(Sort { expr, input, fetch }) => rewrite_arc(input, f)?
@@ -604,6 +606,7 @@ impl LogicalPlan {
                 group_expr,
                 aggr_expr,
                 schema,
+                is_global_group_by,
             }) => map_until_stop_and_collect!(
                 group_expr.into_iter().map_until_stop_and_collect(&mut f),
                 aggr_expr,
@@ -615,6 +618,7 @@ impl LogicalPlan {
                     group_expr,
                     aggr_expr,
                     schema,
+                    is_global_group_by,
                 })
             }),
 
