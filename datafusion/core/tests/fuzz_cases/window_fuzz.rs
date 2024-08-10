@@ -284,7 +284,6 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                 let window_expr = create_window_expr(
                     &window_fn,
                     fn_name.to_string(),
-                    &args,
                     &logical_exprs,
                     &partitionby_exprs,
                     &orderby_exprs,
@@ -674,7 +673,6 @@ async fn run_window_test(
             &window_fn,
             fn_name.clone(),
             &args,
-            &[],
             &partitionby_exprs,
             &orderby_exprs,
             Arc::new(window_frame.clone()),
@@ -693,7 +691,6 @@ async fn run_window_test(
             &window_fn,
             fn_name,
             &args,
-            &[],
             &partitionby_exprs,
             &orderby_exprs,
             Arc::new(window_frame.clone()),

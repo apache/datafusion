@@ -25,6 +25,7 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
+use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::min_max::max_udaf;
 use prost::Message;
 
@@ -409,6 +410,34 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
         schema,
     )?;
     let agg = agg.with_limit(Some(12));
+    roundtrip_test(Arc::new(agg))
+}
+
+#[test]
+fn rountrip_aggregate_with_sort() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        vec![(col("a", &schema)?, "unused".to_string())];
+
+    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![AggregateExprBuilder::new(
+        approx_percentile_cont_udaf(),
+        vec![col("b", &schema)?, lit(0.5)],
+    )
+    .schema(Arc::clone(&schema))
+    .alias("APPROX_PERCENTILE_CONT(b, 0.5)")
+    .build()?];
+
+    let agg = AggregateExec::try_new(
+        AggregateMode::Final,
+        PhysicalGroupBy::new_single(groups.clone()),
+        aggregates.clone(),
+        vec![None],
+        Arc::new(EmptyExec::new(schema.clone())),
+        schema,
+    )?;
     roundtrip_test(Arc::new(agg))
 }
 
