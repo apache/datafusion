@@ -82,7 +82,7 @@ fn to_unique_names<'a>(
         .into_iter()
         .enumerate()
         .try_for_each(|(position, expr)| {
-            let name = expr.schema_name()?;
+            let name = expr.schema_name().to_string();
             if let Entry::Vacant(e) = unique_names.entry(name) {
                 e.insert((position, expr));
                 unique_expr.push(expr.to_owned());
