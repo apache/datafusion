@@ -42,10 +42,13 @@ impl Default for LevenshteinFunc {
 
 impl LevenshteinFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
+                vec![
+                    Exact(vec![DataType::Utf8View, DataType::Utf8View]),
+                    Exact(vec![DataType::Utf8, DataType::Utf8]),
+                    Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -71,6 +74,7 @@ impl ScalarUDFImpl for LevenshteinFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args[0].data_type() {
+            DataType::Utf8View => make_scalar_function(levenshtein::<i32>, vec![])(args),
             DataType::Utf8 => make_scalar_function(levenshtein::<i32>, vec![])(args),
             DataType::LargeUtf8 => make_scalar_function(levenshtein::<i64>, vec![])(args),
             other => {
@@ -92,6 +96,19 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let str1_array = as_generic_string_array::<T>(&args[0])?;
     let str2_array = as_generic_string_array::<T>(&args[1])?;
     match args[0].data_type() {
+        DataType::Utf8View => {
+            let result = str1_array
+                .iter()
+                .zip(str2_array.iter())
+                .map(|(string1, string2)| match (string1, string2) {
+                    (Some(string1), Some(string2)) => {
+                        Some(datafusion_strsim::levenshtein(string1, string2) as i32)
+                    }
+                    _ => None,
+                })
+                .collect::<Int32Array>();
+            Ok(Arc::new(result) as ArrayRef)
+        }
         DataType::Utf8 => {
             let result = str1_array
                 .iter()
@@ -120,7 +137,7 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         other => {
             exec_err!(
-                "levenshtein was called with {other} datatype arguments. It requires Utf8 or LargeUtf8."
+                "levenshtein was called with {other} datatype arguments. It requires Utf8View, Utf8 or LargeUtf8."
             )
         }
     }
