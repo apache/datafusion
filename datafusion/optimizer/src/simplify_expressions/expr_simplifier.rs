@@ -817,7 +817,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if is_not_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::Boolean(Some(true))))
+                Transformed::yes(lit(true))
             }
             // !A OR A ---> true (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
@@ -825,7 +825,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if is_not_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::Boolean(Some(true))))
+                Transformed::yes(lit(true))
             }
             // (..A..) OR A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
@@ -890,7 +890,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: And,
                 right,
             }) if is_not_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::Boolean(Some(false))))
+                Transformed::yes(lit(false))
             }
             // !A AND A ---> false (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
@@ -898,7 +898,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: And,
                 right,
             }) if is_not_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::Boolean(Some(false))))
+                Transformed::yes(lit(false))
             }
             // (..A..) AND A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
