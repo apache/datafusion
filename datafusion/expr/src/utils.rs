@@ -735,7 +735,7 @@ pub fn exprlist_to_fields<'a>(
     let input_schema = plan.schema();
     let result = exprs
         .into_iter()
-        .flat_map(|e| match e {
+        .map(|e| match e {
             Expr::Wildcard { qualifier, options } => match qualifier {
                 None => {
                     let excluded: Vec<String> = get_excluded_columns(
@@ -793,8 +793,10 @@ pub fn exprlist_to_fields<'a>(
             },
             _ => Ok(vec![e.to_field(input_schema)?]),
         })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
         .flatten()
-        .collect::<Vec<_>>();
+        .collect();
     Ok(result)
 }
 
