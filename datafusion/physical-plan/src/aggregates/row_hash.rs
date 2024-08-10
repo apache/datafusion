@@ -686,7 +686,7 @@ impl Stream for GroupedHashAggregateStream {
                 }
 
                 ExecutionState::SkippingAggregationOutput(record_batches) => {
-                    if self.skip_buffer_idx == self.skip_buffer.len() {
+                    if self.skip_buffer_idx == record_batches.len() {
                         self.exec_state = ExecutionState::Done;
                         continue;
                     }
