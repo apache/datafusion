@@ -28,6 +28,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 
 /// Singleton instance of `row_number`, ensures the UDWF is only created once.
+#[allow(non_upper_case_globals)]
 static STATIC_RowNumber: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
     std::sync::OnceLock::new();
 
