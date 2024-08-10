@@ -1777,17 +1777,17 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(*)]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(*)]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=2
-06)----------ProjectionExec: expr=[]
-07)------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
-08)--------------CoalesceBatchesExec: target_batch_size=4096
-09)----------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-10)------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
-11)--------------------ProjectionExec: expr=[c1@0 as c1]
-12)----------------------CoalesceBatchesExec: target_batch_size=4096
-13)------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
-14)--------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-15)----------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
+05)--------ProjectionExec: expr=[]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
+07)------------CoalesceBatchesExec: target_batch_size=4096
+08)--------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+09)----------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
+10)------------------ProjectionExec: expr=[c1@0 as c1]
+11)--------------------CoalesceBatchesExec: target_batch_size=4096
+12)----------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
+13)------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+14)--------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
+
 
 query I
 SELECT count(*) as global_count FROM

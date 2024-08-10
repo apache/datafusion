@@ -2020,15 +2020,12 @@ physical_plan
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[last_value(r.col1) ORDER BY [r.col0 ASC NULLS LAST]]
-08)--------------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
-09)----------------CoalesceBatchesExec: target_batch_size=8192
-10)------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
-11)--------------------CoalesceBatchesExec: target_batch_size=8192
-12)----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
-13)------------------------MemoryExec: partitions=1, partition_sizes=[3]
-14)--------------------CoalesceBatchesExec: target_batch_size=8192
-15)----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
-16)------------------------MemoryExec: partitions=1, partition_sizes=[3]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------ProjectionExec: expr=[col0@2 as col0, col1@3 as col1, col2@4 as col2, col0@0 as col0, col1@1 as col1]
+10)------------------CoalesceBatchesExec: target_batch_size=8192
+11)--------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
+12)----------------------MemoryExec: partitions=1, partition_sizes=[3]
+13)----------------------MemoryExec: partitions=1, partition_sizes=[3]
 
 # Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
