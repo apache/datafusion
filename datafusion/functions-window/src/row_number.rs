@@ -22,6 +22,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 
 use datafusion_common::arrow::array::ArrayRef;
+use datafusion_common::arrow::array::UInt64Array;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
@@ -107,7 +108,9 @@ impl PartitionEvaluator for NumRowsEvaluator {
         //
         // Because row_number supports bounded execution as per the implementation table the
         // the `evaluate_all` does not require an implementation.
-        todo!()
+        Ok(std::sync::Arc::new(UInt64Array::from_iter_values(
+            1..(num_rows as u64) + 1,
+        )))
     }
 
     fn evaluate(
