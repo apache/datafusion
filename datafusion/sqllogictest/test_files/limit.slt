@@ -390,8 +390,8 @@ SELECT ROW_NUMBER() OVER (PARTITION BY t1.column1) FROM t t1, t t2, t t3;
 statement ok
 set datafusion.explain.show_sizes = false;
 
-# verify that there are multiple partitions in the input (i.e. MemoryExec says
-# there are 4 partitions) so that this tests multi-partition limit.
+# verify that there are multiple partitions in the input so that this tests
+# multi-partition limit.
 query TT
 EXPLAIN SELECT DISTINCT i FROM t1000;
 ----
