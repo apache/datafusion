@@ -82,7 +82,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
         match_window_definitions(&mut select.projection, &select.named_window)?;
-        // process the SELECT expressions, with wildcards expanded.
+        // process the SELECT expressions
         let select_exprs = self.prepare_select_exprs(
             &base_plan,
             select.projection,
