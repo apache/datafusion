@@ -15,16 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::AnalyzerRule;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem};
-use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
+use datafusion_expr::utils::{
+    expand_qualified_wildcard, expand_wildcard, find_base_plan,
+};
 use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::sync::Arc;
+
+use crate::AnalyzerRule;
 
 #[derive(Default)]
 pub struct ExpandWildcardRule {}
@@ -50,64 +54,7 @@ impl AnalyzerRule for ExpandWildcardRule {
 fn expand_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     match plan {
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
-            let mut projected_expr = vec![];
-            for e in expr {
-                match e {
-                    Expr::Wildcard { qualifier, options } => {
-                        if let Some(qualifier) = qualifier {
-                            let expanded = expand_qualified_wildcard(
-                                &qualifier,
-                                input.schema(),
-                                Some(&options),
-                            )?;
-                            // If there is a REPLACE statement, replace that column with the given
-                            // replace expression. Column name remains the same.
-                            let replaced = if let Some(replace) = options.opt_replace {
-                                replace_columns(expanded, replace)?
-                            } else {
-                                expanded
-                            };
-                            projected_expr.extend(replaced);
-                        } else {
-                            let expanded = expand_wildcard(input.schema(), &input, None)?;
-                            // If there is a REPLACE statement, replace that column with the given
-                            // replace expression. Column name remains the same.
-                            let replaced = if let Some(replace) = options.opt_replace {
-                                replace_columns(expanded, replace)?
-                            } else {
-                                expanded
-                            };
-                            projected_expr.extend(replaced);
-                        }
-                    }
-                    // A workaround to handle the case when the column name is "*".
-                    // We transform the expression to a Expr::Column through [Column::from_name] in many places.
-                    // It would also convert the wildcard expression to a column expression with name "*".
-                    Expr::Column(Column {
-                        ref relation,
-                        ref name,
-                    }) => {
-                        if name.eq("*") {
-                            if let Some(qualifier) = relation {
-                                projected_expr.extend(expand_qualified_wildcard(
-                                    qualifier,
-                                    input.schema(),
-                                    None,
-                                )?);
-                            } else {
-                                projected_expr.extend(expand_wildcard(
-                                    input.schema(),
-                                    &input,
-                                    None,
-                                )?);
-                            }
-                        } else {
-                            projected_expr.push(e.clone());
-                        }
-                    }
-                    _ => projected_expr.push(e),
-                }
-            }
+            let projected_expr = expand_exprlist(&input, expr)?;
             Ok(Transformed::yes(
                 Projection::try_new(
                     to_unique_names(projected_expr.iter())?,
@@ -145,6 +92,69 @@ fn to_unique_names<'a>(
     Ok(unique_expr)
 }
 
+fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
+    let mut projected_expr = vec![];
+    let input = find_base_plan(input);
+    for e in expr {
+        match e {
+            Expr::Wildcard { qualifier, options } => {
+                if let Some(qualifier) = qualifier {
+                    let expanded = expand_qualified_wildcard(
+                        &qualifier,
+                        input.schema(),
+                        Some(&options),
+                    )?;
+                    // If there is a REPLACE statement, replace that column with the given
+                    // replace expression. Column name remains the same.
+                    let replaced = if let Some(replace) = options.opt_replace {
+                        replace_columns(expanded, replace)?
+                    } else {
+                        expanded
+                    };
+                    projected_expr.extend(replaced);
+                } else {
+                    let expanded = expand_wildcard(input.schema(), input, None)?;
+                    // If there is a REPLACE statement, replace that column with the given
+                    // replace expression. Column name remains the same.
+                    let replaced = if let Some(replace) = options.opt_replace {
+                        replace_columns(expanded, replace)?
+                    } else {
+                        expanded
+                    };
+                    projected_expr.extend(replaced);
+                }
+            }
+            // A workaround to handle the case when the column name is "*".
+            // We transform the expression to a Expr::Column through [Column::from_name] in many places.
+            // It would also convert the wildcard expression to a column expression with name "*".
+            Expr::Column(Column {
+                ref relation,
+                ref name,
+            }) => {
+                if name.eq("*") {
+                    if let Some(qualifier) = relation {
+                        projected_expr.extend(expand_qualified_wildcard(
+                            qualifier,
+                            input.schema(),
+                            None,
+                        )?);
+                    } else {
+                        projected_expr.extend(expand_wildcard(
+                            input.schema(),
+                            input,
+                            None,
+                        )?);
+                    }
+                } else {
+                    projected_expr.push(e.clone());
+                }
+            }
+            _ => projected_expr.push(e),
+        }
+    }
+    Ok(projected_expr)
+}
+
 /// If there is a REPLACE statement in the projected expression in the form of
 /// "REPLACE (some_column_within_an_expr AS some_column)", this function replaces
 /// that column with the given replace expression. Column name remains the same.
@@ -174,14 +184,17 @@ fn replace_columns(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test::{assert_analyzed_plan_eq_display_indent, test_table_scan};
-    use crate::Analyzer;
     use arrow::datatypes::{DataType, Field, Schema};
+
     use datafusion_common::{JoinType, TableReference};
     use datafusion_expr::{
         col, in_subquery, qualified_wildcard, table_scan, wildcard, LogicalPlanBuilder,
     };
+
+    use crate::test::{assert_analyzed_plan_eq_display_indent, test_table_scan};
+    use crate::Analyzer;
+
+    use super::*;
 
     fn assert_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_analyzed_plan_eq_display_indent(
