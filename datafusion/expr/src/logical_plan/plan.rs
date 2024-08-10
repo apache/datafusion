@@ -31,8 +31,9 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
+    enumerate_grouping_sets, exprlist_len, exprlist_to_fields, find_base_plan,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    split_conjunction,
 };
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
@@ -1977,21 +1978,10 @@ impl Projection {
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
-        let expr_len: usize = expr
-            .iter()
-            .map(|e| match e {
-                Expr::Wildcard {
-                    qualifier: None, ..
-                } => schema.fields().len(),
-                Expr::Wildcard {
-                    qualifier: Some(qualifier),
-                    ..
-                } => schema.fields_with_qualified(qualifier).len(),
-                _ => 1,
-            })
-            .sum();
-        if expr_len != schema.fields().len() {
-            return plan_err!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr_len, schema.fields().len());
+        if !expr.iter().any(|e| matches!(e, Expr::Wildcard { .. }))
+            && expr.len() != schema.fields().len()
+        {
+            return plan_err!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len());
         }
         Ok(Self {
             expr,
@@ -2773,23 +2763,37 @@ fn calc_func_dependencies_for_project(
     input: &LogicalPlan,
 ) -> Result<FunctionalDependencies> {
     let input_fields = input.schema().field_names();
+    let wildcard_fields = find_base_plan(input).schema();
     // Calculate expression indices (if present) in the input schema.
     let proj_indices = exprs
         .iter()
-        .filter_map(|expr| {
-            let expr_name = match expr {
-                Expr::Alias(alias) => {
-                    format!("{}", alias.expr)
-                }
-                _ => format!("{}", expr),
-            };
-            input_fields.iter().position(|item| *item == expr_name)
+        .flat_map(|expr| match expr {
+            Expr::Wildcard {
+                qualifier: None, ..
+            } => (0..wildcard_fields.fields().len()).collect(),
+            Expr::Wildcard {
+                qualifier: Some(qualifier),
+                ..
+            } => wildcard_fields
+                .fields_indices_with_qualified(qualifier)
+                .to_vec(),
+            Expr::Alias(alias) => input_fields
+                .iter()
+                .position(|item| *item == alias.expr.to_string())
+                .map(|i| vec![i])
+                .unwrap_or(vec![]),
+            _ => input_fields
+                .iter()
+                .position(|item| *item == expr.to_string())
+                .map(|i| vec![i])
+                .unwrap_or(vec![]),
         })
         .collect::<Vec<_>>();
+    let len = exprlist_len(exprs, wildcard_fields);
     Ok(input
         .schema()
         .functional_dependencies()
-        .project_functional_dependencies(&proj_indices, exprs.len()))
+        .project_functional_dependencies(&proj_indices, len))
 }
 
 /// Sorts its input according to a list of sort expressions.
@@ -2932,7 +2936,7 @@ mod tests {
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
-    use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
+    use crate::{col, exists, in_subquery, lit, placeholder, wildcard, GroupingSet};
 
     use datafusion_common::tree_node::{TransformedResult, TreeNodeVisitor};
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};

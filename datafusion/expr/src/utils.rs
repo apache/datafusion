@@ -729,19 +729,22 @@ pub fn exprlist_to_fields<'a>(
     plan: &LogicalPlan,
 ) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
     // look for exact match in plan's output schema
-    let input_schema = &plan.schema();
-    exprs
+    let wildcard_schema = find_base_plan(plan).schema();
+    let input_schema = plan.schema();
+    let result = exprs
         .into_iter()
         .flat_map(|e| match e {
             Expr::Wildcard { qualifier, .. } => match qualifier {
-                None => (0..input_schema.fields().len())
+                None => (0..wildcard_schema.fields().len())
                     .map(|i| {
-                        Ok(input_schema.qualified_field(i)).map(|(qualifier, field)| {
-                            (qualifier.cloned(), Arc::new(field.to_owned()))
-                        })
+                        Ok(wildcard_schema.qualified_field(i)).map(
+                            |(qualifier, field)| {
+                                (qualifier.cloned(), Arc::new(field.to_owned()))
+                            },
+                        )
                     })
                     .collect::<Vec<_>>(),
-                Some(qualifier) => input_schema
+                Some(qualifier) => wildcard_schema
                     .fields_with_qualified(qualifier)
                     .into_iter()
                     .map(|field| {
@@ -752,7 +755,32 @@ pub fn exprlist_to_fields<'a>(
             .into_iter(),
             _ => vec![e.to_field(input_schema).map_err(Into::into)].into_iter(),
         })
-        .collect()
+        .collect::<Result<Vec<(_, _)>>>()?;
+    Ok(result)
+}
+
+pub fn find_base_plan(input: &LogicalPlan) -> &LogicalPlan {
+    match input {
+        LogicalPlan::Window(window) => find_base_plan(&window.input),
+        LogicalPlan::Aggregate(agg) => find_base_plan(&agg.input),
+        _ => input,
+    }
+}
+
+pub fn exprlist_len(exprs: &[Expr], schema: &DFSchemaRef) -> usize {
+    exprs
+        .iter()
+        .map(|e| match e {
+            Expr::Wildcard {
+                qualifier: None, ..
+            } => schema.fields().len(),
+            Expr::Wildcard {
+                qualifier: Some(qualifier),
+                ..
+            } => schema.fields_with_qualified(qualifier).len(),
+            _ => 1,
+        })
+        .sum()
 }
 
 /// Convert an expression into Column expression if it's already provided as input plan.
