@@ -101,8 +101,8 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
-        col, lit, ColumnarValue, LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature,
-        TypeSignature,
+        col, lit, ColumnarValue, Expr, LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl,
+        Signature, TypeSignature, Volatility,
     };
 
     use datafusion_functions_aggregate::expr_fn::count;
