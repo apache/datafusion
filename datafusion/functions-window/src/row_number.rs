@@ -95,7 +95,11 @@ impl PartitionEvaluator for NumRowsEvaluator {
         true
     }
 
-    fn evaluate_all(&mut self, _values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+    fn evaluate_all(
+        &mut self,
+        _values: &[ArrayRef],
+        num_rows: usize,
+    ) -> Result<ArrayRef> {
         // # Implementation Table
         //
         // |[`uses_window_frame`]|[`supports_bounded_execution`]|[`include_rank`]|function_to_implement|
