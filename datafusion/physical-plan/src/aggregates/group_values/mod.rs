@@ -33,6 +33,31 @@ mod bytes_view;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
+const GROUP_IDX_HIGH_16_BITS_MASK: u64 = 0xffff000000000000;
+const GROUP_IDX_LOW_48_BITS_MASK: u64 = 0x0000ffffffffffff;
+
+#[derive(Debug, Clone, Copy)]
+pub struct GroupIdx(u64);
+
+impl GroupIdx {
+    pub fn new(block_id: u16, block_offset: u64) -> Self {
+        let group_idx_high_part = ((block_id as u64) << 48) & GROUP_IDX_HIGH_16_BITS_MASK;
+        let group_idx_low_part = block_offset & GROUP_IDX_LOW_48_BITS_MASK;
+
+        Self(group_idx_high_part | group_idx_low_part)
+    }
+
+    #[inline]
+    pub fn block_id(&self) -> usize {
+        ((self.0 & GROUP_IDX_HIGH_16_BITS_MASK) >> 48) as usize
+    }
+
+    #[inline]
+    pub fn block_offset(&self) -> usize {
+        (self.0 & GROUP_IDX_LOW_48_BITS_MASK) as usize
+    }
+}
+
 /// An interning store for group keys
 pub trait GroupValues: Send {
     /// Calculates the `groups` for each input row of `cols`
@@ -48,13 +73,13 @@ pub trait GroupValues: Send {
     fn len(&self) -> usize;
 
     /// Emits the group values
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
+    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<Vec<ArrayRef>>>;
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, batch: &RecordBatch);
 }
 
-pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
+pub fn new_group_values(schema: SchemaRef, batch_size: usize) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
@@ -92,5 +117,5 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
         }
     }
 
-    Ok(Box::new(GroupValuesRows::try_new(schema)?))
+    Ok(Box::new(GroupValuesRows::try_new(schema, batch_size)?))
 }
