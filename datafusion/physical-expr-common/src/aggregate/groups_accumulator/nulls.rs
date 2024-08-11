@@ -49,27 +49,33 @@ fn filter_to_nulls(filter: &BooleanArray) -> Option<NullBuffer> {
 /// Subsequent applications of  aggregate functions that ignore NULLs (most of
 /// them) will thus ignore the filtered rows as well.
 ///
-/// # Output element is `true`
-/// * A `true` in the output represents non null output for all values that were both:
+/// # Output element is `true` (and thus output is non-null)
+///
+/// A `true` in the output represents non null output for all values that were *both*:
 ///
 /// * `true` in any `opt_filter` (aka values that passed the filter)
 ///
 /// * `non null` in `input`
 ///
-/// # Output element is `false`
-/// * is false (null) for all values that were false in the filter or null in the input
+/// # Output element is `false` (and thus output is null)
+///
+/// A `false` in the output represents an input that was *either*:
+///
+/// * `null`
+///
+/// * filtered (aka the value was `false` or `null` in the filter)
 ///
 /// # Example
 ///
 /// ```text
 /// ┌─────┐           ┌─────┐            ┌─────┐
-/// │true │           │NULL │            │NULL │
+/// │true │           │NULL │            │false│
 /// │true │    │      │true │            │true │
 /// │true │ ───┼───   │false│  ────────▶ │false│       filtered_nulls
-/// │false│    │      │NULL │            │NULL │
-/// │false│           │true │            │true │
+/// │false│    │      │NULL │            │false│
+/// │false│           │true │            │false│
 /// └─────┘           └─────┘            └─────┘
-/// array           opt_filter           output nulls
+/// array           opt_filter           output
 ///  .nulls()
 ///
 /// false = NULL    true  = pass          false = NULL       Meanings
