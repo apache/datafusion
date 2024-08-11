@@ -1249,6 +1249,44 @@ SELECT APPROX_PERCENTILE_CONT(v, 0.5) FROM (VALUES (CAST(NULL as INT))) as t (v)
 ----
 NULL
 
+#
+# percentile_cont edge cases
+#
+
+statement ok
+CREATE TABLE tmp_percentile_cont(v1 INT, v2 DOUBLE);
+
+statement ok
+INSERT INTO tmp_percentile_cont VALUES (1, 'NaN'::Double), (2, 'NaN'::Double), (3, 'NaN'::Double);
+
+# ISSUE: https://github.com/apache/datafusion/issues/11871
+# Note `approx_median()` is using the same implementation as `approx_percentile_cont()`
+query R
+select APPROX_MEDIAN(v2) from tmp_percentile_cont WHERE v1 = 1;
+----
+NaN
+
+# ISSUE: https://github.com/apache/datafusion/issues/11870
+query R
+select APPROX_PERCENTILE_CONT(v2, 0.8) from tmp_percentile_cont;
+----
+NaN
+
+# ISSUE: https://github.com/apache/datafusion/issues/11869
+# Note: `approx_percentile_cont_with_weight()` uses the same implementation as `approx_percentile_cont()`
+query R
+SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(
+    v2,
+    '+Inf'::Double,
+    0.9
+)
+FROM tmp_percentile_cont;
+----
+NaN
+
+statement ok
+DROP TABLE tmp_percentile_cont;
+
 # csv_query_cube_avg
 query TIR
 SELECT c1, c2, AVG(c3) FROM aggregate_test_100 GROUP BY CUBE (c1, c2) ORDER BY c1, c2

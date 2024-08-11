@@ -233,7 +233,7 @@ impl TDigest {
     }
 
     fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
-        if lo.is_nan() && hi.is_nan() {
+        if lo.is_nan() || hi.is_nan() {
             return v;
         }
         v.clamp(lo, hi)
@@ -538,6 +538,18 @@ impl TDigest {
 
         let value = self.centroids[pos].mean()
             + ((rank - t) / self.centroids[pos].weight() - 0.5) * delta;
+
+        // In `merge_digests()`: `min` is initialized to Inf, `max` is initialized to -Inf
+        // and gets updated according to different `TDigest`s
+        // However, `min`/`max` won't get updated if there is only one `NaN` within `TDigest`
+        // The following two checks is for such edge case
+        if !min.is_finite() && min.is_sign_positive() {
+            min = f64::NEG_INFINITY;
+        }
+
+        if !max.is_finite() && max.is_sign_negative() {
+            max = f64::INFINITY;
+        }
 
         Self::clamp(value, min, max)
     }
