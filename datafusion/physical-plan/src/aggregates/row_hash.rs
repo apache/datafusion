@@ -17,11 +17,12 @@
 
 //! Hash aggregation
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::vec;
+use std::{mem, vec};
 
-use crate::aggregates::group_values::{new_group_values, GroupIdx, GroupValues};
+use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
@@ -62,7 +63,7 @@ pub(crate) enum ExecutionState {
     ReadingInput,
     /// When producing output, the remaining rows to output are stored
     /// here and are sliced off as needed in batch_size chunks
-    ProducingOutput(Vec<RecordBatch>),
+    ProducingOutput(VecDeque<RecordBatch>),
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
     ///
@@ -570,9 +571,10 @@ impl Stream for GroupedHashAggregateStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let batch_size = self.batch_size;
 
         loop {
-            match &self.exec_state {
+            match &mut self.exec_state {
                 ExecutionState::ReadingInput => 'reading_input: {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         // new batch to aggregate
@@ -649,31 +651,39 @@ impl Stream for GroupedHashAggregateStream {
                     }
                 }
 
-                ExecutionState::ProducingOutput(batch) => {
-                    // slice off a part of the batch, if needed
-                    let output_batch;
-                    let size = self.batch_size;
-                    (self.exec_state, output_batch) = if batch.num_rows() <= size {
-                        (
-                            if self.input_done {
+                ExecutionState::ProducingOutput(batches) => {
+                    // If the buffered batches have been empty, we just switch and state and continue the loop.
+                    if batches.is_empty() {
+                        self.exec_state = if self.input_done {
                                 ExecutionState::Done
                             } else if self.should_skip_aggregation() {
                                 ExecutionState::SkippingAggregation
                             } else {
                                 ExecutionState::ReadingInput
-                            },
-                            batch.clone(),
-                        )
-                    } else {
-                        // output first batch_size rows
-                        let size = self.batch_size;
-                        let num_remaining = batch.num_rows() - size;
-                        let remaining = batch.slice(size, num_remaining);
-                        let output = batch.slice(0, size);
-                        (ExecutionState::ProducingOutput(remaining), output)
-                    };
+                            };
+                        continue;
+                    }
+                
+                    // If `cur_record`'s size has been smaller than `batch_size`,
+                    // just pop and return it.
+                    let cur_record = batches.front().unwrap();
+                    let cur_record_size = cur_record.num_rows();
+                    if cur_record_size <= batch_size {
+                        let output = batches.pop_front().unwrap();
+
+                        return Poll::Ready(Some(Ok(
+                            output.record_output(&self.baseline_metrics)
+                        )));
+                    }
+
+                    // If `cur_record`'s size is bigger than `batch_size`, we can just return part of it.
+                    let num_remaining = cur_record_size - batch_size;
+                    let mut cur_remaining = cur_record.slice(batch_size, num_remaining);
+                    let output = cur_record.slice(0, batch_size);
+                    mem::swap(&mut cur_remaining, batches.front_mut().unwrap());
+
                     return Poll::Ready(Some(Ok(
-                        output_batch.record_output(&self.baseline_metrics)
+                        output.record_output(&self.baseline_metrics)
                     )));
                 }
 
@@ -799,14 +809,14 @@ impl GroupedHashAggregateStream {
 
     /// Create an output RecordBatch with the group keys and
     /// accumulator states/values specified in emit_to
-    fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<Vec<RecordBatch>> {
+    fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<VecDeque<RecordBatch>> {
         let schema = if spilling {
             Arc::clone(&self.spill_state.spill_schema)
         } else {
             self.schema()
         };
         if self.group_values.is_empty() {
-            return Ok(vec![RecordBatch::new_empty(schema)]);
+            return Ok(VecDeque::from([RecordBatch::new_empty(schema)]));
         }
 
         let mut output = self.group_values.emit(emit_to)?;
@@ -875,7 +885,8 @@ impl GroupedHashAggregateStream {
                 RecordBatch::try_new(schema.clone(), o)
                     .map_err(|e| DataFusionError::ArrowError(e, None))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<VecDeque<_>>>()?;
+
         Ok(batches)
     }
 
