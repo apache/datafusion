@@ -18,7 +18,7 @@
 use std::collections::VecDeque;
 use std::mem;
 
-use crate::aggregates::group_values::{GroupBlock, GroupIdx, GroupValues};
+use crate::aggregates::group_values::{GroupIdx, GroupValues};
 use ahash::RandomState;
 use arrow::compute::cast;
 use arrow::record_batch::RecordBatch;
@@ -189,7 +189,7 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn size(&self) -> usize {
-        let group_values_size = self.group_values_blocks.as_ref().map(|v| v.size()).unwrap_or(0);
+        let group_values_size = self.group_values_blocks.iter().map(|v| v.size()).sum::<usize>();
         self.row_converter.size()
             + group_values_size
             + self.map_size
@@ -203,9 +203,9 @@ impl GroupValues for GroupValuesRows {
 
     fn len(&self) -> usize {
         self.group_values_blocks
-            .as_ref()
+            .iter()
             .map(|group_values| group_values.num_rows())
-            .unwrap_or(0)
+            .sum::<usize>()
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<Vec<ArrayRef>>> {
@@ -293,10 +293,8 @@ impl GroupValues for GroupValuesRows {
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {
         let count = batch.num_rows();
-        self.group_values_blocks = self.group_values_blocks.take().map(|mut rows| {
-            rows.clear();
-            rows
-        });
+        let mut old_blocks = mem::replace(&mut self.group_values_blocks, VecDeque::new());
+        old_blocks.iter_mut().for_each(|block| block.clear());
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * std::mem::size_of::<(u64, usize)>();

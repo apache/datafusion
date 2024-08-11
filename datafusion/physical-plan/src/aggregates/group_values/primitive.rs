@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupIdx, GroupValues};
 use ahash::RandomState;
 use arrow::array::BooleanBufferBuilder;
 use arrow::buffer::NullBuffer;
@@ -111,7 +111,7 @@ impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
 {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<GroupIdx>) -> Result<()> {
         assert_eq!(cols.len(), 1);
         groups.clear();
 
@@ -145,7 +145,7 @@ where
                     }
                 }
             };
-            groups.push(group_id)
+            groups.push(GroupIdx::new(0, group_id as u64))
         }
         Ok(())
     }
@@ -162,7 +162,7 @@ where
         self.values.len()
     }
 
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<Vec<ArrayRef>>> {
         fn build_primitive<T: ArrowPrimitiveType>(
             values: Vec<T::Native>,
             null_idx: Option<usize>,
@@ -207,7 +207,7 @@ where
                 build_primitive(split, null_group)
             }
         };
-        Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
+        Ok(vec![vec![Arc::new(array.with_data_type(self.data_type.clone()))]])
     }
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {

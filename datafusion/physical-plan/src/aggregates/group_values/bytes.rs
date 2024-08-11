@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupIdx, GroupValues};
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
@@ -44,7 +44,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
     fn intern(
         &mut self,
         cols: &[ArrayRef],
-        groups: &mut Vec<usize>,
+        groups: &mut Vec<GroupIdx>,
     ) -> datafusion_common::Result<()> {
         assert_eq!(cols.len(), 1);
 
@@ -63,7 +63,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
             },
             // called for each group
             |group_idx| {
-                groups.push(group_idx);
+                groups.push(GroupIdx::new(0, group_idx as u64));
             },
         );
 
@@ -84,7 +84,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
         self.num_groups
     }
 
-    fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
+    fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<Vec<ArrayRef>>> {
         // Reset the map to default, and convert it into a single array
         let map_contents = self.map.take().into_state();
 
@@ -111,13 +111,13 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
                 self.intern(&[remaining_group_values], &mut group_indexes)?;
 
                 // Verify that the group indexes were assigned in the correct order
-                assert_eq!(0, group_indexes[0]);
+                assert_eq!(0, group_indexes[0].block_offset());
 
                 emit_group_values
             }
         };
 
-        Ok(vec![group_values])
+        Ok(vec![vec![group_values]])
     }
 
     fn clear_shrink(&mut self, _batch: &RecordBatch) {
