@@ -30,11 +30,7 @@ use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
-use crate::utils::{
-    enumerate_grouping_sets, exprlist_len, exprlist_to_fields, find_base_plan,
-    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    split_conjunction,
-};
+use crate::utils::{enumerate_grouping_sets, exprlist_len, exprlist_to_fields, find_base_plan, find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction};
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
     CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
@@ -2764,33 +2760,16 @@ fn calc_func_dependencies_for_project(
     input: &LogicalPlan,
 ) -> Result<FunctionalDependencies> {
     let input_fields = input.schema().field_names();
-    let wildcard_fields = find_base_plan(input).schema();
+    let wildcard_fields = exprlist_to_fields(exprs, &input)?;
     // Calculate expression indices (if present) in the input schema.
-    let proj_indices = exprs
-        .iter()
-        .flat_map(|expr| match expr {
-            Expr::Wildcard {
-                qualifier: None, ..
-            } => (0..wildcard_fields.fields().len()).collect(),
-            Expr::Wildcard {
-                qualifier: Some(qualifier),
-                ..
-            } => wildcard_fields
-                .fields_indices_with_qualified(qualifier)
-                .to_vec(),
-            Expr::Alias(alias) => input_fields
-                .iter()
-                .position(|item| *item == alias.expr.to_string())
-                .map(|i| vec![i])
-                .unwrap_or(vec![]),
-            _ => input_fields
-                .iter()
-                .position(|item| *item == expr.to_string())
-                .map(|i| vec![i])
-                .unwrap_or(vec![]),
-        })
-        .collect::<Vec<_>>();
-    let len = exprlist_len(exprs, wildcard_fields)?;
+    let proj_indices = wildcard_fields.into_iter()
+        .filter_map(|(qualifier, f)| {
+            let flat_name = qualifier
+                .map(|t| format!("{}.{}", t, f.name()))
+                .unwrap_or(f.name().clone());
+            input_fields.iter().position(|item| *item == flat_name)
+        }).collect::<Vec<_>>();
+    let len = exprlist_len(exprs, input.schema(), Some(find_base_plan(input).schema()))?;
     Ok(input
         .schema()
         .functional_dependencies()
