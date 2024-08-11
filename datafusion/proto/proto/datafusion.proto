@@ -693,6 +693,7 @@ message PhysicalPlanNode {
     PlaceholderRowExecNode placeholder_row = 27;
     CsvSinkExecNode csv_sink = 28;
     ParquetSinkExecNode parquet_sink = 29;
+    FlightScanExecNode flight_scan = 30;
   }
 }
 
@@ -1199,3 +1200,28 @@ message PartitionStats {
   int64 num_bytes = 3;
   repeated datafusion_common.ColumnStats column_stats = 4;
 }
+
+message FlightScanExecNode {
+  repeated FlightPartitionNode partitions = 1;
+  PlanPropertiesNode plan_properties = 2;
+  map<string, bytes> grpc_headers = 3;
+}
+
+message FlightPartitionNode {
+  repeated string locations = 1;
+  bytes token = 2;
+}
+
+message PlanPropertiesNode {
+  datafusion_common.Schema schema = 1;
+  repeated PhysicalSortExprNodeCollection output_ordering = 2;
+  Partitioning partitioning = 3;
+  ExecutionMode execution_mode = 4;
+}
+
+enum ExecutionMode {
+  Bounded = 0;
+  Unbounded = 1;
+  PipelineBreaking = 2;
+}
+

@@ -23,6 +23,8 @@ mod csv;
 mod file_groups;
 mod file_scan_config;
 mod file_stream;
+#[cfg(feature = "flight")]
+mod flight;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
@@ -42,6 +44,9 @@ pub use file_scan_config::{
 };
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
 pub use json::{JsonOpener, NdJsonExec};
+
+#[cfg(feature = "flight")]
+pub use self::flight::{FlightExec, FlightPartition};
 
 use std::{
     fmt::{Debug, Formatter, Result as FmtResult},

@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::Debug;
-use std::sync::Arc;
-
+use arrow::datatypes::Schema;
 use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use prost::bytes::BufMut;
 use prost::Message;
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -32,9 +33,13 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
+#[cfg(feature = "flight")]
+use datafusion::datasource::physical_plan::{FlightExec, FlightPartition};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
+use datafusion::physical_expr::{
+    EquivalenceProperties, PhysicalExprRef, PhysicalSortRequirement,
+};
 use datafusion::physical_plan::aggregates::AggregateMode;
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
@@ -59,7 +64,8 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
-    AggregateExpr, ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
+    AggregateExpr, ExecutionMode, ExecutionPlan, InputOrderMode, PhysicalExpr,
+    PlanProperties, WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
@@ -72,12 +78,15 @@ use crate::physical_plan::from_proto::{
 };
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
-    serialize_physical_window_expr,
+    serialize_physical_sort_exprs, serialize_physical_window_expr,
 };
 use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
-use crate::protobuf::{self, proto_error, window_agg_exec_node};
+use crate::protobuf::{
+    self, proto_error, window_agg_exec_node, FlightPartitionNode, FlightScanExecNode,
+    PhysicalSortExprNodeCollection, PlanPropertiesNode,
+};
 
 use self::from_proto::parse_protobuf_partitioning;
 use self::to_proto::{serialize_partitioning, serialize_physical_expr};
@@ -244,6 +253,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     builder = builder.with_predicate(predicate)
                 }
                 Ok(builder.build_arc())
+            }
+            #[cfg(not(feature = "parquet"))]
+            PhysicalPlanType::ParquetScan => {
+                unreachable!("The `parquet` feature is disabled")
             }
             PhysicalPlanType::AvroScan(scan) => {
                 Ok(Arc::new(AvroExec::new(parse_protobuf_file_scan_config(
@@ -1051,6 +1064,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     sort_order,
                 )))
             }
+            #[cfg(feature = "parquet")]
             PhysicalPlanType::ParquetSink(sink) => {
                 let input =
                     into_physical_plan(&sink.input, registry, runtime, extension_codec)?;
@@ -1080,6 +1094,75 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     sink_schema,
                     sort_order,
                 )))
+            }
+            #[cfg(not(feature = "parquet"))]
+            PhysicalPlanType::ParquetSink => {
+                unreachable!("The `parquet` feature is disabled")
+            }
+            #[cfg(feature = "flight")]
+            PhysicalPlanType::FlightScan(flight_scan) => {
+                let partitions = flight_scan
+                    .partitions
+                    .iter()
+                    .map(|partition_node| {
+                        FlightPartition::restore(
+                            partition_node.locations.clone(),
+                            partition_node.token.clone(),
+                        )
+                    })
+                    .collect();
+                let plan_props =
+                    flight_scan.plan_properties.clone().ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Missing plan_properties in FlightExec".into(),
+                        )
+                    })?;
+                let schema: Arc<Schema> = Arc::new(convert_required!(plan_props.schema)?);
+                let codec = DefaultPhysicalExtensionCodec {};
+                let partitioning = parse_protobuf_partitioning(
+                    plan_props.partitioning.as_ref(),
+                    registry,
+                    schema.as_ref(),
+                    &codec,
+                )?
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "Missing partitioning from plan properties".into(),
+                    )
+                })?;
+                let orderings = &plan_props
+                    .output_ordering
+                    .iter()
+                    .map(|node_collection| {
+                        parse_physical_sort_exprs(
+                            &node_collection.physical_sort_expr_nodes,
+                            registry,
+                            &schema,
+                            &codec,
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let eq_props =
+                    EquivalenceProperties::new_with_orderings(schema, orderings);
+                let execution_mode = match plan_props.execution_mode {
+                    0 => ExecutionMode::Bounded,
+                    1 => ExecutionMode::Unbounded,
+                    2 => ExecutionMode::PipelineBreaking,
+                    _ => unreachable!("Unexpected execution mode"),
+                };
+                let plan_properties =
+                    PlanProperties::new(eq_props, partitioning, execution_mode);
+
+                Ok(Arc::new(FlightExec::restore(
+                    partitions,
+                    plan_properties,
+                    &flight_scan.grpc_headers,
+                )))
+            }
+            #[cfg(not(feature = "flight"))]
+            PhysicalPlanType::FlightScan => {
+                unreachable!("The `flight` feature is disabled")
             }
         }
     }
@@ -1923,6 +2006,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 });
             }
 
+            #[cfg(feature = "parquet")]
             if let Some(sink) = exec.sink().as_any().downcast_ref::<ParquetSink>() {
                 return Ok(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
@@ -1937,6 +2021,64 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             }
 
             // If unknown DataSink then let extension handle it
+        }
+
+        #[cfg(feature = "flight")]
+        if let Some(exec) = plan.downcast_ref::<FlightExec>() {
+            let partitions = exec
+                .partitions
+                .iter()
+                .map(|part| FlightPartitionNode {
+                    locations: part.locations.clone(),
+                    token: part.ticket.clone(),
+                })
+                .collect();
+            let pp = exec.plan_properties.as_ref();
+            let partitioning =
+                Some(serialize_partitioning(&pp.partitioning, extension_codec)?);
+            let output_ordering = pp
+                .eq_properties
+                .oeq_class
+                .orderings
+                .clone()
+                .into_iter()
+                .map(|ordering| PhysicalSortExprNodeCollection {
+                    physical_sort_expr_nodes: serialize_physical_sort_exprs(
+                        ordering,
+                        extension_codec,
+                    )
+                    .unwrap(),
+                })
+                .collect();
+
+            let execution_mode = match pp.execution_mode {
+                ExecutionMode::Bounded => 0,
+                ExecutionMode::Unbounded => 1,
+                ExecutionMode::PipelineBreaking => 1,
+            };
+            let schema = Some(exec.schema().try_into()?);
+            let plan_properties = Some(PlanPropertiesNode {
+                schema,
+                output_ordering,
+                partitioning,
+                execution_mode,
+            });
+            let grpc_headers = HashMap::from_iter(
+                (*exec.grpc_metadata)
+                    .clone()
+                    .into_headers()
+                    .iter()
+                    .map(|(k, v)| (k.as_str().into(), Vec::from(v.as_bytes()))),
+            );
+            return Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::FlightScan(
+                    FlightScanExecNode {
+                        partitions,
+                        plan_properties,
+                        grpc_headers,
+                    },
+                )),
+            });
         }
 
         let mut buf: Vec<u8> = vec![];

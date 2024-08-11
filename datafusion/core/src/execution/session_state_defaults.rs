@@ -25,6 +25,8 @@ use crate::datasource::file_format::json::JsonFormatFactory;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormatFactory;
 use crate::datasource::file_format::FileFormatFactory;
+#[cfg(feature = "flight")]
+use crate::datasource::flight::{sql::FlightSqlDriver, FlightTableFactory};
 use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::context::SessionState;
 #[cfg(feature = "nested_expressions")]
@@ -55,6 +57,13 @@ impl SessionStateDefaults {
         table_factories.insert("NDJSON".into(), Arc::new(DefaultTableFactory::new()));
         table_factories.insert("AVRO".into(), Arc::new(DefaultTableFactory::new()));
         table_factories.insert("ARROW".into(), Arc::new(DefaultTableFactory::new()));
+        #[cfg(feature = "flight")]
+        table_factories.insert(
+            "FLIGHT_SQL".into(),
+            Arc::new(FlightTableFactory::new(
+                Arc::new(FlightSqlDriver::default()),
+            )),
+        );
 
         table_factories
     }

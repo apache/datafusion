@@ -44,6 +44,7 @@ datafusion = { path = "../datafusion/core", version = "41.0.0", features = [
     "regex_expressions",
     "unicode_expressions",
     "compression",
+    "flight",
 ] }
 dirs = "4.0.0"
 env_logger = "0.9"

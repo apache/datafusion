@@ -24,6 +24,8 @@ pub mod cte_worktable;
 pub mod default_table_source;
 pub mod empty;
 pub mod file_format;
+#[cfg(feature = "flight")]
+pub mod flight;
 pub mod function;
 pub mod listing;
 pub mod listing_table_factory;

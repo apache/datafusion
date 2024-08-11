@@ -1030,7 +1030,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1097,6 +1097,8 @@ pub mod physical_plan_node {
         CsvSink(::prost::alloc::boxed::Box<super::CsvSinkExecNode>),
         #[prost(message, tag = "29")]
         ParquetSink(::prost::alloc::boxed::Box<super::ParquetSinkExecNode>),
+        #[prost(message, tag = "30")]
+        FlightScan(super::FlightScanExecNode),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1916,6 +1918,39 @@ pub struct PartitionStats {
     #[prost(message, repeated, tag = "4")]
     pub column_stats: ::prost::alloc::vec::Vec<super::datafusion_common::ColumnStats>,
 }
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FlightScanExecNode {
+    #[prost(message, repeated, tag = "1")]
+    pub partitions: ::prost::alloc::vec::Vec<FlightPartitionNode>,
+    #[prost(message, optional, tag = "2")]
+    pub plan_properties: ::core::option::Option<PlanPropertiesNode>,
+    #[prost(map = "string, bytes", tag = "3")]
+    pub grpc_headers: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::vec::Vec<u8>,
+    >,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FlightPartitionNode {
+    #[prost(string, repeated, tag = "1")]
+    pub locations: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub token: ::prost::alloc::vec::Vec<u8>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PlanPropertiesNode {
+    #[prost(message, optional, tag = "1")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(message, repeated, tag = "2")]
+    pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
+    #[prost(message, optional, tag = "3")]
+    pub partitioning: ::core::option::Option<Partitioning>,
+    #[prost(enumeration = "ExecutionMode", tag = "4")]
+    pub execution_mode: i32,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum BuiltInWindowFunction {
@@ -2139,6 +2174,35 @@ impl AggregateMode {
             "FINAL_PARTITIONED" => Some(Self::FinalPartitioned),
             "SINGLE" => Some(Self::Single),
             "SINGLE_PARTITIONED" => Some(Self::SinglePartitioned),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ExecutionMode {
+    Bounded = 0,
+    Unbounded = 1,
+    PipelineBreaking = 2,
+}
+impl ExecutionMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            ExecutionMode::Bounded => "Bounded",
+            ExecutionMode::Unbounded => "Unbounded",
+            ExecutionMode::PipelineBreaking => "PipelineBreaking",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "Bounded" => Some(Self::Bounded),
+            "Unbounded" => Some(Self::Unbounded),
+            "PipelineBreaking" => Some(Self::PipelineBreaking),
             _ => None,
         }
     }

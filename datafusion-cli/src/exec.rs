@@ -42,6 +42,7 @@ use datafusion::physical_plan::{collect, execute_stream, ExecutionPlanProperties
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
+use datafusion::datasource::flight::config::FlightOptions;
 use datafusion::sql::sqlparser;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
@@ -386,6 +387,8 @@ pub(crate) async fn register_object_store_and_config_extensions(
     let mut table_options = ctx.session_state().default_table_options().clone();
     if let Some(format) = format {
         table_options.set_config_format(format);
+    } else {
+        table_options.extensions.insert(FlightOptions::default())
     }
     table_options.alter_with_string_hash_map(options)?;
 
