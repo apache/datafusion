@@ -815,6 +815,7 @@ impl GroupedHashAggregateStream {
         } else {
             self.schema()
         };
+
         if self.group_values.is_empty() {
             return Ok(VecDeque::from([RecordBatch::new_empty(schema)]));
         }
@@ -832,14 +833,14 @@ impl GroupedHashAggregateStream {
                     let mut rows_count_before_cur_block = 0;
                     for output_block in output.iter_mut() {
                         let block_start = rows_count_before_cur_block;
-                        let block_end =
-                            rows_count_before_cur_block + output_block[0].len();
+                        let block_len= output_block[0].len();
+
                         output_block.reserve(states.len());
                         for state in states.iter() {
-                            output_block.push(state.slice(block_start, block_end))
+                            output_block.push(state.slice(block_start, block_len))
                         }
 
-                        rows_count_before_cur_block = output_block[0].len();
+                        rows_count_before_cur_block += block_len;
                     }
                 }
                 _ if spilling => {
@@ -849,14 +850,14 @@ impl GroupedHashAggregateStream {
                     let mut rows_count_before_cur_block = 0;
                     for output_block in output.iter_mut() {
                         let block_start = rows_count_before_cur_block;
-                        let block_end =
-                            rows_count_before_cur_block + output_block[0].len();
+                        let block_len = output_block[0].len();
+
                         output_block.reserve(states.len());
                         for state in states.iter() {
-                            output_block.push(state.slice(block_start, block_end))
+                            output_block.push(state.slice(block_start, block_len))
                         }
 
-                        rows_count_before_cur_block = output_block[0].len();
+                        rows_count_before_cur_block += block_len;
                     }
                 }
                 AggregateMode::Final
@@ -867,10 +868,11 @@ impl GroupedHashAggregateStream {
                     let mut rows_count_before_cur_block = 0;
                     for output_block in output.iter_mut() {
                         let block_start = rows_count_before_cur_block;
-                        let block_end =
-                            rows_count_before_cur_block + output_block[0].len();
-                        output_block.push(state.slice(block_start, block_end));
-                        rows_count_before_cur_block = output_block[0].len();
+                        let block_len = output_block[0].len();
+
+                        output_block.push(state.slice(block_start, block_len));
+                        
+                        rows_count_before_cur_block += block_len;
                     }
                 }
             }
