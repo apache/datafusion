@@ -25,7 +25,9 @@ use std::sync::Arc;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
+use crate::expr::{
+    is_constant_expression, Placeholder, Sort as SortExpr, WindowFunction,
+};
 use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -656,6 +658,7 @@ impl LogicalPlan {
                 group_expr,
                 aggr_expr,
                 schema: _,
+                is_global_group_by: _,
             }) => Aggregate::try_new(input, group_expr, aggr_expr)
                 .map(LogicalPlan::Aggregate),
             LogicalPlan::Sort(_) => Ok(self),
@@ -2629,6 +2632,8 @@ pub struct Aggregate {
     pub aggr_expr: Vec<Expr>,
     /// The schema description of the aggregate output
     pub schema: DFSchemaRef,
+    /// In order to pass constant group_by parameter to execution plan
+    pub is_global_group_by: bool,
 }
 
 impl Aggregate {
@@ -2693,6 +2698,8 @@ impl Aggregate {
             new_schema.with_functional_dependencies(aggregate_func_dependencies)?,
         );
         Ok(Self {
+            is_global_group_by: group_expr.len() == 1
+                && is_constant_expression(&group_expr[0]),
             input,
             group_expr,
             aggr_expr,
@@ -2713,6 +2720,11 @@ impl Aggregate {
     /// GroupingSet, etc. In these case we need to get inner expression lengths.
     pub fn group_expr_len(&self) -> Result<usize> {
         grouping_set_expr_count(&self.group_expr)
+    }
+
+    pub fn with_is_global_group_by(mut self, is_global_group_by: bool) -> Self {
+        self.is_global_group_by = is_global_group_by;
+        self
     }
 }
 

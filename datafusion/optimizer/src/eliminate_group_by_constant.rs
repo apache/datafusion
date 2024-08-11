@@ -21,7 +21,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
-use datafusion_expr::{Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
+use datafusion_expr::expr::is_constant_expression;
+use datafusion_expr::{Aggregate, LogicalPlan, LogicalPlanBuilder};
 
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
 /// and places additional projection on top of aggregation, to preserve
@@ -63,11 +64,14 @@ impl OptimizerRule for EliminateGroupByConstant {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
-                let simplified_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
-                    aggregate.input,
-                    nonconst_group_expr.into_iter().cloned().collect(),
-                    aggregate.aggr_expr.clone(),
-                )?);
+                let simplified_aggregate = LogicalPlan::Aggregate(
+                    Aggregate::try_new(
+                        aggregate.input,
+                        nonconst_group_expr.into_iter().cloned().collect(),
+                        aggregate.aggr_expr.clone(),
+                    )?
+                    .with_is_global_group_by(aggregate.is_global_group_by),
+                );
 
                 let projection_expr =
                     aggregate.group_expr.into_iter().chain(aggregate.aggr_expr);
@@ -91,27 +95,6 @@ impl OptimizerRule for EliminateGroupByConstant {
     }
 }
 
-/// Checks if expression is constant, and can be eliminated from group by.
-///
-/// Intended to be used only within this rule, helper function, which heavily
-/// reiles on `SimplifyExpressions` result.
-fn is_constant_expression(expr: &Expr) -> bool {
-    match expr {
-        Expr::Alias(e) => is_constant_expression(&e.expr),
-        Expr::BinaryExpr(e) => {
-            is_constant_expression(&e.left) && is_constant_expression(&e.right)
-        }
-        Expr::Literal(_) => true,
-        Expr::ScalarFunction(e) => {
-            matches!(
-                e.func.signature().volatility,
-                Volatility::Immutable | Volatility::Stable
-            ) && e.args.iter().all(is_constant_expression)
-        }
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,8 +104,8 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
-        col, lit, ColumnarValue, LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature,
-        TypeSignature,
+        col, lit, ColumnarValue, Expr, LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl,
+        Signature, TypeSignature, Volatility,
     };
 
     use datafusion_functions_aggregate::expr_fn::count;

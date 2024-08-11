@@ -116,8 +116,11 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     Transformed::no
                 };
 
-                Aggregate::try_new(agg.input, unique_exprs, agg.aggr_expr)
-                    .map(|f| transformed(LogicalPlan::Aggregate(f)))
+                Aggregate::try_new(agg.input, unique_exprs, agg.aggr_expr).map(|f| {
+                    transformed(LogicalPlan::Aggregate(
+                        f.with_is_global_group_by(agg.is_global_group_by),
+                    ))
+                })
             }
             _ => Ok(Transformed::no(plan)),
         }

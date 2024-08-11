@@ -93,7 +93,9 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
                     input.equivalence_properties(),
                 )?;
 
-                let aggr_exec = aggr_exec.with_new_aggr_exprs(aggr_expr);
+                let aggr_exec = aggr_exec
+                    .with_new_aggr_exprs(aggr_expr)
+                    .with_is_global_group_by(aggr_exec.is_global_group_by);
 
                 Ok(Transformed::yes(Arc::new(aggr_exec) as _))
             } else {

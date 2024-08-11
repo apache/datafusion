@@ -619,7 +619,11 @@ impl CommonSubexprEliminate {
                                     new_group_expr,
                                     new_aggr_expr,
                                 )
-                                .map(LogicalPlan::Aggregate)
+                                .map(|f| {
+                                    LogicalPlan::Aggregate(f.with_is_global_group_by(
+                                        aggregate.is_global_group_by,
+                                    ))
+                                })
                             } else {
                                 Aggregate::try_new_with_schema(
                                     new_input,
@@ -627,7 +631,11 @@ impl CommonSubexprEliminate {
                                     rewritten_aggr_expr,
                                     schema,
                                 )
-                                .map(LogicalPlan::Aggregate)
+                                .map(|f| {
+                                    LogicalPlan::Aggregate(f.with_is_global_group_by(
+                                        aggregate.is_global_group_by,
+                                    ))
+                                })
                             }
                         }
                     }
