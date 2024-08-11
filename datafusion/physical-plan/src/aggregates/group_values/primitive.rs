@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::{GroupIdx, GroupValues};
+use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::array::BooleanBufferBuilder;
 use arrow::buffer::NullBuffer;
@@ -111,7 +111,7 @@ impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
 {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<GroupIdx>) -> Result<()> {
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         assert_eq!(cols.len(), 1);
         groups.clear();
 
@@ -145,7 +145,7 @@ where
                     }
                 }
             };
-            groups.push(GroupIdx::new(0, group_id as u64))
+            groups.push(group_id)
         }
         Ok(())
     }

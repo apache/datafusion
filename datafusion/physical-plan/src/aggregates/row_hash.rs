@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use crate::aggregates::group_values::{new_group_values, GroupValues};
+use crate::aggregates::group_values::{new_group_values, GroupIdx, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
@@ -353,7 +353,7 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// scratch space for the current input [`RecordBatch`] being
     /// processed. Reused across batches here to avoid reallocations
-    current_group_indices: Vec<usize>,
+    current_group_indices: Vec<GroupIdx>,
 
     /// Tracks if this stream is generating input or output
     exec_state: ExecutionState,

@@ -108,7 +108,7 @@ impl GroupValuesRows {
 }
 
 impl GroupValues for GroupValuesRows {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<GroupIdx>) -> Result<()> {
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         // Convert the group keys into the row format
         let group_rows = &mut self.rows_buffer;
         group_rows.clear();
@@ -121,7 +121,7 @@ impl GroupValues for GroupValuesRows {
             self.group_values_blocks.push_back(block);
         };
 
-        let mut group_values_blocks = mem::take(&mut self.group_values_blocks);
+        let group_values_blocks = mem::take(&mut self.group_values_blocks);
 
         // tracks to which group each of the input rows belongs
         groups.clear();
