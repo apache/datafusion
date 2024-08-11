@@ -41,6 +41,7 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
+use crate::common::MockSessionState;
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
@@ -1495,7 +1496,9 @@ fn recursive_ctes_disabled() {
         select * from numbers;";
 
     // manually setting up test here so that we can disable recursive ctes
-    let mut context = MockContextProvider::default();
+    let mut context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
     context.options_mut().execution.enable_recursive_ctes = false;
 
     let planner = SqlToRel::new_with_options(&context, ParserOptions::default());
@@ -2727,7 +2730,8 @@ fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<Logica
 }
 
 fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
-    let context = MockContextProvider::default().with_udaf(sum_udaf());
+    let state = MockSessionState::default().with_aggregate_functions(sum_udaf());
+    let context = MockContextProvider { state };
     let planner = SqlToRel::new(&context);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -2739,39 +2743,44 @@ fn logical_plan_with_dialect_and_options(
     dialect: &dyn Dialect,
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
-    let context = MockContextProvider::default()
-        .with_udf(unicode::character_length().as_ref().clone())
-        .with_udf(string::concat().as_ref().clone())
-        .with_udf(make_udf(
+    let state = MockSessionState::default()
+        .with_scalar_functions(Arc::new(unicode::character_length().as_ref().clone()))
+        .with_scalar_functions(Arc::new(string::concat().as_ref().clone()))
+        .with_scalar_functions(Arc::new(make_udf(
             "nullif",
             vec![DataType::Int32, DataType::Int32],
             DataType::Int32,
-        ))
-        .with_udf(make_udf(
+        )))
+        .with_scalar_functions(Arc::new(make_udf(
             "round",
             vec![DataType::Float64, DataType::Int64],
             DataType::Float32,
-        ))
-        .with_udf(make_udf(
+        )))
+        .with_scalar_functions(Arc::new(make_udf(
             "arrow_cast",
             vec![DataType::Int64, DataType::Utf8],
             DataType::Float64,
-        ))
-        .with_udf(make_udf(
+        )))
+        .with_scalar_functions(Arc::new(make_udf(
             "date_trunc",
             vec![DataType::Utf8, DataType::Timestamp(Nanosecond, None)],
             DataType::Int32,
-        ))
-        .with_udf(make_udf("sqrt", vec![DataType::Int64], DataType::Int64))
-        .with_udaf(sum_udaf())
-        .with_udaf(approx_median_udaf())
-        .with_udaf(count_udaf())
-        .with_udaf(avg_udaf())
-        .with_udaf(min_udaf())
-        .with_udaf(max_udaf())
-        .with_udaf(grouping_udaf())
+        )))
+        .with_scalar_functions(Arc::new(make_udf(
+            "sqrt",
+            vec![DataType::Int64],
+            DataType::Int64,
+        )))
+        .with_aggregate_functions(sum_udaf())
+        .with_aggregate_functions(approx_median_udaf())
+        .with_aggregate_functions(count_udaf())
+        .with_aggregate_functions(avg_udaf())
+        .with_aggregate_functions(min_udaf())
+        .with_aggregate_functions(max_udaf())
+        .with_aggregate_functions(grouping_udaf())
         .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
+    let context = MockContextProvider { state };
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
