@@ -2773,7 +2773,7 @@ fn calc_func_dependencies_for_project(
                         qualifier: qualifier.clone(),
                         options: options.clone(),
                     }],
-                    &input,
+                    input,
                 )?;
                 Ok::<_, DataFusionError>(
                     wildcard_fields

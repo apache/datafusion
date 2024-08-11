@@ -19,10 +19,7 @@ use core::fmt;
 
 use datafusion_expr::ScalarUDF;
 use sqlparser::ast::Value::SingleQuotedString;
-use sqlparser::ast::{
-    self, BinaryOperator, Expr as AstExpr, Function, FunctionArg, Ident, Interval,
-    TimezoneInfo, UnaryOperator,
-};
+use sqlparser::ast::{self, BinaryOperator, Expr as AstExpr, Function, FunctionArg, Ident, Interval, ObjectName, TimezoneInfo, UnaryOperator};
 use std::sync::Arc;
 use std::{fmt::Display, vec};
 
@@ -482,8 +479,15 @@ impl Unparser<'_> {
                     format: None,
                 })
             }
-            Expr::Wildcard { .. } => {
-                not_impl_err!("Unsupported Expr conversion: {expr:?}")
+            // TODO: unparsing wildcard addition options
+            Expr::Wildcard { qualifier, .. } => {
+                if let Some(qualifier) = qualifier {
+                    let idents: Vec<Ident> = qualifier.to_vec().into_iter().map(|s| Ident::new(s)).collect();
+                    Ok(ast::Expr::QualifiedWildcard(ObjectName(idents)))
+                }
+                else {
+                    Ok(ast::Expr::Wildcard)
+                }
             }
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::GroupingSets(grouping_sets) => {
@@ -1854,11 +1858,11 @@ mod tests {
             (Expr::Negative(Box::new(col("a"))), r#"-a"#),
             (
                 exists(Arc::new(dummy_logical_plan.clone())),
-                r#"EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
+                r#"EXISTS (SELECT * FROM t WHERE (t.a = 1))"#,
             ),
             (
                 not_exists(Arc::new(dummy_logical_plan.clone())),
-                r#"NOT EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
+                r#"NOT EXISTS (SELECT * FROM t WHERE (t.a = 1))"#,
             ),
             (
                 try_cast(col("a"), DataType::Date64),
