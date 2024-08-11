@@ -2017,7 +2017,7 @@ pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSc
     )?;
     schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
         exprs,
-        find_base_plan(input),
+        input,
     )?)?;
     Ok(Arc::new(schema))
 }
