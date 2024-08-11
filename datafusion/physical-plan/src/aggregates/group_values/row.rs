@@ -180,7 +180,7 @@ impl GroupValues for GroupValuesRows {
                     group_idx
                 }
             };
-            groups.push(group_idx);
+            groups.push(group_idx.as_flat_group_idx(self.max_block_size));
         }
 
         self.group_values_blocks = group_values_blocks;

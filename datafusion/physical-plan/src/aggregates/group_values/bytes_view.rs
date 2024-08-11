@@ -85,7 +85,7 @@ impl GroupValues for GroupValuesBytesView {
         self.num_groups
     }
 
-    fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
+    fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<Vec<ArrayRef>>> {
         // Reset the map to default, and convert it into a single array
         let map_contents = self.map.take().into_state();
 

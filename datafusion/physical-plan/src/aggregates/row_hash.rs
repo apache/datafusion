@@ -61,7 +61,7 @@ pub(crate) enum ExecutionState {
     ReadingInput,
     /// When producing output, the remaining rows to output are stored
     /// here and are sliced off as needed in batch_size chunks
-    ProducingOutput(RecordBatch),
+    ProducingOutput(Vec<RecordBatch>),
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
     ///
@@ -353,7 +353,7 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// scratch space for the current input [`RecordBatch`] being
     /// processed. Reused across batches here to avoid reallocations
-    current_group_indices: Vec<GroupIdx>,
+    current_group_indices: Vec<usize>,
 
     /// Tracks if this stream is generating input or output
     exec_state: ExecutionState,
@@ -798,14 +798,14 @@ impl GroupedHashAggregateStream {
 
     /// Create an output RecordBatch with the group keys and
     /// accumulator states/values specified in emit_to
-    fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<RecordBatch> {
+    fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<Vec<RecordBatch>> {
         let schema = if spilling {
             Arc::clone(&self.spill_state.spill_schema)
         } else {
             self.schema()
         };
         if self.group_values.is_empty() {
-            return Ok(RecordBatch::new_empty(schema));
+            return Ok(vec![RecordBatch::new_empty(schema)]);
         }
 
         let mut output = self.group_values.emit(emit_to)?;
@@ -816,24 +816,66 @@ impl GroupedHashAggregateStream {
         // Next output each aggregate value
         for acc in self.accumulators.iter_mut() {
             match self.mode {
-                AggregateMode::Partial => output.extend(acc.state(emit_to)?),
+                AggregateMode::Partial => {
+                    let states = acc.state(emit_to)?;
+                    let mut rows_count_before_cur_block = 0;
+                    for output_block in output.iter_mut() {
+                        let block_start = rows_count_before_cur_block;
+                        let block_end =
+                            rows_count_before_cur_block + output_block[0].len();
+                        output_block.reserve(states.len());
+                        for state in states.iter() {
+                            output_block.push(state.slice(block_start, block_end))
+                        }
+
+                        rows_count_before_cur_block = output_block[0].len();
+                    }
+                }
                 _ if spilling => {
                     // If spilling, output partial state because the spilled data will be
                     // merged and re-evaluated later.
-                    output.extend(acc.state(emit_to)?)
+                    let states = acc.state(emit_to)?;
+                    let mut rows_count_before_cur_block = 0;
+                    for output_block in output.iter_mut() {
+                        let block_start = rows_count_before_cur_block;
+                        let block_end =
+                            rows_count_before_cur_block + output_block[0].len();
+                        output_block.reserve(states.len());
+                        for state in states.iter() {
+                            output_block.push(state.slice(block_start, block_end))
+                        }
+
+                        rows_count_before_cur_block = output_block[0].len();
+                    }
                 }
                 AggregateMode::Final
                 | AggregateMode::FinalPartitioned
                 | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
+                | AggregateMode::SinglePartitioned => {
+                    let state = acc.evaluate(emit_to)?;
+                    let mut rows_count_before_cur_block = 0;
+                    for output_block in output.iter_mut() {
+                        let block_start = rows_count_before_cur_block;
+                        let block_end =
+                            rows_count_before_cur_block + output_block[0].len();
+                        output_block.push(state.slice(block_start, block_end));
+                        rows_count_before_cur_block = output_block[0].len();
+                    }
+                }
             }
         }
 
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
-        let batch = RecordBatch::try_new(schema, output)?;
-        Ok(batch)
+        let batches = output
+            .into_iter()
+            .map(|o| {
+                RecordBatch::try_new(schema.clone(), o)
+                    .map_err(|e| DataFusionError::ArrowError(e, None))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(batches)
     }
 
     /// Optimistically, [`Self::group_aggregate_batch`] allows to exceed the memory target slightly

@@ -56,6 +56,13 @@ impl GroupIdx {
     pub fn block_offset(&self) -> usize {
         (self.0 & GROUP_IDX_LOW_48_BITS_MASK) as usize
     }
+
+    pub fn as_flat_group_idx(&self, max_block_size: usize) -> usize {
+        let block_id = self.block_id();
+        let block_offset = self.block_offset();
+
+        block_id * max_block_size + block_offset
+    }
 }
 
 /// An interning store for group keys
