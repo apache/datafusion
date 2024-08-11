@@ -37,6 +37,10 @@ use datafusion_expr::{
 };
 
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
+    filtered_null_mask, set_nulls,
+};
+
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use log::debug;
 use std::any::Any;
