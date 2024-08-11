@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! XX utlities for working with nulls
+//! [`set_nulls`], and [`filtered_null_mask`], utilities for working with nulls
 
 use arrow::array::{Array, ArrowNumericType, BooleanArray, PrimitiveArray};
 use arrow::buffer::NullBuffer;
