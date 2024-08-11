@@ -19,7 +19,10 @@ use core::fmt;
 
 use datafusion_expr::ScalarUDF;
 use sqlparser::ast::Value::SingleQuotedString;
-use sqlparser::ast::{self, BinaryOperator, Expr as AstExpr, Function, FunctionArg, Ident, Interval, ObjectName, TimezoneInfo, UnaryOperator};
+use sqlparser::ast::{
+    self, BinaryOperator, Expr as AstExpr, Function, FunctionArg, Ident, Interval,
+    ObjectName, TimezoneInfo, UnaryOperator,
+};
 use std::sync::Arc;
 use std::{fmt::Display, vec};
 
@@ -482,10 +485,10 @@ impl Unparser<'_> {
             // TODO: unparsing wildcard addition options
             Expr::Wildcard { qualifier, .. } => {
                 if let Some(qualifier) = qualifier {
-                    let idents: Vec<Ident> = qualifier.to_vec().into_iter().map(|s| Ident::new(s)).collect();
+                    let idents: Vec<Ident> =
+                        qualifier.to_vec().into_iter().map(Ident::new).collect();
                     Ok(ast::Expr::QualifiedWildcard(ObjectName(idents)))
-                }
-                else {
+                } else {
                     Ok(ast::Expr::Wildcard)
                 }
             }
