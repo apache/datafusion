@@ -808,7 +808,11 @@ pub fn find_base_plan(input: &LogicalPlan) -> &LogicalPlan {
     }
 }
 
-pub fn exprlist_len(exprs: &[Expr], schema: &DFSchemaRef, wildcard_schema: Option<&DFSchemaRef>) -> Result<usize> {
+pub fn exprlist_len(
+    exprs: &[Expr],
+    schema: &DFSchemaRef,
+    wildcard_schema: Option<&DFSchemaRef>,
+) -> Result<usize> {
     exprs
         .iter()
         .map(|e| match e {
@@ -824,7 +828,10 @@ pub fn exprlist_len(exprs: &[Expr], schema: &DFSchemaRef, wildcard_schema: Optio
                 )?
                 .into_iter()
                 .collect::<HashSet<Column>>();
-                Ok(get_exprs_except_skipped(wildcard_schema.unwrap_or(schema), excluded).len())
+                Ok(
+                    get_exprs_except_skipped(wildcard_schema.unwrap_or(schema), excluded)
+                        .len(),
+                )
             }
             Expr::Wildcard {
                 qualifier: Some(qualifier),
