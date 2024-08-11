@@ -54,7 +54,7 @@ pub(crate) struct MockSessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
-    config_options: ConfigOptions,
+    pub config_options: ConfigOptions,
 }
 
 impl MockSessionState {
@@ -84,14 +84,6 @@ impl MockSessionState {
 
 pub(crate) struct MockContextProvider {
     pub(crate) state: MockSessionState,
-}
-
-impl MockContextProvider {
-    // Suppressing dead code warning, as this is used in integration test crates
-    #[allow(dead_code)]
-    pub(crate) fn options_mut(&mut self) -> &mut ConfigOptions {
-        &mut self.state.config_options
-    }
 }
 
 impl ContextProvider for MockContextProvider {

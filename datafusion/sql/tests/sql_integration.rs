@@ -1496,10 +1496,9 @@ fn recursive_ctes_disabled() {
         select * from numbers;";
 
     // manually setting up test here so that we can disable recursive ctes
-    let mut context = MockContextProvider {
-        state: MockSessionState::default(),
-    };
-    context.options_mut().execution.enable_recursive_ctes = false;
+    let mut state = MockSessionState::default();
+    state.config_options.execution.enable_recursive_ctes = false;
+    let context = MockContextProvider { state };
 
     let planner = SqlToRel::new_with_options(&context, ParserOptions::default());
     let result = DFParser::parse_sql_with_dialect(sql, &GenericDialect {});
