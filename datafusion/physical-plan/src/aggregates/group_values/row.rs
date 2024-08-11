@@ -189,7 +189,11 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn size(&self) -> usize {
-        let group_values_size = self.group_values_blocks.iter().map(|v| v.size()).sum::<usize>();
+        let group_values_size = self
+            .group_values_blocks
+            .iter()
+            .map(|v| v.size())
+            .sum::<usize>();
         self.row_converter.size()
             + group_values_size
             + self.map_size
@@ -209,66 +213,95 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<Vec<ArrayRef>>> {
-        let mut group_values_blocks = mem::take(&mut self
-            .group_values_blocks);
+        let mut group_values_blocks = mem::take(&mut self.group_values_blocks);
 
         if group_values_blocks.is_empty() {
             return Ok(Vec::new());
         }
 
         let vec = match emit_to {
-            EmitTo::All => {
-                group_values_blocks.iter_mut().map(|rows_block| {
+            EmitTo::All => group_values_blocks
+                .iter_mut()
+                .map(|rows_block| {
                     let output = self.row_converter.convert_rows(rows_block.iter())?;
                     rows_block.clear();
                     Ok(output)
-                }).collect::<Result<Vec<_>>>()?
-            },
-            
+                })
+                .collect::<Result<Vec<_>>>()?,
+
             EmitTo::First(n) => {
                 // convert it to block
-                let num_emitted_blocks = if n > self.max_block_size {
-                    n / self.max_block_size
-                } else {
-                    1
-                };
-                
-                let mut emitted_blocks = Vec::with_capacity(num_emitted_blocks);
-                for _ in 0..num_emitted_blocks {
+                let num_blocks = n / self.max_block_size;
+                let num_first_rows_in_last_block = n % self.max_block_size;
+
+                let mut emitted_blocks = Vec::with_capacity(num_blocks + 1);
+
+                // Collect the complete emitted blocks
+                for _ in 0..num_blocks {
                     let block = group_values_blocks.pop_front().unwrap();
-                    let converted_block = self.row_converter.convert_rows(block.into_iter())?;
+                    let converted_block =
+                        self.row_converter.convert_rows(block.into_iter())?;
                     emitted_blocks.push(converted_block);
                 }
 
-                // let groups_rows = group_values.iter().take(n);
-                // let output = self.row_converter.convert_rows(groups_rows)?;
-                // // Clear out first n group keys by copying them to a new Rows.
-                // // TODO file some ticket in arrow-rs to make this more efficient?
-                // let mut new_group_values = self.row_converter.empty_rows(0, 0);
-                // for row in group_values.iter().skip(n) {
-                //     new_group_values.push(row);
-                // }
-                // std::mem::swap(&mut new_group_values, &mut group_values);
+                // Cut off the last block and collect if needed
+                if num_first_rows_in_last_block > 0 {
+                    let last_output_rows = group_values_blocks
+                        .front()
+                        .unwrap()
+                        .iter()
+                        .take(num_first_rows_in_last_block);
+                    let last_output_block =
+                        self.row_converter.convert_rows(last_output_rows)?;
+            
+                    let mut remaining_rows = self.row_converter.empty_rows(0, 0);
+                    // TODO file some ticket in arrow-rs to make this more efficient?
+                    for row in group_values_blocks
+                        .front()
+                        .unwrap()
+                        .iter()
+                        .skip(num_first_rows_in_last_block)
+                    {
+                        remaining_rows.push(row);
+                    }
+
+                    std::mem::swap(
+                        group_values_blocks.front_mut().unwrap(),
+                        &mut remaining_rows,
+                    );
+
+                    emitted_blocks.push(last_output_block);
+                }
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
+                let num_emitted_blocks = emitted_blocks.len();
                 unsafe {
                     for bucket in self.map.iter() {
                         // Decrement block id by `num_emitted_blocks`
-                        let (_, group_idx, ) = bucket.as_ref();
-                        let new_block_id = group_idx.block_id().checked_sub(num_emitted_blocks);
+                        let (_, group_idx) = bucket.as_ref();
+                        let new_block_id =
+                            group_idx.block_id().checked_sub(num_emitted_blocks);
+                            
                         match new_block_id {
                             // Group index was >= n, shift value down
                             Some(bid) => {
-                                let block_offset = group_idx.block_offset();
-                                bucket.as_mut().1 = GroupIdx::new(bid as u16, block_offset as u64);
-                            },
+                                if bid == 0 && num_first_rows_in_last_block > 0 {
+                                    let new_block_offset = group_idx.block_offset() - num_first_rows_in_last_block;
+                                    bucket.as_mut().1 =
+                                        GroupIdx::new(bid as u16, new_block_offset as u64);
+                                } else {
+                                    let block_offset = group_idx.block_offset();
+                                    bucket.as_mut().1 =
+                                        GroupIdx::new(bid as u16, block_offset as u64);
+                                }
+                            }
                             // Group index was < n, so remove from table
-                            None =>  self.map.erase(bucket),
+                            None => self.map.erase(bucket),
                         }
                     }
                 }
                 emitted_blocks
-            },
+            }
         };
         let mut output = vec;
 
