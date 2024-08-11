@@ -121,7 +121,7 @@ impl GroupValues for GroupValuesRows {
             self.group_values_blocks.push_back(block);
         };
 
-        let group_values_blocks = mem::take(&mut self.group_values_blocks);
+        let mut group_values_blocks = mem::take(&mut self.group_values_blocks);
 
         // tracks to which group each of the input rows belongs
         groups.clear();
@@ -157,16 +157,16 @@ impl GroupValues for GroupValuesRows {
                 //  1.2 Need to create new entry for the group
                 None => {
                     // Check if the block size has reached the limit, if so we switch to next block.
-                    let block_size =  group_values_blocks.back().unwrap().num_rows();
+                    let block_size = group_values_blocks.back().unwrap().num_rows();
                     if block_size == self.max_block_size {
                         self.cur_block_id += 1;
                         // TODO: calc and use the capacity to init.
                         let block = self.row_converter.empty_rows(0, 0);
-                        self.group_values_blocks.push_back(block);
+                        group_values_blocks.push_back(block);
                     }
 
                     // Add new entry to aggr_state and save newly created index
-                    let cur_group_values = self.group_values_blocks.back_mut().unwrap();
+                    let cur_group_values = group_values_blocks.back_mut().unwrap();
                     let block_offset = cur_group_values.num_rows();
                     let group_idx = GroupIdx::new(self.cur_block_id, block_offset as u64);
                     cur_group_values.push(group_rows.row(row));
