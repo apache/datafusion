@@ -1825,23 +1825,6 @@ mod tests {
     }
 
     #[test]
-    fn plan_builder_union_different_num_columns_error() -> Result<()> {
-        let plan1 =
-            table_scan(TableReference::none(), &employee_schema(), Some(vec![3]))?;
-        let plan2 =
-            table_scan(TableReference::none(), &employee_schema(), Some(vec![3, 4]))?;
-
-        let expected = "Error during planning: Union queries must have the same number of columns, (left is 1, right is 2)";
-        let err_msg1 = plan1.clone().union(plan2.clone().build()?).unwrap_err();
-        let err_msg2 = plan1.union_distinct(plan2.build()?).unwrap_err();
-
-        assert_eq!(err_msg1.strip_backtrace(), expected);
-        assert_eq!(err_msg2.strip_backtrace(), expected);
-
-        Ok(())
-    }
-
-    #[test]
     fn plan_builder_simple_distinct() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?

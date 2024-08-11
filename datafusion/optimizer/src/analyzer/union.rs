@@ -48,8 +48,8 @@ fn coerce_union_schema(inputs: Vec<Arc<LogicalPlan>>) -> Result<DFSchema> {
         let plan_schema = plan.schema();
         if plan_schema.fields().len() != base_schema.fields().len() {
             return plan_err!(
-                "Union schemas have different number of fields,
-                query 1 is {}, query {} is {}",
+                "Union schemas have different number of fields,\
+                query 1 has {}, query {} has {}",
                 base_schema.fields().len(),
                 i + 1,
                 plan_schema.fields().len()
@@ -176,5 +176,49 @@ fn coerce_exprs_for_schema(
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{Result, TableReference};
+    use datafusion_expr::builder::table_scan;
+    use std::sync::Arc;
+
+    use crate::analyzer::TypeCoercion;
+    use crate::test::assert_analyzer_check_err;
+
+    fn employee_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("first_name", DataType::Utf8, false),
+            Field::new("last_name", DataType::Utf8, false),
+            Field::new("state", DataType::Utf8, false),
+            Field::new("salary", DataType::Int32, false),
+        ])
+    }
+
+    #[test]
+    fn union_different_num_columns_error() -> Result<()> {
+        let plan1 =
+            table_scan(TableReference::none(), &employee_schema(), Some(vec![3]))?;
+        let plan2 =
+            table_scan(TableReference::none(), &employee_schema(), Some(vec![3, 4]))?
+                .build()?;
+
+        let expected = "type_coercion\n\
+                        caused by\n\
+                        Error during planning: Union schemas have different number of fields,\
+                        query 1 has 1, query 2 has 2";
+        let union_plan = plan1.clone().union(plan2.clone())?.build()?;
+        assert_analyzer_check_err(
+            vec![Arc::new(TypeCoercion::new())],
+            union_plan,
+            expected,
+        );
+
+        let union_distinct = plan1.union_distinct(plan2)?.build()?;
+        assert_analyzer_check_err(
+            vec![Arc::new(TypeCoercion::new())],
+            union_distinct,
+            expected,
+        );
+        Ok(())
+    }
 }
