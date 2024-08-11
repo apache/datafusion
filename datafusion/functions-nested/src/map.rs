@@ -274,8 +274,8 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,
 ) -> datafusion_common::Result<ColumnarValue> {
-    let mut offset_buffer = vec![O::usize_as(0)];
-    let mut running_offset = O::usize_as(0);
+    let mut offset_buffer = vec![O::zero()];
+    let mut running_offset = O::zero();
 
     let keys = datafusion_common::utils::list_to_arrays::<O>(keys);
     let values = datafusion_common::utils::list_to_arrays::<O>(values);
