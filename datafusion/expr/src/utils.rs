@@ -800,6 +800,10 @@ pub fn exprlist_to_fields<'a>(
     Ok(result)
 }
 
+/// Find the suitable base plan to expand the wildcard expression recursively.
+/// When planning [LogicalPlan::Window] and [LogicalPlan::Aggregate], we will generate
+/// an intermediate plan based on the relation plan (e.g. [LogicalPlan::TableScan], [LogicalPlan::Subquery], ...).
+/// If we expand a wildcard expression basing the intermediate plan, we could get some duplicate fields.
 pub fn find_base_plan(input: &LogicalPlan) -> &LogicalPlan {
     match input {
         LogicalPlan::Window(window) => find_base_plan(&window.input),
@@ -808,6 +812,7 @@ pub fn find_base_plan(input: &LogicalPlan) -> &LogicalPlan {
     }
 }
 
+/// Count the number of real fields. We should expand the wildcard expression to get the actual number.
 pub fn exprlist_len(
     exprs: &[Expr],
     schema: &DFSchemaRef,
@@ -840,12 +845,12 @@ pub fn exprlist_len(
                 let excluded = get_excluded_columns(
                     options.opt_exclude.as_ref(),
                     options.opt_except.as_ref(),
-                    schema,
+                    wildcard_schema.unwrap_or(schema),
                     Some(qualifier),
                 )?
                 .into_iter()
                 .collect::<HashSet<Column>>();
-                Ok(get_exprs_except_skipped(schema, excluded).len())
+                Ok(get_exprs_except_skipped(wildcard_schema.unwrap_or(schema), excluded).len())
             }
             _ => Ok(1),
         })
