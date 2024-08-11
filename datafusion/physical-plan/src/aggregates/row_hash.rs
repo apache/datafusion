@@ -37,6 +37,7 @@ use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
+use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
@@ -901,10 +902,12 @@ impl GroupedHashAggregateStream {
 
     /// Emit all rows, sort them, and store them on disk.
     fn spill(&mut self) -> Result<()> {
-        let emit = self.emit(EmitTo::All, true)?;
-        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
+        let emitteds = self.emit(EmitTo::All, true)?;
+        // TODO: maybe we should concat it gradually in `emit` for saving memory?
+        let single_batch = concat_batches(&emitteds[0].schema(), &emitteds)?;
+        let sorted = sort_batch(&single_batch, &self.spill_state.spill_expr, None)?;
         let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
-        let mut writer = IPCWriter::new(spillfile.path(), &emit.schema())?;
+        let mut writer = IPCWriter::new(spillfile.path(), &single_batch.schema())?;
         // TODO: slice large `sorted` and write to multiple files in parallel
         let mut offset = 0;
         let total_rows = sorted.num_rows();
@@ -955,23 +958,29 @@ impl GroupedHashAggregateStream {
     /// Conduct a streaming merge sort between the batch and spilled data. Since the stream is fully
     /// sorted, set `self.group_ordering` to Full, then later we can read with [`EmitTo::First`].
     fn update_merged_stream(&mut self) -> Result<()> {
-        let batch = self.emit(EmitTo::All, true)?;
+        let emitteds = self.emit(EmitTo::All, true)?;
         // clear up memory for streaming_merge
         self.clear_all();
         self.update_memory_reservation()?;
         let mut streams: Vec<SendableRecordBatchStream> = vec![];
         let expr = self.spill_state.spill_expr.clone();
-        let schema = batch.schema();
-        streams.push(Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&schema),
-            futures::stream::once(futures::future::lazy(move |_| {
-                sort_batch(&batch, &expr, None)
-            })),
-        )));
+        let schema = emitteds[0].schema();
+
+        for batch in emitteds {
+            let expr_clone = expr.clone();
+            streams.push(Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&schema),
+                futures::stream::once(futures::future::lazy(move |_| {
+                    sort_batch(&batch, &expr_clone, None)
+                })),
+            )));
+        }
+
         for spill in self.spill_state.spills.drain(..) {
             let stream = read_spill_as_stream(spill, Arc::clone(&schema), 2)?;
             streams.push(stream);
         }
+
         self.spill_state.is_stream_merging = true;
         self.input = streaming_merge(
             streams,

@@ -216,14 +216,15 @@ impl GroupValues for GroupValuesRows {
             return Ok(Vec::new());
         }
 
-        let mut output = match emit_to {
+        let vec = match emit_to {
             EmitTo::All => {
                 group_values_blocks.iter_mut().map(|rows_block| {
                     let output = self.row_converter.convert_rows(rows_block.iter())?;
                     rows_block.clear();
                     Ok(output)
                 }).collect::<Result<Vec<_>>>()?
-            }
+            },
+            
             EmitTo::First(n) => {
                 // convert it to block
                 let num_emitted_blocks = if n > self.max_block_size {
@@ -267,8 +268,9 @@ impl GroupValues for GroupValuesRows {
                     }
                 }
                 emitted_blocks
-            }
+            },
         };
+        let mut output = vec;
 
         // TODO: Materialize dictionaries in group keys (#7647)
         for one_output in output.iter_mut() {
