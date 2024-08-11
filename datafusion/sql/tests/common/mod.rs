@@ -54,7 +54,7 @@ pub(crate) struct MockSessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
-    config_options: ConfigOptions
+    config_options: ConfigOptions,
 }
 
 impl MockSessionState {
@@ -73,8 +73,11 @@ impl MockSessionState {
         mut self,
         aggregate_function: Arc<AggregateUDF>,
     ) -> Self {
-        self.aggregate_functions
-            .insert(aggregate_function.name().to_string(), aggregate_function);
+        // TODO: change to to_string() if all the function name is converted to lowercase
+        self.aggregate_functions.insert(
+            aggregate_function.name().to_string().to_lowercase(),
+            aggregate_function,
+        );
         self
     }
 }
@@ -211,14 +214,11 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.state.scalar_functions.get(name).map(|x| x.to_owned())
+        self.state.scalar_functions.get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.state
-            .aggregate_functions
-            .get(name)
-            .map(|x| x.to_owned())
+        self.state.aggregate_functions.get(name).cloned()
     }
 
     fn get_variable_type(&self, _: &[String]) -> Option<DataType> {

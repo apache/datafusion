@@ -78,7 +78,7 @@ fn roundtrip_expr() {
     }
 }
 
-// #[test]
+#[test]
 fn roundtrip_statement() -> Result<()> {
     let tests: Vec<&str> = vec![
             "select 1;",
