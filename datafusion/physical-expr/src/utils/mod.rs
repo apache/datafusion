@@ -17,9 +17,10 @@
 
 mod guarantee;
 pub use guarantee::{Guarantee, LiteralGuarantee};
+use hashbrown::HashSet;
 
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::expressions::{BinaryExpr, Column};
@@ -204,9 +205,7 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
     expr.apply(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            if !columns.iter().any(|c| c.eq(column)) {
-                columns.insert(column.clone());
-            }
+            columns.get_or_insert_owned(column);
         }
         Ok(TreeNodeRecursion::Continue)
     })

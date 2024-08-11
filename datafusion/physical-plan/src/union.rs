@@ -586,8 +586,8 @@ mod tests {
 
     use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;
+    use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-    use datafusion_physical_expr_common::expressions::column::col;
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {

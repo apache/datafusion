@@ -31,6 +31,7 @@ use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
 };
 
+use arrow::buffer::Buffer;
 use arrow_ipc::reader::FileDecoder;
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
@@ -296,7 +297,10 @@ impl FileOpener for ArrowOpener {
                     for (dict_block, dict_result) in
                         footer.dictionaries().iter().flatten().zip(dict_results)
                     {
-                        decoder.read_dictionary(dict_block, &dict_result.into())?;
+                        decoder.read_dictionary(
+                            dict_block,
+                            &Buffer::from_bytes(dict_result.into()),
+                        )?;
                     }
 
                     // filter recordbatches according to range
@@ -331,11 +335,12 @@ impl FileOpener for ArrowOpener {
                             .into_iter()
                             .zip(recordbatch_results)
                             .filter_map(move |(block, data)| {
-                                match decoder.read_record_batch(&block, &data.into()) {
-                                    Ok(Some(record_batch)) => Some(Ok(record_batch)),
-                                    Ok(None) => None,
-                                    Err(err) => Some(Err(err)),
-                                }
+                                decoder
+                                    .read_record_batch(
+                                        &block,
+                                        &Buffer::from_bytes(data.into()),
+                                    )
+                                    .transpose()
                             }),
                     )
                     .boxed())

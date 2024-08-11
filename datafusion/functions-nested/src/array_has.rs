@@ -34,19 +34,19 @@ use std::sync::Arc;
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(ArrayHas,
     array_has,
-    first_array second_array, // arg name
+    haystack_array element, // arg names
     "returns true, if the element appears in the first array, otherwise false.", // doc
     array_has_udf // internal function name
 );
 make_udf_expr_and_func!(ArrayHasAll,
     array_has_all,
-    first_array second_array, // arg name
+    haystack_array needle_array, // arg names
     "returns true if each element of the second array appears in the first array; otherwise, it returns false.", // doc
     array_has_all_udf // internal function name
 );
 make_udf_expr_and_func!(ArrayHasAny,
     array_has_any,
-    first_array second_array, // arg name
+    haystack_array needle_array, // arg names
     "returns true if at least one element of the second array appears in the first array; otherwise, it returns false.", // doc
     array_has_any_udf // internal function name
 );
@@ -262,26 +262,26 @@ enum ComparisonType {
 }
 
 fn general_array_has_dispatch<O: OffsetSizeTrait>(
-    array: &ArrayRef,
-    sub_array: &ArrayRef,
+    haystack: &ArrayRef,
+    needle: &ArrayRef,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     let array = if comparison_type == ComparisonType::Single {
-        let arr = as_generic_list_array::<O>(array)?;
-        check_datatypes("array_has", &[arr.values(), sub_array])?;
+        let arr = as_generic_list_array::<O>(haystack)?;
+        check_datatypes("array_has", &[arr.values(), needle])?;
         arr
     } else {
-        check_datatypes("array_has", &[array, sub_array])?;
-        as_generic_list_array::<O>(array)?
+        check_datatypes("array_has", &[haystack, needle])?;
+        as_generic_list_array::<O>(haystack)?
     };
 
     let mut boolean_builder = BooleanArray::builder(array.len());
 
     let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
 
-    let element = Arc::clone(sub_array);
+    let element = Arc::clone(needle);
     let sub_array = if comparison_type != ComparisonType::Single {
-        as_generic_list_array::<O>(sub_array)?
+        as_generic_list_array::<O>(needle)?
     } else {
         array
     };

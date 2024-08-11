@@ -108,8 +108,8 @@ fn rewrite_in_terms_of_projection(
         };
 
         // expr is an actual expr like min(t.c2), but we are looking
-        // for a column with the same "min(C2)", so translate there
-        let name = normalized_expr.display_name()?;
+        // for a column with the same "MIN(C2)", so translate there
+        let name = normalized_expr.schema_name().to_string();
 
         let search_col = Expr::Column(Column {
             relation: None,

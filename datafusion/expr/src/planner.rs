@@ -197,6 +197,13 @@ pub trait ExprPlanner: Send + Sync {
             "Default planner compound identifier hasn't been implemented for ExprPlanner"
         )
     }
+
+    /// Plans `ANY` expression, e.g., `expr = ANY(array_expr)`
+    ///
+    /// Returns origin binary expression if not possible
+    fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
+        Ok(PlannerResult::Original(expr))
+    }
 }
 
 /// An operator with two arguments to plan

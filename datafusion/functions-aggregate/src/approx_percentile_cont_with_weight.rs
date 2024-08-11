@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 use arrow::{
     array::ArrayRef,
@@ -29,7 +30,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, TypeSignature};
-use datafusion_physical_expr_common::aggregate::tdigest::{
+use datafusion_functions_aggregate_common::tdigest::{
     Centroid, TDigest, DEFAULT_MAX_SIZE,
 };
 
@@ -123,16 +124,16 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
             );
         }
 
-        if acc_args.input_exprs.len() != 3 {
+        if acc_args.exprs.len() != 3 {
             return plan_err!(
                 "approx_percentile_cont_with_weight requires three arguments: value, weight, percentile"
             );
         }
 
         let sub_args = AccumulatorArgs {
-            input_exprs: &[
-                acc_args.input_exprs[0].clone(),
-                acc_args.input_exprs[2].clone(),
+            exprs: &[
+                Arc::clone(&acc_args.exprs[0]),
+                Arc::clone(&acc_args.exprs[2]),
             ],
             ..acc_args
         };

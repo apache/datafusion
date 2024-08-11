@@ -35,11 +35,9 @@ use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
 };
-use datafusion_physical_expr_common::aggregate::groups_accumulator::accumulate::NullState;
-use datafusion_physical_expr_common::aggregate::groups_accumulator::nulls::{
-    filtered_null_mask, set_nulls,
-};
-use datafusion_physical_expr_common::aggregate::utils::DecimalAverager;
+
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use log::debug;
 use std::any::Any;
 use std::fmt::Debug;
@@ -96,8 +94,10 @@ impl AggregateUDFImpl for Avg {
             return exec_err!("avg(DISTINCT) aggregations are not available");
         }
         use DataType::*;
+
+        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
         // instantiate specialized accumulator based for the type
-        match (&acc_args.input_types[0], acc_args.data_type) {
+        match (&data_type, acc_args.return_type) {
             (Float64, Float64) => Ok(Box::<AvgAccumulator>::default()),
             (
                 Decimal128(sum_precision, sum_scale),
@@ -124,8 +124,8 @@ impl AggregateUDFImpl for Avg {
             })),
             _ => exec_err!(
                 "AvgAccumulator for ({} --> {})",
-                &acc_args.input_types[0],
-                acc_args.data_type
+                &data_type,
+                acc_args.return_type
             ),
         }
     }
@@ -147,7 +147,7 @@ impl AggregateUDFImpl for Avg {
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         matches!(
-            args.data_type,
+            args.return_type,
             DataType::Float64 | DataType::Decimal128(_, _)
         )
     }
@@ -157,12 +157,14 @@ impl AggregateUDFImpl for Avg {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
+
+        let data_type = args.exprs[0].data_type(args.schema)?;
         // instantiate specialized accumulator based for the type
-        match (&args.input_types[0], args.data_type) {
+        match (&data_type, args.return_type) {
             (Float64, Float64) => {
                 Ok(Box::new(AvgGroupsAccumulator::<Float64Type, _>::new(
-                    &args.input_types[0],
-                    args.data_type,
+                    &data_type,
+                    args.return_type,
                     |sum: f64, count: u64| Ok(sum / count as f64),
                 )))
             }
@@ -180,8 +182,8 @@ impl AggregateUDFImpl for Avg {
                     move |sum: i128, count: u64| decimal_averager.avg(sum, count as i128);
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal128Type, _>::new(
-                    &args.input_types[0],
-                    args.data_type,
+                    &data_type,
+                    args.return_type,
                     avg_fn,
                 )))
             }
@@ -201,16 +203,16 @@ impl AggregateUDFImpl for Avg {
                 };
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal256Type, _>::new(
-                    &args.input_types[0],
-                    args.data_type,
+                    &data_type,
+                    args.return_type,
                     avg_fn,
                 )))
             }
 
             _ => not_impl_err!(
                 "AvgGroupsAccumulator for ({} --> {})",
-                &args.input_types[0],
-                args.data_type
+                &data_type,
+                args.return_type
             ),
         }
     }
