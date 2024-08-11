@@ -107,8 +107,9 @@ fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn initcap_string(string: Option<&str>) -> Option<String> {
+    let mut char_vector = Vec::<char>::new();
     string.map(|string: &str| {
-        let mut char_vector = Vec::<char>::new();
+        char_vector.clear();
         let mut previous_character_letter_or_number = false;
         for c in string.chars() {
             if previous_character_letter_or_number {
