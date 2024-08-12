@@ -122,9 +122,9 @@ pub fn push_down_limits(
             // Revisit current node in case of consecutive pushdowns
             Some(push_down_limits(merged)?.data)
         } else if child.supports_limit_pushdown() {
-            try_push_down_limit(&limit_exec, child.clone())?
+            try_push_down_limit(&limit_exec, Arc::clone(child))?
         } else {
-            add_fetch_to_child(&limit_exec, child.clone())
+            add_fetch_to_child(&limit_exec, Arc::clone(child))
         }
     } else {
         None
@@ -138,7 +138,7 @@ pub fn push_down_limits(
 fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
     if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
         Some(LimitExec::Global(GlobalLimitExec::new(
-            global_limit.input().clone(),
+            Arc::clone(global_limit.input()),
             global_limit.skip(),
             global_limit.fetch(),
         )))
@@ -147,7 +147,7 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
             .downcast_ref::<LocalLimitExec>()
             .map(|local_limit| {
                 LimitExec::Local(LocalLimitExec::new(
-                    local_limit.input().clone(),
+                    Arc::clone(local_limit.input()),
                     local_limit.fetch(),
                 ))
             })
@@ -172,12 +172,12 @@ fn merge_limits(
         (LimitExec::Local(_), LimitExec::Local(_)) => {
             // The fetch is present in this case, can unwrap.
             Arc::new(LocalLimitExec::new(
-                child_limit_exec.input().clone(),
+                Arc::clone(child_limit_exec.input()),
                 fetch.unwrap(),
             ))
         }
         _ => Arc::new(GlobalLimitExec::new(
-            child_limit_exec.input().clone(),
+            Arc::clone(child_limit_exec.input()),
             skip,
             fetch,
         )),
@@ -199,18 +199,19 @@ fn try_push_down_limit(
             // We still need a LocalLimitExec after the child
             if let Some(fetch) = limit_exec.fetch() {
                 let new_local_limit = Arc::new(LocalLimitExec::new(
-                    grandchild.clone(),
+                    Arc::clone(grandchild),
                     fetch + limit_exec.skip(),
                 ));
-                let new_child = child.clone().with_new_children(vec![new_local_limit])?;
+                let new_child =
+                    Arc::clone(&child).with_new_children(vec![new_local_limit])?;
                 Ok(Some(limit_exec.with_child(new_child).into()))
             } else {
                 Ok(None)
             }
         } else {
             // Swap current with child
-            let new_limit = limit_exec.with_child(grandchild.clone());
-            let new_child = child.clone().with_new_children(vec![new_limit.into()])?;
+            let new_limit = limit_exec.with_child(Arc::clone(grandchild));
+            let new_child = child.with_new_children(vec![new_limit.into()])?;
             Ok(Some(new_child))
         }
     } else {
