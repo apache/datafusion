@@ -341,7 +341,7 @@ The DataFusion PMC Chair then sends a NOTICE to `board@apache.org` (cc'ing
 ```
 To: board@apache.org
 Cc: private@datafusion.apache.org
-Subject: [NOTICE] $NEW_PMC_MEMBER for DataFusion PMC
+Subject: [NOTICE] $NEW_PMC_MEMBER to join DataFusion PMC
 
 DataFusion proposes to invite $NEW_PMC_MEMBER ($NEW_PMC_MEMBER_APACHE_ID) to join the PMC.
 

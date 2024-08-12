@@ -22,9 +22,7 @@ use arrow_schema::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, CaseExpr};
-use datafusion_physical_expr_common::expressions::column::Column;
-use datafusion_physical_expr_common::expressions::Literal;
+use datafusion_physical_expr::expressions::{BinaryExpr, CaseExpr, Column, Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 

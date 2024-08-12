@@ -20,25 +20,22 @@ use arrow::datatypes::Int64Type;
 use arrow::util::bench_util::{create_boolean_array, create_primitive_array};
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_common::DFSchema;
 use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::sum::Sum;
+use datafusion_physical_expr::expressions::col;
 use std::sync::Arc;
 
 fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", data_type.clone(), true)]));
-    let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
     let accumulator_args = AccumulatorArgs {
-        data_type,
+        return_type: data_type,
         schema: &schema,
-        dfschema: &df_schema,
         ignore_nulls: false,
-        sort_exprs: &[],
+        ordering_req: &[],
         is_reversed: false,
         name: "SUM(f)",
         is_distinct: false,
-        input_types: &[data_type.clone()],
-        input_exprs: &[datafusion_expr::col("f")],
+        exprs: &[col("f", &schema).unwrap()],
     };
     let sum_fn = Sum::new();
 

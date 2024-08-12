@@ -56,7 +56,7 @@ CREATE TABLE src_table (
 # Setup 3 files, in particular more files than there are partitions
 
 # File 1:
-query IITIDII
+query I
 COPY (SELECT * FROM src_table ORDER BY int_col LIMIT 3)
 TO 'test_files/scratch/parquet_sorted_statistics/test_table/partition_col=A/0.parquet'
 STORED AS PARQUET;
@@ -64,7 +64,7 @@ STORED AS PARQUET;
 3
 
 # File 2:
-query IITIDII
+query I
 COPY (SELECT * FROM src_table WHERE int_col > 3 ORDER BY int_col LIMIT 3)
 TO 'test_files/scratch/parquet_sorted_statistics/test_table/partition_col=B/1.parquet'
 STORED AS PARQUET;
@@ -72,7 +72,7 @@ STORED AS PARQUET;
 3
 
 # Add another file to the directory underlying test_table
-query IITIDII
+query I
 COPY (SELECT * FROM src_table WHERE int_col > 6 ORDER BY int_col LIMIT 3)
 TO 'test_files/scratch/parquet_sorted_statistics/test_table/partition_col=C/2.parquet'
 STORED AS PARQUET;
