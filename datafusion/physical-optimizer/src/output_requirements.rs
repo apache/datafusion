@@ -286,3 +286,5 @@ fn require_top_ordering_helper(
         Ok((plan, false))
     }
 }
+
+// See tests in datafusion/core/tests/physical_optimizer
