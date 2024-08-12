@@ -32,8 +32,8 @@ use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    BuiltInWindowFunction, Expr, PartitionEvaluator, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
+    WindowUDF,
 };
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
@@ -94,7 +94,6 @@ pub fn create_window_expr(
     fun: &WindowFunctionDefinition,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
-    _logical_args: &[Expr],
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
@@ -744,7 +743,6 @@ mod tests {
                 &WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 "count".to_owned(),
                 &[col("a", &schema)?],
-                &[],
                 &[],
                 &[],
                 Arc::new(WindowFrame::new(None)),

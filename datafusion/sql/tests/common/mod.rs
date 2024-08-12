@@ -50,36 +50,40 @@ impl Display for MockCsvType {
 }
 
 #[derive(Default)]
-pub(crate) struct MockContextProvider {
-    options: ConfigOptions,
-    udfs: HashMap<String, Arc<ScalarUDF>>,
-    udafs: HashMap<String, Arc<AggregateUDF>>,
+pub(crate) struct MockSessionState {
+    scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
+    pub config_options: ConfigOptions,
 }
 
-impl MockContextProvider {
-    // Suppressing dead code warning, as this is used in integration test crates
-    #[allow(dead_code)]
-    pub(crate) fn options_mut(&mut self) -> &mut ConfigOptions {
-        &mut self.options
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn with_udf(mut self, udf: ScalarUDF) -> Self {
-        self.udfs.insert(udf.name().to_string(), Arc::new(udf));
+impl MockSessionState {
+    pub fn with_expr_planner(mut self, expr_planner: Arc<dyn ExprPlanner>) -> Self {
+        self.expr_planners.push(expr_planner);
         self
     }
 
-    pub(crate) fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
+    pub fn with_scalar_function(mut self, scalar_function: Arc<ScalarUDF>) -> Self {
+        self.scalar_functions
+            .insert(scalar_function.name().to_string(), scalar_function);
+        self
+    }
+
+    pub fn with_aggregate_function(
+        mut self,
+        aggregate_function: Arc<AggregateUDF>,
+    ) -> Self {
         // TODO: change to to_string() if all the function name is converted to lowercase
-        self.udafs.insert(udaf.name().to_lowercase(), udaf);
+        self.aggregate_functions.insert(
+            aggregate_function.name().to_string().to_lowercase(),
+            aggregate_function,
+        );
         self
     }
+}
 
-    pub(crate) fn with_expr_planner(mut self, planner: Arc<dyn ExprPlanner>) -> Self {
-        self.expr_planners.push(planner);
-        self
-    }
+pub(crate) struct MockContextProvider {
+    pub(crate) state: MockSessionState,
 }
 
 impl ContextProvider for MockContextProvider {
@@ -202,11 +206,11 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.udfs.get(name).cloned()
+        self.state.scalar_functions.get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.udafs.get(name).cloned()
+        self.state.aggregate_functions.get(name).cloned()
     }
 
     fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
@@ -218,7 +222,7 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn options(&self) -> &ConfigOptions {
-        &self.options
+        &self.state.config_options
     }
 
     fn get_file_type(
@@ -237,11 +241,11 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn udf_names(&self) -> Vec<String> {
-        self.udfs.keys().cloned().collect()
+        self.state.scalar_functions.keys().cloned().collect()
     }
 
     fn udaf_names(&self) -> Vec<String> {
-        self.udafs.keys().cloned().collect()
+        self.state.aggregate_functions.keys().cloned().collect()
     }
 
     fn udwf_names(&self) -> Vec<String> {
@@ -249,7 +253,7 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
-        &self.expr_planners
+        &self.state.expr_planners
     }
 }
 

@@ -1510,7 +1510,6 @@ pub fn create_window_expr_with_name(
                 fun,
                 name,
                 &physical_args,
-                args,
                 &partition_by,
                 &order_by,
                 window_frame,

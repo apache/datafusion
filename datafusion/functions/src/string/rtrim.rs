@@ -32,7 +32,7 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 /// Returns the longest string  with trailing characters removed. If the characters are not specified, whitespace is removed.
 /// rtrim('testxxzx', 'xyz') = 'test'
 fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    general_trim::<T>(args, TrimType::Right)
+    general_trim::<T>(args, TrimType::Right, false)
 }
 
 #[derive(Debug)]

@@ -425,6 +425,50 @@ logical_plan
 01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
 02)--TableScan: test projection=[column1_utf8view]
 
+### Initcap
+
+query TT
+EXPLAIN SELECT
+  INITCAP(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: initcap(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+# Create a table with lowercase strings
+statement ok
+CREATE TABLE test_lowercase AS SELECT
+  lower(column1_utf8) as column1_utf8_lower,
+  lower(column1_large_utf8) as column1_large_utf8_lower,
+  lower(column1_utf8view) as column1_utf8view_lower
+FROM test;
+
+# Test INITCAP with utf8view, utf8, and largeutf8
+# Should not cast anything
+query TT
+EXPLAIN SELECT
+  INITCAP(column1_utf8view_lower) as c1,
+  INITCAP(column1_utf8_lower) as c2,
+  INITCAP(column1_large_utf8_lower) as c3
+FROM test_lowercase;
+----
+logical_plan
+01)Projection: initcap(test_lowercase.column1_utf8view_lower) AS c1, initcap(test_lowercase.column1_utf8_lower) AS c2, initcap(test_lowercase.column1_large_utf8_lower) AS c3
+02)--TableScan: test_lowercase projection=[column1_utf8_lower, column1_large_utf8_lower, column1_utf8view_lower]
+
+query TTT
+SELECT
+  INITCAP(column1_utf8view_lower) as c1,
+  INITCAP(column1_utf8_lower) as c2,
+  INITCAP(column1_large_utf8_lower) as c3
+FROM test_lowercase;
+----
+Andrew Andrew Andrew    
+Xiangpeng Xiangpeng Xiangpeng
+Raphael Raphael Raphael
+NULL NULL NULL
+
 # Ensure string functions use native StringView implementation
 # and do not fall back to Utf8 or LargeUtf8
 # Should see no casts to Utf8 in the plans below
@@ -519,14 +563,49 @@ SELECT
 228 0 NULL
 
 ## Ensure no casts for BTRIM
+# Test BTRIM with Utf8View input
+query TT
+EXPLAIN SELECT
+  BTRIM(column1_utf8view) AS l
+FROM test;
+----
+logical_plan
+01)Projection: btrim(test.column1_utf8view) AS l
+02)--TableScan: test projection=[column1_utf8view]
+
+# Test BTRIM with Utf8View input and Utf8View pattern
 query TT
 EXPLAIN SELECT
   BTRIM(column1_utf8view, 'foo') AS l
 FROM test;
 ----
 logical_plan
-01)Projection: btrim(CAST(test.column1_utf8view AS Utf8), Utf8("foo")) AS l
+01)Projection: btrim(test.column1_utf8view, Utf8View("foo")) AS l
 02)--TableScan: test projection=[column1_utf8view]
+
+# Test BTRIM with Utf8View bytes longer than 12
+query TT
+EXPLAIN SELECT
+  BTRIM(column1_utf8view, 'this is longer than 12') AS l
+FROM test;
+----
+logical_plan
+01)Projection: btrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+02)--TableScan: test projection=[column1_utf8view]
+
+# Test BTRIM outputs
+query TTTT
+SELECT
+  BTRIM(column1_utf8view, 'foo') AS l1,
+  BTRIM(column1_utf8view, 'A') AS l2,
+  BTRIM(column1_utf8view) AS l3,
+  BTRIM(column1_utf8view, NULL) AS l4
+FROM test;
+----
+Andrew    ndrew     Andrew    NULL
+Xiangpeng Xiangpeng Xiangpeng NULL
+Raphael   Raphael   Raphael   NULL
+NULL      NULL      NULL      NULL
 
 ## Ensure no casts for CHARACTER_LENGTH
 query TT
@@ -574,7 +653,6 @@ logical_plan
 03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for ENDS_WITH
-## TODO https://github.com/apache/datafusion/issues/11852
 query TT
 EXPLAIN SELECT
   ENDS_WITH(column1_utf8view, 'foo') as c1,
@@ -582,24 +660,10 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: ends_with(CAST(test.column1_utf8view AS Utf8), Utf8("foo")) AS c1, ends_with(__common_expr_1, __common_expr_1) AS c2
-02)--Projection: CAST(test.column2_utf8view AS Utf8) AS __common_expr_1, test.column1_utf8view
-03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
-
-
-## Ensure no casts for INITCAP
-## TODO https://github.com/apache/datafusion/issues/11853
-query TT
-EXPLAIN SELECT
-  INITCAP(column1_utf8view) as c
-FROM test;
-----
-logical_plan
-01)Projection: initcap(CAST(test.column1_utf8view AS Utf8)) AS c
-02)--TableScan: test projection=[column1_utf8view]
+01)Projection: ends_with(test.column1_utf8view, Utf8View("foo")) AS c1, ends_with(test.column2_utf8view, test.column2_utf8view) AS c2
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for LEVENSHTEIN
-## TODO https://github.com/apache/datafusion/issues/11854
 query TT
 EXPLAIN SELECT
   levenshtein(column1_utf8view, 'foo') as c1,
@@ -607,9 +671,8 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: levenshtein(__common_expr_1, Utf8("foo")) AS c1, levenshtein(__common_expr_1, CAST(test.column2_utf8view AS Utf8)) AS c2
-02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
-03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+01)Projection: levenshtein(test.column1_utf8view, Utf8View("foo")) AS c1, levenshtein(test.column1_utf8view, test.column2_utf8view) AS c2
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for LOWER
 ## TODO https://github.com/apache/datafusion/issues/11855
@@ -646,14 +709,13 @@ logical_plan
 
 
 ## Ensure no casts for OCTET_LENGTH
-## TODO https://github.com/apache/datafusion/issues/11858
 query TT
 EXPLAIN SELECT
   OCTET_LENGTH(column1_utf8view) as c1
 FROM test;
 ----
 logical_plan
-01)Projection: octet_length(CAST(test.column1_utf8view AS Utf8)) AS c1
+01)Projection: octet_length(test.column1_utf8view) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for OVERLAY
