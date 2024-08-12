@@ -32,7 +32,8 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 /// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
 /// ltrim('zzzytest', 'xyz') = 'test'
 fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    general_trim::<T>(args, TrimType::Left, false)
+    let use_string_view = args[0].data_type() == &DataType::Utf8View;
+    general_trim::<T>(args, TrimType::Left, use_string_view)
 }
 
 #[derive(Debug)]
@@ -51,7 +52,16 @@ impl LtrimFunc {
         use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![Exact(vec![Utf8]), Exact(vec![Utf8, Utf8])],
+                vec![
+                    // Planner attempts coercion to the target type starting with the most preferred candidate.
+                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
+                    // If that fails, it proceeds to `(Utf8, Utf8)`.
+                    Exact(vec![Utf8View, Utf8View]),
+                    // Exact(vec![Utf8, Utf8View]),
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![Utf8View]),
+                    Exact(vec![Utf8]),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -77,7 +87,7 @@ impl ScalarUDFImpl for LtrimFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(
+            DataType::Utf8 | DataType::Utf8View => make_scalar_function(
                 ltrim::<i32>,
                 vec![Hint::Pad, Hint::AcceptsSingular],
             )(args),
@@ -85,7 +95,10 @@ impl ScalarUDFImpl for LtrimFunc {
                 ltrim::<i64>,
                 vec![Hint::Pad, Hint::AcceptsSingular],
             )(args),
-            other => exec_err!("Unsupported data type {other:?} for function ltrim"),
+            other => exec_err!(
+                "Unsupported data type {other:?} for function ltrim,\
+                expected for Utf8, LargeUtf8 or Utf8View."
+            ),
         }
     }
 }
