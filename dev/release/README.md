@@ -256,20 +256,7 @@ to all of the DataFusion crates.
 Download and unpack the official release tarball
 
 Verify that the Cargo.toml in the tarball contains the correct version
-(e.g. `version = "38.0.0"`) and then publish the crates by running the script `release-crates.sh`
-in a directory extracted from the source tarball that was voted on. Note that this script doesn't
-work if run in a Git repo.
-
-Alternatively the crates can be published one at a time with the following commands. Crates need to be
-published in the correct order as shown in this diagram.
-
-![](crate-deps.svg)
-
-_To update this diagram, manually edit the dependencies in [crate-deps.dot](crate-deps.dot) and then run:_
-
-```shell
-dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
-```
+(e.g. `version = "38.0.0"`) and then publish the crates by running the following commands
 
 ```shell
 (cd datafusion/common && cargo publish)
@@ -283,7 +270,9 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/sql && cargo publish)
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/common-runtime && cargo publish)
+(cd datafusion/catalog && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
+(cd datafusion/physical-optimizer && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto-common && cargo publish)
 (cd datafusion/proto && cargo publish)

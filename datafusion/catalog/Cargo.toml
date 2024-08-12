@@ -17,6 +17,7 @@
 
 [package]
 name = "datafusion-catalog"
+description = "datafusion-catalog"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
