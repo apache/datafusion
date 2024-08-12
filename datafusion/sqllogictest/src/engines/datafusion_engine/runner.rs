@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion::physical_plan::common::collect;
+use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
 use log::info;
 use sqllogictest::DBOutput;
@@ -69,9 +72,12 @@ impl sqllogictest::AsyncDB for DataFusion {
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
     let df = ctx.sql(sql.into().as_str()).await?;
+    let task_ctx = Arc::new(df.task_ctx());
+    let plan = df.create_physical_plan().await?;
 
-    let types = normalize::convert_schema_to_types(df.schema().fields());
-    let results: Vec<RecordBatch> = df.collect().await?;
+    let stream = execute_stream(plan, task_ctx)?;
+    let types = normalize::convert_schema_to_types(stream.schema().fields());
+    let results: Vec<RecordBatch> = collect(stream).await?;
     let rows = normalize::convert_batches(results)?;
 
     if rows.is_empty() && types.is_empty() {

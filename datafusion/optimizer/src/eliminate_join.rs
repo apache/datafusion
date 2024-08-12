@@ -83,9 +83,9 @@ impl OptimizerRule for EliminateJoin {
 mod tests {
     use crate::eliminate_join::EliminateJoin;
     use crate::test::*;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::Result;
     use datafusion_expr::JoinType::Inner;
-    use datafusion_expr::{logical_plan::builder::LogicalPlanBuilder, Expr, LogicalPlan};
+    use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder, LogicalPlan};
     use std::sync::Arc;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
@@ -98,7 +98,7 @@ mod tests {
             .join_on(
                 LogicalPlanBuilder::empty(false).build()?,
                 Inner,
-                Some(Expr::Literal(ScalarValue::Boolean(Some(false)))),
+                Some(lit(false)),
             )?
             .build()?;
 
@@ -112,7 +112,7 @@ mod tests {
             .join_on(
                 LogicalPlanBuilder::empty(false).build()?,
                 Inner,
-                Some(Expr::Literal(ScalarValue::Boolean(Some(true)))),
+                Some(lit(true)),
             )?
             .build()?;
 
