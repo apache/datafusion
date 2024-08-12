@@ -607,6 +607,97 @@ Xiangpeng Xiangpeng Xiangpeng NULL
 Raphael   Raphael   Raphael   NULL
 NULL      NULL      NULL      NULL
 
+## Ensure no casts for LTRIM
+# Test LTRIM with Utf8View input
+query TT
+EXPLAIN SELECT
+  LTRIM(column1_utf8view) AS l
+FROM test;
+----
+logical_plan
+01)Projection: ltrim(test.column1_utf8view) AS l
+02)--TableScan: test projection=[column1_utf8view]
+
+# Test LTRIM with Utf8View input and Utf8View pattern
+query TT
+EXPLAIN SELECT
+  LTRIM(column1_utf8view, 'foo') AS l
+FROM test;
+----
+logical_plan
+01)Projection: ltrim(test.column1_utf8view, Utf8View("foo")) AS l
+02)--TableScan: test projection=[column1_utf8view]
+
+# Test LTRIM with Utf8View bytes longer than 12
+query TT
+EXPLAIN SELECT
+  LTRIM(column1_utf8view, 'this is longer than 12') AS l
+FROM test;
+----
+logical_plan
+01)Projection: ltrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+02)--TableScan: test projection=[column1_utf8view]
+
+# Test LTRIM outputs
+query TTTT
+SELECT
+  LTRIM(column1_utf8view, 'foo') AS l1,
+  LTRIM(column1_utf8view, column2_utf8view) AS l2,
+  LTRIM(column1_utf8view) AS l3,
+  LTRIM(column1_utf8view, NULL) AS l4
+FROM test;
+----
+Andrew    Andrew    Andrew    NULL
+Xiangpeng (empty)   Xiangpeng NULL
+Raphael   aphael   Raphael   NULL
+NULL      NULL      NULL      NULL
+
+## ensure no casts for RTRIM
+# Test RTRIM with Utf8View input
+query TT
+EXPLAIN SELECT
+  RTRIM(column1_utf8view) AS l
+FROM test;
+----
+logical_plan
+01)Projection: rtrim(test.column1_utf8view) AS l
+02)--TableScan: test projection=[column1_utf8view]
+
+# Test RTRIM with Utf8View input and Utf8View pattern
+query TT
+EXPLAIN SELECT
+  RTRIM(column1_utf8view, 'foo') AS l
+FROM test;
+----
+logical_plan
+01)Projection: rtrim(test.column1_utf8view, Utf8View("foo")) AS l
+02)--TableScan: test projection=[column1_utf8view]
+
+# Test RTRIM with Utf8View bytes longer than 12
+query TT
+EXPLAIN SELECT
+  RTRIM(column1_utf8view, 'this is longer than 12') AS l
+FROM test;
+----
+logical_plan
+01)Projection: rtrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+02)--TableScan: test projection=[column1_utf8view]
+
+# Test RTRIM outputs
+query TTTT
+SELECT
+  RTRIM(column1_utf8view, 'foo') AS l1,
+  RTRIM(column1_utf8view, column2_utf8view) AS l2,
+  RTRIM(column1_utf8view) AS l3,
+  RTRIM(column1_utf8view, NULL) AS l4
+FROM test;
+----
+Andrew    Andrew    Andrew    NULL
+Xiangpeng (empty)   Xiangpeng NULL
+Raphael   Raphael   Raphael   NULL
+NULL      NULL      NULL      NULL
+
+
 ## Ensure no casts for CHARACTER_LENGTH
 query TT
 EXPLAIN SELECT
@@ -685,16 +776,6 @@ logical_plan
 01)Projection: lower(CAST(test.column1_utf8view AS Utf8)) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
-## Ensure no casts for LTRIM
-## TODO https://github.com/apache/datafusion/issues/11856
-query TT
-EXPLAIN SELECT
-  LTRIM(column1_utf8view) as c1
-FROM test;
-----
-logical_plan
-01)Projection: ltrim(CAST(test.column1_utf8view AS Utf8)) AS c1
-02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for LPAD
 ## TODO https://github.com/apache/datafusion/issues/11857
@@ -795,18 +876,6 @@ logical_plan
 01)Projection: reverse(CAST(test.column1_utf8view AS Utf8)) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
-## Ensure no casts for RTRIM
-## TODO file ticket
-query TT
-EXPLAIN SELECT
-  RTRIM(column1_utf8view) as c1,
-  RTRIM(column1_utf8view, 'foo') as c2
-FROM test;
-----
-logical_plan
-01)Projection: rtrim(__common_expr_1) AS c1, rtrim(__common_expr_1, Utf8("foo")) AS c2
-02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1
-03)----TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for RIGHT
 ## TODO file ticket
@@ -832,19 +901,6 @@ logical_plan
 02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
 03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
 
-
-## Ensure no casts for RTRIM
-## TODO file ticket
-query TT
-EXPLAIN SELECT
-  RTRIM(column1_utf8view) as c,
-  RTRIM(column1_utf8view, column2_utf8view) as c1
-FROM test;
-----
-logical_plan
-01)Projection: rtrim(__common_expr_1) AS c, rtrim(__common_expr_1, CAST(test.column2_utf8view AS Utf8)) AS c1
-02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
-03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for SPLIT_PART
 ## TODO file ticket
