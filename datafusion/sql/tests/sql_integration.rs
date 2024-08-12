@@ -41,12 +41,15 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
     min_max::min_udaf,
 };
 use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
+use datafusion_optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
+use datafusion_optimizer::Analyzer;
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
@@ -641,7 +644,7 @@ fn select_wildcard_with_repeated_column() {
     let sql = "SELECT *, age FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"person.age\" at position 3 and \"person.age\" at position 8 have the same name. Consider aliasing (\"AS\") one of them.",
+        "expand_wildcard_rule\ncaused by\nError during planning: Projections require unique expression names but the expression \"person.age\" at position 3 and \"person.age\" at position 8 have the same name. Consider aliasing (\"AS\") one of them.",
         err.strip_backtrace()
     );
 }
@@ -2775,7 +2778,14 @@ fn logical_plan_with_dialect_and_options(
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
-    planner.statement_to_plan(ast.pop_front().unwrap())
+    let plan = planner.statement_to_plan(ast.pop_front().unwrap())?;
+    let options = ConfigOptions::default();
+    // apply rule to expand the wildcard expression
+    Analyzer::with_rules(vec![Arc::new(ExpandWildcardRule::new())]).execute_and_check(
+        plan,
+        &options,
+        |_, _| {},
+    )
 }
 
 fn make_udf(name: &'static str, args: Vec<DataType>, return_type: DataType) -> ScalarUDF {

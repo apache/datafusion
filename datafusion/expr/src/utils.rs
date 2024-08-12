@@ -850,7 +850,10 @@ pub fn exprlist_len(
                 )?
                 .into_iter()
                 .collect::<HashSet<Column>>();
-                Ok(get_exprs_except_skipped(wildcard_schema.unwrap_or(schema), excluded).len())
+                Ok(
+                    get_exprs_except_skipped(wildcard_schema.unwrap_or(schema), excluded)
+                        .len(),
+                )
             }
             _ => Ok(1),
         })

@@ -1315,7 +1315,7 @@ fn add_group_by_exprs_from_dependencies(
     Ok(group_expr)
 }
 /// Errors if one or more expressions have equal names.
-pub(crate) fn validate_unique_names<'a>(
+pub fn validate_unique_names<'a>(
     node_name: &str,
     expressions: impl IntoIterator<Item = &'a Expr>,
 ) -> Result<()> {

@@ -15,20 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult};
-use datafusion_common::{Column, DataFusionError, Result};
+use datafusion_common::{Column, Result};
+use datafusion_expr::builder::validate_unique_names;
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem};
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, find_base_plan,
 };
 use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
-
-use crate::AnalyzerRule;
 
 #[derive(Default)]
 pub struct ExpandWildcardRule {}
@@ -55,12 +53,10 @@ fn expand_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     match plan {
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
             let projected_expr = expand_exprlist(&input, expr)?;
+            validate_unique_names("Projections", projected_expr.iter())?;
             Ok(Transformed::yes(
-                Projection::try_new(
-                    to_unique_names(projected_expr.iter())?,
-                    Arc::clone(&input),
-                )
-                .map(LogicalPlan::Projection)?,
+                Projection::try_new(projected_expr, Arc::clone(&input))
+                    .map(LogicalPlan::Projection)?,
             ))
         }
         // Teh schema of the plan should also be updated if the child plan is transformed.
@@ -71,25 +67,6 @@ fn expand_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         }
         _ => Ok(Transformed::no(plan)),
     }
-}
-
-fn to_unique_names<'a>(
-    expressions: impl IntoIterator<Item = &'a Expr>,
-) -> Result<Vec<Expr>> {
-    let mut unique_names = HashMap::new();
-    let mut unique_expr = vec![];
-    expressions
-        .into_iter()
-        .enumerate()
-        .try_for_each(|(position, expr)| {
-            let name = expr.schema_name().to_string();
-            if let Entry::Vacant(e) = unique_names.entry(name) {
-                e.insert((position, expr));
-                unique_expr.push(expr.to_owned());
-            }
-            Ok::<(), DataFusionError>(())
-        })?;
-    Ok(unique_expr)
 }
 
 fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
