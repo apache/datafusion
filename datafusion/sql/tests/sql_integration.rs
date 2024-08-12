@@ -2729,7 +2729,7 @@ fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<Logica
 }
 
 fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
-    let state = MockSessionState::default().with_aggregate_functions(sum_udaf());
+    let state = MockSessionState::default().with_aggregate_function(sum_udaf());
     let context = MockContextProvider { state };
     let planner = SqlToRel::new(&context);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
@@ -2743,40 +2743,40 @@ fn logical_plan_with_dialect_and_options(
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
     let state = MockSessionState::default()
-        .with_scalar_functions(Arc::new(unicode::character_length().as_ref().clone()))
-        .with_scalar_functions(Arc::new(string::concat().as_ref().clone()))
-        .with_scalar_functions(Arc::new(make_udf(
+        .with_scalar_function(Arc::new(unicode::character_length().as_ref().clone()))
+        .with_scalar_function(Arc::new(string::concat().as_ref().clone()))
+        .with_scalar_function(Arc::new(make_udf(
             "nullif",
             vec![DataType::Int32, DataType::Int32],
             DataType::Int32,
         )))
-        .with_scalar_functions(Arc::new(make_udf(
+        .with_scalar_function(Arc::new(make_udf(
             "round",
             vec![DataType::Float64, DataType::Int64],
             DataType::Float32,
         )))
-        .with_scalar_functions(Arc::new(make_udf(
+        .with_scalar_function(Arc::new(make_udf(
             "arrow_cast",
             vec![DataType::Int64, DataType::Utf8],
             DataType::Float64,
         )))
-        .with_scalar_functions(Arc::new(make_udf(
+        .with_scalar_function(Arc::new(make_udf(
             "date_trunc",
             vec![DataType::Utf8, DataType::Timestamp(Nanosecond, None)],
             DataType::Int32,
         )))
-        .with_scalar_functions(Arc::new(make_udf(
+        .with_scalar_function(Arc::new(make_udf(
             "sqrt",
             vec![DataType::Int64],
             DataType::Int64,
         )))
-        .with_aggregate_functions(sum_udaf())
-        .with_aggregate_functions(approx_median_udaf())
-        .with_aggregate_functions(count_udaf())
-        .with_aggregate_functions(avg_udaf())
-        .with_aggregate_functions(min_udaf())
-        .with_aggregate_functions(max_udaf())
-        .with_aggregate_functions(grouping_udaf())
+        .with_aggregate_function(sum_udaf())
+        .with_aggregate_function(approx_median_udaf())
+        .with_aggregate_function(count_udaf())
+        .with_aggregate_function(avg_udaf())
+        .with_aggregate_function(min_udaf())
+        .with_aggregate_function(max_udaf())
+        .with_aggregate_function(grouping_udaf())
         .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
     let context = MockContextProvider { state };

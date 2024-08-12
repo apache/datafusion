@@ -59,7 +59,7 @@ fn roundtrip_expr() {
     let roundtrip = |table, sql: &str| -> Result<String> {
         let dialect = GenericDialect {};
         let sql_expr = Parser::new(&dialect).try_with_sql(sql)?.parse_expr()?;
-        let state = MockSessionState::default().with_aggregate_functions(sum_udaf());
+        let state = MockSessionState::default().with_aggregate_function(sum_udaf());
         let context = MockContextProvider { state };
         let schema = context.get_table_source(table)?.schema();
         let df_schema = DFSchema::try_from(schema.as_ref().clone())?;
@@ -157,8 +157,8 @@ fn roundtrip_statement() -> Result<()> {
             .try_with_sql(query)?
             .parse_statement()?;
         let state = MockSessionState::default()
-            .with_aggregate_functions(sum_udaf())
-            .with_aggregate_functions(count_udaf())
+            .with_aggregate_function(sum_udaf())
+            .with_aggregate_function(count_udaf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
@@ -415,8 +415,8 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             .parse_statement()?;
 
         let state = MockSessionState::default()
-            .with_aggregate_functions(max_udaf())
-            .with_aggregate_functions(min_udaf())
+            .with_aggregate_function(max_udaf())
+            .with_aggregate_function(min_udaf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
         let context = MockContextProvider { state };
