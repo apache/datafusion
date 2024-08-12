@@ -20,7 +20,9 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
-use datafusion_common::cast::{as_generic_string_array, as_int64_array};
+use datafusion_common::cast::{
+    as_generic_string_array, as_int64_array, as_string_view_array,
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
@@ -46,8 +48,11 @@ impl RPadFunc {
             signature: Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Int64]),
+                    Exact(vec![Utf8View, Int64]),
                     Exact(vec![LargeUtf8, Int64]),
                     Exact(vec![Utf8, Int64, Utf8]),
+                    Exact(vec![Utf8View, Int64, Utf8]),
+                    Exact(vec![Utf8View, Int64, Utf8View]),
                     Exact(vec![LargeUtf8, Int64, Utf8]),
                     Exact(vec![Utf8, Int64, LargeUtf8]),
                     Exact(vec![LargeUtf8, Int64, LargeUtf8]),
@@ -77,96 +82,122 @@ impl ScalarUDFImpl for RPadFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(rpad::<i32>, vec![])(args),
+            DataType::Utf8 | DataType::Utf8View => {
+                make_scalar_function(rpad::<i32>, vec![])(args)
+            }
             DataType::LargeUtf8 => make_scalar_function(rpad::<i64>, vec![])(args),
             other => exec_err!("Unsupported data type {other:?} for function rpad"),
         }
     }
 }
 
+macro_rules! process_rpad {
+    // For the two-argument case
+    ($string_array:expr, $length_array:expr, $is_view:expr) => {{
+        $string_array
+            .iter()
+            .zip($length_array.iter())
+            .map(|(string, length)| match (string, length) {
+                (Some(string), Some(length)) => {
+                    if length > i32::MAX as i64 {
+                        return exec_err!("rpad requested length {} too large", length);
+                    }
+
+                    let length = if length < 0 { 0 } else { length as usize };
+                    if length == 0 {
+                        Ok(Some("".to_string()))
+                    } else {
+                        let graphemes = string.graphemes(true).collect::<Vec<&str>>();
+                        if length < graphemes.len() {
+                            Ok(Some(graphemes[..length].concat()))
+                        } else {
+                            let mut s = string.to_string();
+                            if !$is_view {
+                                s.push_str(&" ".repeat(length - graphemes.len()));
+                            } else {
+                                s.push_str(" ".repeat(length - graphemes.len()).as_str());
+                            }
+                            Ok(Some(s))
+                        }
+                    }
+                }
+                _ => Ok(None),
+            })
+            .collect::<Result<GenericStringArray<T>>>()
+    }};
+
+    // For the three-argument case
+    ($string_array:expr, $length_array:expr, $fill_array:expr, $is_view:expr) => {{
+        $string_array
+            .iter()
+            .zip($length_array.iter())
+            .zip($fill_array.iter())
+            .map(|((string, length), fill)| match (string, length, fill) {
+                (Some(string), Some(length), Some(fill)) => {
+                    if length > i32::MAX as i64 {
+                        return exec_err!("rpad requested length {} too large", length);
+                    }
+
+                    let length = if length < 0 { 0 } else { length as usize };
+                    let graphemes = string.graphemes(true).collect::<Vec<&str>>();
+                    let fill_chars = fill.chars().collect::<Vec<char>>();
+
+                    if length < graphemes.len() {
+                        Ok(Some(graphemes[..length].concat()))
+                    } else if fill_chars.is_empty() {
+                        Ok(Some(string.to_string()))
+                    } else {
+                        let mut s = string.to_string();
+                        let char_vector: Vec<char> = (0..length - graphemes.len())
+                            .map(|l| fill_chars[l % fill_chars.len()])
+                            .collect();
+                        s.push_str(&char_vector.iter().collect::<String>());
+                        Ok(Some(s))
+                    }
+                }
+                _ => Ok(None),
+            })
+            .collect::<Result<GenericStringArray<T>>>()
+    }};
+}
+
 /// Extends the string to length 'length' by appending the characters fill (a space by default). If the string is already longer than length then it is truncated.
 /// rpad('hi', 5, 'xy') = 'hixyx'
 pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args.len() {
-        2 => {
+    match (args.len(), args[0].data_type()) {
+        (2, DataType::Utf8View) => {
+            let string_array = as_string_view_array(&args[0])?;
+            let length_array = as_int64_array(&args[1])?;
+
+            let result = process_rpad!(string_array, length_array, true)?;
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        (2, _) => {
             let string_array = as_generic_string_array::<T>(&args[0])?;
             let length_array = as_int64_array(&args[1])?;
 
-            let result = string_array
-                .iter()
-                .zip(length_array.iter())
-                .map(|(string, length)| match (string, length) {
-                    (Some(string), Some(length)) => {
-                        if length > i32::MAX as i64 {
-                            return exec_err!(
-                                "rpad requested length {length} too large"
-                            );
-                        }
-
-                        let length = if length < 0 { 0 } else { length as usize };
-                        if length == 0 {
-                            Ok(Some("".to_string()))
-                        } else {
-                            let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                            if length < graphemes.len() {
-                                Ok(Some(graphemes[..length].concat()))
-                            } else {
-                                let mut s = string.to_string();
-                                s.push_str(" ".repeat(length - graphemes.len()).as_str());
-                                Ok(Some(s))
-                            }
-                        }
-                    }
-                    _ => Ok(None),
-                })
-                .collect::<Result<GenericStringArray<T>>>()?;
+            let result = process_rpad!(string_array, length_array, true)?;
             Ok(Arc::new(result) as ArrayRef)
         }
-        3 => {
+        (3, DataType::Utf8View) => {
+            let string_array = as_string_view_array(&args[0])?;
+            let length_array = as_int64_array(&args[1])?;
+            let fill_array = as_string_view_array(&args[2])?;
+
+            let result = process_rpad!(string_array, length_array, fill_array, true)?;
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        (3, _) => {
             let string_array = as_generic_string_array::<T>(&args[0])?;
             let length_array = as_int64_array(&args[1])?;
             let fill_array = as_generic_string_array::<T>(&args[2])?;
 
-            let result = string_array
-                .iter()
-                .zip(length_array.iter())
-                .zip(fill_array.iter())
-                .map(|((string, length), fill)| match (string, length, fill) {
-                    (Some(string), Some(length), Some(fill)) => {
-                        if length > i32::MAX as i64 {
-                            return exec_err!(
-                                "rpad requested length {length} too large"
-                            );
-                        }
-
-                        let length = if length < 0 { 0 } else { length as usize };
-                        let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                        let fill_chars = fill.chars().collect::<Vec<char>>();
-
-                        if length < graphemes.len() {
-                            Ok(Some(graphemes[..length].concat()))
-                        } else if fill_chars.is_empty() {
-                            Ok(Some(string.to_string()))
-                        } else {
-                            let mut s = string.to_string();
-                            let mut char_vector =
-                                Vec::<char>::with_capacity(length - graphemes.len());
-                            for l in 0..length - graphemes.len() {
-                                char_vector
-                                    .push(*fill_chars.get(l % fill_chars.len()).unwrap());
-                            }
-                            s.push_str(char_vector.iter().collect::<String>().as_str());
-                            Ok(Some(s))
-                        }
-                    }
-                    _ => Ok(None),
-                })
-                .collect::<Result<GenericStringArray<T>>>()?;
-
+            let result = process_rpad!(string_array, length_array, fill_array, true)?;
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => exec_err!(
-            "rpad was called with {other} arguments. It requires at least 2 and at most 3."
+        (other, other_type) => exec_err!(
+            "rpad requires 2 or 3 arguments with corresponding types, but got {}. number of arguments with {}",
+            other, other_type
         ),
     }
 }
