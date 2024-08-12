@@ -94,7 +94,7 @@ SELECT regexp_like('aa', '.*-(\d)');
 ----
 false
 
-query ?
+query B
 SELECT regexp_like(NULL, '.*-(\d)');
 ----
 NULL
@@ -104,7 +104,7 @@ SELECT regexp_like('aaa-0', NULL);
 ----
 NULL
 
-query ?
+query B
 SELECT regexp_like(null, '.*-(\d)');
 ----
 NULL
@@ -294,7 +294,7 @@ SELECT regexp_replace('Thomas', '.[mN]a.', 'M');
 ----
 ThM
 
-query ?
+query T
 SELECT regexp_replace(NULL, 'b(..)', 'X\\1Y', 'g');
 ----
 NULL
