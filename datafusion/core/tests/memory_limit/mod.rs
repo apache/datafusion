@@ -76,8 +76,7 @@ async fn group_by_none() {
     TestCase::new()
         .with_query("select median(request_bytes) from t")
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
-            "AggregateStream",
+            "Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: AggregateStream"
         ])
         .with_memory_limit(2_000)
         .run()
@@ -89,8 +88,7 @@ async fn group_by_row_hash() {
     TestCase::new()
         .with_query("select count(*) from t GROUP BY response_bytes")
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
-            "GroupedHashAggregateStream",
+            "Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: GroupedHashAggregateStream"
         ])
         .with_memory_limit(2_000)
         .run()
@@ -103,8 +101,7 @@ async fn group_by_hash() {
         // group by dict column
         .with_query("select count(*) from t GROUP BY service, host, pod, container")
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
-            "GroupedHashAggregateStream",
+            "Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: GroupedHashAggregateStream"
         ])
         .with_memory_limit(1_000)
         .run()
@@ -117,8 +114,7 @@ async fn join_by_key_multiple_partitions() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
-            "HashJoinInput[0]",
+            "Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: HashJoinInput[0]",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -132,8 +128,7 @@ async fn join_by_key_single_partition() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
-            "HashJoinInput",
+            "Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -146,8 +141,7 @@ async fn join_by_expression() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service != t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
-            "NestedLoopJoinLoad[0]",
+           "Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: NestedLoopJoinLoad[0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -159,8 +153,7 @@ async fn cross_join() {
     TestCase::new()
         .with_query("select t1.* from t t1 CROSS JOIN t t2")
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
-            "CrossJoinExec",
+            "Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: CrossJoinExec",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -216,8 +209,7 @@ async fn symmetric_hash_join() {
             "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
-            "SymmetricHashJoinStream",
+            "Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: SymmetricHashJoinStream",
         ])
         .with_memory_limit(1_000)
         .with_scenario(Scenario::AccessLogStreaming)
@@ -235,8 +227,7 @@ async fn sort_preserving_merge() {
     // so only a merge is needed
         .with_query("select * from t ORDER BY a ASC NULLS LAST, b ASC NULLS LAST LIMIT 10")
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
-            "SortPreservingMergeExec",
+            "Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: SortPreservingMergeExec",
         ])
         // provide insufficient memory to merge
         .with_memory_limit(partition_size / 2)
@@ -313,8 +304,7 @@ async fn sort_spill_reservation() {
 
     test.clone()
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
-            "ExternalSorterMerge", // merging in sort fails
+            "Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: ExternalSorterMerge",
         ])
         .with_config(config)
         .run()
@@ -343,8 +333,7 @@ async fn oom_recursive_cte() {
         SELECT * FROM nodes;",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Failed to allocate additional",
-            "RecursiveQuery",
+            "Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: RecursiveQuery",
         ])
         .with_memory_limit(2_000)
         .run()
