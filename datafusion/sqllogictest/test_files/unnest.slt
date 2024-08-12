@@ -235,7 +235,7 @@ NULL 10 NULL
 NULL NULL 17
 NULL NULL 18
 
-query IIII
+query IIIT
 select 
     unnest(column1), unnest(column2) + 2, 
     column3 * 10, unnest(array_remove(column1, '4')) 
