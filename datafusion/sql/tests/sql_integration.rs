@@ -41,8 +41,8 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
-use datafusion_common::config::ConfigOptions;
 use crate::common::MockSessionState;
+use datafusion_common::config::ConfigOptions;
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
