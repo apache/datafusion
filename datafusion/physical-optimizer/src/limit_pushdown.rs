@@ -248,3 +248,5 @@ fn add_fetch_to_child(
         None
     }
 }
+
+// See tests in datafusion/core/tests/physical_optimizer
