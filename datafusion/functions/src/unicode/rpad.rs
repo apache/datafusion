@@ -47,14 +47,17 @@ impl RPadFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8, Int64]),
                     Exact(vec![Utf8View, Int64]),
-                    Exact(vec![LargeUtf8, Int64]),
-                    Exact(vec![Utf8, Int64, Utf8]),
-                    Exact(vec![Utf8View, Int64, Utf8]),
                     Exact(vec![Utf8View, Int64, Utf8View]),
-                    Exact(vec![LargeUtf8, Int64, Utf8]),
+                    Exact(vec![Utf8View, Int64, Utf8]),
+                    Exact(vec![Utf8View, Int64, LargeUtf8]),
+                    Exact(vec![Utf8, Int64]),
+                    Exact(vec![Utf8, Int64, Utf8View]),
+                    Exact(vec![Utf8, Int64, Utf8]),
                     Exact(vec![Utf8, Int64, LargeUtf8]),
+                    Exact(vec![LargeUtf8, Int64]),
+                    Exact(vec![LargeUtf8, Int64, Utf8View]),
+                    Exact(vec![LargeUtf8, Int64, Utf8]),
                     Exact(vec![LargeUtf8, Int64, LargeUtf8]),
                 ],
                 Volatility::Immutable,
@@ -81,12 +84,37 @@ impl ScalarUDFImpl for RPadFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        match args[0].data_type() {
-            DataType::Utf8 | DataType::Utf8View => {
-                make_scalar_function(rpad::<i32>, vec![])(args)
+        match args.len() {
+            2 => match args[0].data_type() {
+                DataType::Utf8 | DataType::Utf8View => {
+                    make_scalar_function(rpad::<i32, i32>, vec![])(args)
+                }
+                DataType::LargeUtf8 => {
+                    make_scalar_function(rpad::<i64, i64>, vec![])(args)
+                }
+                other => exec_err!("Unsupported data type {other:?} for function rpad"),
+            },
+            3 => match (args[0].data_type(), args[2].data_type()) {
+                (
+                    DataType::Utf8 | DataType::Utf8View,
+                    DataType::Utf8 | DataType::Utf8View,
+                ) => make_scalar_function(rpad::<i32, i32>, vec![])(args),
+                (DataType::LargeUtf8, DataType::LargeUtf8) => {
+                    make_scalar_function(rpad::<i64, i64>, vec![])(args)
+                }
+                (DataType::LargeUtf8, DataType::Utf8View | DataType::Utf8) => {
+                    make_scalar_function(rpad::<i64, i32>, vec![])(args)
+                }
+                (DataType::Utf8View | DataType::Utf8, DataType::LargeUtf8) => {
+                    make_scalar_function(rpad::<i32, i64>, vec![])(args)
+                }
+                (first_type, last_type) => {
+                    exec_err!("unsupported arguments type for rpad, first argument type is {}, last argument type is {}", first_type, last_type)
+                }
+            },
+            number => {
+                exec_err!("unsupported arguments number {} for rpad", number)
             }
-            DataType::LargeUtf8 => make_scalar_function(rpad::<i64>, vec![])(args),
-            other => exec_err!("Unsupported data type {other:?} for function rpad"),
         }
     }
 }
@@ -112,18 +140,14 @@ macro_rules! process_rpad {
                             Ok(Some(graphemes[..length].concat()))
                         } else {
                             let mut s = string.to_string();
-                            if !$is_view {
-                                s.push_str(&" ".repeat(length - graphemes.len()));
-                            } else {
-                                s.push_str(" ".repeat(length - graphemes.len()).as_str());
-                            }
+                            s.push_str(" ".repeat(length - graphemes.len()).as_str());
                             Ok(Some(s))
                         }
                     }
                 }
                 _ => Ok(None),
             })
-            .collect::<Result<GenericStringArray<T>>>()
+            .collect::<Result<GenericStringArray<StringArrayLen>>>()
     }};
 
     // For the three-argument case
@@ -157,13 +181,15 @@ macro_rules! process_rpad {
                 }
                 _ => Ok(None),
             })
-            .collect::<Result<GenericStringArray<T>>>()
+            .collect::<Result<GenericStringArray<StringArrayLen>>>()
     }};
 }
 
 /// Extends the string to length 'length' by appending the characters fill (a space by default). If the string is already longer than length then it is truncated.
 /// rpad('hi', 5, 'xy') = 'hixyx'
-pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
+    args: &[ArrayRef],
+) -> Result<ArrayRef> {
     match (args.len(), args[0].data_type()) {
         (2, DataType::Utf8View) => {
             let string_array = as_string_view_array(&args[0])?;
@@ -173,7 +199,7 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         (2, _) => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
+            let string_array = as_generic_string_array::<StringArrayLen>(&args[0])?;
             let length_array = as_int64_array(&args[1])?;
 
             let result = process_rpad!(string_array, length_array, true)?;
@@ -182,18 +208,40 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         (3, DataType::Utf8View) => {
             let string_array = as_string_view_array(&args[0])?;
             let length_array = as_int64_array(&args[1])?;
-            let fill_array = as_string_view_array(&args[2])?;
-
-            let result = process_rpad!(string_array, length_array, fill_array, true)?;
-            Ok(Arc::new(result) as ArrayRef)
+            match args[2].data_type() {
+                DataType::Utf8View => {
+                    let fill_array = as_string_view_array(&args[2])?;
+                    let result = process_rpad!(string_array, length_array, fill_array, true)?;
+                    Ok(Arc::new(result) as ArrayRef)
+                }
+                DataType::Utf8 | DataType::LargeUtf8 => {
+                    let fill_array = as_generic_string_array::<FillArrayLen>(&args[2])?;
+                    let result = process_rpad!(string_array, length_array, fill_array, true)?;
+                    Ok(Arc::new(result) as ArrayRef)
+                }
+                other_type => {
+                    exec_err!("unsupported type for rpad's third operator: {}", other_type)
+                }
+            }
         }
         (3, _) => {
-            let string_array = as_generic_string_array::<T>(&args[0])?;
+            let string_array = as_generic_string_array::<StringArrayLen>(&args[0])?;
             let length_array = as_int64_array(&args[1])?;
-            let fill_array = as_generic_string_array::<T>(&args[2])?;
-
-            let result = process_rpad!(string_array, length_array, fill_array, true)?;
-            Ok(Arc::new(result) as ArrayRef)
+            match args[2].data_type() {
+                DataType::Utf8View => {
+                    let fill_array = as_string_view_array(&args[2])?;
+                    let result = process_rpad!(string_array, length_array, fill_array, true)?;
+                    Ok(Arc::new(result) as ArrayRef)
+                }
+                DataType::Utf8 | DataType::LargeUtf8 => {
+                    let fill_array = as_generic_string_array::<FillArrayLen>(&args[2])?;
+                    let result = process_rpad!(string_array, length_array, fill_array, true)?;
+                    Ok(Arc::new(result) as ArrayRef)
+                }
+                other_type => {
+                    exec_err!("unsupported type for rpad's third operator: {}", other_type)
+                }
+            }
         }
         (other, other_type) => exec_err!(
             "rpad requires 2 or 3 arguments with corresponding types, but got {}. number of arguments with {}",
