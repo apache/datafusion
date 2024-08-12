@@ -24,7 +24,7 @@ use std::sync::Arc;
 use arrow::datatypes::Field;
 
 use datafusion_common::{
-    plan_datafusion_err, plan_err, DFSchema, Result, TableReference,
+    plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::type_coercion::binary::comparison_coercion;
@@ -96,7 +96,19 @@ pub(crate) fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
     let new_inputs = union_plan
         .inputs
         .iter()
-        .map(|plan| coerce_plan_expr_for_schema(plan, &union_schema).map(Arc::new))
+        .map(|p| {
+            let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
+            match plan {
+                LogicalPlan::Projection(Projection { expr, input, .. }) => {
+                    Ok(Arc::new(project_with_column_index(
+                        expr,
+                        input,
+                        Arc::new(union_schema.clone()),
+                    )?))
+                }
+                other_plan => Ok(Arc::new(other_plan)),
+            }
+        })
         .collect::<Result<Vec<_>>>()?;
     Ok(LogicalPlan::Union(Union {
         inputs: new_inputs,
@@ -133,25 +145,6 @@ pub(crate) fn coerce_plan_expr_for_schema(
     }
 }
 
-fn same_qualified_name(
-    src_expr: &Expr,
-    dst_qualifier: Option<&TableReference>,
-    dst_field: &Field,
-) -> bool {
-    match &src_expr {
-        Expr::Column(c) => {
-            c.relation.as_ref() == dst_qualifier && c.name == *dst_field.name()
-        }
-        Expr::Alias(Alias { relation, name, .. }) => {
-            relation.as_ref() == dst_qualifier || name == dst_field.name()
-        }
-        _ => {
-            dst_qualifier.is_none()
-                && src_expr.schema_name().to_string() == *dst_field.name()
-        }
-    }
-}
-
 fn coerce_exprs_for_schema(
     exprs: Vec<Expr>,
     src_schema: &DFSchema,
@@ -161,17 +154,44 @@ fn coerce_exprs_for_schema(
         .into_iter()
         .enumerate()
         .map(|(idx, expr)| {
-            let (dst_qualifier, dst_field) = dst_schema.qualified_field(idx);
-            let mut new_expr =
-                expr.unalias().cast_to(dst_field.data_type(), src_schema)?;
-            // Make sure the new expression has the same qualified name as the dst_field
-            if !same_qualified_name(&new_expr, dst_qualifier, dst_field) {
-                new_expr =
-                    new_expr.alias_qualified(dst_qualifier.cloned(), dst_field.name());
+            let new_type = dst_schema.field(idx).data_type();
+            if new_type != &expr.get_type(src_schema)? {
+                match expr {
+                    Expr::Alias(Alias { expr, name, .. }) => {
+                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                    }
+                    _ => expr.cast_to(new_type, src_schema),
+                }
+            } else {
+                Ok(expr)
             }
-            Ok(new_expr)
         })
         .collect::<Result<_>>()
+}
+
+fn project_with_column_index(
+    expr: Vec<Expr>,
+    input: Arc<LogicalPlan>,
+    schema: DFSchemaRef,
+) -> Result<LogicalPlan> {
+    let alias_expr = expr
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| match e {
+            Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
+                e.unalias().alias(schema.field(i).name())
+            }
+            Expr::Column(Column {
+                relation: _,
+                ref name,
+            }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
+            Expr::Alias { .. } | Expr::Column { .. } => e,
+            _ => e.alias(schema.field(i).name()),
+        })
+        .collect::<Vec<_>>();
+
+    Projection::try_new_with_schema(alias_expr, input, schema)
+        .map(LogicalPlan::Projection)
 }
 
 #[cfg(test)]

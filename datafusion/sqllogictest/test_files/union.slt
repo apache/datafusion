@@ -642,3 +642,14 @@ DROP TABLE t1;
 
 statement ok
 DROP TABLE t2;
+
+# Test issue: https://github.com/apache/datafusion/issues/11742
+query R rowsort
+WITH 
+  tt(v1) AS (VALUES (1::INT),(NULL::INT)) 
+SELECT NVL(v1, 0.5) FROM tt
+  UNION ALL
+SELECT NULL WHERE FALSE;
+----
+0.5
+1

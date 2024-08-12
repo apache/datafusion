@@ -1338,31 +1338,6 @@ pub(crate) fn validate_unique_names<'a>(
     })
 }
 
-pub fn project_with_column_index(
-    expr: Vec<Expr>,
-    input: Arc<LogicalPlan>,
-    schema: DFSchemaRef,
-) -> Result<LogicalPlan> {
-    let alias_expr = expr
-        .into_iter()
-        .enumerate()
-        .map(|(i, e)| match e {
-            Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
-                e.unalias().alias(schema.field(i).name())
-            }
-            Expr::Column(Column {
-                relation: _,
-                ref name,
-            }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
-            Expr::Alias { .. } | Expr::Column { .. } => e,
-            _ => e.alias(schema.field(i).name()),
-        })
-        .collect::<Vec<_>>();
-
-    Projection::try_new_with_schema(alias_expr, input, schema)
-        .map(LogicalPlan::Projection)
-}
-
 /// Union two logical plans.
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
     // Temporarily use the schema from the left input and later rely on the analyzer to
