@@ -19,16 +19,17 @@ use std::any::Any;
 use std::cmp::{max, Ordering};
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
-use datafusion_common::cast::{as_generic_string_array, as_int64_array};
+use crate::utils::{make_scalar_function, utf8_to_str_type};
+use datafusion_common::cast::{
+    as_generic_string_array, as_int64_array, as_string_view_array,
+};
 use datafusion_common::exec_err;
 use datafusion_common::Result;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-
-use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct RightFunc {
@@ -46,7 +47,11 @@ impl RightFunc {
         use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![Exact(vec![Utf8, Int64]), Exact(vec![LargeUtf8, Int64])],
+                vec![
+                    Exact(vec![Utf8View, Int64]),
+                    Exact(vec![Utf8, Int64]),
+                    Exact(vec![LargeUtf8, Int64]),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -72,9 +77,14 @@ impl ScalarUDFImpl for RightFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(right::<i32>, vec![])(args),
+            DataType::Utf8 | DataType::Utf8View => {
+                make_scalar_function(right::<i32>, vec![])(args)
+            }
             DataType::LargeUtf8 => make_scalar_function(right::<i64>, vec![])(args),
-            other => exec_err!("Unsupported data type {other:?} for function right"),
+            other => exec_err!(
+                "Unsupported data type {other:?} for function right,\
+            expected Utf8View, Utf8 or LargeUtf8."
+            ),
         }
     }
 }
@@ -83,6 +93,47 @@ impl ScalarUDFImpl for RightFunc {
 /// right('abcde', 2) = 'de'
 /// The implementation uses UTF-8 code points as characters
 pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args[0].data_type() == &DataType::Utf8View {
+        string_view_right(args)
+    } else {
+        string_right::<T>(args)
+    }
+}
+
+// Currently the return type can only be Utf8 or LargeUtf8, to reach fully support, we need
+// to edit the `get_optimal_return_type` in utils.rs to make the udfs be able to return Utf8View
+// See https://github.com/apache/datafusion/issues/11790#issuecomment-2283777166
+fn string_view_right(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_string_view_array(&args[0])?;
+    let n_array = as_int64_array(&args[1])?;
+
+    let result = string_array
+        .iter()
+        .zip(n_array.iter())
+        .map(|(string, n)| match (string, n) {
+            (Some(string), Some(n)) => match n.cmp(&0) {
+                Ordering::Less => Some(
+                    string
+                        .chars()
+                        .skip(n.unsigned_abs() as usize)
+                        .collect::<String>(),
+                ),
+                Ordering::Equal => Some("".to_string()),
+                Ordering::Greater => Some(
+                    string
+                        .chars()
+                        .skip(max(string.chars().count() as i64 - n, 0) as usize)
+                        .collect::<String>(),
+                ),
+            },
+            _ => None,
+        })
+        .collect::<GenericStringArray<i32>>(); // the return type of Utf8View is currently Utf8
+
+    Ok(Arc::new(result) as ArrayRef)
+}
+
+fn string_right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
     let n_array = as_int64_array(&args[1])?;
 
