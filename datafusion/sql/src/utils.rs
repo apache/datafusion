@@ -279,7 +279,7 @@ pub(crate) fn transform_bottom_unnest(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
     inner_projection_exprs: &mut Vec<Expr>,
-    memo: &mut HashMap<Column, Vec<Column>>,
+    memo: &mut HashMap<String, Vec<Column>>,
     original_expr: &Expr,
 ) -> Result<Vec<Expr>> {
     let mut transform = |level: usize,
@@ -287,21 +287,22 @@ pub(crate) fn transform_bottom_unnest(
                          struct_allowed: bool,
                          inner_projection_exprs: &mut Vec<Expr>|
      -> Result<Vec<Expr>> {
-        let col = match expr_in_unnest {
-            Expr::Column(col) => col.name(),
-            _ => {
-                // TODO: this failed
-                return internal_err!("unnesting on non-column expr is not supported");
-            }
-        };
+        let inner_expr_name = expr_in_unnest.display_name()?;
+        // let col = match expr_in_unnest {
+        //     Expr::Column(col) => col,
+        //     _ => {
+        //         // TODO: this failed
+        //         return internal_err!("unnesting on non-column expr is not supported");
+        //     }
+        // };
 
         // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
         // inside unnest execution, each column inside the inner projection
         // will be transformed into new columns. Thus we need to keep track of these placeholding column names
         // let placeholder_name = unnest_expr.display_name()?;
-        let placeholder_name = format!("unnest_placeholder({})", col.name());
+        let placeholder_name = format!("unnest_placeholder({})", inner_expr_name);
         let post_unnest_name =
-            format!("unnest_placeholder({},depth={})", col.name(), level);
+            format!("unnest_placeholder({},depth={})", inner_expr_name, level);
         let placeholder_column = Column::from_name(placeholder_name.clone());
         let schema = input.schema();
 
@@ -329,13 +330,14 @@ pub(crate) fn transform_bottom_unnest(
             | DataType::FixedSizeList(field, _)
             | DataType::LargeList(field) => {
                 // TODO: this memo only needs to be a hashset
-                let (already_projected, transformed_cols) = match memo.get_mut(col) {
-                    Some(vec) => (true, vec),
-                    _ => {
-                        memo.insert(col.clone(), vec![]);
-                        (false, memo.get_mut(col).unwrap())
-                    }
-                };
+                let (already_projected, transformed_cols) =
+                    match memo.get_mut(&inner_expr_name) {
+                        Some(vec) => (true, vec),
+                        _ => {
+                            memo.insert(inner_expr_name.clone(), vec![]);
+                            (false, memo.get_mut(&inner_expr_name).unwrap())
+                        }
+                    };
                 if !already_projected {
                     inner_projection_exprs
                         .push(expr_in_unnest.clone().alias(placeholder_name.clone()));

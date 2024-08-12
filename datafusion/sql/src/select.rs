@@ -351,9 +351,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+                let mut check_list: HashSet<Expr> = inner_projection_exprs
+                    .iter()
+                    .map(|expr| expr.clone())
+                    .collect();
+                let deduplicated: Vec<Expr> = inner_projection_exprs
+                    .into_iter()
+                    .filter(|expr| -> bool {
+                        if check_list.remove(expr) {
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                    .collect();
 
                 let plan = LogicalPlanBuilder::from(intermediate_plan)
-                    .project(inner_projection_exprs.clone())?
+                    .project(deduplicated.clone())?
                     .unnest_columns_with_options(columns, unnest_options)?
                     .build()?;
                 intermediate_plan = plan;

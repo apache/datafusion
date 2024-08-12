@@ -1718,7 +1718,7 @@ pub fn unnest_with_options(
 ) -> Result<LogicalPlan> {
     let mut list_columns: Vec<(usize, ColumnUnnestList)> = vec![];
     let mut struct_columns = vec![];
-    let column_by_original_index = columns
+    let indices_to_unnest = columns
         .iter()
         .map(|col_unnesting| {
             Ok((
@@ -1732,13 +1732,20 @@ pub fn unnest_with_options(
 
     let mut dependency_indices = vec![];
     // Transform input schema into new schema
-    // e.g int, unnest([]int), unnest(struct(varchar,varchar))
-    // becomes int, int, varchar, varchar
+    // Given this comprehensive example
+    //
+    // input schema:
+    // col1_unnest_placeholder: list[list[int]], col1: list[list[int]], col2 list[int]
+    // with unnest on unnest(col1,depth=2), unnest(col1,depth=1) and unnest(col2,depth=1)
+    // output schema:
+    // unnest_col1_depth_2: int, unnest_col1_depth1: list[int], col1: list[list[int]], unnest_col2_depth_1: int
+    // Meaning the placeholder column will be replaced by its unnested variation(s), note
+    // the plural.
     let fields = input_schema
         .iter()
         .enumerate()
         .map(|(index, (original_qualifier, original_field))| {
-            match column_by_original_index.get(&index) {
+            match indices_to_unnest.get(&index) {
                 Some((column_to_unnest, unnest_type)) => {
                     let mut inferred_unnest_type = unnest_type.clone();
                     if let ColumnUnnestType::Inferred = unnest_type {
