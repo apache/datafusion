@@ -63,7 +63,7 @@ impl MockSessionState {
         self
     }
 
-    pub fn with_scalar_functions(mut self, scalar_functions: Arc<ScalarUDF>) -> Self {
+    pub fn with_scalar_function(mut self, scalar_function: Arc<ScalarUDF>) -> Self {
         self.scalar_functions
             .insert(scalar_functions.name().to_string(), scalar_functions);
         self
