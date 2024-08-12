@@ -24,6 +24,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
+use datafusion_common::utils::combine_limit;
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
@@ -215,69 +216,6 @@ fn transformed_limit(
         fetch: Some(fetch),
         input: Arc::new(input),
     })))
-}
-
-/// Computes the `skip` and `fetch` parameters of a single limit that would be
-/// equivalent to two consecutive limits with the given `skip`/`fetch` parameters.
-///
-/// There are multiple cases to consider:
-///
-/// # Case 0: Parent and child are disjoint (`child_fetch <= skip`).
-///
-/// ```text
-///   Before merging:
-///                     |........skip........|---fetch-->|     Parent limit
-///    |...child_skip...|---child_fetch-->|                    Child limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |.........(child_skip + skip).........|
-/// ```
-///
-/// # Case 1: Parent is beyond child's range (`skip < child_fetch <= skip + fetch`).
-///
-///   Before merging:
-/// ```text
-///                     |...skip...|------------fetch------------>|   Parent limit
-///    |...child_skip...|-------------child_fetch------------>|       Child limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
-/// ```
-///
-///  # Case 2: Parent is within child's range (`skip + fetch < child_fetch`).
-///
-///   Before merging:
-/// ```text
-///                     |...skip...|---fetch-->|                   Parent limit
-///    |...child_skip...|-------------child_fetch------------>|    Child limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |....(child_skip + skip)....|---fetch-->|
-/// ```
-pub fn combine_limit(
-    parent_skip: usize,
-    parent_fetch: Option<usize>,
-    child_skip: usize,
-    child_fetch: Option<usize>,
-) -> (usize, Option<usize>) {
-    let combined_skip = child_skip.saturating_add(parent_skip);
-
-    let combined_fetch = match (parent_fetch, child_fetch) {
-        (Some(parent_fetch), Some(child_fetch)) => {
-            Some(min(parent_fetch, child_fetch.saturating_sub(parent_skip)))
-        }
-        (Some(parent_fetch), None) => Some(parent_fetch),
-        (None, Some(child_fetch)) => Some(child_fetch.saturating_sub(parent_skip)),
-        (None, None) => None,
-    };
-
-    (combined_skip, combined_fetch)
 }
 
 /// Adds a limit to the inputs of a join, if possible
