@@ -169,6 +169,7 @@ fn coerce_exprs_for_schema(
         .collect::<Result<_>>()
 }
 
+/// See https://github.com/apache/datafusion/pull/2108
 fn project_with_column_index(
     expr: Vec<Expr>,
     input: Arc<LogicalPlan>,

@@ -114,8 +114,11 @@ fn extract_plan_from_distinct(plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analyzer::type_coercion::TypeCoercion;
+    use crate::analyzer::Analyzer;
     use crate::test::*;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{col, logical_plan::table_scan};
 
     fn schema() -> Schema {
@@ -127,7 +130,14 @@ mod tests {
     }
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq(Arc::new(EliminateNestedUnion::new()), plan, expected)
+        let options = ConfigOptions::default();
+        let analyzed_plan = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
+            .execute_and_check(plan, &options, |_, _| {})?;
+        assert_optimized_plan_eq(
+            Arc::new(EliminateNestedUnion::new()),
+            analyzed_plan,
+            expected,
+        )
     }
 
     #[test]
