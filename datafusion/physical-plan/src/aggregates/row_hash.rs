@@ -100,22 +100,24 @@ struct SpillState {
 ///
 /// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
 struct SkipAggregationProbe {
-    /// Number of processed input rows
+    /// Number of processed input rows (updated during probing)
     input_rows: usize,
-    /// Number of total group values for `input_rows`
+    /// Number of total group values for `input_rows` (updated during probing)
     num_groups: usize,
 
-    /// Aggregation ratio check should be performed only when the
-    /// number of input rows exceeds this threshold
+    /// Aggregation ratio check performed when the number of input rows exceeds
+    /// this threshold (from `SessionConfig`)
     probe_rows_threshold: usize,
-    /// Maximum allowed value of `input_rows` / `num_groups` to
-    /// continue aggregation
+    /// Maximum ratio of `num_groups` to `input_rows` for continuing aggregation
+    /// (from `SessionConfig`). If the ratio exceeds this value, aggregation
+    /// is skipped and input rows are directly converted to output
     probe_ratio_threshold: f64,
 
-    /// Flag indicating that further data aggregation mey be skipped
+    /// Flag indicating further data aggregation may be skipped (decision made
+    /// when probing complete)
     should_skip: bool,
-    /// Flag indicating that further updates of `SkipAggregationProbe`
-    /// state won't make any effect
+    /// Flag indicating further updates of `SkipAggregationProbe` state won't
+    /// make any effect (set either while probing or on probing completion)
     is_locked: bool,
 
     /// Number of rows where state was output without aggregation.
