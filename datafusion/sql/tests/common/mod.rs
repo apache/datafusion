@@ -69,7 +69,7 @@ impl MockSessionState {
         self
     }
 
-    pub fn with_aggregate_functions(
+    pub fn with_aggregate_function(
         mut self,
         aggregate_function: Arc<AggregateUDF>,
     ) -> Self {
