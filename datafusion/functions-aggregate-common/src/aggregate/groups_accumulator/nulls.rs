@@ -83,7 +83,7 @@ fn filter_to_nulls(filter: &BooleanArray) -> Option<NullBuffer> {
 ///                 NULL  = filter
 /// ```
 ///
-/// [`GroupsAccumulator::convert_to_state`]: datafusion_expr::groups_accumulator::GroupsAccumulator::convert_to_state
+/// [`GroupsAccumulator::convert_to_state`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 pub fn filtered_null_mask(
     opt_filter: Option<&BooleanArray>,
     input: &dyn Array,
