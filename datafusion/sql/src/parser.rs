@@ -523,7 +523,7 @@ impl<'a> DFParser<'a> {
                 Ok(n) => Ok(Value::Number(n, l)),
                 // The tokenizer should have ensured `n` is an integer
                 // so this should not be possible
-                Err(e) => match e {}
+                Err(e) => match e {},
             },
             _ => self.parser.expected("string or numeric value", next_token),
         }

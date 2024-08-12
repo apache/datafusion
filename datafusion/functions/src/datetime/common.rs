@@ -236,18 +236,21 @@ where
                 let mut ret = None;
 
                 for (pos, v) in args.iter().enumerate().skip(1) {
-                    let ColumnarValue::Scalar(ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x)) = v else {
+                    let ColumnarValue::Scalar(
+                        ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x),
+                    ) = v
+                    else {
                         return exec_err!("Unsupported data type {v:?} for function {name}, arg # {pos}");
                     };
 
                     if let Some(s) = x {
                         match op(a.as_str(), s.as_str()) {
                             Ok(r) => {
-                                ret = Some(Ok(ColumnarValue::Scalar(
-                                    S::scalar(Some(op2(r))),
-                                )));
-                                break
-                            },
+                                ret = Some(Ok(ColumnarValue::Scalar(S::scalar(Some(
+                                    op2(r),
+                                )))));
+                                break;
+                            }
                             Err(e) => ret = Some(Err(e)),
                         }
                     }
