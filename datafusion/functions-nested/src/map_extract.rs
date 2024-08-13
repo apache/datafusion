@@ -132,17 +132,14 @@ fn generic_map_extract_inner<T: ArrowPrimitiveType>(
     keys_array: &PrimitiveArray<T>,
     query_keys_array: &PrimitiveArray<T>,
 ) -> Result<ArrayRef> {
-    let mut values = new_null_array(map_array.value_type(), 1);
-    for index in 0..keys_array.len() {
-        let key = keys_array.value(index);
-        if key == query_keys_array.value(0) {
-            let map_values = map_array.values();
-            values = map_values.slice(index, 1);
-            break;
-        }
-    }
+    let query_key = query_keys_array.value(0);
+    // key cannot be NULL, so we can unwrap
+    let index = keys_array.iter().position(|key| key.unwrap() == query_key);
 
-    return Ok(values);
+    match index {
+        Some(idx) => Ok(map_array.values().slice(idx, 1)),
+        None => Ok(new_null_array(map_array.value_type(), 1)),
+    }
 }
 
 fn string_map_extract_inner(
@@ -150,14 +147,12 @@ fn string_map_extract_inner(
     keys_array: &StringArray,
     query_keys_array: &StringArray,
 ) -> Result<ArrayRef> {
-    let mut values = new_null_array(map_array.value_type(), 1);
-    for index in 0..keys_array.len() {
-        let key = keys_array.value(index);
-        if key == query_keys_array.value(0) {
-            let map_values = map_array.values();
-            values = map_values.slice(index, 1);
-            break;
-        }
+    let query_key = query_keys_array.value(0);
+    // key cannot be NULL, so we can unwrap
+    let index = keys_array.iter().position(|key| key.unwrap() == query_key);
+
+    match index {
+        Some(idx) => Ok(map_array.values().slice(idx, 1)),
+        None => Ok(new_null_array(map_array.value_type(), 1)),
     }
-    return Ok(values);
 }
