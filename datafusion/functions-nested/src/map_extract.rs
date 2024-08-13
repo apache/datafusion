@@ -137,9 +137,7 @@ fn generic_map_extract_inner<T: ArrowPrimitiveType>(
         let key = keys_array.value(index);
         if key == query_keys_array.value(0) {
             let map_values = map_array.values();
-            if !map_values.is_null(index) {
-                values = map_values.slice(index, 1);
-            }
+            values = map_values.slice(index, 1);
             break;
         }
     }
@@ -157,12 +155,9 @@ fn string_map_extract_inner(
         let key = keys_array.value(index);
         if key == query_keys_array.value(0) {
             let map_values = map_array.values();
-            if !map_values.is_null(index) {
-                values = map_values.slice(index, 1);
-            }
+            values = map_values.slice(index, 1);
             break;
         }
     }
-
     return Ok(values);
 }
