@@ -481,13 +481,6 @@ macro_rules! unwrap_or_internal_err {
     };
 }
 
-macro_rules! with_dollar_sign {
-    ($($body:tt)*) => {
-        macro_rules! __with_dollar_sign { $($body)* }
-        __with_dollar_sign!($);
-    }
-}
-
 /// Add a macros for concise  DataFusionError::* errors declaration
 /// supports placeholders the same way as `format!`
 /// Examples:
@@ -501,37 +494,37 @@ macro_rules! with_dollar_sign {
 /// `NAME_DF_ERR` -  macro name for wrapping DataFusionError::*. Needed to keep backtrace opportunity
 /// in construction where DataFusionError::* used directly, like `map_err`, `ok_or_else`, etc
 macro_rules! make_error {
-    ($NAME_ERR:ident, $NAME_DF_ERR: ident, $ERR:ident) => {
-        with_dollar_sign! {
-            ($d:tt) => {
-                /// Macro wraps `$ERR` to add backtrace feature
-                #[macro_export]
-                macro_rules! $NAME_DF_ERR {
-                    ($d($d args:expr),*) => {
-                        $crate::DataFusionError::$ERR(
-                            format!(
-                                "{}{}",
-                                format!($d($d args),*),
-                                $crate::DataFusionError::get_back_trace(),
-                            ).into()
-                        )
-                    }
-                }
-
-                /// Macro wraps Err(`$ERR`) to add backtrace feature
-                #[macro_export]
-                macro_rules! $NAME_ERR {
-                    ($d($d args:expr),*) => {
-                        Err($crate::DataFusionError::$ERR(
-                            format!(
-                                "{}{}",
-                                format!($d($d args),*),
-                                $crate::DataFusionError::get_back_trace(),
-                            ).into()
-                        ))
-                    }
+    ($NAME_ERR:ident, $NAME_DF_ERR: ident, $ERR:ident) => { make_error!(@inner ($), $NAME_ERR, $NAME_DF_ERR, $ERR); };
+    (@inner ($d:tt), $NAME_ERR:ident, $NAME_DF_ERR:ident, $ERR:ident) => {
+        ::paste::paste!{
+            /// Macro wraps `$ERR` to add backtrace feature
+            #[macro_export]
+            macro_rules! $NAME_DF_ERR {
+                ($d($d args:expr),*) => {
+                    $crate::DataFusionError::$ERR(
+                        ::std::format!(
+                            "{}{}",
+                            ::std::format!($d($d args),*),
+                            $crate::DataFusionError::get_back_trace(),
+                        ).into()
+                    )
                 }
             }
+
+            /// Macro wraps Err(`$ERR`) to add backtrace feature
+            #[macro_export]
+            macro_rules! $NAME_ERR {
+                ($d($d args:expr),*) => {
+                    Err($crate::[<_ $NAME_DF_ERR>]!($d($d args),*))
+                }
+            }
+
+            #[doc(hidden)]
+            #[allow(unused)]
+            pub use $NAME_ERR as [<_ $NAME_ERR>];
+            #[doc(hidden)]
+            #[allow(unused)]
+            pub use $NAME_DF_ERR as [<_ $NAME_DF_ERR>];
         }
     };
 }
@@ -613,12 +606,6 @@ macro_rules! schema_err {
 
 // To avoid compiler error when using macro in the same crate:
 // macros from the current crate cannot be referred to by absolute paths
-pub use config_err as _config_err;
-pub use internal_datafusion_err as _internal_datafusion_err;
-pub use internal_err as _internal_err;
-pub use not_impl_err as _not_impl_err;
-pub use plan_datafusion_err as _plan_datafusion_err;
-pub use plan_err as _plan_err;
 pub use schema_err as _schema_err;
 
 /// Create a "field not found" DataFusion::SchemaError
