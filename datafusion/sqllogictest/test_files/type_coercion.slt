@@ -74,22 +74,12 @@ CREATE TABLE orders(
 );
 
 # union_different_num_columns_error() / UNION
-statement error
+query error Error during planning: Union schemas have different number of fields: query 1 has 1 fields whereas query 2 has 2 fields
 SELECT order_id FROM orders UNION SELECT customer_id, o_item_id FROM orders
-----
-DataFusion error: type_coercion
-caused by
-Error during planning: Union schemas have different number of fields: query 1 has 1 fields whereas query 2 has 2 fields
-
 
 # union_different_num_columns_error() / UNION ALL
-statement error
+query error Error during planning: Union schemas have different number of fields: query 1 has 1 fields whereas query 2 has 2 fields
 SELECT order_id FROM orders UNION ALL SELECT customer_id, o_item_id FROM orders
-----
-DataFusion error: type_coercion
-caused by
-Error during planning: Union schemas have different number of fields: query 1 has 1 fields whereas query 2 has 2 fields
-
 
 # union_with_different_column_names()
 query TT
@@ -114,13 +104,8 @@ logical_plan
 05)----EmptyRelation
 
 # union_with_incompatible_data_type()
-statement error
+query error Error during planning: UNION Column 'Int64\(1\)' \(type: Int64\) is not compatible with other type: Interval\(MonthDayNano\)
 SELECT interval '1 year 1 day' UNION ALL SELECT 1
-----
-DataFusion error: type_coercion
-caused by
-Error during planning: UNION Column Int64(1) (type: Int64) is not compatible with other type: Interval(MonthDayNano)
-
 
 # union_with_different_decimal_data_types()
 query TT
@@ -225,13 +210,8 @@ logical_plan
 11)----------EmptyRelation
 
 # union_with_incompatible_data_types()
-statement error
+query error Error during planning: UNION Column 'a' \(type: Boolean\) is not compatible with other type: Utf8
 SELECT 'a' a UNION ALL SELECT true a
-----
-DataFusion error: type_coercion
-caused by
-Error during planning: UNION Column a (type: Boolean) is not compatible with other type: Utf8
-
 
 statement ok
 SET datafusion.optimizer.max_passes = 3;
@@ -239,8 +219,8 @@ SET datafusion.optimizer.max_passes = 3;
 statement ok
 SET datafusion.explain.logical_plan_only = false;
 
-statement error DataFusion error: Execution error: Table 'order' doesn't exist\.
-DROP TABLE order;
+statement ok
+DROP TABLE orders;
 
 ########################################
 ## Test type coercion with UNIONs end ##
