@@ -279,117 +279,12 @@ impl SessionState {
         runtime: Arc<RuntimeEnv>,
         catalog_list: Arc<dyn CatalogProviderList>,
     ) -> Self {
-<<<<<<< HEAD
-        let session_id = Uuid::new_v4().to_string();
-
-        // Create table_factories for all default formats
-        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-            HashMap::new();
-        #[cfg(feature = "parquet")]
-        table_factories.insert("PARQUET".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("CSV".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("JSON".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("NDJSON".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("AVRO".into(), Arc::new(DefaultTableFactory::new()));
-        table_factories.insert("ARROW".into(), Arc::new(DefaultTableFactory::new()));
-
-        if config.create_default_catalog_and_schema() {
-            let default_catalog = MemoryCatalogProvider::new();
-            let schema = MemorySchemaProvider::new();
-
-            default_catalog
-                .register_schema(
-                    &config.options().catalog.default_schema,
-                    Arc::new(schema),
-                )
-                .expect("memory catalog provider can register schema");
-
-            Self::register_default_schema(
-                &config,
-                &table_factories,
-                &runtime,
-                &default_catalog,
-            );
-
-            catalog_list.register_catalog(
-                config.options().catalog.default_catalog.clone(),
-                Arc::new(default_catalog),
-            );
-        }
-
-        let mut new_self = SessionState {
-            session_id,
-            analyzer: Analyzer::new(),
-            optimizer: Optimizer::new(),
-            physical_optimizers: PhysicalOptimizer::new(),
-            query_planner: Arc::new(DefaultQueryPlanner {}),
-            catalog_list,
-            table_functions: HashMap::new(),
-            scalar_functions: HashMap::new(),
-            aggregate_functions: HashMap::new(),
-            window_functions: HashMap::new(),
-            serializer_registry: Arc::new(EmptySerializerRegistry),
-            file_formats: HashMap::new(),
-            table_options: TableOptions::default_from_session_config(config.options()),
-            config,
-            execution_props: ExecutionProps::new(),
-            runtime_env: runtime,
-            table_factories,
-            function_factory: None,
-        };
-
-        #[cfg(feature = "parquet")]
-        if let Err(e) =
-            new_self.register_file_format(Arc::new(ParquetFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default ParquetFormat: {e}")
-        };
-
-        if let Err(e) =
-            new_self.register_file_format(Arc::new(JsonFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default JsonFormat: {e}")
-        };
-
-        if let Err(e) =
-            new_self.register_file_format(Arc::new(CsvFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default CsvFormat: {e}")
-        };
-
-        if let Err(e) =
-            new_self.register_file_format(Arc::new(ArrowFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default ArrowFormat: {e}")
-        };
-
-        if let Err(e) =
-            new_self.register_file_format(Arc::new(AvroFormatFactory::new()), false)
-        {
-            log::info!("Unable to register default AvroFormat: {e}")
-        };
-
-        // register built in functions
-        functions::register_all(&mut new_self)
-            .expect("can not register built in functions");
-
-        // register crate of array expressions (if enabled)
-        #[cfg(feature = "array_expressions")]
-        functions_array::register_all(&mut new_self)
-            .expect("can not register array expressions");
-
-        functions_aggregate::register_all(&mut new_self)
-            .expect("can not register aggregate functions");
-
-        new_self
-=======
         SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
             .with_catalog_list(catalog_list)
             .with_default_features()
             .build()
->>>>>>> main
     }
 
     /// Returns new [`SessionState`] using the provided
