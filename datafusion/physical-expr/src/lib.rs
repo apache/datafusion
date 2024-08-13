@@ -14,10 +14,32 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
-pub mod aggregate;
+// Backward compatibility
+pub mod aggregate {
+    pub(crate) mod groups_accumulator {
+        #[allow(unused_imports)]
+        pub(crate) mod accumulate {
+            pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+        }
+        pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+            accumulate::NullState, GroupsAccumulatorAdapter,
+        };
+    }
+    pub(crate) mod stats {
+        pub use datafusion_functions_aggregate_common::stats::StatsType;
+    }
+    pub mod utils {
+        pub use datafusion_functions_aggregate_common::utils::{
+            adjust_output_array, down_cast_any_ref, get_accum_scalar_values_as_arrays,
+            get_sort_options, ordering_fields, DecimalAverager, Hashable,
+        };
+    }
+    pub use datafusion_functions_aggregate_common::aggregate::AggregateExpr;
+}
 pub mod analysis;
 pub mod binary_map {
     pub use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
@@ -45,7 +67,7 @@ pub mod execution_props {
 
 pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
-pub use datafusion_physical_expr_common::aggregate::{
+pub use datafusion_functions_aggregate_common::aggregate::{
     AggregateExpr, AggregatePhysicalExpressions,
 };
 pub use equivalence::{calculate_union, ConstExpr, EquivalenceProperties};

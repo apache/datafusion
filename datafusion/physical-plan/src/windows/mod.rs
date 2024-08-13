@@ -31,7 +31,6 @@ use crate::{
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::{col, Expr, SortExpr};
 use datafusion_expr::{
     BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
     WindowUDF,
@@ -43,7 +42,7 @@ use datafusion_physical_expr::{
     AggregateExpr, ConstExpr, EquivalenceProperties, LexOrdering,
     PhysicalSortRequirement,
 };
-use datafusion_physical_expr_common::aggregate::AggregateExprBuilder;
+use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use itertools::Itertools;
 
 mod bounded_window_agg_exec;
@@ -95,7 +94,6 @@ pub fn create_window_expr(
     fun: &WindowFunctionDefinition,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
-    _logical_args: &[Expr],
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
@@ -112,25 +110,10 @@ pub fn create_window_expr(
             ))
         }
         WindowFunctionDefinition::AggregateUDF(fun) => {
-            // Convert `Vec<PhysicalSortExpr>` into `Vec<Expr::Sort>`
-            let sort_exprs = order_by
-                .iter()
-                .map(|PhysicalSortExpr { expr, options }| {
-                    let field_name = expr.to_string();
-                    let field_name = field_name.split('@').next().unwrap_or(&field_name);
-                    Expr::Sort(SortExpr {
-                        expr: Box::new(col(field_name)),
-                        asc: !options.descending,
-                        nulls_first: options.nulls_first,
-                    })
-                })
-                .collect::<Vec<_>>();
-
             let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
                 .schema(Arc::new(input_schema.clone()))
                 .alias(name)
                 .order_by(order_by.to_vec())
-                .sort_exprs(sort_exprs)
                 .with_ignore_nulls(ignore_nulls)
                 .build()?;
             window_expr_from_aggregate_expr(
@@ -759,7 +742,6 @@ mod tests {
                 &WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 "count".to_owned(),
                 &[col("a", &schema)?],
-                &[],
                 &[],
                 &[],
                 Arc::new(WindowFrame::new(None)),

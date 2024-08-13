@@ -32,7 +32,7 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 /// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
 /// ltrim('zzzytest', 'xyz') = 'test'
 fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    general_trim::<T>(args, TrimType::Left)
+    general_trim::<T>(args, TrimType::Left, false)
 }
 
 #[derive(Debug)]

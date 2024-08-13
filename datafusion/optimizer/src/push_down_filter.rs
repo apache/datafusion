@@ -817,7 +817,7 @@ impl OptimizerRule for PushDownFilter {
                 let group_expr_columns = agg
                     .group_expr
                     .iter()
-                    .map(|e| Ok(Column::from_qualified_name(e.display_name()?)))
+                    .map(|e| Ok(Column::from_qualified_name(e.schema_name().to_string())))
                     .collect::<Result<HashSet<_>>>()?;
 
                 let predicates = split_conjunction_owned(filter.predicate.clone());
@@ -838,7 +838,7 @@ impl OptimizerRule for PushDownFilter {
                 // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
                 let mut replace_map = HashMap::new();
                 for expr in &agg.group_expr {
-                    replace_map.insert(expr.display_name()?, expr.clone());
+                    replace_map.insert(expr.schema_name().to_string(), expr.clone());
                 }
                 let replaced_push_predicates = push_predicates
                     .into_iter()

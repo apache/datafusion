@@ -20,10 +20,13 @@
 #[macro_use]
 mod binary;
 mod case;
+mod cast;
+mod column;
 mod in_list;
 mod is_not_null;
 mod is_null;
 mod like;
+mod literal;
 mod negative;
 mod no_op;
 mod not;
@@ -41,14 +44,14 @@ pub use crate::PhysicalSortExpr;
 
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
+pub use cast::{cast, CastExpr};
+pub use column::{col, with_new_schema, Column};
 pub use datafusion_expr::utils::format_state_name;
-pub use datafusion_physical_expr_common::expressions::column::{col, Column};
-pub use datafusion_physical_expr_common::expressions::literal::{lit, Literal};
-pub use datafusion_physical_expr_common::expressions::{cast, CastExpr};
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
 pub use like::{like, LikeExpr};
+pub use literal::{lit, Literal};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
 pub use not::{not, NotExpr};

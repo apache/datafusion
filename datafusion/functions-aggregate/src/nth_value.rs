@@ -30,14 +30,12 @@ use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValu
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Expr, ReversedUDAF, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, ReversedUDAF, Signature, Volatility,
 };
-use datafusion_physical_expr_common::aggregate::merge_arrays::merge_ordered_arrays;
-use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
-use datafusion_physical_expr_common::sort_expr::{
-    limited_convert_logical_sort_exprs_to_physical_with_dfschema, LexOrdering,
-    PhysicalSortExpr,
-};
+use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
+use datafusion_functions_aggregate_common::utils::ordering_fields;
+use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 make_udaf_expr_and_func!(
     NthValueAgg,
@@ -87,36 +85,39 @@ impl AggregateUDFImpl for NthValueAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let n = match acc_args.input_exprs[1] {
-            Expr::Literal(ScalarValue::Int64(Some(value))) => {
+        let n = match acc_args.exprs[1]
+            .as_any()
+            .downcast_ref::<Literal>()
+            .map(|lit| lit.value())
+        {
+            Some(ScalarValue::Int64(Some(value))) => {
                 if acc_args.is_reversed {
-                    Ok(-value)
+                    -*value
                 } else {
-                    Ok(value)
+                    *value
                 }
             }
-            _ => not_impl_err!(
-                "{} not supported for n: {}",
-                self.name(),
-                &acc_args.input_exprs[1]
-            ),
-        }?;
+            _ => {
+                return not_impl_err!(
+                    "{} not supported for n: {}",
+                    self.name(),
+                    &acc_args.exprs[1]
+                )
+            }
+        };
 
-        let ordering_req = limited_convert_logical_sort_exprs_to_physical_with_dfschema(
-            acc_args.sort_exprs,
-            acc_args.dfschema,
-        )?;
-
-        let ordering_dtypes = ordering_req
+        let ordering_dtypes = acc_args
+            .ordering_req
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
+        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
         NthValueAccumulator::try_new(
             n,
-            &acc_args.input_types[0],
+            &data_type,
             &ordering_dtypes,
-            ordering_req,
+            acc_args.ordering_req.to_vec(),
         )
         .map(|acc| Box::new(acc) as _)
     }

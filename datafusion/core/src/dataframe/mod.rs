@@ -717,7 +717,10 @@ impl DataFrame {
                             {
                                 let column =
                                     batchs[0].column_by_name(field.name()).unwrap();
-                                if field.data_type().is_numeric() {
+
+                                if column.data_type().is_null() {
+                                    Arc::new(StringArray::from(vec!["null"]))
+                                } else if field.data_type().is_numeric() {
                                     cast(column, &DataType::Float64)?
                                 } else {
                                     cast(column, &DataType::Utf8)?
@@ -2997,13 +3000,13 @@ mod tests {
             .await?
             .select_columns(&["c1", "c2", "c3"])?
             .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
-            .limit(0, Some(1))?
             .sort(vec![
                 // make the test deterministic
                 col("c1").sort(true, true),
                 col("c2").sort(true, true),
                 col("c3").sort(true, true),
             ])?
+            .limit(0, Some(1))?
             .with_column("sum", col("c2") + col("c3"))?;
 
         let df_sum_renamed = df
@@ -3019,11 +3022,11 @@ mod tests {
 
         assert_batches_sorted_eq!(
             [
-                "+-----+-----+----+-------+",
-                "| one | two | c3 | total |",
-                "+-----+-----+----+-------+",
-                "| a   | 3   | 13 | 16    |",
-                "+-----+-----+----+-------+"
+                "+-----+-----+-----+-------+",
+                "| one | two | c3  | total |",
+                "+-----+-----+-----+-------+",
+                "| a   | 3   | -72 | -69   |",
+                "+-----+-----+-----+-------+",
             ],
             &df_sum_renamed
         );

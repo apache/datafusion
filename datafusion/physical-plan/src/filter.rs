@@ -126,7 +126,7 @@ impl FilterExec {
         let schema = input.schema();
         if !check_support(predicate, &schema) {
             let selectivity = default_selectivity as f64 / 100.0;
-            let mut stats = input_stats.into_inexact();
+            let mut stats = input_stats.to_inexact();
             stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
             stats.total_byte_size = stats
                 .total_byte_size

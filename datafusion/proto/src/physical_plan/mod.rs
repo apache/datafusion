@@ -18,7 +18,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::physical_expr_common::aggregate::AggregateExprBuilder;
+use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -477,7 +477,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             ExprType::AggregateExpr(agg_node) => {
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema, extension_codec)).collect::<Result<Vec<_>>>()?;
-                                let _ordering_req: Vec<PhysicalSortExpr> = agg_node.ordering_req.iter()
+                                let ordering_req: Vec<PhysicalSortExpr> = agg_node.ordering_req.iter()
                                     .map(|e| parse_physical_sort_expr(e, registry, &physical_schema, extension_codec)).collect::<Result<Vec<_>>>()?;
                                 agg_node.aggregate_function.as_ref().map(|func| {
                                     match func {
@@ -487,14 +487,12 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                                 None => registry.udaf(udaf_name)?
                                             };
 
-                                            // TODO: approx_percentile_cont and approx_percentile_cont_weight are not supported for UDAF from protobuf yet.
-                                            // TODO: `order by` is not supported for UDAF yet
-                                            // https://github.com/apache/datafusion/issues/11804
                                             AggregateExprBuilder::new(agg_udf, input_phy_expr)
                                                 .schema(Arc::clone(&physical_schema))
                                                 .alias(name)
                                                 .with_ignore_nulls(agg_node.ignore_nulls)
                                                 .with_distinct(agg_node.distinct)
+                                                .order_by(ordering_req)
                                                 .build()
                                         }
                                     }

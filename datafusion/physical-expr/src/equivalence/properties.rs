@@ -24,7 +24,7 @@ use crate::equivalence::{
     collapse_lex_req, EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass,
     ProjectionMapping,
 };
-use crate::expressions::Literal;
+use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
 use crate::{
     physical_exprs_contains, ConstExpr, LexOrdering, LexOrderingRef, LexRequirement,
     LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
@@ -36,9 +36,6 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_err, JoinSide, JoinType, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_physical_expr_common::expressions::column::Column;
-use datafusion_physical_expr_common::expressions::CastExpr;
-use datafusion_physical_expr_common::physical_expr::with_new_schema;
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
 use indexmap::{IndexMap, IndexSet};
