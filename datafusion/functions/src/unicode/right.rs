@@ -20,7 +20,8 @@ use std::cmp::{max, Ordering};
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait,
+    Array, ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array,
+    OffsetSizeTrait,
 };
 use arrow::datatypes::DataType;
 
