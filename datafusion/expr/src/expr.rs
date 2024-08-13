@@ -1032,10 +1032,12 @@ impl Display for WildcardOptions {
     }
 }
 
-/// The planned REPLACE items that include the original ast nodes and the planned expressions
+/// The planned expressions for `REPLACE`
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub struct PlannedReplaceSelectItem {
+    /// The original ast nodes
     pub items: Vec<ReplaceSelectElement>,
+    /// The expression planned from the ast nodes. They will be used when expanding the wildcard.
     pub planned_expressions: Vec<Expr>,
 }
 
