@@ -493,3 +493,22 @@ select cardinality(map([1, 2, 3], ['a', 'b', 'c'])), cardinality(MAP {'a': 1, 'b
        cardinality(MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} });
 ----
 3 2 0 2
+
+# map_extract
+query IIII
+select map_extract(MAP {'a': 1, 'b': 2, 'c': 3}, 'a'), map_extract(MAP {'a': 1, 'b': 2, 'c': 3}, 'b'),
+       map_extract(MAP {'a': 1, 'b': 2, 'c': 3}, 'c'), map_extract(MAP {'a': 1, 'b': 2, 'c': 3}, 'd');
+----
+1 2 3 NULL
+
+query IIII
+select map_extract(MAP {1: 1, 2: 2, 3:3}, 1), map_extract(MAP {1: 1, 2: 2, 3:3}, 2),
+       map_extract(MAP {1: 1, 2: 2, 3:3}, 3), map_extract(MAP {1: 1, 2: 2, 3:3}, 4);
+----
+1 2 3 NULL
+
+# TODO: support Map key and value type coercion
+# query II
+# select map_extract(MAP {1: 1, 2: 2, 3:3}, '1'), map_extract(MAP {1: 1, 2: 2, 3:3}, 1.0);
+# ---
+# 1 1

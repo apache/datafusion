@@ -21,7 +21,7 @@ use arrow::array::ArrayRef;
 
 use arrow::datatypes::{DataType, Float64Type, Int64Type, UInt32Type};
 use arrow_array::{
-    new_empty_array, Array, ArrowPrimitiveType, MapArray, PrimitiveArray, StringArray,
+    new_null_array, Array, ArrowPrimitiveType, MapArray, PrimitiveArray, StringArray,
 };
 use datafusion_common::cast::{as_primitive_array, as_string_array};
 use datafusion_common::utils::get_map_entry_field;
@@ -132,7 +132,7 @@ fn generic_map_extract_inner<T: ArrowPrimitiveType>(
     keys_array: &PrimitiveArray<T>,
     query_keys_array: &PrimitiveArray<T>,
 ) -> Result<ArrayRef> {
-    let mut values = new_empty_array(map_array.value_type());
+    let mut values = new_null_array(map_array.value_type(), 1);
     for index in 0..keys_array.len() {
         let key = keys_array.value(index);
         if key == query_keys_array.value(0) {
@@ -152,7 +152,7 @@ fn string_map_extract_inner(
     keys_array: &StringArray,
     query_keys_array: &StringArray,
 ) -> Result<ArrayRef> {
-    let mut values = new_empty_array(map_array.value_type());
+    let mut values = new_null_array(map_array.value_type(), 1);
     for index in 0..keys_array.len() {
         let key = keys_array.value(index);
         if key == query_keys_array.value(0) {
