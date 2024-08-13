@@ -697,16 +697,32 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for LPAD
-## TODO https://github.com/apache/datafusion/issues/11857
 query TT
 EXPLAIN SELECT
   LPAD(column1_utf8view, 12, ' ') as c1
 FROM test;
 ----
 logical_plan
-01)Projection: lpad(CAST(test.column1_utf8view AS Utf8), Int64(12), Utf8(" ")) AS c1
+01)Projection: lpad(test.column1_utf8view, Int64(12), Utf8(" ")) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
+query TT
+EXPLAIN SELECT
+  LPAD(column1_utf8view, 12, column2_large_utf8) as c1
+FROM test;
+----
+logical_plan
+01)Projection: lpad(test.column1_utf8view, Int64(12), test.column2_large_utf8) AS c1
+02)--TableScan: test projection=[column2_large_utf8, column1_utf8view]
+
+query TT
+EXPLAIN SELECT
+  LPAD(column1_utf8view, 12, column2_utf8view) as c1
+FROM test;
+----
+logical_plan
+01)Projection: lpad(test.column1_utf8view, Int64(12), test.column2_utf8view) AS c1
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for OCTET_LENGTH
 query TT
