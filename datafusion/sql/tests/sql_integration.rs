@@ -58,7 +58,7 @@ mod common;
 fn test_schema_support() {
     quick_test(
         "SELECT * FROM s1.test",
-        "Projection: s1.test.t_date32, s1.test.t_date64\
+        "Projection: *\
              \n  TableScan: s1.test",
     );
 }
@@ -517,7 +517,7 @@ fn plan_copy_to_query() {
     let plan = r#"
 CopyTo: format=csv output_url=output.csv options: ()
   Limit: skip=0, fetch=10
-    Projection: test_decimal.id, test_decimal.price
+    Projection: *
       TableScan: test_decimal
     "#
     .trim();
@@ -638,22 +638,12 @@ fn select_repeated_column() {
 }
 
 #[test]
-fn select_wildcard_with_repeated_column() {
-    let sql = "SELECT *, age FROM person";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Error during planning: Projections require unique expression names but the expression \"person.age\" at position 3 and \"person.age\" at position 8 have the same name. Consider aliasing (\"AS\") one of them.",
-        err.strip_backtrace()
-    );
-}
-
-#[test]
 fn select_wildcard_with_repeated_column_but_is_aliased() {
     quick_test(
-            "SELECT *, first_name AS fn from person",
-            "Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.first_name AS fn\
+        "SELECT *, first_name AS fn from person",
+        "Projection: *, person.first_name AS fn\
             \n  TableScan: person",
-        );
+    );
 }
 
 #[test]
@@ -870,7 +860,7 @@ fn where_selection_with_ambiguous_column() {
 #[test]
 fn natural_join() {
     let sql = "SELECT * FROM lineitem a NATURAL JOIN lineitem b";
-    let expected = "Projection: a.l_item_id, a.l_description, a.price\
+    let expected = "Projection: *\
                         \n  Inner Join: Using a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.price = b.price\
                         \n    SubqueryAlias: a\
                         \n      TableScan: lineitem\
@@ -906,7 +896,7 @@ fn natural_right_join() {
 #[test]
 fn natural_join_no_common_becomes_cross_join() {
     let sql = "SELECT * FROM person a NATURAL JOIN lineitem b";
-    let expected = "Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, b.l_item_id, b.l_description, b.price\
+    let expected = "Projection: *\
                         \n  CrossJoin:\
                         \n    SubqueryAlias: a\
                         \n      TableScan: person\
@@ -918,8 +908,7 @@ fn natural_join_no_common_becomes_cross_join() {
 #[test]
 fn using_join_multiple_keys() {
     let sql = "SELECT * FROM person a join person b using (id, age)";
-    let expected = "Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, \
-        b.first_name, b.last_name, b.state, b.salary, b.birth_date, b.😀\
+    let expected = "Projection: *\
                         \n  Inner Join: Using a.id = b.id, a.age = b.age\
                         \n    SubqueryAlias: a\
                         \n      TableScan: person\
@@ -933,8 +922,7 @@ fn using_join_multiple_keys_subquery() {
     let sql =
         "SELECT age FROM (SELECT * FROM person a join person b using (id, age, state))";
     let expected = "Projection: a.age\
-                        \n  Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, \
-        b.first_name, b.last_name, b.salary, b.birth_date, b.😀\
+                        \n  Projection: *\
                         \n    Inner Join: Using a.id = b.id, a.age = b.age, a.state = b.state\
                         \n      SubqueryAlias: a\
                         \n        TableScan: person\
@@ -946,8 +934,7 @@ fn using_join_multiple_keys_subquery() {
 #[test]
 fn using_join_multiple_keys_qualified_wildcard_select() {
     let sql = "SELECT a.* FROM person a join person b using (id, age)";
-    let expected =
-        "Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀\
+    let expected = "Projection: a.*\
                         \n  Inner Join: Using a.id = b.id, a.age = b.age\
                         \n    SubqueryAlias: a\
                         \n      TableScan: person\
@@ -959,8 +946,7 @@ fn using_join_multiple_keys_qualified_wildcard_select() {
 #[test]
 fn using_join_multiple_keys_select_all_columns() {
     let sql = "SELECT a.*, b.* FROM person a join person b using (id, age)";
-    let expected = "Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, \
-        b.id, b.first_name, b.last_name, b.age, b.state, b.salary, b.birth_date, b.😀\
+    let expected = "Projection: a.*, b.*\
                         \n  Inner Join: Using a.id = b.id, a.age = b.age\
                         \n    SubqueryAlias: a\
                         \n      TableScan: person\
@@ -972,9 +958,7 @@ fn using_join_multiple_keys_select_all_columns() {
 #[test]
 fn using_join_multiple_keys_multiple_joins() {
     let sql = "SELECT * FROM person a join person b using (id, age, state) join person c using (id, age, state)";
-    let expected = "Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, \
-        b.first_name, b.last_name, b.salary, b.birth_date, b.😀, \
-        c.first_name, c.last_name, c.salary, c.birth_date, c.😀\
+    let expected = "Projection: *\
                         \n  Inner Join: Using a.id = c.id, a.age = c.age, a.state = c.state\
                         \n    Inner Join: Using a.id = b.id, a.age = b.age, a.state = b.state\
                         \n      SubqueryAlias: a\
@@ -1305,13 +1289,13 @@ fn select_binary_expr_nested() {
 fn select_wildcard_with_groupby() {
     quick_test(
             r#"SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date, "😀""#,
-            "Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀\
+            "Projection: *\
              \n  Aggregate: groupBy=[[person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀]], aggr=[[]]\
              \n    TableScan: person",
         );
     quick_test(
             "SELECT * FROM (SELECT first_name, last_name FROM person) AS a GROUP BY first_name, last_name",
-            "Projection: a.first_name, a.last_name\
+            "Projection: *\
             \n  Aggregate: groupBy=[[a.first_name, a.last_name]], aggr=[[]]\
             \n    SubqueryAlias: a\
             \n      Projection: person.first_name, person.last_name\
@@ -1474,7 +1458,7 @@ fn recursive_ctes() {
         select * from numbers;";
     quick_test(
         sql,
-        "Projection: numbers.n\
+        "Projection: *\
     \n  SubqueryAlias: numbers\
     \n    RecursiveQuery: is_distinct=false\
     \n      Projection: Int64(1) AS n\
@@ -1687,10 +1671,10 @@ fn select_aggregate_with_non_column_inner_expression_with_groupby() {
 #[test]
 fn test_wildcard() {
     quick_test(
-            "SELECT * from person",
-            "Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀\
+        "SELECT * from person",
+        "Projection: *\
             \n  TableScan: person",
-        );
+    );
 }
 
 #[test]
@@ -2118,7 +2102,7 @@ fn project_wildcard_on_join_with_using() {
             FROM lineitem \
             JOIN lineitem as lineitem2 \
             USING (l_item_id)";
-    let expected = "Projection: lineitem.l_item_id, lineitem.l_description, lineitem.price, lineitem2.l_description, lineitem2.price\
+    let expected = "Projection: *\
         \n  Inner Join: Using lineitem.l_item_id = lineitem2.l_item_id\
         \n    TableScan: lineitem\
         \n    SubqueryAlias: lineitem2\
@@ -3005,7 +2989,7 @@ fn exists_subquery_wildcard() {
     let expected = "Projection: p.id\
         \n  Filter: EXISTS (<subquery>)\
         \n    Subquery:\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀\
+        \n      Projection: *\
         \n        Filter: person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)\
         \n          TableScan: person\
         \n    SubqueryAlias: p\
@@ -3092,13 +3076,13 @@ fn subquery_references_cte() {
         cte AS (SELECT * FROM person) \
         SELECT * FROM person WHERE EXISTS (SELECT * FROM cte WHERE id = person.id)";
 
-    let expected = "Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀\
+    let expected = "Projection: *\
         \n  Filter: EXISTS (<subquery>)\
         \n    Subquery:\
-        \n      Projection: cte.id, cte.first_name, cte.last_name, cte.age, cte.state, cte.salary, cte.birth_date, cte.😀\
+        \n      Projection: *\
         \n        Filter: cte.id = outer_ref(person.id)\
         \n          SubqueryAlias: cte\
-        \n            Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀\
+        \n            Projection: *\
         \n              TableScan: person\
         \n    TableScan: person";
 
@@ -3113,7 +3097,7 @@ fn cte_with_no_column_names() {
         ) \
         SELECT * FROM numbers;";
 
-    let expected = "Projection: numbers.a, numbers.b, numbers.c\
+    let expected = "Projection: *\
         \n  SubqueryAlias: numbers\
         \n    Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c\
         \n      EmptyRelation";
@@ -3129,7 +3113,7 @@ fn cte_with_column_names() {
         ) \
         SELECT * FROM numbers;";
 
-    let expected = "Projection: numbers.a, numbers.b, numbers.c\
+    let expected = "Projection: *\
         \n  SubqueryAlias: numbers\
         \n    Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c\
         \n      Projection: Int64(1), Int64(2), Int64(3)\
@@ -3147,7 +3131,7 @@ fn cte_with_column_aliases_precedence() {
         ) \
         SELECT * FROM numbers;";
 
-    let expected = "Projection: numbers.a, numbers.b, numbers.c\
+    let expected = "Projection: *\
         \n  SubqueryAlias: numbers\
         \n    Projection: x AS a, y AS b, z AS c\
         \n      Projection: Int64(1) AS x, Int64(2) AS y, Int64(3) AS z\
@@ -3528,7 +3512,7 @@ fn test_select_all_inner_join() {
             INNER JOIN orders \
             ON orders.customer_id * 2 = person.id + 10";
 
-    let expected = "Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+    let expected = "Projection: *\
             \n  Inner Join:  Filter: orders.customer_id * Int64(2) = person.id + Int64(10)\
             \n    TableScan: person\
             \n    TableScan: orders";
@@ -4245,7 +4229,7 @@ fn test_prepare_statement_to_plan_value_list() {
     let sql = "PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);";
 
     let expected_plan = "Prepare: \"my_plan\" [Utf8, Utf8] \
-        \n  Projection: t.num, t.letter\
+        \n  Projection: *\
         \n    SubqueryAlias: t\
         \n      Projection: column1 AS num, column2 AS letter\
         \n        Values: (Int64(1), $1), (Int64(2), $2)";
@@ -4260,7 +4244,7 @@ fn test_prepare_statement_to_plan_value_list() {
         ScalarValue::from("a".to_string()),
         ScalarValue::from("b".to_string()),
     ];
-    let expected_plan = "Projection: t.num, t.letter\
+    let expected_plan = "Projection: *\
         \n  SubqueryAlias: t\
         \n    Projection: column1 AS num, column2 AS letter\
         \n      Values: (Int64(1), Utf8(\"a\")), (Int64(2), Utf8(\"b\"))";
@@ -4310,7 +4294,7 @@ fn test_table_alias() {
           (select age from person) t2 \
         ) as f";
 
-    let expected = "Projection: f.id, f.age\
+    let expected = "Projection: *\
         \n  SubqueryAlias: f\
         \n    CrossJoin:\
         \n      SubqueryAlias: t1\
@@ -4327,7 +4311,7 @@ fn test_table_alias() {
           (select age from person) t2 \
         ) as f (c1, c2)";
 
-    let expected = "Projection: f.c1, f.c2\
+    let expected = "Projection: *\
         \n  SubqueryAlias: f\
         \n    Projection: t1.id AS c1, t2.age AS c2\
         \n      CrossJoin:\
