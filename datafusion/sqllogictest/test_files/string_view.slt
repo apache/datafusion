@@ -639,18 +639,19 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test LTRIM outputs
-query TTTT
+query TTTTT
 SELECT
   LTRIM(column1_utf8view, 'foo') AS l1,
   LTRIM(column1_utf8view, column2_utf8view) AS l2,
   LTRIM(column1_utf8view) AS l3,
-  LTRIM(column1_utf8view, NULL) AS l4
+  LTRIM(column1_utf8view, NULL) AS l4,
+  LTRIM(column1_utf8view, 'Xiang') AS l5
 FROM test;
 ----
-Andrew    Andrew    Andrew    NULL
-Xiangpeng (empty)   Xiangpeng NULL
-Raphael   aphael   Raphael   NULL
-NULL      NULL      NULL      NULL
+Andrew    Andrew    Andrew    NULL  Andrew
+Xiangpeng (empty)   Xiangpeng NULL  peng
+Raphael   aphael    Raphael   NULL  Raphael
+NULL      NULL      NULL      NULL  NULL
 
 ## ensure no casts for RTRIM
 # Test RTRIM with Utf8View input
@@ -684,18 +685,19 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test RTRIM outputs
-query TTTT
+query TTTTT
 SELECT
   RTRIM(column1_utf8view, 'foo') AS l1,
   RTRIM(column1_utf8view, column2_utf8view) AS l2,
   RTRIM(column1_utf8view) AS l3,
-  RTRIM(column1_utf8view, NULL) AS l4
+  RTRIM(column1_utf8view, NULL) AS l4,
+  RTRIM(column1_utf8view, 'peng') As l5
 FROM test;
 ----
-Andrew    Andrew    Andrew    NULL
-Xiangpeng (empty)   Xiangpeng NULL
-Raphael   Raphael   Raphael   NULL
-NULL      NULL      NULL      NULL
+Andrew    Andrew    Andrew    NULL  Andrew
+Xiangpeng (empty)   Xiangpeng NULL  Xia
+Raphael   Raphael   Raphael   NULL  Raphael
+NULL      NULL      NULL      NULL  NULL
 
 
 ## Ensure no casts for CHARACTER_LENGTH
