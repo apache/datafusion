@@ -20,7 +20,7 @@ use std::cmp::{max, Ordering};
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait,
+    Array, ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait,
 };
 use arrow::datatypes::DataType;
 
@@ -141,7 +141,7 @@ fn right_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::StringArray;
+    use arrow::array::{Array, StringArray};
     use arrow::datatypes::DataType::Utf8;
 
     use datafusion_common::{Result, ScalarValue};
