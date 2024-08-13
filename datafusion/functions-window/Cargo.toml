@@ -41,4 +41,4 @@ path = "src/lib.rs"
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
-log = {workspace = true}
+log = { workspace = true }
