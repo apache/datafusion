@@ -661,6 +661,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
             }
+            SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
     }
@@ -670,7 +671,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-        values: Vec<sqlparser::ast::Expr>,
+        values: Vec<SQLExpr>,
         fields: Vec<StructField>,
     ) -> Result<Expr> {
         if !fields.is_empty() {
@@ -693,6 +694,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
         not_impl_err!("Struct not supported by ExprPlanner: {create_struct_args:?}")
+    }
+
+    fn parse_tuple(
+        &self,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+        values: Vec<SQLExpr>,
+    ) -> Result<Expr> {
+        match values.first() {
+            Some(SQLExpr::Identifier(_)) | Some(SQLExpr::Value(_)) => {
+                self.parse_struct(schema, planner_context, values, vec![])
+            }
+            None => not_impl_err!("Empty tuple not supported yet"),
+            _ => {
+                not_impl_err!("Only identifiers and literals are supported in tuples")
+            }
+        }
     }
 
     fn sql_position_to_expr(
