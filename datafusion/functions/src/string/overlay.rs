@@ -91,7 +91,7 @@ impl ScalarUDFImpl for OverlayFunc {
 
 macro_rules! process_overlay {
     // For the three-argument case
-    ($string_array:expr, $characters_array:expr, $pos_num:expr, $is_view:expr) => {{
+    ($string_array:expr, $characters_array:expr, $pos_num:expr) => {{
         $string_array
         .iter()
         .zip($characters_array.iter())
@@ -125,7 +125,7 @@ macro_rules! process_overlay {
     }};
 
     // For the four-argument case
-    ($string_array:expr, $characters_array:expr, $pos_num:expr, $len_num:expr, $is_view:expr) => {{
+    ($string_array:expr, $characters_array:expr, $pos_num:expr, $len_num:expr) => {{
         $string_array
         .iter()
         .zip($characters_array.iter())
@@ -180,8 +180,7 @@ pub fn string_overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
             let characters_array = as_generic_string_array::<T>(&args[1])?;
             let pos_num = as_int64_array(&args[2])?;
 
-            let result =
-                process_overlay!(string_array, characters_array, pos_num, false)?;
+            let result = process_overlay!(string_array, characters_array, pos_num)?;
             Ok(Arc::new(result) as ArrayRef)
         }
         4 => {
@@ -190,13 +189,8 @@ pub fn string_overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
             let pos_num = as_int64_array(&args[2])?;
             let len_num = as_int64_array(&args[3])?;
 
-            let result = process_overlay!(
-                string_array,
-                characters_array,
-                pos_num,
-                len_num,
-                false
-            )?;
+            let result =
+                process_overlay!(string_array, characters_array, pos_num, len_num)?;
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
@@ -212,7 +206,7 @@ pub fn string_view_overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arra
             let characters_array = as_string_view_array(&args[1])?;
             let pos_num = as_int64_array(&args[2])?;
 
-            let result = process_overlay!(string_array, characters_array, pos_num, true)?;
+            let result = process_overlay!(string_array, characters_array, pos_num)?;
             Ok(Arc::new(result) as ArrayRef)
         }
         4 => {
@@ -222,7 +216,7 @@ pub fn string_view_overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arra
             let len_num = as_int64_array(&args[3])?;
 
             let result =
-                process_overlay!(string_array, characters_array, pos_num, len_num, true)?;
+                process_overlay!(string_array, characters_array, pos_num, len_num)?;
             Ok(Arc::new(result) as ArrayRef)
         }
         other => {
