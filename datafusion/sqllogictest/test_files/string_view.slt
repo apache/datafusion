@@ -427,6 +427,7 @@ logical_plan
 
 ### Test TRANSLATE
 
+# Should run TRANSLATE using utf8view column successfully
 query T
 SELECT
   TRANSLATE(column1_utf8view, 'foo', 'bar') as c
