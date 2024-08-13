@@ -425,6 +425,18 @@ logical_plan
 01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
 02)--TableScan: test projection=[column1_utf8view]
 
+### Test TRANSLATE
+
+query T
+SELECT
+  TRANSLATE(column1_utf8view, 'foo', 'bar') as c
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
 ### Initcap
 
 query TT
