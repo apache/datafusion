@@ -203,6 +203,32 @@ SELECT lpad(NULL, 5, 'xy')
 ----
 NULL
 
+# test largeutf8, utf8view for lpad
+query T
+SELECT lpad(arrow_cast('hi', 'LargeUtf8'), 5, 'xy')
+----
+xyxhi
+
+query T
+SELECT lpad(arrow_cast('hi', 'Utf8View'), 5, 'xy')
+----
+xyxhi
+
+query T
+SELECT lpad(arrow_cast('hi', 'LargeUtf8'), 5, arrow_cast('xy', 'LargeUtf8'))
+----
+xyxhi
+
+query T
+SELECT lpad(arrow_cast('hi', 'Utf8View'), 5, arrow_cast('xy', 'Utf8View'))
+----
+xyxhi
+
+query T
+SELECT lpad(arrow_cast(NULL, 'Utf8View'), 5, 'xy')
+----
+NULL
+
 query T
 SELECT reverse('abcde')
 ----
