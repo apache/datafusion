@@ -21,16 +21,20 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, IntervalUnit};
 
+use crate::analyzer::AnalyzerRule;
+use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::builder::project_with_column_index;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
     WindowFunction,
 };
+use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::Subquery;
@@ -47,12 +51,9 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, Operator, ScalarUDF,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, Operator,
+    Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
-
-use crate::analyzer::AnalyzerRule;
-use crate::utils::NamePreserver;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -122,6 +123,7 @@ fn analyze_internal(
     })?
     // coerce join expressions specially
     .map_data(|plan| expr_rewrite.coerce_joins(plan))?
+    .map_data(|plan| expr_rewrite.coerce_union(plan))?
     // recompute the schema after the expressions have been rewritten as the types may have changed
     .map_data(|plan| plan.recompute_schema())
 }
@@ -166,6 +168,39 @@ impl<'a> TypeCoercionRewriter<'a> {
             .transpose()?;
 
         Ok(LogicalPlan::Join(join))
+    }
+
+    /// Corece the union inputs after expanding the wildcard expressions
+    ///
+    /// Union inputs must have the same schema, so we coerce the expressions to match the schema
+    /// after expanding the wildcard expressions
+    fn coerce_union(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        let LogicalPlan::Union(union) = plan else {
+            return Ok(plan);
+        };
+
+        let inputs = union
+            .inputs
+            .into_iter()
+            .map(|p| {
+                let plan = coerce_plan_expr_for_schema(&p, &union.schema)?;
+                match plan {
+                    LogicalPlan::Projection(Projection { expr, input, .. }) => {
+                        Ok(Arc::new(project_with_column_index(
+                            expr,
+                            input,
+                            Arc::clone(&union.schema),
+                        )?))
+                    }
+                    other_plan => Ok(Arc::new(other_plan)),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(LogicalPlan::Union(Union {
+            inputs,
+            schema: Arc::clone(&union.schema),
+        }))
     }
 
     fn coerce_join_filter(&self, expr: Expr) -> Result<Expr> {
@@ -1286,7 +1321,6 @@ mod test {
         .eq(cast(lit("1998-03-18"), DataType::Date32));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        dbg!(&plan);
         let expected =
             "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8(\"1998-03-18\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1473,7 +1507,6 @@ mod test {
         ));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        dbg!(&plan);
         let expected =
             "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) - CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;

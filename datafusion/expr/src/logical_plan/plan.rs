@@ -31,8 +31,9 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
+    enumerate_grouping_sets, exprlist_len, exprlist_to_fields, find_base_plan,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    split_conjunction,
 };
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
@@ -1977,7 +1978,9 @@ impl Projection {
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
-        if expr.len() != schema.fields().len() {
+        if !expr.iter().any(|e| matches!(e, Expr::Wildcard { .. }))
+            && expr.len() != schema.fields().len()
+        {
             return plan_err!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len());
         }
         Ok(Self {
@@ -2763,20 +2766,48 @@ fn calc_func_dependencies_for_project(
     // Calculate expression indices (if present) in the input schema.
     let proj_indices = exprs
         .iter()
-        .filter_map(|expr| {
-            let expr_name = match expr {
-                Expr::Alias(alias) => {
-                    format!("{}", alias.expr)
-                }
-                _ => format!("{}", expr),
-            };
-            input_fields.iter().position(|item| *item == expr_name)
+        .map(|expr| match expr {
+            Expr::Wildcard { qualifier, options } => {
+                let wildcard_fields = exprlist_to_fields(
+                    vec![&Expr::Wildcard {
+                        qualifier: qualifier.clone(),
+                        options: options.clone(),
+                    }],
+                    input,
+                )?;
+                Ok::<_, DataFusionError>(
+                    wildcard_fields
+                        .into_iter()
+                        .filter_map(|(qualifier, f)| {
+                            let flat_name = qualifier
+                                .map(|t| format!("{}.{}", t, f.name()))
+                                .unwrap_or(f.name().clone());
+                            input_fields.iter().position(|item| *item == flat_name)
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+            Expr::Alias(alias) => Ok(input_fields
+                .iter()
+                .position(|item| *item == format!("{}", alias.expr))
+                .map(|i| vec![i])
+                .unwrap_or(vec![])),
+            _ => Ok(input_fields
+                .iter()
+                .position(|item| *item == format!("{}", expr))
+                .map(|i| vec![i])
+                .unwrap_or(vec![])),
         })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect::<Vec<_>>();
+
+    let len = exprlist_len(exprs, input.schema(), Some(find_base_plan(input).schema()))?;
     Ok(input
         .schema()
         .functional_dependencies()
-        .project_functional_dependencies(&proj_indices, exprs.len()))
+        .project_functional_dependencies(&proj_indices, len))
 }
 
 /// Sorts its input according to a list of sort expressions.
