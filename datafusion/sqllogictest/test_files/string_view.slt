@@ -896,15 +896,27 @@ logical_plan
 
 
 ## Ensure no casts for RIGHT
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   RIGHT(column1_utf8view, 3) as c2
 FROM test;
 ----
 logical_plan
-01)Projection: right(CAST(test.column1_utf8view AS Utf8), Int64(3)) AS c2
+01)Projection: right(test.column1_utf8view, Int64(3)) AS c2
 02)--TableScan: test projection=[column1_utf8view]
+
+# Test outputs of RIGHT
+query TTT
+SELECT
+  RIGHT(column1_utf8view, 3) as c1,
+  RIGHT(column1_utf8view, 0) as c2,
+  RIGHT(column1_utf8view, -3) as c3
+FROM test;
+----
+rew  (empty) rew
+eng  (empty) ngpeng
+ael  (empty) hael
+NULL NULL    NULL
 
 ## Ensure no casts for RPAD
 ## TODO file ticket
