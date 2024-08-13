@@ -22,7 +22,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{Column, Result};
 use datafusion_expr::builder::validate_unique_names;
-use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem};
+use datafusion_expr::expr::PlannedReplaceSelectItem;
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, find_base_plan,
 };
@@ -83,7 +83,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     )?;
                     // If there is a REPLACE statement, replace that column with the given
                     // replace expression. Column name remains the same.
-                    let replaced = if let Some(replace) = options.opt_replace {
+                    let replaced = if let Some(replace) = options.replace {
                         replace_columns(expanded, replace)?
                     } else {
                         expanded
@@ -94,7 +94,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
                         expand_wildcard(input.schema(), input, Some(&options))?;
                     // If there is a REPLACE statement, replace that column with the given
                     // replace expression. Column name remains the same.
-                    let replaced = if let Some(replace) = options.opt_replace {
+                    let replaced = if let Some(replace) = options.replace {
                         replace_columns(expanded, replace)?
                     } else {
                         expanded
@@ -149,11 +149,7 @@ fn replace_columns(
                 .zip(replace.expressions().iter())
                 .find(|(item, _)| item.column_name.value == *name)
             {
-                *expr = Expr::Alias(Alias {
-                    expr: Box::new(new_expr.clone()),
-                    relation: None,
-                    name: name.clone(),
-                })
+                *expr = new_expr.clone().alias(name.clone())
             }
         }
     }

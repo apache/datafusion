@@ -625,6 +625,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
         options: WildcardAdditionalOptions,
     ) -> Result<WildcardOptions> {
+        let planned_option = WildcardOptions {
+            ilike: options.opt_ilike,
+            exclude: options.opt_exclude,
+            except: options.opt_except,
+            replace: None,
+            rename: options.opt_rename,
+        };
         if let Some(replace) = options.opt_replace {
             let replace_expr = replace
                 .items
@@ -639,25 +646,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .clone())
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let planned_option = PlannedReplaceSelectItem {
-                items: replace.items,
+            let planned_replace = PlannedReplaceSelectItem {
+                items: replace.items.into_iter().map(|i| *i).collect(),
                 planned_expressions: replace_expr,
             };
-            Ok(WildcardOptions {
-                opt_ilike: options.opt_ilike,
-                opt_exclude: options.opt_exclude,
-                opt_except: options.opt_except,
-                opt_replace: Some(planned_option),
-                opt_rename: options.opt_rename,
-            })
+            Ok(planned_option.with_replace(planned_replace))
         } else {
-            Ok(WildcardOptions {
-                opt_ilike: options.opt_ilike,
-                opt_exclude: options.opt_exclude,
-                opt_except: options.opt_except,
-                opt_replace: None,
-                opt_rename: options.opt_rename,
-            })
+            Ok(planned_option)
         }
     }
 

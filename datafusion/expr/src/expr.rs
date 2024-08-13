@@ -978,28 +978,40 @@ impl GroupingSet {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub struct WildcardOptions {
-    pub opt_ilike: Option<IlikeSelectItem>,
-    pub opt_exclude: Option<ExcludeSelectItem>,
-    pub opt_except: Option<ExceptSelectItem>,
-    pub opt_replace: Option<PlannedReplaceSelectItem>,
-    pub opt_rename: Option<RenameSelectItem>,
+    pub ilike: Option<IlikeSelectItem>,
+    pub exclude: Option<ExcludeSelectItem>,
+    pub except: Option<ExceptSelectItem>,
+    pub replace: Option<PlannedReplaceSelectItem>,
+    pub rename: Option<RenameSelectItem>,
+}
+
+impl WildcardOptions {
+    pub fn with_replace(self, replace: PlannedReplaceSelectItem) -> Self {
+        WildcardOptions {
+            ilike: self.ilike,
+            exclude: self.exclude,
+            except: self.except,
+            replace: Some(replace),
+            rename: self.rename,
+        }
+    }
 }
 
 impl Display for WildcardOptions {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        if let Some(ilike) = &self.opt_ilike {
+        if let Some(ilike) = &self.ilike {
             write!(f, " {ilike}")?;
         }
-        if let Some(exclude) = &self.opt_exclude {
+        if let Some(exclude) = &self.exclude {
             write!(f, " {exclude}")?;
         }
-        if let Some(except) = &self.opt_except {
+        if let Some(except) = &self.except {
             write!(f, " {except}")?;
         }
-        if let Some(replace) = &self.opt_replace {
+        if let Some(replace) = &self.replace {
             write!(f, " {replace}")?;
         }
-        if let Some(rename) = &self.opt_rename {
+        if let Some(rename) = &self.rename {
             write!(f, " {rename}")?;
         }
         Ok(())
@@ -1008,7 +1020,7 @@ impl Display for WildcardOptions {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub struct PlannedReplaceSelectItem {
-    pub items: Vec<Box<ReplaceSelectElement>>,
+    pub items: Vec<ReplaceSelectElement>,
     pub planned_expressions: Vec<Expr>,
 }
 
@@ -1021,7 +1033,7 @@ impl Display for PlannedReplaceSelectItem {
 }
 
 impl PlannedReplaceSelectItem {
-    pub fn items(&self) -> &[Box<ReplaceSelectElement>] {
+    pub fn items(&self) -> &[ReplaceSelectElement] {
         &self.items
     }
 
@@ -2986,11 +2998,11 @@ mod test {
                     None,
                     None,
                     Some(PlannedReplaceSelectItem {
-                        items: vec![Box::new(ReplaceSelectElement {
+                        items: vec![ReplaceSelectElement {
                             expr: ast::Expr::Identifier(Ident::from("c1")),
                             column_name: Ident::from("a1"),
                             as_keyword: false
-                        })],
+                        }],
                         planned_expressions: vec![]
                     }),
                     None
@@ -3024,11 +3036,11 @@ mod test {
         opt_rename: Option<RenameSelectItem>,
     ) -> WildcardOptions {
         WildcardOptions {
-            opt_ilike,
-            opt_exclude,
-            opt_except,
-            opt_replace,
-            opt_rename,
+            ilike: opt_ilike,
+            exclude: opt_exclude,
+            except: opt_except,
+            replace: opt_replace,
+            rename: opt_rename,
         }
     }
 }

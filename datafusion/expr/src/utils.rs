@@ -402,8 +402,8 @@ pub fn expand_wildcard(
         })
         .collect::<HashSet<_>>();
     let excluded_columns = if let Some(WildcardOptions {
-        opt_exclude,
-        opt_except,
+        exclude: opt_exclude,
+        except: opt_except,
         ..
     }) = wildcard_options
     {
@@ -436,8 +436,8 @@ pub fn expand_qualified_wildcard(
         DFSchema::try_from_qualified_schema(qualifier.clone(), &qualified_schema)?
             .with_functional_dependencies(projected_func_dependencies)?;
     let excluded_columns = if let Some(WildcardOptions {
-        opt_exclude,
-        opt_except,
+        exclude: opt_exclude,
+        except: opt_except,
         ..
     }) = wildcard_options
     {
@@ -739,8 +739,8 @@ pub fn exprlist_to_fields<'a>(
             Expr::Wildcard { qualifier, options } => match qualifier {
                 None => {
                     let excluded: Vec<String> = get_excluded_columns(
-                        options.opt_exclude.as_ref(),
-                        options.opt_except.as_ref(),
+                        options.exclude.as_ref(),
+                        options.except.as_ref(),
                         wildcard_schema,
                         None,
                     )?
@@ -748,26 +748,22 @@ pub fn exprlist_to_fields<'a>(
                     .map(|c| c.flat_name())
                     .collect();
                     Ok::<_, DataFusionError>(
-                        (0..wildcard_schema.fields().len())
-                            .filter_map(|i| {
-                                let (qualifier, field) =
-                                    wildcard_schema.qualified_field(i);
-                                let flat_name = qualifier
-                                    .map(|t| format!("{}.{}", t, field.name()))
-                                    .unwrap_or(field.name().clone());
-                                if excluded.contains(&flat_name) {
-                                    None
-                                } else {
-                                    Some((qualifier.cloned(), Arc::new(field.to_owned())))
-                                }
+                        wildcard_schema
+                            .field_names()
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, s)| !excluded.contains(s))
+                            .map(|(i, _)| wildcard_schema.qualified_field(i))
+                            .map(|(qualifier, f)| {
+                                (qualifier.cloned(), Arc::new(f.to_owned()))
                             })
                             .collect::<Vec<_>>(),
                     )
                 }
                 Some(qualifier) => {
                     let excluded: Vec<String> = get_excluded_columns(
-                        options.opt_exclude.as_ref(),
-                        options.opt_except.as_ref(),
+                        options.exclude.as_ref(),
+                        options.except.as_ref(),
                         wildcard_schema,
                         Some(qualifier),
                     )?
@@ -826,8 +822,8 @@ pub fn exprlist_len(
                 options,
             } => {
                 let excluded = get_excluded_columns(
-                    options.opt_exclude.as_ref(),
-                    options.opt_except.as_ref(),
+                    options.exclude.as_ref(),
+                    options.except.as_ref(),
                     wildcard_schema.unwrap_or(schema),
                     None,
                 )?
@@ -843,8 +839,8 @@ pub fn exprlist_len(
                 options,
             } => {
                 let excluded = get_excluded_columns(
-                    options.opt_exclude.as_ref(),
-                    options.opt_except.as_ref(),
+                    options.exclude.as_ref(),
+                    options.except.as_ref(),
                     wildcard_schema.unwrap_or(schema),
                     Some(qualifier),
                 )?
