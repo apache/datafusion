@@ -19,7 +19,9 @@ use std::any::Any;
 use std::cmp::{max, Ordering};
 use std::sync::Arc;
 
-use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait};
+use arrow::array::{
+    ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait,
+};
 use arrow::datatypes::DataType;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
