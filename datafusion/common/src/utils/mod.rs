@@ -34,7 +34,7 @@ use arrow_array::{
     Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
     RecordBatchOptions,
 };
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Fields};
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -751,6 +751,30 @@ pub fn combine_limit(
     };
 
     (combined_skip, combined_fetch)
+}
+
+pub fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
+    match data_type {
+        DataType::Map(filed, _) => {
+            let field_data_type = filed.data_type();
+            match field_data_type {
+                DataType::Struct(fields) if fields.len() == 2 => Ok(fields),
+                DataType::Struct(fields) => {
+                    _internal_err!(
+                        "Expected a Struct type with 2 fields in Map, got {} fields",
+                        fields.len()
+                    )
+                }
+                _ => {
+                    return _internal_err!(
+                        "Expected a Struct type, got {:?}",
+                        field_data_type
+                    )
+                }
+            }
+        }
+        _ => return _internal_err!("Expected a Map type, got {:?}", data_type),
+    }
 }
 
 #[cfg(test)]

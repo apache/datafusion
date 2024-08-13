@@ -146,6 +146,8 @@ pub enum ArrayFunctionSignature {
     /// Specialized Signature for MapArray
     /// The function takes a single argument that must be a MapArray
     MapArray,
+    /// Specialized Signature for MapExtract and similar functions
+    MapArrayAndKey,
 }
 
 impl std::fmt::Display for ArrayFunctionSignature {
@@ -168,6 +170,9 @@ impl std::fmt::Display for ArrayFunctionSignature {
             }
             ArrayFunctionSignature::MapArray => {
                 write!(f, "map_array")
+            }
+            ArrayFunctionSignature::MapArrayAndKey => {
+                write!(f, "map_array, key")
             }
         }
     }
@@ -354,6 +359,13 @@ impl Signature {
     pub fn array(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
+            volatility,
+        }
+    }
+    /// Specialized Signature for MapArray and similar functions
+    pub fn map_array_and_key(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::MapArrayAndKey),
             volatility,
         }
     }
