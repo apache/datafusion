@@ -761,14 +761,13 @@ logical_plan
 
 
 ## Ensure no casts for REPEAT
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   REPEAT(column1_utf8view, 2) as c1
 FROM test;
 ----
 logical_plan
-01)Projection: repeat(CAST(test.column1_utf8view AS Utf8), Int64(2)) AS c1
+01)Projection: repeat(test.column1_utf8view, Int64(2)) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REPLACE
