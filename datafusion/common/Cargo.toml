@@ -60,6 +60,7 @@ libc = "0.2.140"
 num_cpus = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
+paste = "1.0.15"
 pyo3 = { version = "0.21.0", optional = true }
 sqlparser = { workspace = true }
 

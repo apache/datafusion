@@ -58,7 +58,7 @@ impl ToDateFunc {
                 },
                 "to_date",
             ),
-            n if n >= 2 => handle_multiple::<Date32Type, _, Date32Type, _>(
+            2.. => handle_multiple::<Date32Type, _, Date32Type, _>(
                 args,
                 |s, format| {
                     string_to_timestamp_nanos_formatted(s, format)
@@ -72,7 +72,7 @@ impl ToDateFunc {
                 |n| n,
                 "to_date",
             ),
-            _ => exec_err!("Unsupported 0 argument count for function to_date"),
+            0 => exec_err!("Unsupported 0 argument count for function to_date"),
         }
     }
 }
