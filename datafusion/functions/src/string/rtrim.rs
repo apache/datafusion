@@ -57,7 +57,6 @@ impl RtrimFunc {
                     // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
                     // If that fails, it proceeds to `(Utf8, Utf8)`.
                     Exact(vec![Utf8View, Utf8View]),
-                    // Exact(vec![Utf8, Utf8View]),
                     Exact(vec![Utf8, Utf8]),
                     Exact(vec![Utf8View]),
                     Exact(vec![Utf8]),
@@ -97,7 +96,7 @@ impl ScalarUDFImpl for RtrimFunc {
             )(args),
             other => exec_err!(
                 "Unsupported data type {other:?} for function rtrim,\
-                expected for Utf8, LargeUtf8 or Utf8View."
+                expected Utf8, LargeUtf8 or Utf8View."
             ),
         }
     }
