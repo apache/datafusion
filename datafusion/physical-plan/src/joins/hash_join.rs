@@ -3824,7 +3824,7 @@ mod tests {
             // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: HashJoinInput"
+                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
             );
         }
 
@@ -3903,7 +3903,7 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Resources exhausted with top memory consumers (across reservations) are: HashJoinInput[1]"
+                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
 
             );
         }
