@@ -17,7 +17,7 @@
 
 //! Define a plan for unnesting values in columns that contain a list type.
 
-use std::cmp;
+use std::cmp::{self, Ordering};
 use std::collections::HashMap;
 use std::{any::Any, sync::Arc};
 
@@ -43,14 +43,12 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, Result, UnnestOptions,
 };
 use datafusion_execution::TaskContext;
-use datafusion_expr::builder::unnest;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
-use itertools::{Either, Itertools};
 use log::trace;
 
 /// Unnest the given columns (either with type struct or list)
@@ -270,7 +268,7 @@ impl UnnestStream {
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(batch)) => {
                     let timer = self.metrics.elapsed_compute.timer();
-                    let result = build_batch(
+                    let result = build_batch_v2(
                         &batch,
                         &self.schema,
                         &self.list_type_columns,
@@ -409,7 +407,6 @@ pub struct ListUnnest {
 
 fn unnest_at_level(
     batch: &[ArrayRef],
-    schema: &SchemaRef,
     list_type_columns: &[ListUnnest],
     temp_batch: &mut HashMap<(usize, usize), ArrayRef>,
     level_to_unnest: usize,
@@ -517,47 +514,83 @@ fn build_batch_v2(
                 .fold(0, |highest_depth, ListUnnest { depth, .. }| {
                     cmp::max(highest_depth, *depth)
                 });
-            let mut temp_unnest_result = batch.columns();
+            let mut unnested_original_columns = vec![];
             for depth in (1..=highest_depth).rev() {
-                temp_unnest_result = &unnest_at_level(
-                    batch.columns(),
-                    schema,
+                let input = match depth {
+                    highest_depth => batch.columns(),
+                    _ => &unnested_original_columns,
+                };
+                let temp = unnest_at_level(
+                    input,
                     list_type_columns,
                     &mut temp_batch,
                     highest_depth,
                     options,
                 )?;
+                unnested_original_columns = temp;
             }
             // TODO: combine temp with the batch
-            let unnested_array_map: HashMap<usize, Vec<Arc<dyn Array>>> = temp_batch
-                .into_iter()
-                .enumerate()
-                // .into_iter()
-                // .zip(list_type_columns.iter())
-                .fold(
+            let unnested_array_map: HashMap<usize, Vec<(Arc<dyn Array>, usize)>> =
+                temp_batch.into_iter().fold(
                     HashMap::new(),
-                    |mut acc,
-                     (
-                        flattened_array,
-                        ListUnnest {
-                            index_in_input_schema,
-                            depth,
-                        },
-                    )| {
-                        acc.entry(*index_in_input_schema)
+                    |mut acc, ((index_in_input_schema, depth), flattened_array)| {
+                        acc.entry(index_in_input_schema)
                             .or_insert(vec![])
-                            .push(flattened_array);
+                            .push((flattened_array, depth));
                         acc
                     },
                 );
+            let output_order: HashMap<(usize, usize), usize> = list_type_columns
+                .iter()
+                .enumerate()
+                .map(|(order, unnest_def)| {
+                    let ListUnnest {
+                        depth,
+                        index_in_input_schema,
+                    } = unnest_def;
+                    ((*index_in_input_schema, *depth), order)
+                })
+                .collect();
 
-            // temp_unnest_result.iter().map(f)
-            // vertical expansion because of list unnest
-            let ret = flatten_list_cols_from_indices(
-                batch,
-                unnested_array_map,
-                &take_indicies,
-            )?;
+            let mut ordered_unnested_array_map = unnested_array_map
+                .into_iter()
+                .map(
+                    // each item in unnested_columns is the result of unnesting the same input column
+                    // we need to sort them to conform with the unnest definition
+                    // e.g unnest(unnest(col)) must goes before unnest(col)
+                    |(original_index, mut unnested_columns)| {
+                        unnested_columns.sort_by(|(_, depth), (_, depth2)| -> Ordering {
+                            output_order.get(&(original_index, *depth)).unwrap().cmp(
+                                output_order.get(&(original_index, *depth2)).unwrap(),
+                            )
+                        });
+                        (
+                            original_index,
+                            unnested_columns
+                                .into_iter()
+                                .map(|(arr, _)| arr)
+                                .collect::<Vec<_>>(),
+                        )
+                    },
+                )
+                .collect::<HashMap<_, _>>();
+            // let highest_depth = list_type_columns
+            //     .iter()
+            //     .fold(0, |highest_depth, ListUnnest { depth, .. }| {
+            //         cmp::max(highest_depth, *depth)
+            //     });
+            let ret = unnested_original_columns
+                .iter()
+                .enumerate()
+                .map(
+                    |(col_idx, arr)| match ordered_unnested_array_map.remove(&col_idx) {
+                        Some(unnested_arrays) => unnested_arrays,
+                        None => vec![arr.clone()],
+                    },
+                )
+                .flatten()
+                .collect::<Vec<_>>();
+
             flatten_struct_cols(&ret, schema, struct_column_indices)
         }
     };
@@ -569,94 +602,94 @@ fn build_batch_v2(
 /// taking the longest length among these lists, and shorter lists are padded with NULLs.
 /// - For struct columns: We will expand the struct columns into multiple subfield columns.
 /// For columns that don't need to be unnested, repeat their values until reaching the longest length.
-fn build_batch(
-    batch: &RecordBatch,
-    schema: &SchemaRef,
-    list_type_columns: &[ListUnnest],
-    struct_column_indices: &HashSet<usize>,
-    options: &UnnestOptions,
-) -> Result<RecordBatch> {
-    let transformed = match list_type_columns.len() {
-        0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
-        _ => {
-            // maintain a map of temp result
-            // <usize,Vec<Result>>
-            // given a map of unnesting
-            // col1: <depth=2,depth=1>
-            // col2: <depth=1>
-            // 1.run for each to unnest all the top level
-            // col1: <depth=1> => to temp
-            // 2.run unnest on remaining level
-            // col1: <depth=2> => to temp
-            // col2: <depth=1> => to temp
-            let list_arrays: Vec<(ArrayRef, usize)> = list_type_columns
-                .iter()
-                .map(
-                    |ListUnnest {
-                         depth,
-                         index_in_input_schema,
-                     }| {
-                        Ok((
-                            ColumnarValue::Array(Arc::clone(
-                                batch.column(*index_in_input_schema),
-                            ))
-                            .into_array(batch.num_rows())?,
-                            *depth,
-                        ))
-                    },
-                )
-                .collect::<Result<_>>()?;
+// fn build_batch(
+//     batch: &RecordBatch,
+//     schema: &SchemaRef,
+//     list_type_columns: &[ListUnnest],
+//     struct_column_indices: &HashSet<usize>,
+//     options: &UnnestOptions,
+// ) -> Result<RecordBatch> {
+//     let transformed = match list_type_columns.len() {
+//         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
+//         _ => {
+//             // maintain a map of temp result
+//             // <usize,Vec<Result>>
+//             // given a map of unnesting
+//             // col1: <depth=2,depth=1>
+//             // col2: <depth=1>
+//             // 1.run for each to unnest all the top level
+//             // col1: <depth=1> => to temp
+//             // 2.run unnest on remaining level
+//             // col1: <depth=2> => to temp
+//             // col2: <depth=1> => to temp
+//             let list_arrays: Vec<(ArrayRef, usize)> = list_type_columns
+//                 .iter()
+//                 .map(
+//                     |ListUnnest {
+//                          depth,
+//                          index_in_input_schema,
+//                      }| {
+//                         Ok((
+//                             ColumnarValue::Array(Arc::clone(
+//                                 batch.column(*index_in_input_schema),
+//                             ))
+//                             .into_array(batch.num_rows())?,
+//                             *depth,
+//                         ))
+//                     },
+//                 )
+//                 .collect::<Result<_>>()?;
 
-            let longest_length = find_longest_length(&list_arrays, options)?;
-            let unnested_length = longest_length.as_primitive::<Int64Type>();
-            let total_length = if unnested_length.is_empty() {
-                0
-            } else {
-                sum(unnested_length).ok_or_else(|| {
-                    exec_datafusion_err!("Failed to calculate the total unnested length")
-                })? as usize
-            };
-            if total_length == 0 {
-                return Ok(RecordBatch::new_empty(Arc::clone(schema)));
-            }
+//             let longest_length = find_longest_length(&list_arrays, options)?;
+//             let unnested_length = longest_length.as_primitive::<Int64Type>();
+//             let total_length = if unnested_length.is_empty() {
+//                 0
+//             } else {
+//                 sum(unnested_length).ok_or_else(|| {
+//                     exec_datafusion_err!("Failed to calculate the total unnested length")
+//                 })? as usize
+//             };
+//             if total_length == 0 {
+//                 return Ok(RecordBatch::new_empty(Arc::clone(schema)));
+//             }
 
-            // Unnest all the list arrays
-            let unnested_arrays =
-                unnest_list_arrays(&list_arrays, unnested_length, total_length)?;
-            let unnested_array_map: HashMap<usize, Vec<Arc<dyn Array>>> = unnested_arrays
-                .into_iter()
-                .zip(list_type_columns.iter())
-                .fold(
-                    HashMap::new(),
-                    |mut acc,
-                     (
-                        flattened_array,
-                        ListUnnest {
-                            index_in_input_schema,
-                            depth,
-                        },
-                    )| {
-                        acc.entry(*index_in_input_schema)
-                            .or_insert(vec![])
-                            .push(flattened_array);
-                        acc
-                    },
-                );
+//             // Unnest all the list arrays
+//             let unnested_arrays =
+//                 unnest_list_arrays(&list_arrays, unnested_length, total_length)?;
+//             let unnested_array_map: HashMap<usize, Vec<Arc<dyn Array>>> = unnested_arrays
+//                 .into_iter()
+//                 .zip(list_type_columns.iter())
+//                 .fold(
+//                     HashMap::new(),
+//                     |mut acc,
+//                      (
+//                         flattened_array,
+//                         ListUnnest {
+//                             index_in_input_schema,
+//                             depth,
+//                         },
+//                     )| {
+//                         acc.entry(*index_in_input_schema)
+//                             .or_insert(vec![])
+//                             .push(flattened_array);
+//                         acc
+//                     },
+//                 );
 
-            // Create the take indices array for other columns
-            let take_indicies = create_take_indicies(unnested_length, total_length);
+//             // Create the take indices array for other columns
+//             let take_indicies = create_take_indicies(unnested_length, total_length);
 
-            // vertical expansion because of list unnest
-            let ret = flatten_list_cols_from_indices(
-                batch,
-                unnested_array_map,
-                &take_indicies,
-            )?;
-            flatten_struct_cols(&ret, schema, struct_column_indices)
-        }
-    };
-    transformed
-}
+//             // vertical expansion because of list unnest
+//             let ret = flatten_list_cols_from_indices(
+//                 batch,
+//                 unnested_array_map,
+//                 &take_indicies,
+//             )?;
+//             flatten_struct_cols(&ret, schema, struct_column_indices)
+//         }
+//     };
+//     transformed
+// }
 
 /// TODO: only prototype
 /// This function does not handle NULL yet
@@ -1020,8 +1053,8 @@ fn flatten_list_cols_from_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{Field, Int32Type};
-    use arrow_array::{GenericListArray, Int32Array, OffsetSizeTrait, StringArray};
+    use arrow::datatypes::Field;
+    use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 
     // Create a GenericListArray with the following list values:
@@ -1100,236 +1133,9 @@ mod tests {
         expected: Vec<Option<&str>>,
     ) -> datafusion_common::Result<()> {
         let length_array = Int64Array::from(lengths);
-        let unnested_array = unnest_list_array(list_array, &length_array, 3 * 6, 1)?;
+        let unnested_array = unnest_list_array(list_array, &length_array, 3 * 6)?;
         let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
         assert_eq!(strs, expected);
-        Ok(())
-    }
-    #[test]
-    fn test_todo() -> datafusion_common::Result<()> {
-        // original: [[1,2,3],null,[4,5]] [[7,8,9,10],null,[11,12,13]] null
-        // unnest depth=1:[1,2,3], null, [4,5], [7,8,9,10], null, [11,12,13] , null
-        // unnest depth=2: 1,2,3,null,4,5,7,8,9,10,null,11,12,13,null
-        let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(1), Some(2), Some(3)]),
-            None,
-            Some(vec![Some(4), Some(5)]),
-            Some(vec![Some(7), Some(8), Some(9), Some(10)]),
-            None,
-            Some(vec![Some(11), Some(12), Some(13)]),
-        ]);
-
-        let list_arr_ref = Arc::new(list_arr.clone()) as ArrayRef;
-        // last item is null
-        let offsets = OffsetBuffer::from_lengths([3, 3, 0]);
-
-        let mut nulls = BooleanBufferBuilder::new(2);
-        nulls.append(true);
-        nulls.append(true);
-        nulls.append(false);
-        let nested_list_arr = ListArray::new(
-            Arc::new(Field::new_list_field(
-                list_arr_ref.data_type().to_owned(),
-                true,
-            )),
-            offsets,
-            list_arr_ref,
-            Some(NullBuffer::new(nulls.finish())),
-        );
-        // TODO: for each row we have to check if it is not null, then iterate recursively to find the offset
-        // until the depth = 1
-        // Seed some None values at the top level, second top level to check how to null works
-        for row in 0..list_arr.len() {
-            // TODO: verify null preseving behavior
-            if !list_arr.is_null(row) {
-                let (start, end) = (&list_arr as &dyn ListArrayType).value_offsets(row);
-                for i in start..end {}
-            }
-        }
-        nested_list_arr
-            .values()
-            .as_list::<i32>()
-            .offsets()
-            .iter()
-            .for_each(|i| {
-                println!("{}", i);
-            });
-        let nested_list_arr_ref = Arc::new(nested_list_arr.clone()) as ArrayRef;
-        let longest_length = find_longest_length(
-            &vec![(nested_list_arr_ref, 2)],
-            &UnnestOptions {
-                preserve_nulls: true,
-            },
-        )?;
-        let longest_length = longest_length.as_primitive::<Int64Type>();
-        let unnested =
-            unnest_list_array_prototype(&nested_list_arr, longest_length, 14, 2)?;
-        let expected_array = Int32Array::from(Vec::<i32>::from([1, 2, 3]));
-        assert_eq!(
-            unnested.as_any().downcast_ref::<Int32Array>().unwrap(),
-            &expected_array
-        );
-
-        Ok(())
-        // let unnested_length = longest_length.as_primitive::<Int64Type>();
-        // unnest_list_arrays(list_arrays, length_array, capacity)
-        // unnest_list_array(list_array, length_array, capacity, depth)
-    }
-
-    fn unnest_list_array_prototype_recursive(
-        index_builder: &mut PrimitiveArray<Int64Type>,
-        list_array: &GenericListArray<i32>,
-        // length_array: &PrimitiveArray<Int64Type>,
-        // capacity: usize,
-        depth: usize,
-    ) -> Result<usize> {
-        Ok(0)
-        // if depth == 1 {
-        //     for row in 0..list_array.len() {
-        //         let mut value_length = 0;
-        //         if !list_array.is_null(row) {
-        //             let (start, end) =
-        //                 (list_array as &dyn ListArrayType).value_offsets(row);
-        //             value_length = end - start;
-        //             for i in start..end {
-        //                 if depth == 1 {
-        //                     take_indicies_builder.append_value(i)
-        //                 } else {
-        //                 }
-        //             }
-        //         }
-        //     }
-        // } else {
-        //     for row in 0..list_array.len() {
-        //         let mut value_length = 0;
-        //         if !list_array.is_null(row) {
-        //             let (start, end) =
-        //                 (list_array as &dyn ListArrayType).value_offsets(row);
-        //             value_length = end - start;
-        //             for i in start..end {
-        //                 if depth == 1 {
-        //                     take_indicies_builder.append_value(i)
-        //                 } else {
-        //                 }
-        //             }
-        //         }
-        //     }
-        //     let inner_list_array = list_array.values().as_list::<i32>();
-        //     unnest_list_array_prototype_recursive(
-        //         index_builder,
-        //         inner_list_array,
-        //         depth - 1,
-        //     )
-        // }
-    }
-    // [[1,2,3],null,[4,5]] 1
-    // [[7,8,9,10],null,[11,12,13]] 1
-    // null 1
-    // result into
-    // 1,2,3,null,4,5,7,8,9,10,null,11,12,13
-    //
-    fn unnest_list_array_prototype(
-        list_array: &GenericListArray<i32>,
-        length_array: &PrimitiveArray<Int64Type>,
-        capacity: usize,
-        depth: usize,
-    ) -> Result<ArrayRef> {
-        let mut cur_depth = depth;
-        let mut backed_array = list_array.values();
-        loop {
-            if cur_depth == 1 {
-                break;
-            }
-            backed_array = backed_array.as_list::<i32>().values();
-            cur_depth -= 1;
-        }
-
-        // TODO: handle me recursively
-        let mut take_indicies_builder = PrimitiveArray::<Int64Type>::builder(capacity);
-        for row in 0..list_array.len() {
-            let mut value_length = 0;
-            if !list_array.is_null(row) {
-                let (start, end) = (list_array as &dyn ListArrayType).value_offsets(row);
-                value_length = end - start;
-                for i in start..end {
-                    if depth == 1 {
-                        take_indicies_builder.append_value(i)
-                    } else {
-                    }
-                }
-            }
-            let target_length = length_array.value(row);
-            debug_assert!(
-                value_length <= target_length,
-                "value length is beyond the longest length"
-            );
-            // Pad with NULL values
-            for _ in value_length..target_length {
-                take_indicies_builder.append_null();
-            }
-        }
-        Ok(kernels::take::take(
-            &backed_array,
-            &take_indicies_builder.finish(),
-            None,
-        )?)
-    }
-
-    #[test]
-    fn test_length_recursive() -> datafusion_common::Result<()> {
-        // [[1,2,3],null,[4,5]],[[7,8,9,10],null,[11,12,13]] null
-        let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(1), Some(2), Some(3)]),
-            None,
-            Some(vec![Some(4), Some(5)]),
-            Some(vec![Some(7), Some(8), Some(9), Some(10)]),
-            None,
-            Some(vec![Some(11), Some(12), Some(13)]),
-        ]);
-        let list_arr_ref = Arc::new(list_arr) as ArrayRef;
-        let offsets = OffsetBuffer::from_lengths([3, 3, 0]);
-        let mut nulls = BooleanBufferBuilder::new(3);
-        nulls.append(true);
-        nulls.append(true);
-        nulls.append(false);
-        let nested_list_arr = ListArray::new(
-            Arc::new(Field::new_list_field(
-                list_arr_ref.data_type().to_owned(),
-                true,
-            )),
-            offsets,
-            list_arr_ref,
-            Some(NullBuffer::new(nulls.finish())),
-        );
-        let list_arr_2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(1), Some(2), Some(3)]),
-            None,
-            Some(vec![Some(4), Some(5)]),
-            Some(vec![Some(7), Some(8), Some(9), Some(10)]),
-            None,
-            Some(vec![Some(11), Some(12), Some(13)]),
-        ]);
-        let list_arr_ref = Arc::new(list_arr) as ArrayRef;
-        let offsets = OffsetBuffer::from_lengths([3, 3, 0]);
-        let mut nulls = BooleanBufferBuilder::new(3);
-        nulls.append(true);
-        nulls.append(true);
-        nulls.append(false);
-        let nested_list_arr = ListArray::new(
-            Arc::new(Field::new_list_field(
-                list_arr_ref.data_type().to_owned(),
-                true,
-            )),
-            offsets,
-            list_arr_ref,
-            Some(NullBuffer::new(nulls.finish())),
-        );
-        // [6,8,0]
-        verify_longest_length(
-            &[(Arc::new(nested_list_arr) as ArrayRef, 2)],
-            true,
-            vec![6, 8, 0],
-        )?;
         Ok(())
     }
 
@@ -1379,7 +1185,7 @@ mod tests {
     }
 
     fn verify_longest_length(
-        list_arrays: &[(ArrayRef, usize)],
+        list_arrays: &[ArrayRef],
         preserve_nulls: bool,
         expected: Vec<i64>,
     ) -> datafusion_common::Result<()> {
@@ -1401,51 +1207,27 @@ mod tests {
         // Test with single ListArray
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         let list_array = Arc::new(make_generic_array::<i32>()) as ArrayRef;
-        verify_longest_length(
-            &[(Arc::clone(&list_array), 1)],
-            false,
-            vec![3, 0, 0, 1, 0, 2],
-        )?;
-        verify_longest_length(
-            &[(Arc::clone(&list_array), 1)],
-            true,
-            vec![3, 0, 1, 1, 1, 2],
-        )?;
+        verify_longest_length(&[Arc::clone(&list_array)], false, vec![3, 0, 0, 1, 0, 2])?;
+        verify_longest_length(&[Arc::clone(&list_array)], true, vec![3, 0, 1, 1, 1, 2])?;
 
         // Test with single LargeListArray
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         let list_array = Arc::new(make_generic_array::<i64>()) as ArrayRef;
-        verify_longest_length(
-            &[(Arc::clone(&list_array), 1)],
-            false,
-            vec![3, 0, 0, 1, 0, 2],
-        )?;
-        verify_longest_length(
-            &[(Arc::clone(&list_array), 1)],
-            true,
-            vec![3, 0, 1, 1, 1, 2],
-        )?;
+        verify_longest_length(&[Arc::clone(&list_array)], false, vec![3, 0, 0, 1, 0, 2])?;
+        verify_longest_length(&[Arc::clone(&list_array)], true, vec![3, 0, 1, 1, 1, 2])?;
 
         // Test with single FixedSizeListArray
         //  [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
         let list_array = Arc::new(make_fixed_list()) as ArrayRef;
-        verify_longest_length(
-            &[(Arc::clone(&list_array), 1)],
-            false,
-            vec![2, 0, 2, 0, 2, 2],
-        )?;
-        verify_longest_length(
-            &[(Arc::clone(&list_array), 1)],
-            true,
-            vec![2, 1, 2, 1, 2, 2],
-        )?;
+        verify_longest_length(&[Arc::clone(&list_array)], false, vec![2, 0, 2, 0, 2, 2])?;
+        verify_longest_length(&[Arc::clone(&list_array)], true, vec![2, 1, 2, 1, 2, 2])?;
 
         // Test with multiple list arrays
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         //  [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
         let list1 = Arc::new(make_generic_array::<i32>()) as ArrayRef;
         let list2 = Arc::new(make_fixed_list()) as ArrayRef;
-        let list_arrays = vec![(Arc::clone(&list1), 1), (Arc::clone(&list2), 1)];
+        let list_arrays = vec![Arc::clone(&list1), Arc::clone(&list2)];
         verify_longest_length(&list_arrays, false, vec![3, 0, 2, 1, 2, 2])?;
         verify_longest_length(&list_arrays, true, vec![3, 1, 2, 1, 2, 2])?;
 

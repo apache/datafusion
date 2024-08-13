@@ -1735,10 +1735,15 @@ pub fn unnest_with_options(
     // Given this comprehensive example
     //
     // input schema:
-    // col1_unnest_placeholder: list[list[int]], col1: list[list[int]], col2 list[int]
+    // 1.col1_unnest_placeholder: list[list[int]],
+    // 2.col1: list[list[int]]
+    // 3.col2: list[int]
     // with unnest on unnest(col1,depth=2), unnest(col1,depth=1) and unnest(col2,depth=1)
     // output schema:
-    // unnest_col1_depth_2: int, unnest_col1_depth1: list[int], col1: list[list[int]], unnest_col2_depth_1: int
+    // 1.unnest_col1_depth_2: int
+    // 2.unnest_col1_depth_1: list[int]
+    // 3.col1: list[list[int]]
+    // 4.unnest_col2_depth_1: int
     // Meaning the placeholder column will be replaced by its unnested variation(s), note
     // the plural.
     let fields = input_schema
