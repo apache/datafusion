@@ -1150,6 +1150,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-functions-nested",
+ "datafusion-functions-window",
  "datafusion-optimizer",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
@@ -1344,6 +1345,16 @@ dependencies = [
  "log",
  "paste",
  "rand",
+]
+
+[[package]]
+name = "datafusion-functions-window"
+version = "40.0.0"
+dependencies = [
+ "datafusion-common",
+ "datafusion-expr",
+ "datafusion-physical-expr-common",
+ "log",
 ]
 
 [[package]]
