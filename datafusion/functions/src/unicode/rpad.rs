@@ -121,7 +121,7 @@ impl ScalarUDFImpl for RPadFunc {
 
 macro_rules! process_rpad {
     // For the two-argument case
-    ($string_array:expr, $length_array:expr, $is_view:expr) => {{
+    ($string_array:expr, $length_array:expr) => {{
         $string_array
             .iter()
             .zip($length_array.iter())
@@ -151,7 +151,7 @@ macro_rules! process_rpad {
     }};
 
     // For the three-argument case
-    ($string_array:expr, $length_array:expr, $fill_array:expr, $is_view:expr) => {{
+    ($string_array:expr, $length_array:expr, $fill_array:expr) => {{
         $string_array
             .iter()
             .zip($length_array.iter())
@@ -195,14 +195,14 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
             let string_array = as_string_view_array(&args[0])?;
             let length_array = as_int64_array(&args[1])?;
 
-            let result = process_rpad!(string_array, length_array, true)?;
+            let result = process_rpad!(string_array, length_array)?;
             Ok(Arc::new(result) as ArrayRef)
         }
         (2, _) => {
             let string_array = as_generic_string_array::<StringArrayLen>(&args[0])?;
             let length_array = as_int64_array(&args[1])?;
 
-            let result = process_rpad!(string_array, length_array, true)?;
+            let result = process_rpad!(string_array, length_array)?;
             Ok(Arc::new(result) as ArrayRef)
         }
         (3, DataType::Utf8View) => {
@@ -211,12 +211,12 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
             match args[2].data_type() {
                 DataType::Utf8View => {
                     let fill_array = as_string_view_array(&args[2])?;
-                    let result = process_rpad!(string_array, length_array, fill_array, true)?;
+                    let result = process_rpad!(string_array, length_array, fill_array)?;
                     Ok(Arc::new(result) as ArrayRef)
                 }
                 DataType::Utf8 | DataType::LargeUtf8 => {
                     let fill_array = as_generic_string_array::<FillArrayLen>(&args[2])?;
-                    let result = process_rpad!(string_array, length_array, fill_array, true)?;
+                    let result = process_rpad!(string_array, length_array, fill_array)?;
                     Ok(Arc::new(result) as ArrayRef)
                 }
                 other_type => {
@@ -230,12 +230,12 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
             match args[2].data_type() {
                 DataType::Utf8View => {
                     let fill_array = as_string_view_array(&args[2])?;
-                    let result = process_rpad!(string_array, length_array, fill_array, true)?;
+                    let result = process_rpad!(string_array, length_array, fill_array)?;
                     Ok(Arc::new(result) as ArrayRef)
                 }
                 DataType::Utf8 | DataType::LargeUtf8 => {
                     let fill_array = as_generic_string_array::<FillArrayLen>(&args[2])?;
-                    let result = process_rpad!(string_array, length_array, fill_array, true)?;
+                    let result = process_rpad!(string_array, length_array, fill_array)?;
                     Ok(Arc::new(result) as ArrayRef)
                 }
                 other_type => {
