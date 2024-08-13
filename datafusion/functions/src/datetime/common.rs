@@ -28,7 +28,9 @@ use chrono::{DateTime, TimeZone, Utc};
 use itertools::Either;
 
 use datafusion_common::cast::as_generic_string_array;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarType, ScalarValue};
+use datafusion_common::{
+    exec_err, unwrap_or_internal_err, DataFusionError, Result, ScalarType, ScalarValue,
+};
 use datafusion_expr::ColumnarValue;
 
 /// Error message if nanosecond conversion request beyond supported interval
@@ -227,46 +229,34 @@ where
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
-                let mut val: Option<Result<ColumnarValue>> = None;
-                let mut err: Option<DataFusionError> = None;
+                let a = a.as_ref();
+                // ASK: Why do we trust `a` to be non-null at this point?
+                let a = unwrap_or_internal_err!(a);
 
-                match a {
-                    Some(a) => {
-                        // enumerate all the values finding the first one that returns an Ok result
-                        for (pos, v) in args.iter().enumerate().skip(1) {
-                            if let ColumnarValue::Scalar(s) = v {
-                                if let ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x) =
-                                    s
-                                {
-                                    if let Some(s) = x {
-                                        match op(a.as_str(), s.as_str()) {
-                                            Ok(r) => {
-                                                val = Some(Ok(ColumnarValue::Scalar(
-                                                    S::scalar(Some(op2(r))),
-                                                )));
-                                                break;
-                                            }
-                                            Err(e) => {
-                                                err = Some(e);
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    return exec_err!("Unsupported data type {s:?} for function {name}, arg # {pos}");
-                                }
-                            } else {
-                                return exec_err!("Unsupported data type {v:?} for function {name}, arg # {pos}");
+                let mut ret = None;
+
+                for (pos, v) in args.iter().enumerate().skip(1) {
+                    let ColumnarValue::Scalar(
+                        ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x),
+                    ) = v
+                    else {
+                        return exec_err!("Unsupported data type {v:?} for function {name}, arg # {pos}");
+                    };
+
+                    if let Some(s) = x {
+                        match op(a.as_str(), s.as_str()) {
+                            Ok(r) => {
+                                ret = Some(Ok(ColumnarValue::Scalar(S::scalar(Some(
+                                    op2(r),
+                                )))));
+                                break;
                             }
+                            Err(e) => ret = Some(Err(e)),
                         }
                     }
-                    None => (),
                 }
 
-                if let Some(v) = val {
-                    v
-                } else {
-                    Err(err.unwrap())
-                }
+                unwrap_or_internal_err!(ret)
             }
             other => {
                 exec_err!("Unsupported data type {other:?} for function {name}")
