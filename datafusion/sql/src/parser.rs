@@ -519,12 +519,7 @@ impl<'a> DFParser<'a> {
             Token::SingleQuotedString(s) => Ok(Value::SingleQuotedString(s)),
             Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
             Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
-            Token::Number(ref n, l) => match n.parse() {
-                Ok(n) => Ok(Value::Number(n, l)),
-                // The tokenizer should have ensured `n` is an integer
-                // so this should not be possible
-                Err(e) => match e {},
-            },
+            Token::Number(n, l) => Ok(Value::Number(n, l)),
             _ => self.parser.expected("string or numeric value", next_token),
         }
     }
