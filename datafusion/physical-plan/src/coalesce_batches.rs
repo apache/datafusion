@@ -523,12 +523,14 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
 
 #[cfg(test)]
 mod tests {
+    use std::mem;
+    use std::ops::Range;
+
     use super::*;
+
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::builder::ArrayBuilder;
     use arrow_array::{StringViewArray, UInt32Array};
-    use std::mem;
-    use std::ops::Range;
 
     #[test]
     fn test_coalesce() {
