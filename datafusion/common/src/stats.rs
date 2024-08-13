@@ -25,7 +25,7 @@ use arrow_schema::{Schema, SchemaRef};
 
 /// Represents a value with a degree of certainty. `Precision` is used to
 /// propagate information the precision of statistical values.
-#[derive(Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default, Copy)]
 pub enum Precision<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
     /// The exact value is known
     Exact(T),
@@ -503,9 +503,9 @@ mod tests {
         let inexact_precision = Precision::Inexact(42);
         let absent_precision = Precision::<i32>::Absent;
 
-        assert_eq!(exact_precision.clone().to_inexact(), inexact_precision);
-        assert_eq!(inexact_precision.clone().to_inexact(), inexact_precision);
-        assert_eq!(absent_precision.clone().to_inexact(), absent_precision);
+        assert_eq!(exact_precision.to_inexact(), inexact_precision);
+        assert_eq!(inexact_precision.to_inexact(), inexact_precision);
+        assert_eq!(absent_precision.to_inexact(), absent_precision);
     }
 
     #[test]
@@ -544,5 +544,20 @@ mod tests {
         assert_eq!(precision1.multiply(&precision3), Precision::Exact(30));
         assert_eq!(precision2.multiply(&precision3), Precision::Inexact(15));
         assert_eq!(precision1.multiply(&absent_precision), Precision::Absent);
+    }
+
+    #[test]
+    fn test_precision_cloning() {
+        // Precision<usize> is copy
+        let precision: Precision<usize> = Precision::Exact(42);
+        let p2 = precision;
+        assert_eq!(precision, p2);
+
+        // Precision<ScalarValue> is not copy (requires .clone())
+        let precision: Precision<ScalarValue> =
+            Precision::Exact(ScalarValue::Int64(Some(42)));
+        // Clippy would complain about this if it were Copy
+        let p2 = precision.clone();
+        assert_eq!(precision, p2);
     }
 }
