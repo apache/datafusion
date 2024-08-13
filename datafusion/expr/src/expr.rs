@@ -976,12 +976,26 @@ impl GroupingSet {
     }
 }
 
+/// Additional options for wildcards, e.g. Snowflake `EXCLUDE`/`RENAME` and Bigquery `EXCEPT`.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub struct WildcardOptions {
+    /// `[ILIKE...]`.
+    ///  Snowflake syntax: <https://docs.snowflake.com/en/sql-reference/sql/select#parameters>
     pub ilike: Option<IlikeSelectItem>,
+    /// `[EXCLUDE...]`.
+    ///  Snowflake syntax: <https://docs.snowflake.com/en/sql-reference/sql/select#parameters>
     pub exclude: Option<ExcludeSelectItem>,
+    /// `[EXCEPT...]`.
+    ///  BigQuery syntax: <https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax#select_except>
+    ///  Clickhouse syntax: <https://clickhouse.com/docs/en/sql-reference/statements/select#except>
     pub except: Option<ExceptSelectItem>,
+    /// `[REPLACE]`
+    ///  BigQuery syntax: <https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax#select_replace>
+    ///  Clickhouse syntax: <https://clickhouse.com/docs/en/sql-reference/statements/select#replace>
+    ///  Snowflake syntax: <https://docs.snowflake.com/en/sql-reference/sql/select#parameters>
     pub replace: Option<PlannedReplaceSelectItem>,
+    /// `[RENAME ...]`.
+    ///  Snowflake syntax: <https://docs.snowflake.com/en/sql-reference/sql/select#parameters>
     pub rename: Option<RenameSelectItem>,
 }
 
@@ -1018,6 +1032,7 @@ impl Display for WildcardOptions {
     }
 }
 
+/// The planned REPLACE items that include the original ast nodes and the planned expressions
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub struct PlannedReplaceSelectItem {
     pub items: Vec<ReplaceSelectElement>,

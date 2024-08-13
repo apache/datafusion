@@ -138,8 +138,8 @@ pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
 /// # Example
 ///
 /// ```rust
-/// use datafusion_common::TableReference;
-/// use datafusion_expr::{qualified_wildcard};
+/// # use datafusion_common::TableReference;
+/// # use datafusion_expr::{qualified_wildcard};
 /// let p = qualified_wildcard(TableReference::bare("t"));
 /// assert_eq!(p.to_string(), "t.*")
 /// ```
