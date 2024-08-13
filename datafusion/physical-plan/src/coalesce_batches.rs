@@ -263,6 +263,29 @@ impl Stream for CoalesceBatchesStream {
 
 /// Enumeration of possible states for `CoalesceBatchesStream`.
 /// It represents different stages in the lifecycle of a stream of record batches.
+///
+/// An example of state transition:
+/// Notation:
+/// `[3000]`: A batch with size 3000
+/// `{[2000], [3000]}`: `CoalesceBatchStream`'s internal buffer with 2 batches buffered
+/// Input of `CoalesceBatchStream` will generate three batches `[2000], [3000], [4000]`
+/// The coalescing procedure will go through the following steps:
+/// 1. The initial state and coalescing threshold is 4096.
+/// - state: `Pull`
+/// - buffer: `{}`
+/// 2. Read the first batch and get it buffered.
+/// - state: `Pull`
+/// - buffer: `{[2000]}`
+/// 3. Read the second batch, the coalescing target is reached since 2000 + 3000 > 4096
+/// - state: `ReturnBuffer`
+/// - buffer: `{[2000], [3000]}`
+/// 4. Two batches in the batch get merged and consumed by the upstream operator.
+/// - state: `Pull`
+/// - buffer: `{}`
+/// 5. Read the third input batch, the input is ended now
+/// - state: `Exhausted`
+/// - buffer: `{[4000]}`
+/// After emptying the buffer, the operation is complete.
 #[derive(Debug, Clone, Eq, PartialEq)]
 enum CoalesceBatchesStreamState {
     // State to pull a new batch from the input stream.
