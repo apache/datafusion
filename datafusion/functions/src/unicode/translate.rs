@@ -18,11 +18,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{
-    ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait,
-    StringArray,
-};
-use arrow::datatypes::{DataType, Int32Type, Int64Type};
+use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, StringArray};
+use arrow::datatypes::DataType;
 use hashbrown::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -85,19 +82,19 @@ fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string_view();
             let from_array = args[1].as_string::<i32>();
             let to_array = args[1].as_string::<i32>();
-            translate::<Int32Type, _, _>(string_array, from_array, to_array)
+            translate::<_, _>(string_array, from_array, to_array)
         }
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
             let from_array = args[1].as_string::<i32>();
             let to_array = args[1].as_string::<i32>();
-            translate::<Int32Type, _, _>(string_array, from_array, to_array)
+            translate::<_, _>(string_array, from_array, to_array)
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
             let from_array = args[1].as_string::<i64>();
             let to_array = args[1].as_string::<i64>();
-            translate::<Int64Type, _, _>(string_array, from_array, to_array)
+            translate::<_, _>(string_array, from_array, to_array)
         }
         other => {
             exec_err!("Unsupported data type {other:?} for function translate")
@@ -107,15 +104,10 @@ fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Replaces each character in string that matches a character in the from set with the corresponding character in the to set. If from is longer than to, occurrences of the extra characters in from are deleted.
 /// translate('12345', '143', 'ax') = 'a2x5'
-fn translate<'a, T: ArrowPrimitiveType, V, B>(
-    string_array: V,
-    from_array: B,
-    to_array: B,
-) -> Result<ArrayRef>
+fn translate<'a, V, B>(string_array: V, from_array: B, to_array: B) -> Result<ArrayRef>
 where
     V: ArrayAccessor<Item = &'a str>,
     B: ArrayAccessor<Item = &'a str>,
-    T::Native: OffsetSizeTrait,
 {
     let string_array_iter = ArrayIter::new(string_array);
     let from_array_iter = ArrayIter::new(from_array);
