@@ -19,7 +19,7 @@ use std::any::Any;
 use std::cmp::{max, Ordering};
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
@@ -93,52 +93,26 @@ impl ScalarUDFImpl for RightFunc {
 /// right('abcde', 2) = 'de'
 /// The implementation uses UTF-8 code points as characters
 pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let n_array = as_int64_array(&args[1])?;
     if args[0].data_type() == &DataType::Utf8View {
-        string_view_right(args)
+        // string_view_right(args)
+        let string_array = as_string_view_array(&args[0])?;
+        right_impl::<T, _>(&mut string_array.iter(), n_array)
     } else {
-        string_right::<T>(args)
+        // string_right::<T>(args)
+        let string_array = &as_generic_string_array::<T>(&args[0])?;
+        right_impl::<T, _>(&mut string_array.iter(), n_array)
     }
 }
 
 // Currently the return type can only be Utf8 or LargeUtf8, to reach fully support, we need
 // to edit the `get_optimal_return_type` in utils.rs to make the udfs be able to return Utf8View
 // See https://github.com/apache/datafusion/issues/11790#issuecomment-2283777166
-fn string_view_right(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = as_string_view_array(&args[0])?;
-    let n_array = as_int64_array(&args[1])?;
-
-    let result = string_array
-        .iter()
-        .zip(n_array.iter())
-        .map(|(string, n)| match (string, n) {
-            (Some(string), Some(n)) => match n.cmp(&0) {
-                Ordering::Less => Some(
-                    string
-                        .chars()
-                        .skip(n.unsigned_abs() as usize)
-                        .collect::<String>(),
-                ),
-                Ordering::Equal => Some("".to_string()),
-                Ordering::Greater => Some(
-                    string
-                        .chars()
-                        .skip(max(string.chars().count() as i64 - n, 0) as usize)
-                        .collect::<String>(),
-                ),
-            },
-            _ => None,
-        })
-        .collect::<GenericStringArray<i32>>(); // the return type of Utf8View is currently Utf8
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
-fn string_right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-    let n_array = as_int64_array(&args[1])?;
-
-    let result = string_array
-        .iter()
+fn right_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
+    string_array_iter: &mut ArrayIter<V>,
+    n_array: &Int64Array,
+) -> Result<ArrayRef> {
+    let result = string_array_iter
         .zip(n_array.iter())
         .map(|(string, n)| match (string, n) {
             (Some(string), Some(n)) => match n.cmp(&0) {
@@ -165,7 +139,7 @@ fn string_right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
+    use arrow::array::StringArray;
     use arrow::datatypes::DataType::Utf8;
 
     use datafusion_common::{Result, ScalarValue};
