@@ -24,3 +24,21 @@ query TT?
 select 'foo', '', NULL
 ----
 foo (empty) NULL
+
+# Where clause accept NULL literal
+query I
+select 1 where NULL
+----
+
+# Where clause does not accept non boolean and has nice error message
+query error Cannot create filter with non\-boolean predicate 'Utf8\("foo"\)' returning Utf8
+select 1 where 'foo'
+
+query I
+select 1 where NULL and 1 = 1
+----
+
+query I
+select 1 where NULL or 1 = 1
+----
+1

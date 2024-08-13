@@ -80,9 +80,8 @@ logical_plan
 02)--Sort: aggregate_test_100.c13 DESC NULLS FIRST, fetch=5
 03)----TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
-02)--SortExec: TopK(fetch=5), expr=[c13@12 DESC], preserve_partitioning=[false]
-03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], has_header=true
+01)SortExec: TopK(fetch=5), expr=[c13@12 DESC], preserve_partitioning=[false]
+02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], has_header=true
 
 
 

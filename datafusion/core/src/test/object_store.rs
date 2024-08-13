@@ -16,9 +16,8 @@
 // under the License.
 //! Object store implementation used for testing
 use crate::execution::context::SessionState;
+use crate::execution::session_state::SessionStateBuilder;
 use crate::prelude::SessionContext;
-use datafusion_execution::config::SessionConfig;
-use datafusion_execution::runtime_env::RuntimeEnv;
 use futures::FutureExt;
 use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};
 use std::sync::Arc;
@@ -44,10 +43,7 @@ pub fn make_test_store_and_state(files: &[(&str, u64)]) -> (Arc<InMemory>, Sessi
 
     (
         Arc::new(memory),
-        SessionState::new_with_config_rt(
-            SessionConfig::default(),
-            Arc::new(RuntimeEnv::default()),
-        ),
+        SessionStateBuilder::new().with_default_features().build(),
     )
 }
 

@@ -134,7 +134,15 @@ use crate::{OptimizerConfig, OptimizerRule};
 #[derive(Default)]
 pub struct PushDownFilter {}
 
-/// For a given JOIN type, determine whether each side of the join is preserved.
+/// For a given JOIN type, determine whether each input of the join is preserved
+/// for post-join (`WHERE` clause) filters.
+///
+/// It is only correct to push filters below a join for preserved inputs.
+///
+/// # Return Value
+/// A tuple of booleans - (left_preserved, right_preserved).
+///
+/// # "Preserved" input definition
 ///
 /// We say a join side is preserved if the join returns all or a subset of the rows from
 /// the relevant side, such that each row of the output table directly maps to a row of
@@ -145,15 +153,11 @@ pub struct PushDownFilter {}
 /// For example:
 ///   - In an inner join, both sides are preserved, because each row of the output
 ///     maps directly to a row from each side.
-///   - In a left join, the left side is preserved and the right is not, because
-///     there may be rows in the output that don't directly map to a row in the
-///     right input (due to nulls filling where there is no match on the right).
 ///
-/// This is important because we can always push down post-join filters to a preserved
-/// side of the join, assuming the filter only references columns from that side. For the
-/// non-preserved side it can be more tricky.
-///
-/// Returns a tuple of booleans - (left_preserved, right_preserved).
+///   - In a left join, the left side is preserved (we can push predicates) but
+///     the right is not, because there may be rows in the output that don't
+///     directly map to a row in the right input (due to nulls filling where there
+///     is no match on the right).
 fn lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
     match join_type {
         JoinType::Inner => Ok((true, true)),
@@ -169,9 +173,15 @@ fn lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
     }
 }
 
-/// For a given JOIN logical plan, determine whether each side of the join is preserved
-/// in terms on join filtering.
-/// Predicates from join filter can only be pushed to preserved join side.
+/// For a given JOIN type, determine whether each input of the join is preserved
+/// for the join condition (`ON` clause filters).
+///
+/// It is only correct to push filters below a join for preserved inputs.
+///
+/// # Return Value
+/// A tuple of booleans - (left_preserved, right_preserved).
+///
+/// See [`lr_is_preserved`] for a definition of "preserved".
 fn on_lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
     match join_type {
         JoinType::Inner => Ok((true, true)),
@@ -184,13 +194,50 @@ fn on_lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
     }
 }
 
-/// Determine which predicates in state can be pushed down to a given side of a join.
-/// To determine this, we need to know the schema of the relevant join side and whether
-/// or not the side's rows are preserved when joining. If the side is not preserved, we
-/// do not push down anything. Otherwise we can push down predicates where all of the
-/// relevant columns are contained on the relevant join side's schema.
-fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bool> {
-    let schema_columns = schema
+/// Evaluates the columns referenced in the given expression to see if they refer
+/// only to the left or right columns
+#[derive(Debug)]
+struct ColumnChecker<'a> {
+    /// schema of left join input
+    left_schema: &'a DFSchema,
+    /// columns in left_schema, computed on demand
+    left_columns: Option<HashSet<Column>>,
+    /// schema of right join input
+    right_schema: &'a DFSchema,
+    /// columns in left_schema, computed on demand
+    right_columns: Option<HashSet<Column>>,
+}
+
+impl<'a> ColumnChecker<'a> {
+    fn new(left_schema: &'a DFSchema, right_schema: &'a DFSchema) -> Self {
+        Self {
+            left_schema,
+            left_columns: None,
+            right_schema,
+            right_columns: None,
+        }
+    }
+
+    /// Return true if the expression references only columns from the left side of the join
+    fn is_left_only(&mut self, predicate: &Expr) -> bool {
+        if self.left_columns.is_none() {
+            self.left_columns = Some(schema_columns(self.left_schema));
+        }
+        has_all_column_refs(predicate, self.left_columns.as_ref().unwrap())
+    }
+
+    /// Return true if the expression references only columns from the right side of the join
+    fn is_right_only(&mut self, predicate: &Expr) -> bool {
+        if self.right_columns.is_none() {
+            self.right_columns = Some(schema_columns(self.right_schema));
+        }
+        has_all_column_refs(predicate, self.right_columns.as_ref().unwrap())
+    }
+}
+
+/// Returns all columns in the schema
+fn schema_columns(schema: &DFSchema) -> HashSet<Column> {
+    schema
         .iter()
         .flat_map(|(qualifier, field)| {
             [
@@ -199,8 +246,7 @@ fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bo
                 Column::new_unqualified(field.name()),
             ]
         })
-        .collect::<HashSet<_>>();
-    Ok(has_all_column_refs(predicate, &schema_columns))
+        .collect::<HashSet<_>>()
 }
 
 /// Determine whether the predicate can evaluate as the join conditions
@@ -215,8 +261,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
-        | Expr::Unnest(_)
-        | Expr::ScalarFunction(_) => {
+        | Expr::Unnest(_) => {
             is_evaluate = false;
             Ok(TreeNodeRecursion::Stop)
         }
@@ -238,7 +283,8 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Case(_)
         | Expr::Cast(_)
         | Expr::TryCast(_)
-        | Expr::InList { .. } => Ok(TreeNodeRecursion::Continue),
+        | Expr::InList { .. }
+        | Expr::ScalarFunction(_) => Ok(TreeNodeRecursion::Continue),
         Expr::Sort(_)
         | Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
@@ -285,16 +331,7 @@ fn extract_or_clauses_for_join<'a>(
     filters: &'a [Expr],
     schema: &'a DFSchema,
 ) -> impl Iterator<Item = Expr> + 'a {
-    let schema_columns = schema
-        .iter()
-        .flat_map(|(qualifier, field)| {
-            [
-                Column::new(qualifier.cloned(), field.name()),
-                // we need to push down filter using unqualified column as well
-                Column::new_unqualified(field.name()),
-            ]
-        })
-        .collect::<HashSet<_>>();
+    let schema_columns = schema_columns(schema);
 
     // new formed OR clauses and their column references
     filters.iter().filter_map(move |expr| {
@@ -397,12 +434,11 @@ fn push_down_all_join(
     let mut right_push = vec![];
     let mut keep_predicates = vec![];
     let mut join_conditions = vec![];
+    let mut checker = ColumnChecker::new(left_schema, right_schema);
     for predicate in predicates {
-        if left_preserved && can_pushdown_join_predicate(&predicate, left_schema)? {
+        if left_preserved && checker.is_left_only(&predicate) {
             left_push.push(predicate);
-        } else if right_preserved
-            && can_pushdown_join_predicate(&predicate, right_schema)?
-        {
+        } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
         } else if is_inner_join && can_evaluate_as_join_condition(&predicate)? {
             // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
@@ -415,26 +451,24 @@ fn push_down_all_join(
 
     // For infer predicates, if they can not push through join, just drop them
     for predicate in inferred_join_predicates {
-        if left_preserved && can_pushdown_join_predicate(&predicate, left_schema)? {
+        if left_preserved && checker.is_left_only(&predicate) {
             left_push.push(predicate);
-        } else if right_preserved
-            && can_pushdown_join_predicate(&predicate, right_schema)?
-        {
+        } else if right_preserved && checker.is_right_only(&predicate) {
             right_push.push(predicate);
         }
     }
 
+    let mut on_filter_join_conditions = vec![];
+    let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type)?;
+
     if !on_filter.is_empty() {
-        let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type)?;
         for on in on_filter {
-            if on_left_preserved && can_pushdown_join_predicate(&on, left_schema)? {
+            if on_left_preserved && checker.is_left_only(&on) {
                 left_push.push(on)
-            } else if on_right_preserved
-                && can_pushdown_join_predicate(&on, right_schema)?
-            {
+            } else if on_right_preserved && checker.is_right_only(&on) {
                 right_push.push(on)
             } else {
-                join_conditions.push(on)
+                on_filter_join_conditions.push(on)
             }
         }
     }
@@ -450,6 +484,21 @@ fn push_down_all_join(
         right_push.extend(extract_or_clauses_for_join(&join_conditions, right_schema));
     }
 
+    // For predicates from join filter, we should check with if a join side is preserved
+    // in term of join filtering.
+    if on_left_preserved {
+        left_push.extend(extract_or_clauses_for_join(
+            &on_filter_join_conditions,
+            left_schema,
+        ));
+    }
+    if on_right_preserved {
+        right_push.extend(extract_or_clauses_for_join(
+            &on_filter_join_conditions,
+            right_schema,
+        ));
+    }
+
     if let Some(predicate) = conjunction(left_push) {
         join.left = Arc::new(LogicalPlan::Filter(Filter::try_new(predicate, join.left)?));
     }
@@ -459,6 +508,7 @@ fn push_down_all_join(
     }
 
     // Add any new join conditions as the non join predicates
+    join_conditions.extend(on_filter_join_conditions);
     join.filter = conjunction(join_conditions);
 
     // wrap the join on the filter whose predicates must be kept, if any
@@ -507,7 +557,7 @@ fn push_down_join(
 /// * `predicates` the pushed down filter expression
 ///
 /// * `on_filters` filters from the join ON clause that have not already been
-/// identified as join predicates
+///   identified as join predicates
 ///
 fn infer_join_predicates(
     join: &Join,
@@ -602,7 +652,7 @@ impl OptimizerRule for PushDownFilter {
             return push_down_join(join, None);
         };
 
-        let plan_schema = plan.schema().clone();
+        let plan_schema = Arc::clone(plan.schema());
 
         let LogicalPlan::Filter(mut filter) = plan else {
             return Ok(Transformed::no(plan));
@@ -711,11 +761,11 @@ impl OptimizerRule for PushDownFilter {
 
                 // Push down non-unnest filter predicate
                 // Unnest
-                //   Unenst Input (Projection)
+                //   Unnest Input (Projection)
                 // -> rewritten to
                 // Unnest
                 //   Filter
-                //     Unenst Input (Projection)
+                //     Unnest Input (Projection)
 
                 let unnest_input = std::mem::take(&mut unnest.input);
 
@@ -767,7 +817,7 @@ impl OptimizerRule for PushDownFilter {
                 let group_expr_columns = agg
                     .group_expr
                     .iter()
-                    .map(|e| Ok(Column::from_qualified_name(e.display_name()?)))
+                    .map(|e| Ok(Column::from_qualified_name(e.schema_name().to_string())))
                     .collect::<Result<HashSet<_>>>()?;
 
                 let predicates = split_conjunction_owned(filter.predicate.clone());
@@ -788,7 +838,7 @@ impl OptimizerRule for PushDownFilter {
                 // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
                 let mut replace_map = HashMap::new();
                 for expr in &agg.group_expr {
-                    replace_map.insert(expr.display_name()?, expr.clone());
+                    replace_map.insert(expr.schema_name().to_string(), expr.clone());
                 }
                 let replaced_push_predicates = push_predicates
                     .into_iter()
@@ -970,7 +1020,7 @@ impl OptimizerRule for PushDownFilter {
 /// ```
 fn rewrite_projection(
     predicates: Vec<Expr>,
-    projection: Projection,
+    mut projection: Projection,
 ) -> Result<(Transformed<LogicalPlan>, Option<Expr>)> {
     // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
     // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
@@ -1003,11 +1053,13 @@ fn rewrite_projection(
             // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
             let new_filter = LogicalPlan::Filter(Filter::try_new(
                 replace_cols_by_name(expr, &non_volatile_map)?,
-                Arc::clone(&projection.input),
+                std::mem::take(&mut projection.input),
             )?);
 
+            projection.input = Arc::new(new_filter);
+
             Ok((
-                insert_below(LogicalPlan::Projection(projection), new_filter)?,
+                Transformed::yes(LogicalPlan::Projection(projection)),
                 conjunction(keep_predicates),
             ))
         }
@@ -1075,7 +1127,7 @@ fn convert_cross_join_to_inner_join(cross_join: CrossJoin) -> Result<Join> {
         on: vec![],
         filter: None,
         schema: DFSchemaRef::new(join_schema),
-        null_equals_null: true,
+        null_equals_null: false,
     })
 }
 
@@ -1188,7 +1240,7 @@ mod tests {
         let optimized_plan =
             optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
 
-        let formatted_plan = format!("{optimized_plan:?}");
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(expected, formatted_plan);
         Ok(())
     }
@@ -1349,7 +1401,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "\
             Filter: b = Int64(1)\
             \n  Projection: test.a * Int32(2) + test.c AS b, test.c\
@@ -1379,7 +1431,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "\
             Filter: a = Int64(1)\
             \n  Projection: b * Int32(3) AS a, test.c\
@@ -1448,7 +1500,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
@@ -1464,7 +1516,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
@@ -1481,7 +1533,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone(), table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
@@ -1498,7 +1550,7 @@ mod tests {
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone(), table_scan.clone()],
-                schema: table_scan.schema().clone(),
+                schema: Arc::clone(table_scan.schema()),
             }),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)
@@ -1529,7 +1581,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "\
             Filter: sum(test.c) > Int64(10)\
             \n  Filter: b > Int64(10)\
@@ -1564,7 +1616,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "\
             Filter: sum(test.c) > Int64(10) AND b > Int64(10) AND sum(test.c) < Int64(20)\
             \n  Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]\
@@ -1713,7 +1765,7 @@ mod tests {
 
         // not part of the test
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: test.a >= Int64(1)\
              \n  Projection: test.a\
              \n    Limit: skip=0, fetch=1\
@@ -1745,7 +1797,7 @@ mod tests {
 
         // not part of the test
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Projection: test.a\
             \n  Filter: test.a >= Int64(1)\
             \n    Filter: test.a <= Int64(1)\
@@ -1779,7 +1831,7 @@ mod tests {
              \n    TableScan: test";
 
         // not part of the test
-        assert_eq!(format!("{plan:?}"), expected);
+        assert_eq!(format!("{plan}"), expected);
 
         let expected = "\
         TestUserDefined\
@@ -1809,7 +1861,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: test.a <= Int64(1)\
             \n  Inner Join: test.a = test2.a\
             \n    TableScan: test\
@@ -1846,7 +1898,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: test.a <= Int64(1)\
             \n  Inner Join: Using test.a = test2.a\
             \n    TableScan: test\
@@ -1863,7 +1915,7 @@ mod tests {
         assert_optimized_plan_eq(plan, expected)
     }
 
-    /// post-join predicates with columns from both sides are converted to join filterss
+    /// post-join predicates with columns from both sides are converted to join filters
     #[test]
     fn filter_join_on_common_dependent() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -1886,7 +1938,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: test.c <= test2.b\
             \n  Inner Join: test.a = test2.a\
             \n    Projection: test.a, test.c\
@@ -1929,7 +1981,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: test.b <= Int64(1)\
             \n  Inner Join: test.a = test2.a\
             \n    Projection: test.a, test.b\
@@ -1968,7 +2020,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: test2.a <= Int64(1)\
             \n  Left Join: Using test.a = test2.a\
             \n    TableScan: test\
@@ -2006,7 +2058,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: test.a <= Int64(1)\
             \n  Right Join: Using test.a = test2.a\
             \n    TableScan: test\
@@ -2045,7 +2097,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: test.a <= Int64(1)\
             \n  Left Join: Using test.a = test2.a\
             \n    TableScan: test\
@@ -2083,7 +2135,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: test2.a <= Int64(1)\
             \n  Right Join: Using test.a = test2.a\
             \n    TableScan: test\
@@ -2126,7 +2178,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Inner Join: test.a = test2.a Filter: test.c > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)\
             \n  Projection: test.a, test.b, test.c\
             \n    TableScan: test\
@@ -2168,7 +2220,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Inner Join: test.a = test2.a Filter: test.b > UInt32(1) AND test2.c > UInt32(4)\
             \n  Projection: test.a, test.b, test.c\
             \n    TableScan: test\
@@ -2208,7 +2260,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Inner Join: test.a = test2.b Filter: test.a > UInt32(1)\
             \n  Projection: test.a\
             \n    TableScan: test\
@@ -2251,7 +2303,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Left Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)\
             \n  Projection: test.a, test.b, test.c\
             \n    TableScan: test\
@@ -2294,7 +2346,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Right Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)\
             \n  Projection: test.a, test.b, test.c\
             \n    TableScan: test\
@@ -2337,7 +2389,7 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Full Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)\
             \n  Projection: test.a, test.b, test.c\
             \n    TableScan: test\
@@ -2345,7 +2397,7 @@ mod tests {
             \n    TableScan: test2"
         );
 
-        let expected = &format!("{plan:?}");
+        let expected = &format!("{plan}");
         assert_optimized_plan_eq(plan, expected)
     }
 
@@ -2522,7 +2574,7 @@ Projection: a, b
 
         // filter on col b
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: b > Int64(10) AND test.c > Int64(10)\
             \n  Projection: test.a AS b, test.c\
             \n    TableScan: test"
@@ -2551,7 +2603,7 @@ Projection: a, b
 
         // filter on col b
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: b > Int64(10) AND test.c > Int64(10)\
             \n  Projection: b, test.c\
             \n    Projection: test.a AS b, test.c\
@@ -2579,7 +2631,7 @@ Projection: a, b
 
         // filter on col b and d
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: b > Int64(10) AND d > Int64(10)\
             \n  Projection: test.a AS b, test.c AS d\
             \n    TableScan: test\
@@ -2616,7 +2668,7 @@ Projection: a, b
             .build()?;
 
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Inner Join: c = d Filter: c > UInt32(1)\
             \n  Projection: test.a AS c\
             \n    TableScan: test\
@@ -2648,7 +2700,7 @@ Projection: a, b
 
         // filter on col b
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
             \n  Projection: test.a AS b, test.c\
             \n    TableScan: test\
@@ -2678,7 +2730,7 @@ Projection: a, b
 
         // filter on col b
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "Filter: b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
             \n  Projection: b, test.c\
             \n    Projection: test.a AS b, test.c\
@@ -2719,7 +2771,7 @@ Projection: a, b
         \n      TableScan: sq\
         \n  Projection: test.a AS b, test.c\
         \n    TableScan: test";
-        assert_eq!(format!("{plan:?}"), expected_before);
+        assert_eq!(format!("{plan}"), expected_before);
 
         // rewrite filter col b to test.a
         let expected_after = "\
@@ -2750,7 +2802,7 @@ Projection: a, b
         \n        SubqueryAlias: b\
         \n          Projection: Int64(0) AS a\
         \n            EmptyRelation";
-        assert_eq!(format!("{plan:?}"), expected_before);
+        assert_eq!(format!("{plan}"), expected_before);
 
         // Ensure that the predicate without any columns (0 = 1) is
         // still there.
@@ -2825,7 +2877,7 @@ Projection: a, b
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "LeftSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
             \n  TableScan: test1\
             \n  Projection: test2.a, test2.b\
@@ -2866,7 +2918,7 @@ Projection: a, b
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "RightSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
             \n  TableScan: test1\
             \n  Projection: test2.a, test2.b\
@@ -2910,7 +2962,7 @@ Projection: a, b
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "LeftAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
             \n  Projection: test1.a, test1.b\
             \n    TableScan: test1\
@@ -2956,7 +3008,7 @@ Projection: a, b
 
         // not part of the test, just good to know:
         assert_eq!(
-            format!("{plan:?}"),
+            format!("{plan}"),
             "RightAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
             \n  Projection: test1.a, test1.b\
             \n    TableScan: test1\
@@ -3022,7 +3074,7 @@ Projection: a, b
         \n      Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r\
         \n        Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]\
         \n          TableScan: test1";
-        assert_eq!(format!("{plan:?}"), expected_before);
+        assert_eq!(format!("{plan}"), expected_before);
 
         let expected_after = "Projection: t.a, t.r\
         \n  SubqueryAlias: t\
@@ -3067,7 +3119,7 @@ Projection: a, b
         \n        Inner Join: test1.a = test2.a\
         \n          TableScan: test1\
         \n          TableScan: test2";
-        assert_eq!(format!("{plan:?}"), expected_before);
+        assert_eq!(format!("{plan}"), expected_before);
 
         let expected = "Projection: t.a, t.r\
         \n  SubqueryAlias: t\

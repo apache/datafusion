@@ -42,7 +42,7 @@ pub use order_by::rewrite_sort_cols_by_aggs;
 ///
 /// For example, concatenating arrays `a || b` is represented as
 /// `Operator::ArrowAt`, but can be implemented by calling a function
-/// `array_concat` from the `functions-array` crate.
+/// `array_concat` from the `functions-nested` crate.
 // This is not used in datafusion internally, but it is still helpful for downstream project so don't remove it.
 pub trait FunctionRewrite {
     /// Return a human readable name for this rewrite
@@ -155,7 +155,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
         })
     })
     .data()
-    .expect("Unnormalize is infallable")
+    .expect("Unnormalize is infallible")
 }
 
 /// Create a Column from the Scalar Expr
@@ -173,7 +173,7 @@ pub fn create_col_from_scalar_expr(
             name,
         )),
         _ => {
-            let scalar_column = scalar_expr.display_name()?;
+            let scalar_column = scalar_expr.schema_name().to_string();
             Ok(Column::new(
                 Some::<TableReference>(subqry_alias.into()),
                 scalar_column,
@@ -201,7 +201,7 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
         })
     })
     .data()
-    .expect("strip_outer_reference is infallable")
+    .expect("strip_outer_reference is infallible")
 }
 
 /// Returns plan with expressions coerced to types compatible with
@@ -215,7 +215,7 @@ pub fn coerce_plan_expr_for_schema(
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
             let new_exprs =
                 coerce_exprs_for_schema(expr.clone(), input.schema(), schema)?;
-            let projection = Projection::try_new(new_exprs, input.clone())?;
+            let projection = Projection::try_new(new_exprs, Arc::clone(input))?;
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {
@@ -475,16 +475,14 @@ mod test {
         let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
 
         let original_name = match &expr_from {
-            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
-            expr => expr.display_name(),
-        }
-        .unwrap();
+            Expr::Sort(Sort { expr, .. }) => expr.schema_name().to_string(),
+            expr => expr.schema_name().to_string(),
+        };
 
         let new_name = match &expr {
-            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
-            expr => expr.display_name(),
-        }
-        .unwrap();
+            Expr::Sort(Sort { expr, .. }) => expr.schema_name().to_string(),
+            expr => expr.schema_name().to_string(),
+        };
 
         assert_eq!(
             original_name, new_name,

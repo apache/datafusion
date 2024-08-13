@@ -17,9 +17,6 @@
 
 use std::sync::Arc;
 
-use crate::signature::{
-    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
-};
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
@@ -28,6 +25,9 @@ use arrow::{
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err, Result,
+};
+use datafusion_expr_common::signature::{
+    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
 };
 
 use super::binary::{binary_numeric_coercion, comparison_coercion};
@@ -378,6 +378,16 @@ fn get_valid_types(
                 array(&current_types[0])
                     .map_or_else(|| vec![vec![]], |array_type| vec![vec![array_type]])
             }
+            ArrayFunctionSignature::MapArray => {
+                if current_types.len() != 1 {
+                    return Ok(vec![vec![]]);
+                }
+
+                match &current_types[0] {
+                    DataType::Map(_, _) => vec![vec![current_types[0].clone()]],
+                    _ => vec![vec![]],
+                }
+            }
         },
         TypeSignature::Any(number) => {
             if current_types.len() != *number {
@@ -573,6 +583,10 @@ fn coerced_from<'a>(
         (Interval(_), _) if matches!(type_from, Utf8 | LargeUtf8) => {
             Some(type_into.clone())
         }
+        // We can go into a Utf8View from a Utf8 or LargeUtf8
+        (Utf8View, _) if matches!(type_from, Utf8 | LargeUtf8 | Null) => {
+            Some(type_into.clone())
+        }
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
@@ -598,7 +612,7 @@ fn coerced_from<'a>(
                             Arc::new(f_into.as_ref().clone().with_data_type(data_type));
                         Some(FixedSizeList(new_field, *size_from))
                     }
-                    Some(_) => Some(FixedSizeList(f_into.clone(), *size_from)),
+                    Some(_) => Some(FixedSizeList(Arc::clone(f_into), *size_from)),
                     _ => None,
                 }
             }
@@ -607,11 +621,11 @@ fn coerced_from<'a>(
         (Timestamp(unit, Some(tz)), _) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {
                 Timestamp(_, Some(from_tz)) => {
-                    Some(Timestamp(unit.clone(), Some(from_tz.clone())))
+                    Some(Timestamp(*unit, Some(Arc::clone(from_tz))))
                 }
                 Null | Date32 | Utf8 | LargeUtf8 | Timestamp(_, None) => {
                     // In the absence of any other information assume the time zone is "+00" (UTC).
-                    Some(Timestamp(unit.clone(), Some("+00".into())))
+                    Some(Timestamp(*unit, Some("+00".into())))
                 }
                 _ => None,
             }
@@ -637,6 +651,18 @@ mod tests {
     use arrow::datatypes::Field;
 
     #[test]
+    fn test_string_conversion() {
+        let cases = vec![
+            (DataType::Utf8View, DataType::Utf8, true),
+            (DataType::Utf8View, DataType::LargeUtf8, true),
+        ];
+
+        for case in cases {
+            assert_eq!(can_coerce_from(&case.0, &case.1), case.2);
+        }
+    }
+
+    #[test]
     fn test_maybe_data_types() {
         // this vec contains: arg1, arg2, expected result
         let cases = vec![
@@ -646,7 +672,7 @@ mod tests {
                 vec![DataType::UInt8, DataType::UInt16],
                 Some(vec![DataType::UInt8, DataType::UInt16]),
             ),
-            // 2 entries, can coerse values
+            // 2 entries, can coerce values
             (
                 vec![DataType::UInt16, DataType::UInt16],
                 vec![DataType::UInt8, DataType::UInt16],
@@ -715,12 +741,12 @@ mod tests {
     fn test_fixed_list_wildcard_coerce() -> Result<()> {
         let inner = Arc::new(Field::new("item", DataType::Int32, false));
         let current_types = vec![
-            DataType::FixedSizeList(inner.clone(), 2), // able to coerce for any size
+            DataType::FixedSizeList(Arc::clone(&inner), 2), // able to coerce for any size
         ];
 
         let signature = Signature::exact(
             vec![DataType::FixedSizeList(
-                inner.clone(),
+                Arc::clone(&inner),
                 FIXED_SIZE_LIST_WILDCARD,
             )],
             Volatility::Stable,
@@ -731,7 +757,7 @@ mod tests {
 
         // make sure it can't coerce to a different size
         let signature = Signature::exact(
-            vec![DataType::FixedSizeList(inner.clone(), 3)],
+            vec![DataType::FixedSizeList(Arc::clone(&inner), 3)],
             Volatility::Stable,
         );
         let coerced_data_types = data_types(&current_types, &signature);
@@ -739,7 +765,7 @@ mod tests {
 
         // make sure it works with the same type.
         let signature = Signature::exact(
-            vec![DataType::FixedSizeList(inner.clone(), 2)],
+            vec![DataType::FixedSizeList(Arc::clone(&inner), 2)],
             Volatility::Stable,
         );
         let coerced_data_types = data_types(&current_types, &signature).unwrap();

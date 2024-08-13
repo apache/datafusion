@@ -772,7 +772,7 @@ concat(str[, ..., str_n])
 Concatenates multiple strings together with a specified separator.
 
 ```
-concat(separator, str[, ..., str_n])
+concat_ws(separator, str[, ..., str_n])
 ```
 
 #### Arguments
@@ -1132,6 +1132,14 @@ substr(str, start_pos[, length])
 - **length**: Number of characters to extract.
   If not specified, returns the rest of the string after the start position.
 
+#### Aliases
+
+- substring
+
+### `substring`
+
+_Alias of [substr](#substr)._
+
 ### `translate`
 
 Translates characters in a string to specified translation characters.
@@ -1472,6 +1480,7 @@ contains(string, search_string)
 - [make_date](#make_date)
 - [to_char](#to_char)
 - [to_date](#to_date)
+- [to_local_time](#to_local_time)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
@@ -1702,7 +1711,7 @@ to_char(expression, format)
 #### Example
 
 ```
-> > select to_char('2023-03-01'::date, '%d-%m-%Y');
+> select to_char('2023-03-01'::date, '%d-%m-%Y');
 +----------------------------------------------+
 | to_char(Utf8("2023-03-01"),Utf8("%d-%m-%Y")) |
 +----------------------------------------------+
@@ -1762,6 +1771,68 @@ to_date(expression[, ..., format_n])
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
+
+### `to_local_time`
+
+Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or
+timezone information). This function handles daylight saving time changes.
+
+```
+to_local_time(expression)
+```
+
+#### Arguments
+
+- **expression**: Time expression to operate on. Can be a constant, column, or function.
+
+#### Example
+
+```
+> SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp);
++---------------------------------------------+
+| to_local_time(Utf8("2024-04-01T00:00:20Z")) |
++---------------------------------------------+
+| 2024-04-01T00:00:20                         |
++---------------------------------------------+
+
+> SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels');
++---------------------------------------------+
+| to_local_time(Utf8("2024-04-01T00:00:20Z")) |
++---------------------------------------------+
+| 2024-04-01T00:00:20                         |
++---------------------------------------------+
+
+> SELECT
+  time,
+  arrow_typeof(time) as type,
+  to_local_time(time) as to_local_time,
+  arrow_typeof(to_local_time(time)) as to_local_time_type
+FROM (
+  SELECT '2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels' AS time
+);
++---------------------------+------------------------------------------------+---------------------+-----------------------------+
+| time                      | type                                           | to_local_time       | to_local_time_type          |
++---------------------------+------------------------------------------------+---------------------+-----------------------------+
+| 2024-04-01T00:00:20+02:00 | Timestamp(Nanosecond, Some("Europe/Brussels")) | 2024-04-01T00:00:20 | Timestamp(Nanosecond, None) |
++---------------------------+------------------------------------------------+---------------------+-----------------------------+
+
+# combine `to_local_time()` with `date_bin()` to bin on boundaries in the timezone rather
+# than UTC boundaries
+
+> SELECT date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels')) AS date_bin;
++---------------------+
+| date_bin            |
++---------------------+
+| 2024-04-01T00:00:00 |
++---------------------+
+
+> SELECT date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels')) AT TIME ZONE 'Europe/Brussels' AS date_bin_with_timezone;
++---------------------------+
+| date_bin_with_timezone    |
++---------------------------+
+| 2024-04-01T00:00:00+02:00 |
++---------------------------+
+```
 
 ### `to_timestamp`
 
@@ -3563,6 +3634,70 @@ Unwraps struct fields into columns.
 +-----------------------+-----------------------+
 | 5                     | a string              |
 +-----------------------+-----------------------+
+```
+
+## Map Functions
+
+- [map](#map)
+- [make_map](#make_map)
+
+### `map`
+
+Returns an Arrow map with the specified key-value pairs.
+
+```
+map(key, value)
+map(key: value)
+```
+
+#### Arguments
+
+- **key**: Expression to be used for key.
+  Can be a constant, column, or function, any combination of arithmetic or
+  string operators, or a named expression of previous listed.
+- **value**: Expression to be used for value.
+  Can be a constant, column, or function, any combination of arithmetic or
+  string operators, or a named expression of previous listed.
+
+#### Example
+
+```
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+----
+{POST: 41, HEAD: 33, PATCH: }
+
+SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+----
+{[1, 2]: a, [3, 4]: b}
+
+SELECT MAP { 'a': 1, 'b': 2 };
+----
+{a: 1, b: 2}
+```
+
+### `make_map`
+
+Returns an Arrow map with the specified key-value pairs.
+
+```
+make_map(key_1, value_1, ..., key_n, value_n)
+```
+
+#### Arguments
+
+- **key_n**: Expression to be used for key.
+  Can be a constant, column, or function, any combination of arithmetic or
+  string operators, or a named expression of previous listed.
+- **value_n**: Expression to be used for value.
+  Can be a constant, column, or function, any combination of arithmetic or
+  string operators, or a named expression of previous listed.
+
+#### Example
+
+```
+SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', null);
+----
+{POST: 41, HEAD: 33, PATCH: }
 ```
 
 ## Hashing Functions

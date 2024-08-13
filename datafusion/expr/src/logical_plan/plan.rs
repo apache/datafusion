@@ -25,7 +25,7 @@ use std::sync::Arc;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Alias, Placeholder, Sort as SortExpr, WindowFunction};
+use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
 use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -41,9 +41,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
@@ -189,7 +187,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # }
 /// ```
 ///
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
     /// SELECT with an expression list) on its input.
@@ -265,7 +263,7 @@ pub enum LogicalPlan {
     /// Prepare a statement and find any bind parameters
     /// (e.g. `?`). This is used to implement SQL-prepared statements.
     Prepare(Prepare),
-    /// Data Manipulaton Language (DML): Insert / Update / Delete
+    /// Data Manipulation Language (DML): Insert / Update / Delete
     Dml(DmlStatement),
     /// Data Definition Language (DDL): CREATE / DROP TABLES / VIEWS / SCHEMAS
     Ddl(DdlStatement),
@@ -498,18 +496,18 @@ impl LogicalPlan {
                 // The join keys in using-join must be columns.
                 let columns =
                     on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
-                        let Some(l) = l.try_as_col().cloned() else {
+                        let Some(l) = l.get_as_join_column() else {
                             return internal_err!(
                                 "Invalid join key. Expected column, found {l:?}"
                             );
                         };
-                        let Some(r) = r.try_as_col().cloned() else {
+                        let Some(r) = r.get_as_join_column() else {
                             return internal_err!(
                                 "Invalid join key. Expected column, found {r:?}"
                             );
                         };
-                        accumu.insert(l);
-                        accumu.insert(r);
+                        accumu.insert(l.to_owned());
+                        accumu.insert(r.to_owned());
                         Result::<_, DataFusionError>::Ok(accumu)
                     })?;
                 using_columns.push(columns);
@@ -645,39 +643,6 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Values(Values { schema, values }))
             }
             LogicalPlan::Filter(Filter { predicate, input }) => {
-                // todo: should this logic be moved to Filter::try_new?
-
-                // filter predicates should not contain aliased expressions so we remove any aliases
-                // before this logic was added we would have aliases within filters such as for
-                // benchmark q6:
-                //
-                // lineitem.l_shipdate >= Date32(\"8766\")
-                // AND lineitem.l_shipdate < Date32(\"9131\")
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
-                // Decimal128(Some(49999999999999),30,15)
-                // AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
-                // Decimal128(Some(69999999999999),30,15)
-                // AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
-
-                let predicate = predicate
-                    .transform_down(|expr| {
-                        match expr {
-                            Expr::Exists { .. }
-                            | Expr::ScalarSubquery(_)
-                            | Expr::InSubquery(_) => {
-                                // subqueries could contain aliases so we don't recurse into those
-                                Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
-                            }
-                            Expr::Alias(_) => Ok(Transformed::new(
-                                expr.unalias(),
-                                true,
-                                TreeNodeRecursion::Jump,
-                            )),
-                            _ => Ok(Transformed::no(expr)),
-                        }
-                    })
-                    .data()?;
-
                 Filter::try_new(predicate, input).map(LogicalPlan::Filter)
             }
             LogicalPlan::Repartition(_) => Ok(self),
@@ -762,9 +727,9 @@ impl LogicalPlan {
                 // If inputs are not pruned do not change schema
                 // TODO this seems wrong (shouldn't we always use the schema of the input?)
                 let schema = if schema.fields().len() == input_schema.fields().len() {
-                    schema.clone()
+                    Arc::clone(&schema)
                 } else {
-                    input_schema.clone()
+                    Arc::clone(input_schema)
                 };
                 Ok(LogicalPlan::Union(Union { inputs, schema }))
             }
@@ -850,7 +815,7 @@ impl LogicalPlan {
                 ..
             }) => Ok(LogicalPlan::Dml(DmlStatement::new(
                 table_name.clone(),
-                table_schema.clone(),
+                Arc::clone(table_schema),
                 op.clone(),
                 Arc::new(inputs.swap_remove(0)),
             ))),
@@ -863,13 +828,13 @@ impl LogicalPlan {
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs.swap_remove(0)),
                 output_url: output_url.clone(),
-                file_type: file_type.clone(),
+                file_type: Arc::clone(file_type),
                 options: options.clone(),
                 partition_by: partition_by.clone(),
             })),
             LogicalPlan::Values(Values { schema, .. }) => {
                 Ok(LogicalPlan::Values(Values {
-                    schema: schema.clone(),
+                    schema: Arc::clone(schema),
                     values: expr
                         .chunks_exact(schema.fields().len())
                         .map(|s| s.to_vec())
@@ -879,7 +844,6 @@ impl LogicalPlan {
             LogicalPlan::Filter { .. } => {
                 assert_eq!(1, expr.len());
                 let predicate = expr.pop().unwrap();
-                let predicate = Filter::remove_aliases(predicate)?.data;
 
                 Filter::try_new(predicate, Arc::new(inputs.swap_remove(0)))
                     .map(LogicalPlan::Filter)
@@ -1028,9 +992,9 @@ impl LogicalPlan {
                 let input_schema = inputs[0].schema();
                 // If inputs are not pruned do not change schema.
                 let schema = if schema.fields().len() == input_schema.fields().len() {
-                    schema.clone()
+                    Arc::clone(schema)
                 } else {
-                    input_schema.clone()
+                    Arc::clone(input_schema)
                 };
                 Ok(LogicalPlan::Union(Union {
                     inputs: inputs.into_iter().map(Arc::new).collect(),
@@ -1074,7 +1038,7 @@ impl LogicalPlan {
                 assert_eq!(inputs.len(), 1);
                 Ok(LogicalPlan::Analyze(Analyze {
                     verbose: a.verbose,
-                    schema: a.schema.clone(),
+                    schema: Arc::clone(&a.schema),
                     input: Arc::new(inputs.swap_remove(0)),
                 }))
             }
@@ -1088,7 +1052,7 @@ impl LogicalPlan {
                     verbose: e.verbose,
                     plan: Arc::new(inputs.swap_remove(0)),
                     stringified_plans: e.stringified_plans.clone(),
-                    schema: e.schema.clone(),
+                    schema: Arc::clone(&e.schema),
                     logical_optimization_succeeded: e.logical_optimization_succeeded,
                 }))
             }
@@ -1370,7 +1334,7 @@ impl LogicalPlan {
         param_values: &ParamValues,
     ) -> Result<LogicalPlan> {
         self.transform_up_with_subqueries(|plan| {
-            let schema = plan.schema().clone();
+            let schema = Arc::clone(plan.schema());
             plan.map_expressions(|e| {
                 e.infer_placeholder_types(&schema)?.transform_up(|e| {
                     if let Expr::Placeholder(Placeholder { id, .. }) = e {
@@ -1634,8 +1598,8 @@ impl LogicalPlan {
                             })
                             .collect();
 
-                        let elipse = if values.len() > 5 { "..." } else { "" };
-                        write!(f, "Values: {}{}", str_values.join(", "), elipse)
+                        let eclipse = if values.len() > 5 { "..." } else { "" };
+                        write!(f, "Values: {}{}", str_values.join(", "), eclipse)
                     }
 
                     LogicalPlan::TableScan(TableScan {
@@ -1918,7 +1882,7 @@ impl LogicalPlan {
     }
 }
 
-impl Debug for LogicalPlan {
+impl Display for LogicalPlan {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         self.display_indent().fmt(f)
     }
@@ -1931,7 +1895,7 @@ impl ToStringifiedPlan for LogicalPlan {
 }
 
 /// Produces no rows: An empty relation with an empty schema
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmptyRelation {
     /// Whether to produce a placeholder row
     pub produce_one_row: bool,
@@ -1946,22 +1910,22 @@ pub struct EmptyRelation {
 /// From the [Postgres Docs]:
 ///
 /// 1. Evaluate the non-recursive term. For `UNION` (but not `UNION ALL`),
-/// discard duplicate rows. Include all remaining rows in the result of the
-/// recursive query, and also place them in a temporary working table.
-//
+///    discard duplicate rows. Include all remaining rows in the result of the
+///    recursive query, and also place them in a temporary working table.
+///
 /// 2. So long as the working table is not empty, repeat these steps:
 ///
 /// * Evaluate the recursive term, substituting the current contents of the
-/// working table for the recursive self-reference. For `UNION` (but not `UNION
-/// ALL`), discard duplicate rows and rows that duplicate any previous result
-/// row. Include all remaining rows in the result of the recursive query, and
-/// also place them in a temporary intermediate table.
+///   working table for the recursive self-reference. For `UNION` (but not `UNION
+///   ALL`), discard duplicate rows and rows that duplicate any previous result
+///   row. Include all remaining rows in the result of the recursive query, and
+///   also place them in a temporary intermediate table.
 ///
 /// * Replace the contents of the working table with the contents of the
-/// intermediate table, then empty the intermediate table.
+///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
@@ -1978,7 +1942,7 @@ pub struct RecursiveQuery {
 /// Values expression. See
 /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
 /// documentation for more details.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Values {
     /// The table schema
     pub schema: DFSchemaRef,
@@ -2039,7 +2003,7 @@ impl Projection {
 /// # Arguments
 ///
 /// * `input`: A reference to the input `LogicalPlan` for which the projection schema
-/// will be computed.
+///   will be computed.
 /// * `exprs`: A slice of `Expr` expressions representing the projection operation to apply.
 ///
 /// # Returns
@@ -2059,7 +2023,7 @@ pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSc
 }
 
 /// Aliased subquery
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct SubqueryAlias {
@@ -2107,7 +2071,7 @@ impl SubqueryAlias {
 ///
 /// Filter should not be created directly but instead use `try_new()`
 /// and that these fields are only pub to support pattern matching
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
@@ -2118,29 +2082,27 @@ pub struct Filter {
 
 impl Filter {
     /// Create a new filter operator.
+    ///
+    /// Notes: as Aliases have no effect on the output of a filter operator,
+    /// they are removed from the predicate expression.
     pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
-            if predicate_type != DataType::Boolean {
+            // Interpret NULL as a missing boolean value.
+            if predicate_type != DataType::Boolean && predicate_type != DataType::Null {
                 return plan_err!(
                     "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
                 );
             }
         }
 
-        // filter predicates should not be aliased
-        if let Expr::Alias(Alias { expr, name, .. }) = predicate {
-            return plan_err!(
-                "Attempted to create Filter predicate with \
-                expression `{expr}` aliased as '{name}'. Filter predicates should not be \
-                aliased."
-            );
-        }
-
-        Ok(Self { predicate, input })
+        Ok(Self {
+            predicate: predicate.unalias_nested().data,
+            input,
+        })
     }
 
     /// Is this filter guaranteed to return 0 or 1 row in a given instantiation?
@@ -2209,42 +2171,10 @@ impl Filter {
         }
         false
     }
-
-    /// Remove aliases from a predicate for use in a `Filter`
-    ///
-    /// filter predicates should not contain aliased expressions so we remove
-    /// any aliases.
-    ///
-    /// before this logic was added we would have aliases within filters such as
-    /// for benchmark q6:
-    ///
-    /// ```sql
-    /// lineitem.l_shipdate >= Date32(\"8766\")
-    /// AND lineitem.l_shipdate < Date32(\"9131\")
-    /// AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount >=
-    /// Decimal128(Some(49999999999999),30,15)
-    /// AND CAST(lineitem.l_discount AS Decimal128(30, 15)) AS lineitem.l_discount <=
-    /// Decimal128(Some(69999999999999),30,15)
-    /// AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
-    /// ```
-    pub fn remove_aliases(predicate: Expr) -> Result<Transformed<Expr>> {
-        predicate.transform_down(|expr| {
-            match expr {
-                Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_) => {
-                    // subqueries could contain aliases so we don't recurse into those
-                    Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
-                }
-                Expr::Alias(Alias { expr, .. }) => {
-                    Ok(Transformed::new(*expr, true, TreeNodeRecursion::Jump))
-                }
-                _ => Ok(Transformed::no(expr)),
-            }
-        })
-    }
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Window {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -2260,7 +2190,7 @@ impl Window {
         let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
             .schema()
             .iter()
-            .map(|(q, f)| (q.cloned(), f.clone()))
+            .map(|(q, f)| (q.cloned(), Arc::clone(f)))
             .collect();
         let input_len = fields.len();
         let mut window_fields = fields;
@@ -2361,6 +2291,19 @@ pub struct TableScan {
     pub fetch: Option<usize>,
 }
 
+impl Debug for TableScan {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("TableScan")
+            .field("table_name", &self.table_name)
+            .field("source", &"...")
+            .field("projection", &self.projection)
+            .field("projected_schema", &self.projected_schema)
+            .field("filters", &self.filters)
+            .field("fetch", &self.fetch)
+            .finish_non_exhaustive()
+    }
+}
+
 impl PartialEq for TableScan {
     fn eq(&self, other: &Self) -> bool {
         self.table_name == other.table_name
@@ -2438,7 +2381,7 @@ impl TableScan {
 }
 
 /// Apply Cross Join to two logical plans
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CrossJoin {
     /// Left input
     pub left: Arc<LogicalPlan>,
@@ -2449,7 +2392,7 @@ pub struct CrossJoin {
 }
 
 /// Repartition the plan based on a partitioning scheme.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Repartition {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -2458,7 +2401,7 @@ pub struct Repartition {
 }
 
 /// Union multiple inputs
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Union {
     /// Inputs to merge
     pub inputs: Vec<Arc<LogicalPlan>>,
@@ -2468,7 +2411,7 @@ pub struct Union {
 
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
 /// `Expr::Placeholder` expressions that are filled in during execution
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Prepare {
     /// The name of the statement
     pub name: String,
@@ -2500,7 +2443,7 @@ pub struct Prepare {
 /// | parent_span_id     | Utf8                        | YES         |
 /// +--------------------+-----------------------------+-------------+
 /// ```
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DescribeTable {
     /// Table schema
     pub schema: Arc<Schema>,
@@ -2510,7 +2453,7 @@ pub struct DescribeTable {
 
 /// Produces a relation with string representations of
 /// various parts of the plan
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Explain {
     /// Should extra (detailed, intermediate plans) be included?
     pub verbose: bool,
@@ -2526,7 +2469,7 @@ pub struct Explain {
 
 /// Runs the actual plan, and then prints the physical plan with
 /// with execution metrics.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Analyze {
     /// Should extra detail be included?
     pub verbose: bool,
@@ -2541,7 +2484,7 @@ pub struct Analyze {
 // the manual `PartialEq` is removed in favor of a derive.
 // (see `PartialEq` the impl for details.)
 #[allow(clippy::derived_hash_with_manual_eq)]
-#[derive(Clone, Eq, Hash)]
+#[derive(Debug, Clone, Eq, Hash)]
 pub struct Extension {
     /// The runtime extension operator
     pub node: Arc<dyn UserDefinedLogicalNode>,
@@ -2557,7 +2500,7 @@ impl PartialEq for Extension {
 }
 
 /// Produces the first `n` tuples from its input and discards the rest.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Limit {
     /// Number of rows to skip before fetch
     pub skip: usize,
@@ -2569,7 +2512,7 @@ pub struct Limit {
 }
 
 /// Removes duplicate rows from the input
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Distinct {
     /// Plain `DISTINCT` referencing all selection expressions
     All(Arc<LogicalPlan>),
@@ -2588,7 +2531,7 @@ impl Distinct {
 }
 
 /// Removes duplicate rows from the input
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DistinctOn {
     /// The `DISTINCT ON` clause expression list
     pub on_expr: Vec<Expr>,
@@ -2674,7 +2617,7 @@ impl DistinctOn {
 
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct Aggregate {
@@ -2797,8 +2740,8 @@ fn calc_func_dependencies_for_aggregate(
     if !contains_grouping_set(group_expr) {
         let group_by_expr_names = group_expr
             .iter()
-            .map(|item| item.display_name())
-            .collect::<Result<Vec<_>>>()?;
+            .map(|item| item.schema_name().to_string())
+            .collect::<Vec<_>>();
         let aggregate_func_dependencies = aggregate_functional_dependencies(
             input.schema(),
             &group_by_expr_names,
@@ -2837,7 +2780,7 @@ fn calc_func_dependencies_for_project(
 }
 
 /// Sorts its input according to a list of sort expressions.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Sort {
     /// The sort expressions
     pub expr: Vec<Expr>,
@@ -2848,7 +2791,7 @@ pub struct Sort {
 }
 
 /// Join two logical plans on one or more join columns
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Join {
     /// Left input
     pub left: Arc<LogicalPlan>,
@@ -2978,7 +2921,7 @@ mod tests {
     use crate::logical_plan::table_scan;
     use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
 
-    use datafusion_common::tree_node::TreeNodeVisitor;
+    use datafusion_common::tree_node::{TransformedResult, TreeNodeVisitor};
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
 
     use crate::test::function_stub::count;
@@ -3385,7 +3328,7 @@ digraph {
             vec![col("a")],
             Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
-                schema: empty_schema.clone(),
+                schema: Arc::clone(&empty_schema),
             })),
             empty_schema,
         );
@@ -3500,9 +3443,9 @@ digraph {
         );
         let scan = Arc::new(LogicalPlan::TableScan(TableScan {
             table_name: TableReference::bare("tab"),
-            source: source.clone(),
+            source: Arc::clone(&source) as Arc<dyn TableSource>,
             projection: None,
-            projected_schema: schema.clone(),
+            projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
         }));
@@ -3532,17 +3475,14 @@ digraph {
             table_name: TableReference::bare("tab"),
             source,
             projection: None,
-            projected_schema: unique_schema.clone(),
+            projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
         }));
         let col = schema.field_names()[0].clone();
 
-        let filter = Filter::try_new(
-            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
-            scan,
-        )
-        .unwrap();
+        let filter =
+            Filter::try_new(Expr::Column(col.into()).eq(lit(1i32)), scan).unwrap();
         assert!(filter.is_scalar());
     }
 
@@ -3560,8 +3500,7 @@ digraph {
             .build()
             .unwrap();
 
-        let external_filter =
-            col("foo").eq(Expr::Literal(ScalarValue::Boolean(Some(true))));
+        let external_filter = col("foo").eq(lit(true));
 
         // after transformation, because plan is not the same anymore,
         // the parent plan is built again with call to LogicalPlan::with_new_inputs -> with_new_exprs

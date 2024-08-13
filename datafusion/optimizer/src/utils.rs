@@ -177,13 +177,13 @@ pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
 /// ];
 ///
 /// // use split_binary_owned to split them
-/// assert_eq!(split_binary_owned(expr, &Operator::Plus), split);
+/// assert_eq!(split_binary_owned(expr, Operator::Plus), split);
 /// ```
 #[deprecated(
     since = "34.0.0",
     note = "use `datafusion_expr::utils::split_binary_owned` instead"
 )]
-pub fn split_binary_owned(expr: Expr, op: &Operator) -> Vec<Expr> {
+pub fn split_binary_owned(expr: Expr, op: Operator) -> Vec<Expr> {
     expr_utils::split_binary_owned(expr, op)
 }
 
@@ -194,7 +194,7 @@ pub fn split_binary_owned(expr: Expr, op: &Operator) -> Vec<Expr> {
     since = "34.0.0",
     note = "use `datafusion_expr::utils::split_binary` instead"
 )]
-pub fn split_binary<'a>(expr: &'a Expr, op: &Operator) -> Vec<&'a Expr> {
+pub fn split_binary(expr: &Expr, op: Operator) -> Vec<&Expr> {
     expr_utils::split_binary(expr, op)
 }
 

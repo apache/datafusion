@@ -132,14 +132,14 @@ CREATE TABLE src_table_2 (
 (7, 'ggg', 700, 2),
 (8, 'hhh', 800, 2);
 
-query ITII
+query I
 COPY  src_table_1 TO 'test_files/scratch/csv_files/csv_partitions/1.csv'
 STORED AS CSV;
 ----
 4
 
 
-query ITII
+query I
 COPY  src_table_2 TO 'test_files/scratch/csv_files/csv_partitions/2.csv'
 STORED AS CSV;
 ----
@@ -184,7 +184,7 @@ physical_plan
 statement ok
 CREATE TABLE table_with_necessary_quoting (
   int_col INT,
-  string_col TEXT,
+  string_col TEXT
 ) AS VALUES
 (1, 'e|e|e'),
 (2, 'f|f|f'),
@@ -192,7 +192,7 @@ CREATE TABLE table_with_necessary_quoting (
 (4, 'h|h|h');
 
 # quote is required because `|` is delimiter and part of the data
-query IT
+query I
 COPY table_with_necessary_quoting TO 'test_files/scratch/csv_files/table_with_necessary_quoting.csv'
 STORED AS csv
 OPTIONS ('format.quote' '~',
@@ -264,7 +264,7 @@ id2 "value2"
 id3 "value3"
 
 # ensure that double quote option is used when writing to csv
-query TT
+query I
 COPY csv_with_double_quote TO 'test_files/scratch/csv_files/table_with_double_quotes.csv'
 STORED AS csv
 OPTIONS ('format.double_quote' 'true');
@@ -288,7 +288,7 @@ id2 "value2"
 id3 "value3"
 
 # ensure when double quote option is disabled that quotes are escaped instead
-query TT
+query I
 COPY csv_with_double_quote TO 'test_files/scratch/csv_files/table_with_escaped_quotes.csv'
 STORED AS csv
 OPTIONS ('format.double_quote' 'false', 'format.escape' '#');
@@ -310,3 +310,45 @@ id0 "value0"
 id1 "value1"
 id2 "value2"
 id3 "value3"
+
+# Handling of newlines in values
+
+statement ok
+SET datafusion.optimizer.repartition_file_min_size = 1;
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_newlines_in_values_unsafe (
+col1 TEXT,
+col2 TEXT
+) STORED AS CSV
+LOCATION '../core/tests/data/newlines_in_values.csv';
+
+statement error incorrect number of fields
+select * from stored_table_with_newlines_in_values_unsafe;
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_newlines_in_values_safe (
+col1 TEXT,
+col2 TEXT
+) STORED AS CSV
+LOCATION '../core/tests/data/newlines_in_values.csv'
+OPTIONS ('format.newlines_in_values' 'true');
+
+query TT
+select * from stored_table_with_newlines_in_values_safe;
+----
+id message
+1
+01)hello
+02)world
+2
+01)something
+02)else
+3
+01)
+02)many
+03)lines
+04)make
+05)good test
+4 unquoted
+value end

@@ -23,14 +23,12 @@ use arrow::datatypes::Int32Type;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
+use datafusion::catalog::Session;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{
-    parquet::StatisticsConverter,
-    {FileScanConfig, ParquetExec},
-};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::SessionState;
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use datafusion::parquet::arrow::{
     arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
 };
@@ -222,7 +220,7 @@ impl TableProvider for IndexTableProvider {
 
     async fn scan(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,

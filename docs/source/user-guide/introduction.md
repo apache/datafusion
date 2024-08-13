@@ -22,7 +22,7 @@
 DataFusion is a very fast, extensible query engine for building
 high-quality data-centric systems in [Rust](http://rustlang.org),
 using the [Apache Arrow](https://arrow.apache.org) in-memory format.
-DataFusion is part of the [Apache Arrow](https://arrow.apache.org/)
+DataFusion originated as part of the [Apache Arrow](https://arrow.apache.org/)
 project.
 
 DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, [python bindings], extensive customization, a great community, and more.
@@ -114,6 +114,7 @@ Here are some active projects using DataFusion:
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
 - [ROAPI](https://github.com/roapi/roapi)
+- [Sail](https://github.com/lakehq/sail) Unifying stream, batch, and AI workloads with Apache Spark compatibility
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
 - [Spice.ai](https://github.com/spiceai/spiceai) Unified SQL query interface & materialization engine
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products

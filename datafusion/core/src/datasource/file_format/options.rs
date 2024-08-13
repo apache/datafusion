@@ -63,6 +63,14 @@ pub struct CsvReadOptions<'a> {
     pub escape: Option<u8>,
     /// If enabled, lines beginning with this byte are ignored.
     pub comment: Option<u8>,
+    /// Specifies whether newlines in (quoted) values are supported.
+    ///
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
+    pub newlines_in_values: bool,
     /// An optional schema representing the CSV files. If None, CSV reader will try to infer it
     /// based on data in file.
     pub schema: Option<&'a Schema>,
@@ -95,6 +103,7 @@ impl<'a> CsvReadOptions<'a> {
             delimiter: b',',
             quote: b'"',
             escape: None,
+            newlines_in_values: false,
             file_extension: DEFAULT_CSV_EXTENSION,
             table_partition_cols: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
@@ -130,6 +139,18 @@ impl<'a> CsvReadOptions<'a> {
     /// Specify delimiter to use for CSV read
     pub fn escape(mut self, escape: u8) -> Self {
         self.escape = Some(escape);
+        self
+    }
+
+    /// Specifies whether newlines in (quoted) values are supported.
+    ///
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
+    pub fn newlines_in_values(mut self, newlines_in_values: bool) -> Self {
+        self.newlines_in_values = newlines_in_values;
         self
     }
 
@@ -490,6 +511,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_delimiter(self.delimiter)
             .with_quote(self.quote)
             .with_escape(self.escape)
+            .with_newlines_in_values(self.newlines_in_values)
             .with_schema_infer_max_rec(self.schema_infer_max_records)
             .with_file_compression_type(self.file_compression_type.to_owned());
 

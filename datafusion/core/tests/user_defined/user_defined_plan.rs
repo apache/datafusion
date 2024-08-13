@@ -68,6 +68,10 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
+use async_trait::async_trait;
+use futures::{Stream, StreamExt};
+
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
     common::cast::{as_int64_array, as_string_array},
     common::{arrow_datafusion_err, internal_err, DFSchemaRef},
@@ -90,19 +94,16 @@ use datafusion::{
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::{SessionConfig, SessionContext},
 };
-
-use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Projection;
 use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
-use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.
-async fn exec_sql(ctx: &mut SessionContext, sql: &str) -> Result<String> {
+async fn exec_sql(ctx: &SessionContext, sql: &str) -> Result<String> {
     let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;
     pretty_format_batches(&batches)
@@ -111,25 +112,25 @@ async fn exec_sql(ctx: &mut SessionContext, sql: &str) -> Result<String> {
 }
 
 /// Create a test table.
-async fn setup_table(mut ctx: SessionContext) -> Result<SessionContext> {
+async fn setup_table(ctx: SessionContext) -> Result<SessionContext> {
     let sql = "CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT) STORED AS CSV location 'tests/data/customer.csv'";
 
     let expected = vec!["++", "++"];
 
-    let s = exec_sql(&mut ctx, sql).await?;
+    let s = exec_sql(&ctx, sql).await?;
     let actual = s.lines().collect::<Vec<_>>();
 
     assert_eq!(expected, actual, "Creating table");
     Ok(ctx)
 }
 
-async fn setup_table_without_schemas(mut ctx: SessionContext) -> Result<SessionContext> {
+async fn setup_table_without_schemas(ctx: SessionContext) -> Result<SessionContext> {
     let sql =
         "CREATE EXTERNAL TABLE sales STORED AS CSV location 'tests/data/customer.csv'";
 
     let expected = vec!["++", "++"];
 
-    let s = exec_sql(&mut ctx, sql).await?;
+    let s = exec_sql(&ctx, sql).await?;
     let actual = s.lines().collect::<Vec<_>>();
 
     assert_eq!(expected, actual, "Creating table");
@@ -145,7 +146,7 @@ const QUERY2: &str = "SELECT 42, arrow_typeof(42)";
 
 // Run the query using the specified execution context and compare it
 // to the known result
-async fn run_and_compare_query(mut ctx: SessionContext, description: &str) -> Result<()> {
+async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result<()> {
     let expected = vec![
         "+-------------+---------+",
         "| customer_id | revenue |",
@@ -156,7 +157,7 @@ async fn run_and_compare_query(mut ctx: SessionContext, description: &str) -> Re
         "+-------------+---------+",
     ];
 
-    let s = exec_sql(&mut ctx, QUERY).await?;
+    let s = exec_sql(&ctx, QUERY).await?;
     let actual = s.lines().collect::<Vec<_>>();
 
     assert_eq!(
@@ -173,7 +174,7 @@ async fn run_and_compare_query(mut ctx: SessionContext, description: &str) -> Re
 // Run the query using the specified execution context and compare it
 // to the known result
 async fn run_and_compare_query_with_analyzer_rule(
-    mut ctx: SessionContext,
+    ctx: SessionContext,
     description: &str,
 ) -> Result<()> {
     let expected = vec![
@@ -184,7 +185,7 @@ async fn run_and_compare_query_with_analyzer_rule(
         "+------------+--------------------------+",
     ];
 
-    let s = exec_sql(&mut ctx, QUERY2).await?;
+    let s = exec_sql(&ctx, QUERY2).await?;
     let actual = s.lines().collect::<Vec<_>>();
 
     assert_eq!(
@@ -201,7 +202,7 @@ async fn run_and_compare_query_with_analyzer_rule(
 // Run the query using the specified execution context and compare it
 // to the known result
 async fn run_and_compare_query_with_auto_schemas(
-    mut ctx: SessionContext,
+    ctx: SessionContext,
     description: &str,
 ) -> Result<()> {
     let expected = vec![
@@ -214,7 +215,7 @@ async fn run_and_compare_query_with_auto_schemas(
         "+----------+----------+",
     ];
 
-    let s = exec_sql(&mut ctx, QUERY1).await?;
+    let s = exec_sql(&ctx, QUERY1).await?;
     let actual = s.lines().collect::<Vec<_>>();
 
     assert_eq!(
@@ -261,13 +262,13 @@ async fn topk_query() -> Result<()> {
 #[tokio::test]
 // Run EXPLAIN PLAN and show the plan was in fact rewritten
 async fn topk_plan() -> Result<()> {
-    let mut ctx = setup_table(make_topk_context()).await?;
+    let ctx = setup_table(make_topk_context()).await?;
 
     let mut expected = ["| logical_plan after topk                               | TopK: k=3                                                                     |",
         "|                                                       |   TableScan: sales projection=[customer_id,revenue]                                  |"].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {QUERY}");
-    let actual_output = exec_sql(&mut ctx, &explain_query).await?;
+    let actual_output = exec_sql(&ctx, &explain_query).await?;
 
     // normalize newlines (output on windows uses \r\n)
     let mut actual_output = actual_output.replace("\r\n", "\n");
@@ -290,10 +291,14 @@ async fn topk_plan() -> Result<()> {
 fn make_topk_context() -> SessionContext {
     let config = SessionConfig::new().with_target_partitions(48);
     let runtime = Arc::new(RuntimeEnv::default());
-    let mut state = SessionState::new_with_config_rt(config, runtime)
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(runtime)
+        .with_default_features()
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
-        .add_optimizer_rule(Arc::new(TopKOptimizerRule {}));
-    state.add_analyzer_rule(Arc::new(MyAnalyzerRule {}));
+        .with_optimizer_rule(Arc::new(TopKOptimizerRule {}))
+        .with_analyzer_rule(Arc::new(MyAnalyzerRule {}))
+        .build();
     SessionContext::new_with_state(state)
 }
 

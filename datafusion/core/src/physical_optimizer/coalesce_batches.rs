@@ -23,7 +23,6 @@ use std::sync::Arc;
 use crate::{
     config::ConfigOptions,
     error::Result,
-    physical_optimizer::PhysicalOptimizerRule,
     physical_plan::{
         coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
         repartition::RepartitionExec, Partitioning,
@@ -31,6 +30,7 @@ use crate::{
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 
 /// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
 /// are produced by highly selective filters

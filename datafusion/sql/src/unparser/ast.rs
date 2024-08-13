@@ -80,19 +80,30 @@ impl QueryBuilder {
         self
     }
     pub fn build(&self) -> Result<ast::Query, BuilderError> {
+        let order_by = if self.order_by.is_empty() {
+            None
+        } else {
+            Some(ast::OrderBy {
+                exprs: self.order_by.clone(),
+                interpolate: None,
+            })
+        };
+
         Ok(ast::Query {
             with: self.with.clone(),
             body: match self.body {
                 Some(ref value) => value.clone(),
                 None => return Err(Into::into(UninitializedFieldError::from("body"))),
             },
-            order_by: self.order_by.clone(),
+            order_by,
             limit: self.limit.clone(),
             limit_by: self.limit_by.clone(),
             offset: self.offset.clone(),
             fetch: self.fetch.clone(),
             locks: self.locks.clone(),
             for_clause: self.for_clause.clone(),
+            settings: None,
+            format_clause: None,
         })
     }
     fn create_empty() -> Self {
@@ -234,6 +245,7 @@ impl SelectBuilder {
             value_table_mode: self.value_table_mode,
             connect_by: None,
             window_before_qualify: false,
+            prewhere: None,
         })
     }
     fn create_empty() -> Self {
@@ -245,7 +257,7 @@ impl SelectBuilder {
             from: Default::default(),
             lateral_views: Default::default(),
             selection: Default::default(),
-            group_by: Some(ast::GroupByExpr::Expressions(Vec::new())),
+            group_by: Some(ast::GroupByExpr::Expressions(Vec::new(), Vec::new())),
             cluster_by: Default::default(),
             distribute_by: Default::default(),
             sort_by: Default::default(),
@@ -420,6 +432,7 @@ impl TableRelationBuilder {
             with_hints: self.with_hints.clone(),
             version: self.version.clone(),
             partitions: self.partitions.clone(),
+            with_ordinality: false,
         })
     }
     fn create_empty() -> Self {
@@ -494,7 +507,7 @@ impl Default for DerivedRelationBuilder {
 pub(super) struct UninitializedFieldError(&'static str);
 
 impl UninitializedFieldError {
-    /// Create a new `UnitializedFieldError` for the specified field name.
+    /// Create a new `UninitializedFieldError` for the specified field name.
     pub fn new(field_name: &'static str) -> Self {
         UninitializedFieldError(field_name)
     }

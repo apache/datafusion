@@ -571,7 +571,7 @@ mod tests {
         );
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
-                in_subquery(col("customer.c_custkey"), orders.clone())
+                in_subquery(col("customer.c_custkey"), Arc::clone(&orders))
                     .and(in_subquery(col("customer.c_custkey"), orders)),
             )?
             .project(vec![col("customer.c_custkey")])?
@@ -1232,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn in_subquery_muti_project_subquery_cols() -> Result<()> {
+    fn in_subquery_multi_project_subquery_cols() -> Result<()> {
         let table_scan = test_table_scan()?;
         let subquery_scan = test_table_scan_with_name("sq")?;
 
@@ -1358,7 +1358,7 @@ mod tests {
         );
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
-            .filter(exists(orders.clone()).and(exists(orders)))?
+            .filter(exists(Arc::clone(&orders)).and(exists(orders)))?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 

@@ -21,60 +21,77 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
-
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{internal_err, Result};
+use arrow_schema::SchemaRef;
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::ColumnarValue;
 
+use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
+
+/// Represents the column at a given index in a RecordBatch
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
-pub struct UnKnownColumn {
+pub struct Column {
     name: String,
+    index: usize,
 }
 
-impl UnKnownColumn {
-    /// Create a new unknown column expression
-    pub fn new(name: &str) -> Self {
+impl Column {
+    /// Create a new column expression
+    pub fn new(name: &str, index: usize) -> Self {
         Self {
             name: name.to_owned(),
+            index,
         }
+    }
+
+    /// Create a new column expression based on column name and schema
+    pub fn new_with_schema(name: &str, schema: &Schema) -> Result<Self> {
+        Ok(Column::new(name, schema.index_of(name)?))
     }
 
     /// Get the column name
     pub fn name(&self) -> &str {
         &self.name
     }
-}
 
-impl std::fmt::Display for UnKnownColumn {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.name)
+    /// Get the column index
+    pub fn index(&self) -> usize {
+        self.index
     }
 }
 
-impl PhysicalExpr for UnKnownColumn {
+impl std::fmt::Display for Column {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}@{}", self.name, self.index)
+    }
+}
+
+impl PhysicalExpr for Column {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
     /// Get the data type of this expression, given the schema of the input
-    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(DataType::Null)
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        self.bounds_check(input_schema)?;
+        Ok(input_schema.field(self.index).data_type().clone())
     }
 
-    /// Decide whehter this expression is nullable, given the schema of the input
-    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        Ok(true)
+    /// Decide whether this expression is nullable, given the schema of the input
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        self.bounds_check(input_schema)?;
+        Ok(input_schema.field(self.index).is_nullable())
     }
 
     /// Evaluate the expression
-    fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        internal_err!("UnKnownColumn::evaluate() should not be called")
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        self.bounds_check(batch.schema().as_ref())?;
+        Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -94,7 +111,7 @@ impl PhysicalExpr for UnKnownColumn {
     }
 }
 
-impl PartialEq<dyn Any> for UnKnownColumn {
+impl PartialEq<dyn Any> for Column {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
@@ -103,10 +120,55 @@ impl PartialEq<dyn Any> for UnKnownColumn {
     }
 }
 
+impl Column {
+    fn bounds_check(&self, input_schema: &Schema) -> Result<()> {
+        if self.index < input_schema.fields.len() {
+            Ok(())
+        } else {
+            internal_err!(
+                "PhysicalExpr Column references column '{}' at index {} (zero-based) but input schema only has {} columns: {:?}",
+                self.name,
+                self.index, input_schema.fields.len(), input_schema.fields().iter().map(|f| f.name().clone()).collect::<Vec<String>>())
+        }
+    }
+}
+
+/// Create a column expression
+pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(Column::new_with_schema(name, schema)?))
+}
+
+/// Rewrites an expression according to new schema; i.e. changes the columns it
+/// refers to with the column at corresponding index in the new schema. Returns
+/// an error if the given schema has fewer columns than the original schema.
+/// Note that the resulting expression may not be valid if data types in the
+/// new schema is incompatible with expression nodes.
+pub fn with_new_schema(
+    expr: Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(expr
+        .transform_up(|expr| {
+            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                let idx = col.index();
+                let Some(field) = schema.fields().get(idx) else {
+                    return plan_err!(
+                        "New schema has fewer columns than original schema"
+                    );
+                };
+                let new_col = Column::new(field.name(), idx);
+                Ok(Transformed::yes(Arc::new(new_col) as _))
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })?
+        .data)
+}
+
 #[cfg(test)]
 mod test {
-    use crate::expressions::Column;
-    use crate::PhysicalExpr;
+    use super::Column;
+    use crate::physical_expr::PhysicalExpr;
 
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};

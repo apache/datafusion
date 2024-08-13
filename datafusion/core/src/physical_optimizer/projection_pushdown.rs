@@ -18,13 +18,12 @@
 //! This file implements the `ProjectionPushdown` physical optimization rule.
 //! The function [`remove_unnecessary_projections`] tries to push down all
 //! projections one by one if the operator below is amenable to this. If a
-//! projection reaches a source, it can even dissappear from the plan entirely.
+//! projection reaches a source, it can even disappear from the plan entirely.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::output_requirements::OutputRequirementExec;
-use super::PhysicalOptimizerRule;
 use crate::datasource::physical_plan::CsvExec;
 use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -46,7 +45,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{DataFusionError, JoinSide};
+use datafusion_common::{internal_err, JoinSide};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{
     utils::collect_columns, Partitioning, PhysicalExpr, PhysicalExprRef,
@@ -55,6 +54,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
@@ -179,15 +179,17 @@ fn try_swapping_with_csv(
         );
         file_scan.projection = Some(new_projections);
 
-        Arc::new(CsvExec::new(
-            file_scan,
-            csv.has_header(),
-            csv.delimiter(),
-            csv.quote(),
-            csv.escape(),
-            csv.comment(),
-            csv.file_compression_type,
-        )) as _
+        Arc::new(
+            CsvExec::builder(file_scan)
+                .with_has_header(csv.has_header())
+                .with_delimeter(csv.delimiter())
+                .with_quote(csv.quote())
+                .with_escape(csv.escape())
+                .with_comment(csv.comment())
+                .with_newlines_in_values(csv.newlines_in_values())
+                .with_file_compression_type(csv.file_compression_type)
+                .build(),
+        ) as _
     })
 }
 
@@ -640,6 +642,7 @@ fn try_pushdown_through_hash_join(
         &projection_as_columns[0..=far_right_left_col_ind as _],
         &projection_as_columns[far_left_right_col_ind as _..],
         hash_join.on(),
+        hash_join.left().schema().fields().len(),
     ) else {
         return Ok(None);
     };
@@ -649,8 +652,7 @@ fn try_pushdown_through_hash_join(
             &projection_as_columns[0..=far_right_left_col_ind as _],
             &projection_as_columns[far_left_right_col_ind as _..],
             filter,
-            hash_join.left(),
-            hash_join.right(),
+            hash_join.left().schema().fields().len(),
         ) {
             Some(updated_filter) => Some(updated_filter),
             None => return Ok(None),
@@ -750,8 +752,7 @@ fn try_swapping_with_nested_loop_join(
             &projection_as_columns[0..=far_right_left_col_ind as _],
             &projection_as_columns[far_left_right_col_ind as _..],
             filter,
-            nl_join.left(),
-            nl_join.right(),
+            nl_join.left().schema().fields().len(),
         ) {
             Some(updated_filter) => Some(updated_filter),
             None => return Ok(None),
@@ -806,6 +807,7 @@ fn try_swapping_with_sort_merge_join(
         &projection_as_columns[0..=far_right_left_col_ind as _],
         &projection_as_columns[far_left_right_col_ind as _..],
         sm_join.on(),
+        sm_join.left().schema().fields().len(),
     ) else {
         return Ok(None);
     };
@@ -859,6 +861,7 @@ fn try_swapping_with_sym_hash_join(
         &projection_as_columns[0..=far_right_left_col_ind as _],
         &projection_as_columns[far_left_right_col_ind as _..],
         sym_join.on(),
+        sym_join.left().schema().fields().len(),
     ) else {
         return Ok(None);
     };
@@ -868,8 +871,7 @@ fn try_swapping_with_sym_hash_join(
             &projection_as_columns[0..=far_right_left_col_ind as _],
             &projection_as_columns[far_left_right_col_ind as _..],
             filter,
-            sym_join.left(),
-            sym_join.right(),
+            sym_join.left().schema().fields().len(),
         ) {
             Some(updated_filter) => Some(updated_filter),
             None => return Ok(None),
@@ -1090,6 +1092,7 @@ fn update_join_on(
     proj_left_exprs: &[(Column, String)],
     proj_right_exprs: &[(Column, String)],
     hash_join_on: &[(PhysicalExprRef, PhysicalExprRef)],
+    left_field_size: usize,
 ) -> Option<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
     // TODO: Clippy wants the "map" call removed, but doing so generates
     //       a compilation error. Remove the clippy directive once this
@@ -1100,8 +1103,9 @@ fn update_join_on(
         .map(|(left, right)| (left, right))
         .unzip();
 
-    let new_left_columns = new_columns_for_join_on(&left_idx, proj_left_exprs);
-    let new_right_columns = new_columns_for_join_on(&right_idx, proj_right_exprs);
+    let new_left_columns = new_columns_for_join_on(&left_idx, proj_left_exprs, 0);
+    let new_right_columns =
+        new_columns_for_join_on(&right_idx, proj_right_exprs, left_field_size);
 
     match (new_left_columns, new_right_columns) {
         (Some(left), Some(right)) => Some(left.into_iter().zip(right).collect()),
@@ -1112,9 +1116,14 @@ fn update_join_on(
 /// This function generates a new set of columns to be used in a hash join
 /// operation based on a set of equi-join conditions (`hash_join_on`) and a
 /// list of projection expressions (`projection_exprs`).
+///
+/// Notes: Column indices in the projection expressions are based on the join schema,
+/// whereas the join on expressions are based on the join child schema. `column_index_offset`
+/// represents the offset between them.
 fn new_columns_for_join_on(
     hash_join_on: &[&PhysicalExprRef],
     projection_exprs: &[(Column, String)],
+    column_index_offset: usize,
 ) -> Option<Vec<PhysicalExprRef>> {
     let new_columns = hash_join_on
         .iter()
@@ -1130,6 +1139,8 @@ fn new_columns_for_join_on(
                             .enumerate()
                             .find(|(_, (proj_column, _))| {
                                 column.name() == proj_column.name()
+                                    && column.index() + column_index_offset
+                                        == proj_column.index()
                             })
                             .map(|(index, (_, alias))| Column::new(alias, index));
                         if let Some(new_column) = new_column {
@@ -1138,10 +1149,10 @@ fn new_columns_for_join_on(
                             // If the column is not found in the projection expressions,
                             // it means that the column is not projected. In this case,
                             // we cannot push the projection down.
-                            Err(DataFusionError::Internal(format!(
+                            internal_err!(
                                 "Column {:?} not found in projection expressions",
                                 column
-                            )))
+                            )
                         }
                     } else {
                         Ok(Transformed::no(expr))
@@ -1160,21 +1171,20 @@ fn update_join_filter(
     projection_left_exprs: &[(Column, String)],
     projection_right_exprs: &[(Column, String)],
     join_filter: &JoinFilter,
-    join_left: &Arc<dyn ExecutionPlan>,
-    join_right: &Arc<dyn ExecutionPlan>,
+    left_field_size: usize,
 ) -> Option<JoinFilter> {
     let mut new_left_indices = new_indices_for_join_filter(
         join_filter,
         JoinSide::Left,
         projection_left_exprs,
-        join_left.schema(),
+        0,
     )
     .into_iter();
     let mut new_right_indices = new_indices_for_join_filter(
         join_filter,
         JoinSide::Right,
         projection_right_exprs,
-        join_right.schema(),
+        left_field_size,
     )
     .into_iter();
 
@@ -1204,20 +1214,24 @@ fn update_join_filter(
 /// This function determines and returns a vector of indices representing the
 /// positions of columns in `projection_exprs` that are involved in `join_filter`,
 /// and correspond to a particular side (`join_side`) of the join operation.
+///
+/// Notes: Column indices in the projection expressions are based on the join schema,
+/// whereas the join filter is based on the join child schema. `column_index_offset`
+/// represents the offset between them.
 fn new_indices_for_join_filter(
     join_filter: &JoinFilter,
     join_side: JoinSide,
     projection_exprs: &[(Column, String)],
-    join_child_schema: SchemaRef,
+    column_index_offset: usize,
 ) -> Vec<usize> {
     join_filter
         .column_indices()
         .iter()
         .filter(|col_idx| col_idx.side == join_side)
         .filter_map(|col_idx| {
-            projection_exprs.iter().position(|(col, _)| {
-                col.name() == join_child_schema.fields()[col_idx.index].name()
-            })
+            projection_exprs
+                .iter()
+                .position(|(col, _)| col_idx.index + column_index_offset == col.index())
         })
         .collect()
 }
@@ -1676,20 +1690,24 @@ mod tests {
             Field::new("d", DataType::Int32, true),
             Field::new("e", DataType::Int32, true),
         ]));
-        Arc::new(CsvExec::new(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema.clone(),
+        Arc::new(
+            CsvExec::builder(
+                FileScanConfig::new(
+                    ObjectStoreUrl::parse("test:///").unwrap(),
+                    schema.clone(),
+                )
+                .with_file(PartitionedFile::new("x".to_string(), 100))
+                .with_projection(Some(vec![0, 1, 2, 3, 4])),
             )
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_projection(Some(vec![0, 1, 2, 3, 4])),
-            false,
-            0,
-            0,
-            None,
-            None,
-            FileCompressionType::UNCOMPRESSED,
-        ))
+            .with_has_header(false)
+            .with_delimeter(0)
+            .with_quote(0)
+            .with_escape(None)
+            .with_comment(None)
+            .with_newlines_in_values(false)
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .build(),
+        )
     }
 
     fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
@@ -1699,20 +1717,24 @@ mod tests {
             Field::new("c", DataType::Int32, true),
             Field::new("d", DataType::Int32, true),
         ]));
-        Arc::new(CsvExec::new(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema.clone(),
+        Arc::new(
+            CsvExec::builder(
+                FileScanConfig::new(
+                    ObjectStoreUrl::parse("test:///").unwrap(),
+                    schema.clone(),
+                )
+                .with_file(PartitionedFile::new("x".to_string(), 100))
+                .with_projection(Some(vec![3, 2, 1])),
             )
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_projection(Some(vec![3, 2, 1])),
-            false,
-            0,
-            0,
-            None,
-            None,
-            FileCompressionType::UNCOMPRESSED,
-        ))
+            .with_has_header(false)
+            .with_delimeter(0)
+            .with_quote(0)
+            .with_escape(None)
+            .with_comment(None)
+            .with_newlines_in_values(false)
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .build(),
+        )
     }
 
     fn create_projecting_memory_exec() -> Arc<dyn ExecutionPlan> {

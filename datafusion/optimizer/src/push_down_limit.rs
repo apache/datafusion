@@ -24,6 +24,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
+use datafusion_common::utils::combine_limit;
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
@@ -217,78 +218,6 @@ fn transformed_limit(
     })))
 }
 
-/// Combines two limits into a single
-///
-/// Returns the combined limit `(skip, fetch)`
-///
-/// # Case 0: Parent and Child are disjoint. (`child_fetch <= skip`)
-///
-/// ```text
-///   Before merging:
-///                     |........skip........|---fetch-->|              Parent Limit
-///    |...child_skip...|---child_fetch-->|                             Child Limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |.........(child_skip + skip).........|
-/// ```
-///
-///   Before merging:
-/// ```text
-///                     |...skip...|------------fetch------------>|     Parent Limit
-///    |...child_skip...|-------------child_fetch------------>|         Child Limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
-/// ```
-///
-/// # Case 1: Parent is beyond the range of Child. (`skip < child_fetch <= skip + fetch`)
-///
-///   Before merging:
-/// ```text
-///                     |...skip...|------------fetch------------>|     Parent Limit
-///    |...child_skip...|-------------child_fetch------------>|         Child Limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
-/// ```
-///
-///  # Case 2: Parent is in the range of Child. (`skip + fetch < child_fetch`)
-///   Before merging:
-/// ```text
-///                     |...skip...|---fetch-->|                        Parent Limit
-///    |...child_skip...|-------------child_fetch------------>|         Child Limit
-/// ```
-///
-///   After merging:
-/// ```text
-///    |....(child_skip + skip)....|---fetch-->|
-/// ```
-fn combine_limit(
-    parent_skip: usize,
-    parent_fetch: Option<usize>,
-    child_skip: usize,
-    child_fetch: Option<usize>,
-) -> (usize, Option<usize>) {
-    let combined_skip = child_skip.saturating_add(parent_skip);
-
-    let combined_fetch = match (parent_fetch, child_fetch) {
-        (Some(parent_fetch), Some(child_fetch)) => {
-            Some(min(parent_fetch, child_fetch.saturating_sub(parent_skip)))
-        }
-        (Some(parent_fetch), None) => Some(parent_fetch),
-        (None, Some(child_fetch)) => Some(child_fetch.saturating_sub(parent_skip)),
-        (None, None) => None,
-    };
-
-    (combined_skip, combined_fetch)
-}
-
 /// Adds a limit to the inputs of a join, if possible
 fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
     use JoinType::*;
@@ -330,8 +259,8 @@ mod test {
 
     use super::*;
     use crate::test::*;
-
-    use datafusion_expr::{col, exists, logical_plan::builder::LogicalPlanBuilder, max};
+    use datafusion_expr::{col, exists, logical_plan::builder::LogicalPlanBuilder};
+    use datafusion_functions_aggregate::expr_fn::max;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(PushDownLimit::new()), plan, expected)
@@ -384,7 +313,7 @@ mod test {
 
         // Limit should *not* push down aggregate node
         let expected = "Limit: skip=0, fetch=1000\
-        \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]\
         \n    TableScan: test";
 
         assert_optimized_plan_equal(plan, expected)
@@ -456,7 +385,7 @@ mod test {
 
         // Limit should use deeper LIMIT 1000, but Limit 10 shouldn't push down aggregation
         let expected = "Limit: skip=0, fetch=10\
-        \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]\
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000";
 
@@ -557,7 +486,7 @@ mod test {
 
         // Limit should *not* push down aggregate node
         let expected = "Limit: skip=10, fetch=1000\
-        \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]\
         \n    TableScan: test";
 
         assert_optimized_plan_equal(plan, expected)

@@ -338,9 +338,9 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                let elipse = if values.len() > 5 { "..." } else { "" };
+                let eclipse = if values.len() > 5 { "..." } else { "" };
 
-                let values_str = format!("{}{}", str_values, elipse);
+                let values_str = format!("{}{}", str_values, eclipse);
                 json!({
                     "Node Type": "Values",
                     "Values": values_str

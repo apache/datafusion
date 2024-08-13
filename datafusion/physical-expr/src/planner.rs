@@ -31,7 +31,9 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
-use datafusion_expr::{binary_expr, Between, BinaryExpr, Expr, Like, Operator, TryCast};
+use datafusion_expr::{
+    binary_expr, lit, Between, BinaryExpr, Expr, Like, Operator, TryCast,
+};
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
 /// AS int)`.
@@ -140,32 +142,26 @@ pub fn create_physical_expr(
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(Some(true))),
+                lit(true),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
         Expr::IsNotTrue(expr) => {
-            let binary_op = binary_expr(
-                expr.as_ref().clone(),
-                Operator::IsDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(Some(true))),
-            );
+            let binary_op =
+                binary_expr(expr.as_ref().clone(), Operator::IsDistinctFrom, lit(true));
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
         Expr::IsFalse(expr) => {
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(Some(false))),
+                lit(false),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
         Expr::IsNotFalse(expr) => {
-            let binary_op = binary_expr(
-                expr.as_ref().clone(),
-                Operator::IsDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(Some(false))),
-            );
+            let binary_op =
+                binary_expr(expr.as_ref().clone(), Operator::IsDistinctFrom, lit(false));
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
         Expr::IsUnknown(expr) => {
@@ -195,7 +191,7 @@ pub fn create_physical_expr(
             //
             // There should be no coercion during physical
             // planning.
-            binary(lhs, op.clone(), rhs, input_schema)
+            binary(lhs, *op, rhs, input_schema)
         }
         Expr::Like(Like {
             negated,
@@ -242,7 +238,7 @@ pub fn create_physical_expr(
                 when_expr
                     .iter()
                     .zip(then_expr.iter())
-                    .map(|(w, t)| (w.clone(), t.clone()))
+                    .map(|(w, t)| (Arc::clone(w), Arc::clone(t)))
                     .collect();
             let else_expr: Option<Arc<dyn PhysicalExpr>> =
                 if let Some(e) = &case.else_expr {
@@ -288,7 +284,7 @@ pub fn create_physical_expr(
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
             scalar_function::create_physical_expr(
-                func.clone().as_ref(),
+                Arc::clone(func).as_ref(),
                 &physical_args,
                 input_schema,
                 args,
@@ -307,9 +303,19 @@ pub fn create_physical_expr(
 
             // rewrite the between into the two binary operators
             let binary_expr = binary(
-                binary(value_expr.clone(), Operator::GtEq, low_expr, input_schema)?,
+                binary(
+                    Arc::clone(&value_expr),
+                    Operator::GtEq,
+                    low_expr,
+                    input_schema,
+                )?,
                 Operator::And,
-                binary(value_expr.clone(), Operator::LtEq, high_expr, input_schema)?,
+                binary(
+                    Arc::clone(&value_expr),
+                    Operator::LtEq,
+                    high_expr,
+                    input_schema,
+                )?,
                 input_schema,
             );
 

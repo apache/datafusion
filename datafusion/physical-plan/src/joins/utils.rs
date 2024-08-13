@@ -34,8 +34,9 @@ use arrow::array::{
     UInt32BufferBuilder, UInt32Builder, UInt64Array, UInt64BufferBuilder,
 };
 use arrow::compute;
-use arrow::datatypes::{Field, Schema, SchemaBuilder};
+use arrow::datatypes::{Field, Schema, SchemaBuilder, UInt32Type, UInt64Type};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow_array::builder::UInt64Builder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::as_boolean_array;
@@ -65,7 +66,7 @@ use parking_lot::Mutex;
 /// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
 /// As the key is a hash value, we need to check possible hash collisions in the probe stage
 /// During this stage it might be the case that a row is contained the same hashmap value,
-/// but the values don't match. Those are checked in the [`equal_rows_arr`](crate::joins::hash_join::equal_rows_arr) method.
+/// but the values don't match. Those are checked in the `equal_rows_arr` method.
 ///
 /// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
 ///
@@ -144,7 +145,7 @@ impl JoinHashMap {
 pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
 
 // Macro for traversing chained values with limit.
-// Early returns in case of reacing output tuples limit.
+// Early returns in case of reaching output tuples limit.
 macro_rules! chain_traverse {
     (
         $input_indices:ident, $match_indices:ident, $hash_values:ident, $next_chain:ident,
@@ -439,7 +440,7 @@ pub fn adjust_right_output_partitioning(
         Partitioning::Hash(exprs, size) => {
             let new_exprs = exprs
                 .iter()
-                .map(|expr| add_offset_to_expr(expr.clone(), left_columns_len))
+                .map(|expr| add_offset_to_expr(Arc::clone(expr), left_columns_len))
                 .collect();
             Partitioning::Hash(new_exprs, *size)
         }
@@ -455,12 +456,10 @@ fn replace_on_columns_of_right_ordering(
 ) -> Result<()> {
     for (left_col, right_col) in on_columns {
         for item in right_ordering.iter_mut() {
-            let new_expr = item
-                .expr
-                .clone()
+            let new_expr = Arc::clone(&item.expr)
                 .transform(|e| {
                     if e.eq(right_col) {
-                        Ok(Transformed::yes(left_col.clone()))
+                        Ok(Transformed::yes(Arc::clone(left_col)))
                     } else {
                         Ok(Transformed::no(e))
                     }
@@ -478,12 +477,12 @@ fn offset_ordering(
     offset: usize,
 ) -> Vec<PhysicalSortExpr> {
     match join_type {
-        // In the case below, right ordering should be offseted with the left
+        // In the case below, right ordering should be offsetted with the left
         // side length, since we append the right table to the left table.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => ordering
             .iter()
             .map(|sort_expr| PhysicalSortExpr {
-                expr: add_offset_to_expr(sort_expr.expr.clone(), offset),
+                expr: add_offset_to_expr(Arc::clone(&sort_expr.expr), offset),
                 options: sort_expr.options,
             })
             .collect(),
@@ -911,7 +910,7 @@ fn estimate_inner_join_cardinality(
     left_stats: Statistics,
     right_stats: Statistics,
 ) -> Option<Precision<usize>> {
-    // Immediatedly return if inputs considered as non-overlapping
+    // Immediately return if inputs considered as non-overlapping
     if let Some(estimation) = estimate_disjoint_inputs(&left_stats, &right_stats) {
         return Some(estimation);
     };
@@ -1121,7 +1120,7 @@ impl<T: 'static> OnceFut<T> {
             OnceFutState::Ready(r) => Poll::Ready(
                 r.as_ref()
                     .map(|r| r.as_ref())
-                    .map_err(|e| DataFusionError::External(Box::new(e.clone()))),
+                    .map_err(|e| DataFusionError::External(Box::new(Arc::clone(e)))),
             ),
         }
     }
@@ -1284,6 +1283,7 @@ pub(crate) fn adjust_indices_by_join_type(
     right_indices: UInt32Array,
     adjust_range: Range<usize>,
     join_type: JoinType,
+    preserve_order_for_right: bool,
 ) -> (UInt64Array, UInt32Array) {
     match join_type {
         JoinType::Inner => {
@@ -1295,12 +1295,17 @@ pub(crate) fn adjust_indices_by_join_type(
             (left_indices, right_indices)
             // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
         }
-        JoinType::Right | JoinType::Full => {
-            // matched
-            // unmatched right row will be produced in this batch
-            let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
+        JoinType::Right => {
             // combine the matched and unmatched right result together
-            append_right_indices(left_indices, right_indices, right_unmatched_indices)
+            append_right_indices(
+                left_indices,
+                right_indices,
+                adjust_range,
+                preserve_order_for_right,
+            )
+        }
+        JoinType::Full => {
+            append_right_indices(left_indices, right_indices, adjust_range, false)
         }
         JoinType::RightSemi => {
             // need to remove the duplicated record in the right side
@@ -1326,30 +1331,48 @@ pub(crate) fn adjust_indices_by_join_type(
     }
 }
 
-/// Appends the `right_unmatched_indices` to the `right_indices`,
-/// and fills Null to tail of `left_indices` to
-/// keep the length of `right_indices` and `left_indices` consistent.
+/// Appends right indices to left indices based on the specified order mode.
+///
+/// The function operates in two modes:
+/// 1. If `preserve_order_for_right` is true, probe matched and unmatched indices
+///    are inserted in order using the `append_probe_indices_in_order()` method.
+/// 2. Otherwise, unmatched probe indices are simply appended after matched ones.
+///
+/// # Parameters
+/// - `left_indices`: UInt64Array of left indices.
+/// - `right_indices`: UInt32Array of right indices.
+/// - `adjust_range`: Range to adjust the right indices.
+/// - `preserve_order_for_right`: Boolean flag to determine the mode of operation.
+///
+/// # Returns
+/// A tuple of updated `UInt64Array` and `UInt32Array`.
 pub(crate) fn append_right_indices(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
-    right_unmatched_indices: UInt32Array,
+    adjust_range: Range<usize>,
+    preserve_order_for_right: bool,
 ) -> (UInt64Array, UInt32Array) {
-    // left_indices, right_indices and right_unmatched_indices must not contain the null value
-    if right_unmatched_indices.is_empty() {
-        (left_indices, right_indices)
+    if preserve_order_for_right {
+        append_probe_indices_in_order(left_indices, right_indices, adjust_range)
     } else {
-        let unmatched_size = right_unmatched_indices.len();
-        // the new left indices: left_indices + null array
-        // the new right indices: right_indices + right_unmatched_indices
-        let new_left_indices = left_indices
-            .iter()
-            .chain(std::iter::repeat(None).take(unmatched_size))
-            .collect::<UInt64Array>();
-        let new_right_indices = right_indices
-            .iter()
-            .chain(right_unmatched_indices.iter())
-            .collect::<UInt32Array>();
-        (new_left_indices, new_right_indices)
+        let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
+
+        if right_unmatched_indices.is_empty() {
+            (left_indices, right_indices)
+        } else {
+            let unmatched_size = right_unmatched_indices.len();
+            // the new left indices: left_indices + null array
+            // the new right indices: right_indices + right_unmatched_indices
+            let new_left_indices = left_indices
+                .iter()
+                .chain(std::iter::repeat(None).take(unmatched_size))
+                .collect();
+            let new_right_indices = right_indices
+                .iter()
+                .chain(right_unmatched_indices.iter())
+                .collect();
+            (new_left_indices, new_right_indices)
+        }
     }
 }
 
@@ -1379,7 +1402,7 @@ where
         .filter_map(|idx| {
             (!bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
         })
-        .collect::<PrimitiveArray<T>>()
+        .collect()
 }
 
 /// Returns intersection of `range` and `input_indices` omitting duplicates
@@ -1408,7 +1431,61 @@ where
         .filter_map(|idx| {
             (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
         })
-        .collect::<PrimitiveArray<T>>()
+        .collect()
+}
+
+/// Appends probe indices in order by considering the given build indices.
+///
+/// This function constructs new build and probe indices by iterating through
+/// the provided indices, and appends any missing values between previous and
+/// current probe index with a corresponding null build index.
+///
+/// # Parameters
+///
+/// - `build_indices`: `PrimitiveArray` of `UInt64Type` containing build indices.
+/// - `probe_indices`: `PrimitiveArray` of `UInt32Type` containing probe indices.
+/// - `range`: The range of indices to consider.
+///
+/// # Returns
+///
+/// A tuple of two arrays:
+/// - A `PrimitiveArray` of `UInt64Type` with the newly constructed build indices.
+/// - A `PrimitiveArray` of `UInt32Type` with the newly constructed probe indices.
+fn append_probe_indices_in_order(
+    build_indices: PrimitiveArray<UInt64Type>,
+    probe_indices: PrimitiveArray<UInt32Type>,
+    range: Range<usize>,
+) -> (PrimitiveArray<UInt64Type>, PrimitiveArray<UInt32Type>) {
+    // Builders for new indices:
+    let mut new_build_indices = UInt64Builder::new();
+    let mut new_probe_indices = UInt32Builder::new();
+    // Set previous index as the start index for the initial loop:
+    let mut prev_index = range.start as u32;
+    // Zip the two iterators.
+    debug_assert!(build_indices.len() == probe_indices.len());
+    for (build_index, probe_index) in build_indices
+        .values()
+        .into_iter()
+        .zip(probe_indices.values().into_iter())
+    {
+        // Append values between previous and current probe index with null build index:
+        for value in prev_index..*probe_index {
+            new_probe_indices.append_value(value);
+            new_build_indices.append_null();
+        }
+        // Append current indices:
+        new_probe_indices.append_value(*probe_index);
+        new_build_indices.append_value(*build_index);
+        // Set current probe index as previous for the next iteration:
+        prev_index = probe_index + 1;
+    }
+    // Append remaining probe indices after the last valid probe index with null build index.
+    for value in prev_index..range.end as u32 {
+        new_probe_indices.append_value(value);
+        new_build_indices.append_null();
+    }
+    // Build arrays and return:
+    (new_build_indices.finish(), new_probe_indices.finish())
 }
 
 /// Metrics for build & probe joins
@@ -2342,7 +2419,7 @@ mod tests {
         );
         assert!(
             absent_outer_estimation.is_none(),
-            "Expected \"None\" esimated SemiJoin cardinality for absent outer num_rows"
+            "Expected \"None\" estimated SemiJoin cardinality for absent outer num_rows"
         );
 
         let absent_inner_estimation = estimate_join_cardinality(
@@ -2360,7 +2437,7 @@ mod tests {
             &join_on,
         ).expect("Expected non-empty PartialJoinStatistics for SemiJoin with absent inner num_rows");
 
-        assert_eq!(absent_inner_estimation.num_rows, 500, "Expected outer.num_rows esimated SemiJoin cardinality for absent inner num_rows");
+        assert_eq!(absent_inner_estimation.num_rows, 500, "Expected outer.num_rows estimated SemiJoin cardinality for absent inner num_rows");
 
         let absent_inner_estimation = estimate_join_cardinality(
             &JoinType::LeftSemi,
@@ -2376,7 +2453,7 @@ mod tests {
             },
             &join_on,
         );
-        assert!(absent_inner_estimation.is_none(), "Expected \"None\" esimated SemiJoin cardinality for absent outer and inner num_rows");
+        assert!(absent_inner_estimation.is_none(), "Expected \"None\" estimated SemiJoin cardinality for absent outer and inner num_rows");
 
         Ok(())
     }
@@ -2475,7 +2552,7 @@ mod tests {
                     &on_columns,
                     left_columns_len,
                     maintains_input_order,
-                    probe_side
+                    probe_side,
                 ),
                 expected[i]
             );

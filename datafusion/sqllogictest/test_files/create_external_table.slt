@@ -33,23 +33,23 @@ statement error DataFusion error: SQL error: ParserError\("Missing LOCATION clau
 CREATE EXTERNAL TABLE t STORED AS CSV
 
 # Option value is missing
-statement error DataFusion error: SQL error: ParserError\("Expected string or numeric value, found: \)"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: string or numeric value, found: \)"\)
 CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'
 
 # Missing `(` in WITH ORDER clause
-statement error DataFusion error: SQL error: ParserError\("Expected \(, found: c1"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: \(, found: c1"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER c1 LOCATION 'foo.csv'
 
 # Missing `)` in WITH ORDER clause
-statement error DataFusion error: SQL error: ParserError\("Expected \), found: LOCATION"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: \), found: LOCATION"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 LOCATION 'foo.csv'
 
 # Missing `ROW` in WITH HEADER clause
-statement error DataFusion error: SQL error: ParserError\("Expected ROW, found: LOCATION"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: ROW, found: LOCATION"\)
 CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'
 
 # Missing `BY` in PARTITIONED clause
-statement error DataFusion error: SQL error: ParserError\("Expected BY, found: LOCATION"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: BY, found: LOCATION"\)
 CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'
 
 # Duplicate `STORED AS` clause
@@ -69,11 +69,11 @@ statement error DataFusion error: SQL error: ParserError\("OPTIONS specified mor
 CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('k1' 'v1', 'k2' 'v2') OPTIONS ('k3' 'v3') LOCATION 'foo.csv'
 
 # With typo error
-statement error DataFusion error: SQL error: ParserError\("Expected HEADER, found: HEAD"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: HEADER, found: HEAD"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH HEAD ROW LOCATION 'foo.csv';
 
 # Missing `anything` in WITH clause
-statement error DataFusion error: SQL error: ParserError\("Expected HEADER, found: LOCATION"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: HEADER, found: LOCATION"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH LOCATION 'foo.csv';
 
 # Unrecognized random clause

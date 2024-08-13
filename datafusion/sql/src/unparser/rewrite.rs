@@ -15,13 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeIterator},
     Result,
 };
-use datafusion_expr::{Expr, LogicalPlan, Sort};
+use datafusion_expr::{Expr, LogicalPlan, Projection, Sort};
+use sqlparser::ast::Ident;
 
 /// Normalize the schema of a union plan to remove qualifiers from the schema fields and sort expressions.
 ///
@@ -98,4 +102,173 @@ fn rewrite_sort_expr_for_union(exprs: Vec<Expr>) -> Result<Vec<Expr>> {
         .data()?;
 
     Ok(sort_exprs)
+}
+
+// Rewrite logic plan for query that order by columns are not in projections
+// Plan before rewrite:
+//
+// Projection: j1.j1_string, j2.j2_string
+//   Sort: j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST
+//     Projection: j1.j1_string, j2.j2_string, j1.j1_id, j2.j2_id
+//       Inner Join:  Filter: j1.j1_id = j2.j2_id
+//         TableScan: j1
+//         TableScan: j2
+//
+// Plan after rewrite
+//
+// Sort: j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST
+//   Projection: j1.j1_string, j2.j2_string
+//     Inner Join:  Filter: j1.j1_id = j2.j2_id
+//       TableScan: j1
+//       TableScan: j2
+//
+// This prevents the original plan generate query with derived table but missing alias.
+pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
+    p: &Projection,
+) -> Option<LogicalPlan> {
+    let LogicalPlan::Sort(sort) = p.input.as_ref() else {
+        return None;
+    };
+
+    let LogicalPlan::Projection(inner_p) = sort.input.as_ref() else {
+        return None;
+    };
+
+    let mut map = HashMap::new();
+    let inner_exprs = inner_p
+        .expr
+        .iter()
+        .enumerate()
+        .map(|(i, f)| match f {
+            Expr::Alias(alias) => {
+                let a = Expr::Column(alias.name.clone().into());
+                map.insert(a.clone(), f.clone());
+                a
+            }
+            Expr::Column(_) => {
+                map.insert(
+                    Expr::Column(inner_p.schema.field(i).name().into()),
+                    f.clone(),
+                );
+                f.clone()
+            }
+            _ => {
+                let a = Expr::Column(inner_p.schema.field(i).name().into());
+                map.insert(a.clone(), f.clone());
+                a
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut collects = p.expr.clone();
+    for expr in &sort.expr {
+        if let Expr::Sort(s) = expr {
+            collects.push(s.expr.as_ref().clone());
+        }
+    }
+
+    // Compare outer collects Expr::to_string with inner collected transformed values
+    // alias -> alias column
+    // column -> remain
+    // others, extract schema field name
+    let outer_collects = collects.iter().map(Expr::to_string).collect::<HashSet<_>>();
+    let inner_collects = inner_exprs
+        .iter()
+        .map(Expr::to_string)
+        .collect::<HashSet<_>>();
+
+    if outer_collects == inner_collects {
+        let mut sort = sort.clone();
+        let mut inner_p = inner_p.clone();
+
+        let new_exprs = p
+            .expr
+            .iter()
+            .map(|e| map.get(e).unwrap_or(e).clone())
+            .collect::<Vec<_>>();
+
+        inner_p.expr.clone_from(&new_exprs);
+        sort.input = Arc::new(LogicalPlan::Projection(inner_p));
+
+        Some(LogicalPlan::Sort(sort))
+    } else {
+        None
+    }
+}
+
+// This logic is to work out the columns and inner query for SubqueryAlias plan for both types of
+// subquery
+// - `(SELECT column_a as a from table) AS A`
+// - `(SELECT column_a from table) AS A (a)`
+//
+// A roundtrip example for table alias with columns
+//
+// query: SELECT id FROM (SELECT j1_id from j1) AS c (id)
+//
+// LogicPlan:
+// Projection: c.id
+//   SubqueryAlias: c
+//     Projection: j1.j1_id AS id
+//       Projection: j1.j1_id
+//         TableScan: j1
+//
+// Before introducing this logic, the unparsed query would be `SELECT c.id FROM (SELECT j1.j1_id AS
+// id FROM (SELECT j1.j1_id FROM j1)) AS c`.
+// The query is invalid as `j1.j1_id` is not a valid identifier in the derived table
+// `(SELECT j1.j1_id FROM j1)`
+//
+// With this logic, the unparsed query will be:
+// `SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)`
+//
+// Caveat: this won't handle the case like `select * from (select 1, 2) AS a (b, c)`
+// as the parser gives a wrong plan which has mismatch `Int(1)` types: Literal and
+// Column in the Projections. Once the parser side is fixed, this logic should work
+pub(super) fn subquery_alias_inner_query_and_columns(
+    subquery_alias: &datafusion_expr::SubqueryAlias,
+) -> (&LogicalPlan, Vec<Ident>) {
+    let plan: &LogicalPlan = subquery_alias.input.as_ref();
+
+    let LogicalPlan::Projection(outer_projections) = plan else {
+        return (plan, vec![]);
+    };
+
+    // check if it's projection inside projection
+    let Some(inner_projection) = find_projection(outer_projections.input.as_ref()) else {
+        return (plan, vec![]);
+    };
+
+    let mut columns: Vec<Ident> = vec![];
+    // check if the inner projection and outer projection have a matching pattern like
+    //     Projection: j1.j1_id AS id
+    //       Projection: j1.j1_id
+    for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
+        let Expr::Alias(ref outer_alias) = &outer_projections.expr[i] else {
+            return (plan, vec![]);
+        };
+
+        // inner projection schema fields store the projection name which is used in outer
+        // projection expr
+        let inner_expr_string = match inner_expr {
+            Expr::Column(_) => inner_expr.to_string(),
+            _ => inner_projection.schema.field(i).name().clone(),
+        };
+
+        if outer_alias.expr.to_string() != inner_expr_string {
+            return (plan, vec![]);
+        };
+
+        columns.push(outer_alias.name.as_str().into());
+    }
+
+    (outer_projections.input.as_ref(), columns)
+}
+
+fn find_projection(logical_plan: &LogicalPlan) -> Option<&Projection> {
+    match logical_plan {
+        LogicalPlan::Projection(p) => Some(p),
+        LogicalPlan::Limit(p) => find_projection(p.input.as_ref()),
+        LogicalPlan::Distinct(p) => find_projection(p.input().as_ref()),
+        LogicalPlan::Sort(p) => find_projection(p.input.as_ref()),
+        _ => None,
+    }
 }

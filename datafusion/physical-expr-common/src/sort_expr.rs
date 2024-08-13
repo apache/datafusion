@@ -22,13 +22,12 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
-use crate::utils::limited_convert_logical_expr_to_physical_expr;
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Expr};
+use datafusion_common::Result;
+use datafusion_expr_common::columnar_value::ColumnarValue;
 
 /// Represents Sort operation for a column in a RecordBatch
 #[derive(Clone, Debug)]
@@ -37,6 +36,13 @@ pub struct PhysicalSortExpr {
     pub expr: Arc<dyn PhysicalExpr>,
     /// Option to specify how the given column should be sorted
     pub options: SortOptions,
+}
+
+impl PhysicalSortExpr {
+    /// Create a new PhysicalSortExpr
+    pub fn new(expr: Arc<dyn PhysicalExpr>, options: SortOptions) -> Self {
+        Self { expr, options }
+    }
 }
 
 impl PartialEq for PhysicalSortExpr {
@@ -155,10 +161,7 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
             descending: false,
             nulls_first: false,
         });
-        PhysicalSortExpr {
-            expr: value.expr,
-            options,
-        }
+        PhysicalSortExpr::new(value.expr, options)
     }
 }
 
@@ -268,29 +271,3 @@ pub type LexRequirement = Vec<PhysicalSortRequirement>;
 ///`LexRequirementRef` is an alias for the type &`[PhysicalSortRequirement]`, which
 /// represents a reference to a lexicographical ordering requirement.
 pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];
-
-/// Converts each [`Expr::Sort`] into a corresponding [`PhysicalSortExpr`].
-/// Returns an error if the given logical expression is not a [`Expr::Sort`].
-pub fn limited_convert_logical_sort_exprs_to_physical(
-    exprs: &[Expr],
-    schema: &Schema,
-) -> Result<Vec<PhysicalSortExpr>> {
-    // Construct PhysicalSortExpr objects from Expr objects:
-    let mut sort_exprs = vec![];
-    for expr in exprs {
-        let Expr::Sort(sort) = expr else {
-            return exec_err!("Expects to receive sort expression");
-        };
-        sort_exprs.push(PhysicalSortExpr {
-            expr: limited_convert_logical_expr_to_physical_expr(
-                sort.expr.as_ref(),
-                schema,
-            )?,
-            options: SortOptions {
-                descending: !sort.asc,
-                nulls_first: sort.nulls_first,
-            },
-        });
-    }
-    Ok(sort_exprs)
-}

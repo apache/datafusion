@@ -24,7 +24,7 @@ CREATE TABLE values(
     a INT,
     b FLOAT,
     c VARCHAR,
-    n VARCHAR,
+    n VARCHAR
 ) AS VALUES
   (1, 1.1, 'a', NULL),
   (2, 2.2, 'b', NULL),
@@ -122,6 +122,10 @@ physical_plan
 query error
 select named_struct();
 
+# error on duplicate field names
+query error
+select named_struct('c0': 1, 'c1': 2, 'c1': 3);
+
 # error on odd number of arguments #1
 query error DataFusion error: Execution error: named_struct requires an even number of arguments, got 1 instead
 select named_struct('a');
@@ -162,9 +166,23 @@ select named_struct('scalar', 27, 'array', values.a, 'null', NULL) from values;
 {scalar: 27, array: 2, null: }
 {scalar: 27, array: 3, null: }
 
+query ?
+select {'scalar': 27, 'array': values.a, 'null': NULL} from values;
+----
+{scalar: 27, array: 1, null: }
+{scalar: 27, array: 2, null: }
+{scalar: 27, array: 3, null: }
+
 # named_struct with mixed scalar and array values #2
 query ?
 select named_struct('array', values.a, 'scalar', 27, 'null', NULL) from values;
+----
+{array: 1, scalar: 27, null: }
+{array: 2, scalar: 27, null: }
+{array: 3, scalar: 27, null: }
+
+query ?
+select {'array': values.a, 'scalar': 27, 'null': NULL} from values;
 ----
 {array: 1, scalar: 27, null: }
 {array: 2, scalar: 27, null: }
@@ -200,10 +218,59 @@ select named_struct('field_a', 1, 'field_b', 2);
 ----
 {field_a: 1, field_b: 2}
 
-statement ok
-drop table values;
-
 query T
 select arrow_typeof(named_struct('first', 1, 'second', 2, 'third', 3));
 ----
 Struct([Field { name: "first", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "second", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "third", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+
+query T
+select arrow_typeof({'first': 1, 'second': 2, 'third': 3});
+----
+Struct([Field { name: "first", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "second", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "third", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+
+# test nested struct literal
+query ?
+select {'animal': {'cat': 1, 'dog': 2, 'bird': {'parrot': 3, 'canary': 1}}, 'genre': {'fiction': ['mystery', 'sci-fi', 'fantasy'], 'non-fiction': {'biography': 5, 'history': 7, 'science': {'physics': 2, 'biology': 3}}}, 'vehicle': {'car': {'sedan': 4, 'suv': 2}, 'bicycle': 3, 'boat': ['sailboat', 'motorboat']}, 'weather': {'sunny': True, 'temperature': 25.5, 'wind': {'speed': 10, 'direction': 'NW'}}};
+----
+{animal: {cat: 1, dog: 2, bird: {parrot: 3, canary: 1}}, genre: {fiction: [mystery, sci-fi, fantasy], non-fiction: {biography: 5, history: 7, science: {physics: 2, biology: 3}}}, vehicle: {car: {sedan: 4, suv: 2}, bicycle: 3, boat: [sailboat, motorboat]}, weather: {sunny: true, temperature: 25.5, wind: {speed: 10, direction: NW}}}
+
+# test tuple as struct
+query B
+select ('x', 'y') = ('x', 'y');
+----
+true
+
+query B
+select ('x', 'y') = ('y', 'x');
+----
+false
+
+query error DataFusion error: Error during planning: Cannot infer common argument type for comparison operation Struct.*
+select ('x', 'y') = ('x', 'y', 'z');
+
+query B
+select ('x', 'y') IN (('x', 'y'));
+----
+true
+
+query B
+select ('x', 'y') IN (('x', 'y'), ('y', 'x'));
+----
+true
+
+query I
+select a from values where (a, c) = (1, 'a');
+----
+1
+
+query I
+select a from values where (a, c) IN ((1, 'a'), (2, 'b'));
+----
+1
+2
+
+statement ok
+drop table values;
+
+statement ok
+drop table struct_values;

@@ -80,7 +80,7 @@ impl StreamingTableExec {
             if !schema.eq(partition_schema) {
                 debug!(
                     "Target schema does not match with partition schema. \
-                        Target_schema: {schema:?}. Partiton Schema: {partition_schema:?}"
+                        Target_schema: {schema:?}. Partition Schema: {partition_schema:?}"
                 );
                 return plan_err!("Mismatch between schema and batches");
             }
@@ -93,7 +93,7 @@ impl StreamingTableExec {
         let projected_output_ordering =
             projected_output_ordering.into_iter().collect::<Vec<_>>();
         let cache = Self::compute_properties(
-            projected_schema.clone(),
+            Arc::clone(&projected_schema),
             &projected_output_ordering,
             &partitions,
             infinite,
@@ -240,7 +240,7 @@ impl ExecutionPlan for StreamingTableExec {
         let stream = self.partitions[partition].execute(ctx);
         let projected_stream = match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
-                self.projected_schema.clone(),
+                Arc::clone(&self.projected_schema),
                 stream.map(move |x| {
                     x.and_then(|b| b.project(projection.as_ref()).map_err(Into::into))
                 }),
@@ -263,6 +263,19 @@ impl ExecutionPlan for StreamingTableExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(StreamingTableExec {
+            partitions: self.partitions.clone(),
+            projection: self.projection.clone(),
+            projected_schema: Arc::clone(&self.projected_schema),
+            projected_output_ordering: self.projected_output_ordering.clone(),
+            infinite: self.infinite,
+            limit,
+            cache: self.cache.clone(),
+            metrics: self.metrics.clone(),
+        }))
     }
 }
 
@@ -327,7 +340,7 @@ mod test {
         /// Set the batches for the stream
         fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
             let stream = TestPartitionStream::new_with_batches(batches);
-            self.schema = Some(stream.schema().clone());
+            self.schema = Some(Arc::clone(stream.schema()));
             self.partitions = vec![Arc::new(stream)];
             self
         }

@@ -134,19 +134,3 @@ The good thing about open code and open development is that any issues in one ch
 
 Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
 Commenting on the PR will remove the `stale` label.
-
-## Specifications
-
-We formalize some DataFusion semantics and behaviors through specification
-documents. These specifications are useful to be used as references to help
-resolve ambiguities during development or code reviews.
-
-You are also welcome to propose changes to existing specifications or create
-new specifications as you see fit.
-
-Here is the list current active specifications:
-
-- [Output field name semantic](https://datafusion.apache.org/contributor-guide/specification/output-field-name-semantic.html)
-- [Invariants](https://datafusion.apache.org/contributor-guide/specification/invariants.html)
-
-All specifications are stored in the `docs/source/specification` folder.

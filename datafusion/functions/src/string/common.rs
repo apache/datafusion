@@ -25,7 +25,7 @@ use arrow::array::{
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
 
-use datafusion_common::cast::as_generic_string_array;
+use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
@@ -49,6 +49,7 @@ impl Display for TrimType {
 pub(crate) fn general_trim<T: OffsetSizeTrait>(
     args: &[ArrayRef],
     trim_type: TrimType,
+    use_string_view: bool,
 ) -> Result<ArrayRef> {
     let func = match trim_type {
         TrimType::Left => |input, pattern: &str| {
@@ -68,7 +69,20 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
         },
     };
 
-    let string_array = as_generic_string_array::<T>(&args[0])?;
+    if use_string_view {
+        string_view_trim::<T>(trim_type, func, args)
+    } else {
+        string_trim::<T>(trim_type, func, args)
+    }
+}
+
+// removing 'a will cause compiler complaining lifetime of `func`
+fn string_view_trim<'a, T: OffsetSizeTrait>(
+    trim_type: TrimType,
+    func: fn(&'a str, &'a str) -> &'a str,
+    args: &'a [ArrayRef],
+) -> Result<ArrayRef> {
+    let string_array = as_string_view_array(&args[0])?;
 
     match args.len() {
         1 => {
@@ -80,11 +94,15 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
             Ok(Arc::new(result) as ArrayRef)
         }
         2 => {
-            let characters_array = as_generic_string_array::<T>(&args[1])?;
+            let characters_array = as_string_view_array(&args[1])?;
 
             if characters_array.len() == 1 {
                 if characters_array.is_null(0) {
-                    return Ok(new_null_array(args[0].data_type(), args[0].len()));
+                    return Ok(new_null_array(
+                        // The schema is expecting utf8 as null
+                        &DataType::Utf8,
+                        string_array.len(),
+                    ));
                 }
 
                 let characters = characters_array.value(0);
@@ -109,7 +127,61 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
         other => {
             exec_err!(
             "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
-        )
+            )
+        }
+    }
+}
+
+fn string_trim<'a, T: OffsetSizeTrait>(
+    trim_type: TrimType,
+    func: fn(&'a str, &'a str) -> &'a str,
+    args: &'a [ArrayRef],
+) -> Result<ArrayRef> {
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+
+    match args.len() {
+        1 => {
+            let result = string_array
+                .iter()
+                .map(|string| string.map(|string: &str| func(string, " ")))
+                .collect::<GenericStringArray<T>>();
+
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        2 => {
+            let characters_array = as_generic_string_array::<T>(&args[1])?;
+
+            if characters_array.len() == 1 {
+                if characters_array.is_null(0) {
+                    return Ok(new_null_array(
+                        string_array.data_type(),
+                        string_array.len(),
+                    ));
+                }
+
+                let characters = characters_array.value(0);
+                let result = string_array
+                    .iter()
+                    .map(|item| item.map(|string| func(string, characters)))
+                    .collect::<GenericStringArray<T>>();
+                return Ok(Arc::new(result) as ArrayRef);
+            }
+
+            let result = string_array
+                .iter()
+                .zip(characters_array.iter())
+                .map(|(string, characters)| match (string, characters) {
+                    (Some(string), Some(characters)) => Some(func(string, characters)),
+                    _ => None,
+                })
+                .collect::<GenericStringArray<T>>();
+
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        other => {
+            exec_err!(
+            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
+            )
         }
     }
 }

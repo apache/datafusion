@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
 //! Function packages for [DataFusion].
 //!
@@ -74,7 +76,7 @@
 //! 3. Add a new feature to `Cargo.toml`, with any optional dependencies
 //!
 //! 4. Use the `make_package!` macro to expose the module when the
-//! feature is enabled.
+//!    feature is enabled.
 //!
 //! [`ScalarUDF`]: datafusion_expr::ScalarUDF
 use datafusion_common::Result;
@@ -129,6 +131,9 @@ make_stub_package!(crypto, "crypto_expressions");
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode;
 make_stub_package!(unicode, "unicode_expressions");
+
+#[cfg(any(feature = "datetime_expressions", feature = "unicode_expressions"))]
+pub mod planner;
 
 mod utils;
 

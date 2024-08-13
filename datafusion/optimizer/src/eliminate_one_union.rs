@@ -110,7 +110,7 @@ mod tests {
             &table_scan(Some("table"), &schema(), None)?.build()?,
             &schema().to_dfschema()?,
         )?;
-        let schema = table_plan.schema().clone();
+        let schema = Arc::clone(table_plan.schema());
         let single_union_plan = LogicalPlan::Union(Union {
             inputs: vec![Arc::new(table_plan)],
             schema,

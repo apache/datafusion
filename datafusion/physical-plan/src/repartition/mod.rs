@@ -133,12 +133,12 @@ impl RepartitionExecState {
             let r_metrics = RepartitionMetrics::new(i, num_output_partitions, &metrics);
 
             let input_task = SpawnedTask::spawn(RepartitionExec::pull_from_input(
-                input.clone(),
+                Arc::clone(&input),
                 i,
                 txs.clone(),
                 partitioning.clone(),
                 r_metrics,
-                context.clone(),
+                Arc::clone(&context),
             ));
 
             // In a separate task, wait for each input to be done
@@ -261,6 +261,7 @@ impl BatchPartitioner {
                     num_partitions: partitions,
                     hash_buffer,
                 } => {
+                    // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
                     let arrays = exprs
@@ -282,6 +283,11 @@ impl BatchPartitioner {
                             .append_value(index as u64);
                     }
 
+                    // Finished building index-arrays for output partitions
+                    timer.done();
+
+                    // Borrowing partitioner timer to prevent moving `self` to closure
+                    let partitioner_timer = &self.timer;
                     let it = indices
                         .into_iter()
                         .enumerate()
@@ -290,6 +296,9 @@ impl BatchPartitioner {
                             (!indices.is_empty()).then_some((partition, indices))
                         })
                         .map(move |(partition, indices)| {
+                            // Tracking time required for repartitioned batches construction
+                            let _timer = partitioner_timer.timer();
+
                             // Produce batches based on indices
                             let columns = batch
                                 .columns()
@@ -302,9 +311,6 @@ impl BatchPartitioner {
 
                             let batch =
                                 RecordBatch::try_new(batch.schema(), columns).unwrap();
-
-                            // bind timer so it drops w/ this iterator
-                            let _ = &timer;
 
                             Ok((partition, batch))
                         });
@@ -408,7 +414,7 @@ pub struct RepartitionExec {
 struct RepartitionMetrics {
     /// Time in nanos to execute child operator and fetch batches
     fetch_time: metrics::Time,
-    /// Time in nanos to perform repartitioning
+    /// Repartitioning elapsed time in nanos
     repartition_time: metrics::Time,
     /// Time in nanos for sending resulting batches to channels.
     ///
@@ -427,8 +433,8 @@ impl RepartitionMetrics {
             MetricBuilder::new(metrics).subset_time("fetch_time", input_partition);
 
         // Time in nanos to perform repartitioning
-        let repart_time =
-            MetricBuilder::new(metrics).subset_time("repart_time", input_partition);
+        let repartition_time =
+            MetricBuilder::new(metrics).subset_time("repartition_time", input_partition);
 
         // Time in nanos for sending resulting batches to channels
         let send_time = (0..num_output_partitions)
@@ -443,7 +449,7 @@ impl RepartitionMetrics {
 
         Self {
             fetch_time,
-            repartition_time: repart_time,
+            repartition_time,
             send_time,
         }
     }
@@ -616,7 +622,7 @@ impl ExecutionPlan for RepartitionExec {
                             schema: Arc::clone(&schema_captured),
                             receiver,
                             drop_helper: Arc::clone(&abort_helper),
-                            reservation: reservation.clone(),
+                            reservation: Arc::clone(&reservation),
                         }) as SendableRecordBatchStream
                     })
                     .collect::<Vec<_>>();
@@ -700,6 +706,11 @@ impl RepartitionExec {
         // If the ordering is lost, reset the ordering equivalence class:
         if !Self::maintains_input_order_helper(input, preserve_order)[0] {
             eq_properties.clear_orderings();
+        }
+        // When there are more than one input partitions, they will be fused at the output.
+        // Therefore, remove per partition constants.
+        if input.output_partitioning().partition_count() > 1 {
+            eq_properties.clear_per_partition_constants();
         }
         eq_properties
     }
@@ -861,7 +872,7 @@ impl RepartitionExec {
 
                 for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
-                    let err = Err(DataFusionError::External(Box::new(e.clone())));
+                    let err = Err(DataFusionError::External(Box::new(Arc::clone(&e))));
                     tx.send(Some(err)).await.ok();
                 }
             }
@@ -940,7 +951,7 @@ impl Stream for RepartitionStream {
 impl RecordBatchStream for RepartitionStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -990,7 +1001,7 @@ impl Stream for PerPartitionStream {
 impl RecordBatchStream for PerPartitionStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -1112,14 +1123,14 @@ mod tests {
     ) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(TaskContext::default());
         // create physical plan
-        let exec = MemoryExec::try_new(&input_partitions, schema.clone(), None)?;
+        let exec = MemoryExec::try_new(&input_partitions, Arc::clone(schema), None)?;
         let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
 
         // execute and collect results
         let mut output_partitions = vec![];
         for i in 0..exec.partitioning.partition_count() {
             // execute this *output* partition and collect all batches
-            let mut stream = exec.execute(i, task_ctx.clone())?;
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
             let mut batches = vec![];
             while let Some(result) = stream.next().await {
                 batches.push(result?);
@@ -1296,10 +1307,14 @@ mod tests {
         let input = Arc::new(make_barrier_exec());
 
         // partition into two output streams
-        let exec = RepartitionExec::try_new(input.clone(), partitioning).unwrap();
+        let exec = RepartitionExec::try_new(
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            partitioning,
+        )
+        .unwrap();
 
-        let output_stream0 = exec.execute(0, task_ctx.clone()).unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
+        let output_stream0 = exec.execute(0, Arc::clone(&task_ctx)).unwrap();
+        let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
 
         // now, purposely drop output stream 0
         // *before* any outputs are produced
@@ -1330,8 +1345,8 @@ mod tests {
 
     #[tokio::test]
     // As the hash results might be different on different platforms or
-    // wiht different compilers, we will compare the same execution with
-    // and without droping the output stream.
+    // with different compilers, we will compare the same execution with
+    // and without dropping the output stream.
     async fn hash_repartition_with_dropping_output_stream() {
         let task_ctx = Arc::new(TaskContext::default());
         let partitioning = Partitioning::Hash(
@@ -1342,10 +1357,14 @@ mod tests {
             2,
         );
 
-        // We first collect the results without droping the output stream.
+        // We first collect the results without dropping the output stream.
         let input = Arc::new(make_barrier_exec());
-        let exec = RepartitionExec::try_new(input.clone(), partitioning.clone()).unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
+        let exec = RepartitionExec::try_new(
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            partitioning.clone(),
+        )
+        .unwrap();
+        let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
         let mut background_task = JoinSet::new();
         background_task.spawn(async move {
             input.wait().await;
@@ -1365,9 +1384,13 @@ mod tests {
 
         // Now do the same but dropping the stream before waiting for the barrier
         let input = Arc::new(make_barrier_exec());
-        let exec = RepartitionExec::try_new(input.clone(), partitioning).unwrap();
-        let output_stream0 = exec.execute(0, task_ctx.clone()).unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
+        let exec = RepartitionExec::try_new(
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            partitioning,
+        )
+        .unwrap();
+        let output_stream0 = exec.execute(0, Arc::clone(&task_ctx)).unwrap();
+        let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
         // now, purposely drop output stream 0
         // *before* any outputs are produced
         std::mem::drop(output_stream0);
@@ -1466,9 +1489,9 @@ mod tests {
         let schema = batch.schema();
         let input = MockExec::new(vec![Ok(batch)], schema);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
-        let output_stream0 = exec.execute(0, task_ctx.clone()).unwrap();
+        let output_stream0 = exec.execute(0, Arc::clone(&task_ctx)).unwrap();
         let batch0 = crate::common::collect(output_stream0).await.unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
+        let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
         let batch1 = crate::common::collect(output_stream1).await.unwrap();
         assert!(batch0.is_empty() || batch1.is_empty());
         Ok(())
@@ -1491,12 +1514,12 @@ mod tests {
         let task_ctx = Arc::new(task_ctx);
 
         // create physical plan
-        let exec = MemoryExec::try_new(&input_partitions, schema.clone(), None)?;
+        let exec = MemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
         let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
 
         // pull partitions
         for i in 0..exec.partitioning.partition_count() {
-            let mut stream = exec.execute(i, task_ctx.clone())?;
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
             let err =
                 arrow_datafusion_err!(stream.next().await.unwrap().unwrap_err().into());
             let err = err.find_root();
@@ -1637,7 +1660,7 @@ mod test {
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-        Arc::new(MemoryExec::try_new(&[vec![]], schema.clone(), None).unwrap())
+        Arc::new(MemoryExec::try_new(&[vec![]], Arc::clone(schema), None).unwrap())
     }
 
     fn sorted_memory_exec(
@@ -1645,7 +1668,7 @@ mod test {
         sort_exprs: Vec<PhysicalSortExpr>,
     ) -> Arc<dyn ExecutionPlan> {
         Arc::new(
-            MemoryExec::try_new(&[vec![]], schema.clone(), None)
+            MemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
                 .unwrap()
                 .with_sort_information(vec![sort_exprs]),
         )

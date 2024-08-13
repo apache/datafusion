@@ -33,7 +33,8 @@ use arrow::ipc::{reader::read_record_batch, root_as_message};
 use datafusion_common::{
     arrow_datafusion_err,
     config::{
-        ColumnOptions, CsvOptions, JsonOptions, ParquetOptions, TableParquetOptions,
+        CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
+        TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
     parsers::CompressionTypeVariant,
@@ -260,6 +261,10 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 precision,
                 scale,
             }) => DataType::Decimal128(*precision as u8, *scale as i8),
+            arrow_type::ArrowTypeEnum::Decimal256(protobuf::Decimal256Type {
+                precision,
+                scale,
+            }) => DataType::Decimal256(*precision as u8, *scale as i8),
             arrow_type::ArrowTypeEnum::List(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
@@ -380,7 +385,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::ListValue(v)
             | Value::FixedSizeListValue(v)
             | Value::LargeListValue(v)
-            | Value::StructValue(v) => {
+            | Value::StructValue(v)
+            | Value::MapValue(v) => {
                 let protobuf::ScalarNestedValue {
                     ipc_message,
                     arrow_data,
@@ -402,7 +408,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                         "Error IPC message while deserializing ScalarValue::List: {e}"
                     ))
                 })?;
-                let buffer = Buffer::from(arrow_data);
+                let buffer = Buffer::from(arrow_data.as_slice());
 
                 let ipc_batch = message.header_as_record_batch().ok_or_else(|| {
                     Error::General(
@@ -417,7 +423,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                             "Error IPC message while deserializing ScalarValue::List dictionary message: {e}"
                         ))
                     })?;
-                    let buffer = Buffer::from(arrow_data);
+                    let buffer = Buffer::from(arrow_data.as_slice());
 
                     let dict_batch = message.header_as_dictionary_batch().ok_or_else(|| {
                         Error::General(
@@ -447,7 +453,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                                 None,
                                 &message.version(),
                             )?;
-                            Ok(record_batch.column(0).clone())
+                            Ok(Arc::clone(record_batch.column(0)))
                         }
                         _ => Err(Error::General("dictionary id not found in schema while deserializing ScalarValue::List".to_string())),
                     }?;
@@ -479,6 +485,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     Value::StructValue(_) => {
                         Self::Struct(arr.as_struct().to_owned().into())
                     }
+                    Value::MapValue(_) => Self::Map(arr.as_map().to_owned().into()),
                     _ => unreachable!(),
                 }
             }
@@ -858,6 +865,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             quote: proto_opts.quote[0],
             escape: proto_opts.escape.first().copied(),
             double_quote: proto_opts.has_header.first().map(|h| *h != 0),
+            newlines_in_values: proto_opts.newlines_in_values.first().map(|h| *h != 0),
             compression: proto_opts.compression().into(),
             schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,
             date_format: (!proto_opts.date_format.is_empty())
@@ -948,53 +956,53 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             allow_single_file_parallelism: value.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as usize,
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as usize,
-
+            schema_force_string_view: value.schema_force_string_view,
         })
     }
 }
 
-impl TryFrom<&protobuf::ColumnOptions> for ColumnOptions {
+impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
     type Error = DataFusionError;
     fn try_from(
-        value: &protobuf::ColumnOptions,
+        value: &protobuf::ParquetColumnOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        Ok(ColumnOptions {
+        Ok(ParquetColumnOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
-                protobuf::column_options::CompressionOpt::Compression(v) => Some(v),
+                protobuf::parquet_column_options::CompressionOpt::Compression(v) => Some(v),
             }).unwrap_or(None),
-            dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::column_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
+            dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
             statistics_enabled: value
                 .statistics_enabled_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
+                    protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
                 })
                 .unwrap_or(None),
             max_statistics_size: value
                 .max_statistics_size_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
+                    protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
                 })
                 .unwrap_or(None),
             encoding: value
                 .encoding_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::column_options::EncodingOpt::Encoding(v) => Some(v),
+                    protobuf::parquet_column_options::EncodingOpt::Encoding(v) => Some(v),
                 })
                 .unwrap_or(None),
             bloom_filter_enabled: value.bloom_filter_enabled_opt.clone().map(|opt| match opt {
-                protobuf::column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v) => Some(v),
+                protobuf::parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v) => Some(v),
             })
                 .unwrap_or(None),
             bloom_filter_fpp: value
                 .bloom_filter_fpp_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::column_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
+                    protobuf::parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
                 })
                 .unwrap_or(None),
             bloom_filter_ndv: value
                 .bloom_filter_ndv_opt.clone()
                 .map(|opt| match opt {
-                    protobuf::column_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
+                    protobuf::parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
                 })
                 .unwrap_or(None),
         })
@@ -1006,8 +1014,9 @@ impl TryFrom<&protobuf::TableParquetOptions> for TableParquetOptions {
     fn try_from(
         value: &protobuf::TableParquetOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        let mut column_specific_options: HashMap<String, ColumnOptions> = HashMap::new();
-        for protobuf::ColumnSpecificOptions {
+        let mut column_specific_options: HashMap<String, ParquetColumnOptions> =
+            HashMap::new();
+        for protobuf::ParquetColumnSpecificOptions {
             column_name,
             options: maybe_options,
         } in &value.column_specific_options

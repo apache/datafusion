@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{plan_datafusion_err, plan_err, Column, DFSchema, Result};
+use datafusion_common::{
+    not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema, Result,
+};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::Expr;
 use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};
@@ -37,7 +39,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// If false, interpret numeric literals as constant values.
     pub(crate) fn order_by_to_sort_expr(
         &self,
-        exprs: &[OrderByExpr],
+        exprs: Vec<OrderByExpr>,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
         literal_to_column: bool,
@@ -63,7 +65,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 asc,
                 expr,
                 nulls_first,
+                with_fill,
             } = e;
+
+            if let Some(with_fill) = with_fill {
+                return not_impl_err!("ORDER BY WITH FILL is not supported: {with_fill}");
+            }
 
             let expr = match expr {
                 SQLExpr::Value(Value::Number(v, _)) if literal_to_column => {
@@ -87,11 +94,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         input_schema.qualified_field(field_index - 1),
                     ))
                 }
-                e => self.sql_expr_to_logical_expr(
-                    e.clone(),
-                    order_by_schema,
-                    planner_context,
-                )?,
+                e => {
+                    self.sql_expr_to_logical_expr(e, order_by_schema, planner_context)?
+                }
             };
             let asc = asc.unwrap_or(true);
             expr_vec.push(Expr::Sort(Sort::new(

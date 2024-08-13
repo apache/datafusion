@@ -69,3 +69,23 @@ query ?
 SELECT CAST(MAKE_ARRAY() AS VARCHAR[])
 ----
 []
+
+statement ok
+create table t0(v0 BIGINT);
+
+statement ok
+insert into t0 values (1),(2),(3);
+
+query I
+select * from t0 where v0>1e100;
+----
+
+query I
+select * from t0 where v0<1e100;
+----
+1
+2
+3
+
+statement ok
+drop table t0;

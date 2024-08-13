@@ -20,7 +20,7 @@ CREATE TABLE test(
   num INT,
   bin_field  BYTEA,
   base64_field TEXT,
-  hex_field TEXT,
+  hex_field TEXT
 ) as VALUES
   (0, 'abc',  encode('abc', 'base64'), encode('abc', 'hex')),
   (1, 'qweqwe',    encode('qweqwe', 'base64'), encode('qweqwe', 'hex')),

@@ -20,7 +20,7 @@ name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
 keywords = ["arrow", "query", "sql"]
 include = ["benches/*.rs", "src/**/*.rs", "Cargo.toml"]
-readme = "README.md"
+readme = "../../README.md"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
@@ -40,8 +40,10 @@ name = "datafusion"
 path = "src/lib.rs"
 
 [features]
+nested_expressions = ["datafusion-functions-nested"]
+# This feature is deprecated. Use the `nested_expressions` feature instead.
+array_expressions = ["nested_expressions"]
 # Used to enable the avro format
-array_expressions = ["datafusion-functions-array"]
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
@@ -49,7 +51,7 @@ crypto_expressions = ["datafusion-functions/crypto_expressions"]
 datetime_expressions = ["datafusion-functions/datetime_expressions"]
 dirs = ["dep:dirs"]
 default = [
-    "array_expressions",
+    "nested_expressions",
     "crypto_expressions",
     "datetime_expressions",
     "encoding_expressions",
@@ -62,7 +64,7 @@ default = [
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
-force_hash_collisions = []
+force_hash_collisions = ["datafusion-physical-plan/force_hash_collisions", "datafusion-common/force_hash_collisions"]
 math_expressions = ["datafusion-functions/math_expressions"]
 parquet = ["datafusion-common/parquet", "dep:parquet"]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
@@ -98,16 +100,19 @@ bytes = { workspace = true }
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
+datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
-datafusion-functions-array = { workspace = true, optional = true }
+datafusion-functions-nested = { workspace = true, optional = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
+datafusion-physical-expr-functions-aggregate = { workspace = true }
+datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 dirs = { version = "4.0.0", optional = true }
@@ -218,4 +223,5 @@ name = "topk_aggregate"
 
 [[bench]]
 harness = false
-name = "parquet_statistic"
+name = "map_query_sql"
+required-features = ["nested_expressions"]

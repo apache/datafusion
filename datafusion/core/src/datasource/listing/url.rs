@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::context::SessionState;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_optimizer::OptimizerConfig;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -53,7 +53,7 @@ impl ListingTableUrl {
     /// subdirectories.
     ///
     /// Similarly `s3://BUCKET/blob.csv` refers to `blob.csv` in the S3 bucket `BUCKET`,
-    /// wherease `s3://BUCKET/foo/` refers to all objects with the prefix `foo/` in the
+    /// whereas `s3://BUCKET/foo/` refers to all objects with the prefix `foo/` in the
     /// S3 bucket `BUCKET`
     ///
     /// # URL Encoding

@@ -82,7 +82,7 @@ fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
     defs.iter().for_each(|TableDef { name, schema }| {
         ctx.register_table(
             name,
-            Arc::new(MemTable::try_new(Arc::new(schema.clone()), vec![]).unwrap()),
+            Arc::new(MemTable::try_new(Arc::new(schema.clone()), vec![vec![]]).unwrap()),
         )
         .unwrap();
     });

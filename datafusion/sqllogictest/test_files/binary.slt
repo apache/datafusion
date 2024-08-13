@@ -25,7 +25,7 @@ SELECT X'FF01', arrow_typeof(X'FF01');
 ----
 ff01 Binary
 
-# Invaid hex values
+# Invalid hex values
 query error DataFusion error: Error during planning: Invalid HexStringLiteral 'Z'
 SELECT X'Z'
 

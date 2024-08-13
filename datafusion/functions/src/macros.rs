@@ -75,9 +75,8 @@ macro_rules! make_udf_function {
         static $GNAME: std::sync::OnceLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
             std::sync::OnceLock::new();
 
-        /// Return a [`ScalarUDF`] for [`$UDF`]
-        ///
-        /// [`ScalarUDF`]: datafusion_expr::ScalarUDF
+        #[doc = "Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) for "]
+        #[doc = stringify!($UDF)]
         pub fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
             $GNAME
                 .get_or_init(|| {
@@ -162,7 +161,7 @@ macro_rules! downcast_arg {
 /// $UNARY_FUNC: the unary function to apply to the argument
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
 macro_rules! make_math_unary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr) => {
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr) => {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 
         mod $NAME {
@@ -172,6 +171,7 @@ macro_rules! make_math_unary_udf {
             use arrow::array::{ArrayRef, Float32Array, Float64Array};
             use arrow::datatypes::DataType;
             use datafusion_common::{exec_err, DataFusionError, Result};
+            use datafusion_expr::interval_arithmetic::Interval;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
@@ -220,6 +220,10 @@ macro_rules! make_math_unary_udf {
                     input: &[ExprProperties],
                 ) -> Result<SortProperties> {
                     $OUTPUT_ORDERING(input)
+                }
+
+                fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+                    $EVALUATE_BOUNDS(inputs)
                 }
 
                 fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

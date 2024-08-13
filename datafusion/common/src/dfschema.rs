@@ -211,7 +211,7 @@ impl DFSchema {
         schema: &SchemaRef,
     ) -> Result<Self> {
         let dfschema = Self {
-            inner: schema.clone(),
+            inner: Arc::clone(schema),
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
         };
@@ -311,7 +311,7 @@ impl DFSchema {
             };
             if !duplicated_field {
                 // self.inner.fields.push(field.clone());
-                schema_builder.push(field.clone());
+                schema_builder.push(Arc::clone(field));
                 qualifiers.push(qualifier.cloned());
             }
         }
@@ -521,34 +521,8 @@ impl DFSchema {
 
     /// Find the field with the given name
     pub fn field_with_unqualified_name(&self, name: &str) -> Result<&Field> {
-        let matches = self.qualified_fields_with_unqualified_name(name);
-        match matches.len() {
-            0 => Err(unqualified_field_not_found(name, self)),
-            1 => Ok(matches[0].1),
-            _ => {
-                // When `matches` size > 1, it doesn't necessarily mean an `ambiguous name` problem.
-                // Because name may generate from Alias/... . It means that it don't own qualifier.
-                // For example:
-                //             Join on id = b.id
-                // Project a.id as id   TableScan b id
-                // In this case, there isn't `ambiguous name` problem. When `matches` just contains
-                // one field without qualifier, we should return it.
-                let fields_without_qualifier = matches
-                    .iter()
-                    .filter(|(q, _)| q.is_none())
-                    .collect::<Vec<_>>();
-                if fields_without_qualifier.len() == 1 {
-                    Ok(fields_without_qualifier[0].1)
-                } else {
-                    _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column {
-                            relation: None,
-                            name: name.to_string(),
-                        },
-                    })
-                }
-            }
-        }
+        self.qualified_field_with_unqualified_name(name)
+            .map(|(_, field)| field)
     }
 
     /// Find the field with the given qualified name
@@ -1276,7 +1250,7 @@ mod tests {
         let arrow_schema_ref = Arc::new(arrow_schema.clone());
 
         let df_schema = DFSchema {
-            inner: arrow_schema_ref.clone(),
+            inner: Arc::clone(&arrow_schema_ref),
             field_qualifiers: vec![None; arrow_schema_ref.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };
@@ -1284,7 +1258,7 @@ mod tests {
 
         {
             let arrow_schema = arrow_schema.clone();
-            let arrow_schema_ref = arrow_schema_ref.clone();
+            let arrow_schema_ref = Arc::clone(&arrow_schema_ref);
 
             assert_eq!(df_schema, arrow_schema.to_dfschema().unwrap());
             assert_eq!(df_schema, arrow_schema_ref.to_dfschema().unwrap());
@@ -1292,7 +1266,7 @@ mod tests {
 
         {
             let arrow_schema = arrow_schema.clone();
-            let arrow_schema_ref = arrow_schema_ref.clone();
+            let arrow_schema_ref = Arc::clone(&arrow_schema_ref);
 
             assert_eq!(df_schema_ref, arrow_schema.to_dfschema_ref().unwrap());
             assert_eq!(df_schema_ref, arrow_schema_ref.to_dfschema_ref().unwrap());
@@ -1310,7 +1284,7 @@ mod tests {
         ])
     }
     #[test]
-    fn test_dfschema_to_schema_convertion() {
+    fn test_dfschema_to_schema_conversion() {
         let mut a_metadata = HashMap::new();
         a_metadata.insert("key".to_string(), "value".to_string());
         let a_field = Field::new("a", DataType::Int64, false).with_metadata(a_metadata);
@@ -1322,7 +1296,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a_field, b_field]));
 
         let df_schema = DFSchema {
-            inner: schema.clone(),
+            inner: Arc::clone(&schema),
             field_qualifiers: vec![None; schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };

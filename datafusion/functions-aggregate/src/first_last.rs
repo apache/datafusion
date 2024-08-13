@@ -31,13 +31,11 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateExt, AggregateUDFImpl, ArrayFunctionSignature, Expr, Signature,
-    TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, ExprFunctionExt,
+    Signature, TypeSignature, Volatility,
 };
-use datafusion_physical_expr_common::aggregate::utils::get_sort_options;
-use datafusion_physical_expr_common::sort_expr::{
-    limited_convert_logical_sort_exprs_to_physical, LexOrdering, PhysicalSortExpr,
-};
+use datafusion_functions_aggregate_common::utils::get_sort_options;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 create_func!(FirstValue, first_value_udaf);
 
@@ -116,24 +114,21 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let ordering_req = limited_convert_logical_sort_exprs_to_physical(
-            acc_args.sort_exprs,
-            acc_args.schema,
-        )?;
-
-        let ordering_dtypes = ordering_req
+        let ordering_dtypes = acc_args
+            .ordering_req
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
         // When requirement is empty, or it is signalled by outside caller that
         // the ordering requirement is/will be satisfied.
-        let requirement_satisfied = ordering_req.is_empty() || self.requirement_satisfied;
+        let requirement_satisfied =
+            acc_args.ordering_req.is_empty() || self.requirement_satisfied;
 
         FirstValueAccumulator::try_new(
-            acc_args.data_type,
+            acc_args.return_type,
             &ordering_dtypes,
-            ordering_req,
+            acc_args.ordering_req.to_vec(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -247,7 +242,7 @@ impl FirstValueAccumulator {
             .iter()
             .zip(self.ordering_req.iter())
             .map(|(values, req)| SortColumn {
-                values: values.clone(),
+                values: Arc::clone(values),
                 options: Some(req.options),
             })
             .collect::<Vec<_>>();
@@ -415,22 +410,19 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let ordering_req = limited_convert_logical_sort_exprs_to_physical(
-            acc_args.sort_exprs,
-            acc_args.schema,
-        )?;
-
-        let ordering_dtypes = ordering_req
+        let ordering_dtypes = acc_args
+            .ordering_req
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
-        let requirement_satisfied = ordering_req.is_empty() || self.requirement_satisfied;
+        let requirement_satisfied =
+            acc_args.ordering_req.is_empty() || self.requirement_satisfied;
 
         LastValueAccumulator::try_new(
-            acc_args.data_type,
+            acc_args.return_type,
             &ordering_dtypes,
-            ordering_req,
+            acc_args.ordering_req.to_vec(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -439,14 +431,14 @@ impl AggregateUDFImpl for LastValue {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         let StateFieldsArgs {
             name,
-            input_type,
+            input_types,
             return_type: _,
             ordering_fields,
             is_distinct: _,
         } = args;
         let mut fields = vec![Field::new(
             format_state_name(name, "last_value"),
-            input_type.clone(),
+            input_types[0].clone(),
             true,
         )];
         fields.extend(ordering_fields.to_vec());
@@ -547,7 +539,7 @@ impl LastValueAccumulator {
                 // Take the reverse ordering requirement. This enables us to
                 // use "fetch = 1" to get the last value.
                 SortColumn {
-                    values: values.clone(),
+                    values: Arc::clone(values),
                     options: Some(!req.options),
                 }
             })
@@ -676,7 +668,7 @@ fn convert_to_sort_cols(
     arrs.iter()
         .zip(sort_exprs.iter())
         .map(|(item, sort_expr)| SortColumn {
-            values: item.clone(),
+            values: Arc::clone(item),
             options: Some(sort_expr.options),
         })
         .collect::<Vec<_>>()
@@ -707,7 +699,7 @@ mod tests {
         for arr in arrs {
             // Once first_value is set, accumulator should remember it.
             // It shouldn't update first_value for each new batch
-            first_accumulator.update_batch(&[arr.clone()])?;
+            first_accumulator.update_batch(&[Arc::clone(&arr)])?;
             // last_value should be updated for each new batch.
             last_accumulator.update_batch(&[arr])?;
         }
@@ -733,12 +725,12 @@ mod tests {
         let mut first_accumulator =
             FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
 
-        first_accumulator.update_batch(&[arrs[0].clone()])?;
+        first_accumulator.update_batch(&[Arc::clone(&arrs[0])])?;
         let state1 = first_accumulator.state()?;
 
         let mut first_accumulator =
             FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
-        first_accumulator.update_batch(&[arrs[1].clone()])?;
+        first_accumulator.update_batch(&[Arc::clone(&arrs[1])])?;
         let state2 = first_accumulator.state()?;
 
         assert_eq!(state1.len(), state2.len());
@@ -763,12 +755,12 @@ mod tests {
         let mut last_accumulator =
             LastValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
 
-        last_accumulator.update_batch(&[arrs[0].clone()])?;
+        last_accumulator.update_batch(&[Arc::clone(&arrs[0])])?;
         let state1 = last_accumulator.state()?;
 
         let mut last_accumulator =
             LastValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
-        last_accumulator.update_batch(&[arrs[1].clone()])?;
+        last_accumulator.update_batch(&[Arc::clone(&arrs[1])])?;
         let state2 = last_accumulator.state()?;
 
         assert_eq!(state1.len(), state2.len());

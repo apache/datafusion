@@ -19,7 +19,7 @@
 //!
 //! Coercion is performed automatically by DataFusion when the types
 //! of arguments passed to a function or needed by operators do not
-//! exacty match the types required by that function / operator. In
+//! exactly match the types required by that function / operator. In
 //! this case, DataFusion will attempt to *coerce* the arguments to
 //! types accepted by the function by inserting CAST operations.
 //!
@@ -31,10 +31,13 @@
 //! i64. However, i64 -> i32 is never performed as there are i64
 //! values which can not be represented by i32 values.
 
-pub mod aggregates;
-pub mod binary;
+pub mod aggregates {
+    pub use datafusion_expr_common::type_coercion::aggregates::*;
+}
 pub mod functions;
 pub mod other;
+
+pub use datafusion_expr_common::type_coercion::binary;
 
 use arrow::datatypes::DataType;
 /// Determine whether the given data type `dt` represents signed numeric values.

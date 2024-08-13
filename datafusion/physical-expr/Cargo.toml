@@ -56,6 +56,8 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true }
+datafusion-functions-aggregate-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
@@ -77,3 +79,11 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 [[bench]]
 harness = false
 name = "in_list"
+
+[[bench]]
+harness = false
+name = "case_when"
+
+[[bench]]
+harness = false
+name = "is_null"

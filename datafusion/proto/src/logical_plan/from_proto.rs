@@ -19,17 +19,16 @@ use std::sync::Arc;
 
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
+    exec_datafusion_err, internal_err, plan_datafusion_err, Result, ScalarValue,
     TableReference, UnnestOptions,
 };
 use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{Alias, Placeholder};
-use datafusion_expr::window_frame::{check_window_frame, regularize_window_order_by};
+use datafusion_expr::ExprFunctionExt;
 use datafusion_expr::{
     expr::{self, InList, Sort, WindowFunction},
     logical_plan::{PlanType, StringifiedPlan},
-    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr,
-    GroupingSet,
+    Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -139,18 +138,6 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
     }
 }
 
-impl From<protobuf::AggregateFunction> for AggregateFunction {
-    fn from(agg_fun: protobuf::AggregateFunction) -> Self {
-        match agg_fun {
-            protobuf::AggregateFunction::Min => Self::Min,
-            protobuf::AggregateFunction::Max => Self::Max,
-            protobuf::AggregateFunction::ArrayAgg => Self::ArrayAgg,
-            protobuf::AggregateFunction::Grouping => Self::Grouping,
-            protobuf::AggregateFunction::NthValueAgg => Self::NthValue,
-        }
-    }
-}
-
 impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
         match built_in_function {
@@ -237,12 +224,6 @@ impl From<protobuf::JoinConstraint> for JoinConstraint {
     }
 }
 
-pub fn parse_i32_to_aggregate_function(value: &i32) -> Result<AggregateFunction, Error> {
-    protobuf::AggregateFunction::try_from(*value)
-        .map(|a| a.into())
-        .map_err(|_| Error::unknown("AggregateFunction", *value))
-}
-
 pub fn parse_expr(
     proto: &protobuf::LogicalExprNode,
     registry: &dyn FunctionRegistry,
@@ -271,11 +252,7 @@ pub fn parse_expr(
             Ok(operands
                 .into_iter()
                 .reduce(|left, right| {
-                    Expr::BinaryExpr(BinaryExpr::new(
-                        Box::new(left),
-                        op.clone(),
-                        Box::new(right),
-                    ))
+                    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
         }
@@ -295,35 +272,18 @@ pub fn parse_expr(
                 .window_frame
                 .as_ref()
                 .map::<Result<WindowFrame, _>, _>(|window_frame| {
-                    let window_frame = window_frame.clone().try_into()?;
-                    check_window_frame(&window_frame, order_by.len())
+                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
+                    window_frame
+                        .regularize_order_bys(&mut order_by)
                         .map(|_| window_frame)
                 })
                 .transpose()?
                 .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "missing window frame during deserialization".to_string(),
-                    )
+                    exec_datafusion_err!("missing window frame during deserialization")
                 })?;
+
             // TODO: support proto for null treatment
-            let null_treatment = None;
-            regularize_window_order_by(&window_frame, &mut order_by)?;
-
             match window_function {
-                window_expr_node::WindowFunction::AggrFunction(i) => {
-                    let aggr_function = parse_i32_to_aggregate_function(i)?;
-
-                    Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::expr::WindowFunctionDefinition::AggregateFunction(
-                            aggr_function,
-                        ),
-                        vec![parse_required_expr(expr.expr.as_deref(), registry, "expr", codec)?],
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        None
-                    )))
-                }
                 window_expr_node::WindowFunction::BuiltInFunction(i) => {
                     let built_in_function = protobuf::BuiltInWindowFunction::try_from(*i)
                         .map_err(|_| Error::unknown("BuiltInWindowFunction", *i))?
@@ -334,65 +294,59 @@ pub fn parse_expr(
                             .map(|e| vec![e])
                             .unwrap_or_else(Vec::new);
 
-                    Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::expr::WindowFunctionDefinition::BuiltInWindowFunction(
+                    Expr::WindowFunction(WindowFunction::new(
+                        expr::WindowFunctionDefinition::BuiltInWindowFunction(
                             built_in_function,
                         ),
                         args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment
-                    )))
+                    ))
+                    .partition_by(partition_by)
+                    .order_by(order_by)
+                    .window_frame(window_frame)
+                    .build()
+                    .map_err(Error::DataFusionError)
                 }
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
-                    let udaf_function = registry.udaf(udaf_name)?;
+                    let udaf_function = match &expr.fun_definition {
+                        Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
+                        None => registry.udaf(udaf_name)?,
+                    };
+
                     let args =
                         parse_optional_expr(expr.expr.as_deref(), registry, codec)?
                             .map(|e| vec![e])
                             .unwrap_or_else(Vec::new);
-                    Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::expr::WindowFunctionDefinition::AggregateUDF(
-                            udaf_function,
-                        ),
+                    Expr::WindowFunction(WindowFunction::new(
+                        expr::WindowFunctionDefinition::AggregateUDF(udaf_function),
                         args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        None,
-                    )))
+                    ))
+                    .partition_by(partition_by)
+                    .order_by(order_by)
+                    .window_frame(window_frame)
+                    .build()
+                    .map_err(Error::DataFusionError)
                 }
                 window_expr_node::WindowFunction::Udwf(udwf_name) => {
-                    let udwf_function = registry.udwf(udwf_name)?;
+                    let udwf_function = match &expr.fun_definition {
+                        Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
+                        None => registry.udwf(udwf_name)?,
+                    };
+
                     let args =
                         parse_optional_expr(expr.expr.as_deref(), registry, codec)?
                             .map(|e| vec![e])
                             .unwrap_or_else(Vec::new);
-                    Ok(Expr::WindowFunction(WindowFunction::new(
-                        datafusion_expr::expr::WindowFunctionDefinition::WindowUDF(
-                            udwf_function,
-                        ),
+                    Expr::WindowFunction(WindowFunction::new(
+                        expr::WindowFunctionDefinition::WindowUDF(udwf_function),
                         args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        None,
-                    )))
+                    ))
+                    .partition_by(partition_by)
+                    .order_by(order_by)
+                    .window_frame(window_frame)
+                    .build()
+                    .map_err(Error::DataFusionError)
                 }
             }
-        }
-        ExprType::AggregateExpr(expr) => {
-            let fun = parse_i32_to_aggregate_function(&expr.aggr_function)?;
-
-            Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                fun,
-                parse_exprs(&expr.expr, registry, codec)?,
-                expr.distinct,
-                parse_optional_expr(expr.filter.as_deref(), registry, codec)?
-                    .map(Box::new),
-                parse_vec_expr(&expr.order_by, registry, codec)?,
-                None,
-            )))
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
             parse_required_expr(alias.expr.as_deref(), registry, "expr", codec)?,
@@ -619,7 +573,10 @@ pub fn parse_expr(
             )))
         }
         ExprType::AggregateUdfExpr(pb) => {
-            let agg_fn = registry.udaf(pb.fun_name.as_str())?;
+            let agg_fn = match &pb.fun_definition {
+                Some(buf) => codec.try_decode_udaf(&pb.fun_name, buf)?,
+                None => registry.udaf(&pb.fun_name)?,
+            };
 
             Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 agg_fn,

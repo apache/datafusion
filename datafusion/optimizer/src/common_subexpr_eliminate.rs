@@ -28,17 +28,16 @@ use crate::utils::NamePreserver;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::hash_utils::combine_hashes;
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter, TreeNodeVisitor,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    TreeNodeVisitor,
 };
-use datafusion_common::{
-    internal_datafusion_err, qualified_name, Column, DFSchema, DFSchemaRef, Result,
-};
-use datafusion_expr::expr::Alias;
+use datafusion_common::{qualified_name, Column, DFSchema, DFSchemaRef, Result};
+use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{col, Expr, ExprSchemable};
+use datafusion_expr::{col, BinaryExpr, Case, Expr, ExprSchemable, Operator};
 use indexmap::IndexMap;
 
 const CSE_PREFIX: &str = "__common_expr";
@@ -106,8 +105,9 @@ impl Hash for Identifier<'_> {
 /// ```
 type IdArray<'n> = Vec<(usize, Option<Identifier<'n>>)>;
 
-/// A map that contains the number of occurrences of expressions by their identifiers.
-type ExprStats<'n> = HashMap<Identifier<'n>, usize>;
+/// A map that contains the number of normal and conditional occurrences of expressions by
+/// their identifiers.
+type ExprStats<'n> = HashMap<Identifier<'n>, (usize, usize)>;
 
 /// A map that contains the common expressions and their alias extracted during the
 /// second, rewriting traversal.
@@ -141,6 +141,23 @@ type CommonExprs<'n> = IndexMap<Identifier<'n>, (Expr, String)>;
 /// ```
 pub struct CommonSubexprEliminate {
     random_state: RandomState,
+}
+
+/// The result of potentially rewriting a list of expressions to eliminate common
+/// subexpressions.
+#[derive(Debug)]
+enum FoundCommonExprs {
+    /// No common expressions were found
+    No { original_exprs_list: Vec<Vec<Expr>> },
+    /// Common expressions were found
+    Yes {
+        /// extracted common expressions
+        common_exprs: Vec<(Expr, String)>,
+        /// new expressions with common subexpressions replaced
+        new_exprs_list: Vec<Vec<Expr>>,
+        /// original expressions
+        original_exprs_list: Vec<Vec<Expr>>,
+    },
 }
 
 impl CommonSubexprEliminate {
@@ -187,24 +204,20 @@ impl CommonSubexprEliminate {
         id_array: &mut IdArray<'n>,
         expr_mask: ExprMask,
     ) -> Result<bool> {
-        // Don't consider volatile expressions for CSE.
-        Ok(if expr.is_volatile()? {
-            false
-        } else {
-            let mut visitor = ExprIdentifierVisitor {
-                expr_stats,
-                id_array,
-                visit_stack: vec![],
-                down_index: 0,
-                up_index: 0,
-                expr_mask,
-                random_state: &self.random_state,
-                found_common: false,
-            };
-            expr.visit(&mut visitor)?;
+        let mut visitor = ExprIdentifierVisitor {
+            expr_stats,
+            id_array,
+            visit_stack: vec![],
+            down_index: 0,
+            up_index: 0,
+            expr_mask,
+            random_state: &self.random_state,
+            found_common: false,
+            conditional: false,
+        };
+        expr.visit(&mut visitor)?;
 
-            visitor.found_common
-        })
+        Ok(visitor.found_common)
     }
 
     /// Rewrites `exprs_list` with common sub-expressions replaced with a new
@@ -220,8 +233,7 @@ impl CommonSubexprEliminate {
         expr_stats: &ExprStats<'n>,
         common_exprs: &mut CommonExprs<'n>,
         alias_generator: &AliasGenerator,
-    ) -> Result<Transformed<Vec<Vec<Expr>>>> {
-        let mut transformed = false;
+    ) -> Result<Vec<Vec<Expr>>> {
         exprs_list
             .into_iter()
             .zip(arrays_list.iter())
@@ -230,69 +242,65 @@ impl CommonSubexprEliminate {
                     .into_iter()
                     .zip(arrays.iter())
                     .map(|(expr, id_array)| {
-                        let replaced = replace_common_expr(
+                        replace_common_expr(
                             expr,
                             id_array,
                             expr_stats,
                             common_exprs,
                             alias_generator,
-                        )?;
-                        // remember if this expression was actually replaced
-                        transformed |= replaced.transformed;
-                        Ok(replaced.data)
+                        )
                     })
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()
-            .map(|rewritten_exprs_list| {
-                // propagate back transformed information
-                Transformed::new_transformed(rewritten_exprs_list, transformed)
-            })
     }
 
-    /// Rewrites the expression in `exprs_list` with common sub-expressions
-    /// replaced with a new colum and adds a ProjectionExec on top of `input`
-    /// which computes any replaced common sub-expressions.
+    /// Extracts common sub-expressions and rewrites `exprs_list`.
     ///
-    /// Returns a tuple of:
-    /// 1. The rewritten expressions
-    /// 2. A `LogicalPlan::Projection` with input of `input` that computes any
-    ///    common sub-expressions that were used
-    fn rewrite_expr(
+    /// Returns `FoundCommonExprs` recording the result of the extraction
+    fn find_common_exprs(
         &self,
         exprs_list: Vec<Vec<Expr>>,
-        arrays_list: Vec<Vec<IdArray>>,
-        input: LogicalPlan,
-        expr_stats: &ExprStats,
         config: &dyn OptimizerConfig,
-    ) -> Result<Transformed<(Vec<Vec<Expr>>, LogicalPlan)>> {
-        let mut transformed = false;
-        let mut common_exprs = CommonExprs::new();
+        expr_mask: ExprMask,
+    ) -> Result<Transformed<FoundCommonExprs>> {
+        let mut found_common = false;
+        let mut expr_stats = ExprStats::new();
+        let id_arrays_list = exprs_list
+            .iter()
+            .map(|exprs| {
+                self.to_arrays(exprs, &mut expr_stats, expr_mask).map(
+                    |(fc, id_arrays)| {
+                        found_common |= fc;
 
-        let rewrite_exprs = self.rewrite_exprs_list(
-            exprs_list,
-            arrays_list,
-            expr_stats,
-            &mut common_exprs,
-            &config.alias_generator(),
-        )?;
-        transformed |= rewrite_exprs.transformed;
+                        id_arrays
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if found_common {
+            let mut common_exprs = CommonExprs::new();
+            let new_exprs_list = self.rewrite_exprs_list(
+                // Must clone as Identifiers use references to original expressions so we have
+                // to keep the original expressions intact.
+                exprs_list.clone(),
+                id_arrays_list,
+                &expr_stats,
+                &mut common_exprs,
+                &config.alias_generator(),
+            )?;
+            assert!(!common_exprs.is_empty());
 
-        let new_input = self.rewrite(input, config)?;
-        transformed |= new_input.transformed;
-        let mut new_input = new_input.data;
-
-        if !common_exprs.is_empty() {
-            assert!(transformed);
-            new_input = build_common_expr_project_plan(new_input, common_exprs)?;
+            Ok(Transformed::yes(FoundCommonExprs::Yes {
+                common_exprs: common_exprs.into_values().collect(),
+                new_exprs_list,
+                original_exprs_list: exprs_list,
+            }))
+        } else {
+            Ok(Transformed::no(FoundCommonExprs::No {
+                original_exprs_list: exprs_list,
+            }))
         }
-
-        // return the transformed information
-
-        Ok(Transformed::new_transformed(
-            (rewrite_exprs.data, new_input),
-            transformed,
-        ))
     }
 
     fn try_optimize_proj(
@@ -343,13 +351,9 @@ impl CommonSubexprEliminate {
         let input = unwrap_arc(input);
         let expr = vec![predicate];
         self.try_unary_plan(expr, input, config)?
-            .transform_data(|(mut new_expr, new_input)| {
+            .map_data(|(mut new_expr, new_input)| {
                 assert_eq!(new_expr.len(), 1); // passed in vec![predicate]
                 let new_predicate = new_expr.pop().unwrap();
-                Ok(Filter::remove_aliases(new_predicate)?
-                    .update_data(|new_predicate| (new_predicate, new_input)))
-            })?
-            .map_data(|(new_predicate, new_input)| {
                 Filter::try_new(new_predicate, Arc::new(new_input))
                     .map(LogicalPlan::Filter)
             })
@@ -360,96 +364,86 @@ impl CommonSubexprEliminate {
         window: Window,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        // collect all window expressions from any number of LogicalPlanWindow
-        let (mut window_exprs, mut window_schemas, mut plan) =
+        // Collects window expressions from consecutive `LogicalPlan::Window` nodes into
+        // a list.
+        let (window_expr_list, window_schemas, input) =
             get_consecutive_window_exprs(window);
 
-        let mut found_common = false;
-        let mut expr_stats = ExprStats::new();
-        let arrays_per_window = window_exprs
-            .iter()
-            .map(|window_expr| {
-                self.to_arrays(window_expr, &mut expr_stats, ExprMask::Normal)
-                    .map(|(fc, id_arrays)| {
-                        found_common |= fc;
-
-                        id_arrays
+        // Extract common sub-expressions from the list.
+        self.find_common_exprs(window_expr_list, config, ExprMask::Normal)?
+            .map_data(|common| match common {
+                // If there are common sub-expressions, then the insert a projection node
+                // with the common expressions between the new window nodes and the
+                // original input.
+                FoundCommonExprs::Yes {
+                    common_exprs,
+                    new_exprs_list,
+                    original_exprs_list,
+                } => {
+                    build_common_expr_project_plan(input, common_exprs).map(|new_input| {
+                        (new_exprs_list, new_input, Some(original_exprs_list))
                     })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        if found_common {
-            // save the original names
-            let name_preserver = NamePreserver::new(&plan);
-            let mut saved_names = window_exprs
-                .iter()
-                .map(|exprs| {
-                    exprs
-                        .iter()
-                        .map(|expr| name_preserver.save(expr))
-                        .collect::<Result<Vec<_>>>()
+                }
+                FoundCommonExprs::No {
+                    original_exprs_list,
+                } => Ok((original_exprs_list, input, None)),
+            })?
+            // Recurse into the new input.
+            // (This is similar to what a `ApplyOrder::TopDown` optimizer rule would do.)
+            .transform_data(|(new_window_expr_list, new_input, window_expr_list)| {
+                self.rewrite(new_input, config)?.map_data(|new_input| {
+                    Ok((new_window_expr_list, new_input, window_expr_list))
                 })
-                .collect::<Result<Vec<_>>>()?;
-
-            assert_eq!(window_exprs.len(), arrays_per_window.len());
-            let num_window_exprs = window_exprs.len();
-            let rewritten_window_exprs = self.rewrite_expr(
-                // Must clone as Identifiers use references to original expressions so we
-                // have to keep the original expressions intact.
-                window_exprs.clone(),
-                arrays_per_window,
-                plan,
-                &expr_stats,
-                config,
-            )?;
-            let transformed = rewritten_window_exprs.transformed;
-            assert!(transformed);
-
-            let (mut new_expr, new_input) = rewritten_window_exprs.data;
-
-            let mut plan = new_input;
-
-            // Construct consecutive window operator, with their corresponding new
-            // window expressions.
-            //
-            // Note this iterates over, `new_expr` and `saved_names` which are the
-            // same length, in reverse order
-            assert_eq!(num_window_exprs, new_expr.len());
-            assert_eq!(num_window_exprs, saved_names.len());
-            while let (Some(new_window_expr), Some(saved_names)) =
-                (new_expr.pop(), saved_names.pop())
-            {
-                assert_eq!(new_window_expr.len(), saved_names.len());
-
-                // Rename re-written window expressions with original name, to
-                // preserve the output schema
-                let new_window_expr = new_window_expr
-                    .into_iter()
-                    .zip(saved_names.into_iter())
-                    .map(|(new_window_expr, saved_name)| {
-                        saved_name.restore(new_window_expr)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                plan = LogicalPlan::Window(Window::try_new(
-                    new_window_expr,
-                    Arc::new(plan),
-                )?);
-            }
-
-            Ok(Transformed::new_transformed(plan, transformed))
-        } else {
-            while let (Some(window_expr), Some(schema)) =
-                (window_exprs.pop(), window_schemas.pop())
-            {
-                plan = LogicalPlan::Window(Window {
-                    input: Arc::new(plan),
-                    window_expr,
-                    schema,
-                });
-            }
-
-            Ok(Transformed::no(plan))
-        }
+            })?
+            // Rebuild the consecutive window nodes.
+            .map_data(|(new_window_expr_list, new_input, window_expr_list)| {
+                // If there were common expressions extracted, then we need to make sure
+                // we restore the original column names.
+                // TODO: Although `find_common_exprs()` inserts aliases around extracted
+                //  common expressions this doesn't mean that the original column names
+                //  (schema) are preserved due to the inserted aliases are not always at
+                //  the top of the expression.
+                //  Let's consider improving `find_common_exprs()` to always keep column
+                //  names and get rid of additional name preserving logic here.
+                if let Some(window_expr_list) = window_expr_list {
+                    let name_preserver = NamePreserver::new_for_projection();
+                    let saved_names = window_expr_list
+                        .iter()
+                        .map(|exprs| {
+                            exprs
+                                .iter()
+                                .map(|expr| name_preserver.save(expr))
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    new_window_expr_list.into_iter().zip(saved_names).try_rfold(
+                        new_input,
+                        |plan, (new_window_expr, saved_names)| {
+                            let new_window_expr = new_window_expr
+                                .into_iter()
+                                .zip(saved_names)
+                                .map(|(new_window_expr, saved_name)| {
+                                    saved_name.restore(new_window_expr)
+                                })
+                                .collect::<Result<Vec<_>>>()?;
+                            Window::try_new(new_window_expr, Arc::new(plan))
+                                .map(LogicalPlan::Window)
+                        },
+                    )
+                } else {
+                    new_window_expr_list
+                        .into_iter()
+                        .zip(window_schemas)
+                        .try_rfold(new_input, |plan, (new_window_expr, schema)| {
+                            Window::try_new_with_schema(
+                                new_window_expr,
+                                Arc::new(plan),
+                                schema,
+                            )
+                            .map(LogicalPlan::Window)
+                        })
+                }
+            })
     }
 
     fn try_optimize_aggregate(
@@ -461,136 +455,184 @@ impl CommonSubexprEliminate {
             group_expr,
             aggr_expr,
             input,
-            schema: orig_schema,
+            schema,
             ..
         } = aggregate;
-        // track transformed information
-        let mut transformed = false;
+        let input = unwrap_arc(input);
+        // Extract common sub-expressions from the aggregate and grouping expressions.
+        self.find_common_exprs(vec![group_expr, aggr_expr], config, ExprMask::Normal)?
+            .map_data(|common| {
+                match common {
+                    // If there are common sub-expressions, then insert a projection node
+                    // with the common expressions between the new aggregate node and the
+                    // original input.
+                    FoundCommonExprs::Yes {
+                        common_exprs,
+                        mut new_exprs_list,
+                        mut original_exprs_list,
+                    } => {
+                        let new_aggr_expr = new_exprs_list.pop().unwrap();
+                        let new_group_expr = new_exprs_list.pop().unwrap();
 
-        let name_perserver = NamePreserver::new_for_projection();
-        let saved_names = aggr_expr
-            .iter()
-            .map(|expr| name_perserver.save(expr))
-            .collect::<Result<Vec<_>>>()?;
-
-        let mut expr_stats = ExprStats::new();
-        // rewrite inputs
-        let (group_found_common, group_arrays) =
-            self.to_arrays(&group_expr, &mut expr_stats, ExprMask::Normal)?;
-        let (aggr_found_common, aggr_arrays) =
-            self.to_arrays(&aggr_expr, &mut expr_stats, ExprMask::Normal)?;
-        let (new_aggr_expr, new_group_expr, new_input) =
-            if group_found_common || aggr_found_common {
-                // rewrite both group exprs and aggr_expr
-                let rewritten = self.rewrite_expr(
-                    // Must clone as Identifiers use references to original expressions so
-                    // we have to keep the original expressions intact.
-                    vec![group_expr.clone(), aggr_expr.clone()],
-                    vec![group_arrays, aggr_arrays],
-                    unwrap_arc(input),
-                    &expr_stats,
-                    config,
-                )?;
-                assert!(rewritten.transformed);
-                transformed |= rewritten.transformed;
-                let (mut new_expr, new_input) = rewritten.data;
-
-                // note the reversed pop order.
-                let new_aggr_expr = pop_expr(&mut new_expr)?;
-                let new_group_expr = pop_expr(&mut new_expr)?;
-
-                (new_aggr_expr, new_group_expr, Arc::new(new_input))
-            } else {
-                (aggr_expr, group_expr, input)
-            };
-
-        // create potential projection on top
-        let mut expr_stats = ExprStats::new();
-        let (aggr_found_common, aggr_arrays) = self.to_arrays(
-            &new_aggr_expr,
-            &mut expr_stats,
-            ExprMask::NormalAndAggregates,
-        )?;
-        if aggr_found_common {
-            let mut common_exprs = CommonExprs::new();
-            let mut rewritten_exprs = self.rewrite_exprs_list(
-                // Must clone as Identifiers use references to original expressions so we
-                // have to keep the original expressions intact.
-                vec![new_aggr_expr.clone()],
-                vec![aggr_arrays],
-                &expr_stats,
-                &mut common_exprs,
-                &config.alias_generator(),
-            )?;
-            assert!(rewritten_exprs.transformed);
-            let rewritten = pop_expr(&mut rewritten_exprs.data)?;
-
-            assert!(!common_exprs.is_empty());
-            let mut agg_exprs = common_exprs
-                .into_values()
-                .map(|(expr, expr_alias)| expr.alias(expr_alias))
-                .collect::<Vec<_>>();
-
-            let new_input_schema = Arc::clone(new_input.schema());
-            let mut proj_exprs = vec![];
-            for expr in &new_group_expr {
-                extract_expressions(expr, &new_input_schema, &mut proj_exprs)?
-            }
-            for (expr_rewritten, expr_orig) in rewritten.into_iter().zip(new_aggr_expr) {
-                if expr_rewritten == expr_orig {
-                    if let Expr::Alias(Alias { expr, name, .. }) = expr_rewritten {
-                        agg_exprs.push(expr.alias(&name));
-                        proj_exprs.push(Expr::Column(Column::from_name(name)));
-                    } else {
-                        let expr_alias = config.alias_generator().next(CSE_PREFIX);
-                        let (qualifier, field) =
-                            expr_rewritten.to_field(&new_input_schema)?;
-                        let out_name = qualified_name(qualifier.as_ref(), field.name());
-
-                        agg_exprs.push(expr_rewritten.alias(&expr_alias));
-                        proj_exprs.push(
-                            Expr::Column(Column::from_name(expr_alias)).alias(out_name),
-                        );
+                        build_common_expr_project_plan(input, common_exprs).map(
+                            |new_input| {
+                                let aggr_expr = original_exprs_list.pop().unwrap();
+                                (
+                                    new_aggr_expr,
+                                    new_group_expr,
+                                    new_input,
+                                    Some(aggr_expr),
+                                )
+                            },
+                        )
                     }
-                } else {
-                    proj_exprs.push(expr_rewritten);
+
+                    FoundCommonExprs::No {
+                        mut original_exprs_list,
+                    } => {
+                        let new_aggr_expr = original_exprs_list.pop().unwrap();
+                        let new_group_expr = original_exprs_list.pop().unwrap();
+
+                        Ok((new_aggr_expr, new_group_expr, input, None))
+                    }
                 }
-            }
-
-            let agg = LogicalPlan::Aggregate(Aggregate::try_new(
-                new_input,
-                new_group_expr,
-                agg_exprs,
-            )?);
-
-            Projection::try_new(proj_exprs, Arc::new(agg))
-                .map(LogicalPlan::Projection)
-                .map(Transformed::yes)
-        } else {
-            // TODO: How exactly can the name or the schema change in this case?
-            //  In theory `new_aggr_expr` and `new_group_expr` are either the original expressions or they were crafted via `rewrite_expr()`, that keeps the original expression names.
-            //  If this is really needed can we have UT for it?
-            // Alias aggregation expressions if they have changed
-            let new_aggr_expr = new_aggr_expr
-                .into_iter()
-                .zip(saved_names.into_iter())
-                .map(|(new_expr, saved_name)| saved_name.restore(new_expr))
-                .collect::<Result<Vec<Expr>>>()?;
-            // Since group_expr may have changed, schema may also. Use try_new method.
-            let new_agg = if transformed {
-                Aggregate::try_new(new_input, new_group_expr, new_aggr_expr)?
-            } else {
-                Aggregate::try_new_with_schema(
-                    new_input,
-                    new_group_expr,
-                    new_aggr_expr,
-                    orig_schema,
+            })?
+            // Recurse into the new input.
+            // (This is similar to what a `ApplyOrder::TopDown` optimizer rule would do.)
+            .transform_data(|(new_aggr_expr, new_group_expr, new_input, aggr_expr)| {
+                self.rewrite(new_input, config)?.map_data(|new_input| {
+                    Ok((
+                        new_aggr_expr,
+                        new_group_expr,
+                        aggr_expr,
+                        Arc::new(new_input),
+                    ))
+                })
+            })?
+            // Try extracting common aggregate expressions and rebuild the aggregate node.
+            .transform_data(|(new_aggr_expr, new_group_expr, aggr_expr, new_input)| {
+                // Extract common aggregate sub-expressions from the aggregate expressions.
+                self.find_common_exprs(
+                    vec![new_aggr_expr],
+                    config,
+                    ExprMask::NormalAndAggregates,
                 )?
-            };
-            let new_agg = LogicalPlan::Aggregate(new_agg);
+                .map_data(|common| {
+                    match common {
+                        FoundCommonExprs::Yes {
+                            common_exprs,
+                            mut new_exprs_list,
+                            mut original_exprs_list,
+                        } => {
+                            let rewritten_aggr_expr = new_exprs_list.pop().unwrap();
+                            let new_aggr_expr = original_exprs_list.pop().unwrap();
 
-            Ok(Transformed::new_transformed(new_agg, transformed))
-        }
+                            let mut agg_exprs = common_exprs
+                                .into_iter()
+                                .map(|(expr, expr_alias)| expr.alias(expr_alias))
+                                .collect::<Vec<_>>();
+
+                            let new_input_schema = Arc::clone(new_input.schema());
+                            let mut proj_exprs = vec![];
+                            for expr in &new_group_expr {
+                                extract_expressions(
+                                    expr,
+                                    &new_input_schema,
+                                    &mut proj_exprs,
+                                )?
+                            }
+                            for (expr_rewritten, expr_orig) in
+                                rewritten_aggr_expr.into_iter().zip(new_aggr_expr)
+                            {
+                                if expr_rewritten == expr_orig {
+                                    if let Expr::Alias(Alias { expr, name, .. }) =
+                                        expr_rewritten
+                                    {
+                                        agg_exprs.push(expr.alias(&name));
+                                        proj_exprs
+                                            .push(Expr::Column(Column::from_name(name)));
+                                    } else {
+                                        let expr_alias =
+                                            config.alias_generator().next(CSE_PREFIX);
+                                        let (qualifier, field) =
+                                            expr_rewritten.to_field(&new_input_schema)?;
+                                        let out_name = qualified_name(
+                                            qualifier.as_ref(),
+                                            field.name(),
+                                        );
+
+                                        agg_exprs.push(expr_rewritten.alias(&expr_alias));
+                                        proj_exprs.push(
+                                            Expr::Column(Column::from_name(expr_alias))
+                                                .alias(out_name),
+                                        );
+                                    }
+                                } else {
+                                    proj_exprs.push(expr_rewritten);
+                                }
+                            }
+
+                            let agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                                new_input,
+                                new_group_expr,
+                                agg_exprs,
+                            )?);
+                            Projection::try_new(proj_exprs, Arc::new(agg))
+                                .map(LogicalPlan::Projection)
+                        }
+
+                        // If there aren't any common aggregate sub-expressions, then just
+                        // rebuild the aggregate node.
+                        FoundCommonExprs::No {
+                            mut original_exprs_list,
+                        } => {
+                            let rewritten_aggr_expr = original_exprs_list.pop().unwrap();
+
+                            // If there were common expressions extracted, then we need to
+                            // make sure we restore the original column names.
+                            // TODO: Although `find_common_exprs()` inserts aliases around
+                            //  extracted common expressions this doesn't mean that the
+                            //  original column names (schema) are preserved due to the
+                            //  inserted aliases are not always at the top of the
+                            //  expression.
+                            //  Let's consider improving `find_common_exprs()` to always
+                            //  keep column names and get rid of additional name
+                            //  preserving logic here.
+                            if let Some(aggr_expr) = aggr_expr {
+                                let name_perserver = NamePreserver::new_for_projection();
+                                let saved_names = aggr_expr
+                                    .iter()
+                                    .map(|expr| name_perserver.save(expr))
+                                    .collect::<Result<Vec<_>>>()?;
+                                let new_aggr_expr = rewritten_aggr_expr
+                                    .into_iter()
+                                    .zip(saved_names.into_iter())
+                                    .map(|(new_expr, saved_name)| {
+                                        saved_name.restore(new_expr)
+                                    })
+                                    .collect::<Result<Vec<Expr>>>()?;
+
+                                // Since `group_expr` may have changed, schema may also.
+                                // Use `try_new()` method.
+                                Aggregate::try_new(
+                                    new_input,
+                                    new_group_expr,
+                                    new_aggr_expr,
+                                )
+                                .map(LogicalPlan::Aggregate)
+                            } else {
+                                Aggregate::try_new_with_schema(
+                                    new_input,
+                                    new_group_expr,
+                                    rewritten_aggr_expr,
+                                    schema,
+                                )
+                                .map(LogicalPlan::Aggregate)
+                            }
+                        }
+                    }
+                })
+            })
     }
 
     /// Rewrites the expr list and input to remove common subexpressions
@@ -606,35 +648,38 @@ impl CommonSubexprEliminate {
     ///
     /// 1. The original `input` of no common subexpressions were extracted
     /// 2. A newly added projection on top of the original input
-    /// that computes the common subexpressions
+    ///    that computes the common subexpressions
     fn try_unary_plan(
         &self,
-        expr: Vec<Expr>,
+        exprs: Vec<Expr>,
         input: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<(Vec<Expr>, LogicalPlan)>> {
-        let mut expr_stats = ExprStats::new();
-        let (found_common, id_arrays) =
-            self.to_arrays(&expr, &mut expr_stats, ExprMask::Normal)?;
-
-        if found_common {
-            let rewritten = self.rewrite_expr(
-                // Must clone as Identifiers use references to original expressions so we
-                // have to keep the original expressions intact.
-                vec![expr.clone()],
-                vec![id_arrays],
-                input,
-                &expr_stats,
-                config,
-            )?;
-            assert!(rewritten.transformed);
-            rewritten.map_data(|(mut new_expr, new_input)| {
-                assert_eq!(new_expr.len(), 1);
-                Ok((new_expr.pop().unwrap(), new_input))
+        // Extract common sub-expressions from the expressions.
+        self.find_common_exprs(vec![exprs], config, ExprMask::Normal)?
+            .map_data(|common| match common {
+                FoundCommonExprs::Yes {
+                    common_exprs,
+                    mut new_exprs_list,
+                    original_exprs_list: _,
+                } => {
+                    let new_exprs = new_exprs_list.pop().unwrap();
+                    build_common_expr_project_plan(input, common_exprs)
+                        .map(|new_input| (new_exprs, new_input))
+                }
+                FoundCommonExprs::No {
+                    mut original_exprs_list,
+                } => {
+                    let new_exprs = original_exprs_list.pop().unwrap();
+                    Ok((new_exprs, input))
+                }
+            })?
+            // Recurse into the new input.
+            // (This is similar to what a `ApplyOrder::TopDown` optimizer rule would do.)
+            .transform_data(|(new_exprs, new_input)| {
+                self.rewrite(new_input, config)?
+                    .map_data(|new_input| Ok((new_exprs, new_input)))
             })
-        } else {
-            Ok(Transformed::no((expr, input)))
-        }
     }
 }
 
@@ -643,7 +688,7 @@ impl CommonSubexprEliminate {
 /// Returns the window expressions, and the input to the deepest child
 /// LogicalPlan.
 ///
-/// For example, if the input widnow looks like
+/// For example, if the input window looks like
 ///
 /// ```text
 ///   LogicalPlan::Window(exprs=[a, b, c])
@@ -672,7 +717,7 @@ impl CommonSubexprEliminate {
 fn get_consecutive_window_exprs(
     window: Window,
 ) -> (Vec<Vec<Expr>>, Vec<DFSchemaRef>, LogicalPlan) {
-    let mut window_exprs = vec![];
+    let mut window_expr_list = vec![];
     let mut window_schemas = vec![];
     let mut plan = LogicalPlan::Window(window);
     while let LogicalPlan::Window(Window {
@@ -681,12 +726,12 @@ fn get_consecutive_window_exprs(
         schema,
     }) = plan
     {
-        window_exprs.push(window_expr);
+        window_expr_list.push(window_expr);
         window_schemas.push(schema);
 
         plan = unwrap_arc(input);
     }
-    (window_exprs, window_schemas, plan)
+    (window_expr_list, window_schemas, plan)
 }
 
 impl OptimizerRule for CommonSubexprEliminate {
@@ -695,7 +740,10 @@ impl OptimizerRule for CommonSubexprEliminate {
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
+        // This rule handles recursion itself in a `ApplyOrder::TopDown` like manner.
+        // This is because in some cases adjacent nodes are collected (e.g. `Window`) and
+        // CSEd as a group, which can't be done in a simple `ApplyOrder::TopDown` rule.
+        None
     }
 
     fn rewrite(
@@ -733,8 +781,9 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Prepare(_) => {
-                // ApplyOrder::TopDown handles recursion
-                Transformed::no(plan)
+                // This rule handles recursion itself in a `ApplyOrder::TopDown` like
+                // manner.
+                plan.map_children(|c| self.rewrite(c, config))?
             }
         };
 
@@ -760,12 +809,6 @@ impl Default for CommonSubexprEliminate {
     }
 }
 
-fn pop_expr(new_expr: &mut Vec<Vec<Expr>>) -> Result<Vec<Expr>> {
-    new_expr
-        .pop()
-        .ok_or_else(|| internal_datafusion_err!("Failed to pop expression"))
-}
-
 /// Build the "intermediate" projection plan that evaluates the extracted common
 /// expressions.
 ///
@@ -778,11 +821,11 @@ fn pop_expr(new_expr: &mut Vec<Vec<Expr>>) -> Result<Vec<Expr>> {
 /// expr_stats: the set of common subexpressions
 fn build_common_expr_project_plan(
     input: LogicalPlan,
-    common_exprs: CommonExprs,
+    common_exprs: Vec<(Expr, String)>,
 ) -> Result<LogicalPlan> {
     let mut fields_set = BTreeSet::new();
     let mut project_exprs = common_exprs
-        .into_values()
+        .into_iter()
         .map(|(expr, expr_alias)| {
             fields_set.insert(expr_alias.clone());
             Ok(expr.alias(expr_alias))
@@ -906,36 +949,69 @@ struct ExprIdentifierVisitor<'a, 'n> {
     random_state: &'a RandomState,
     // a flag to indicate that common expression found
     found_common: bool,
+    // if we are in a conditional branch. A conditional branch means that the expression
+    // might not be executed depending on the runtime values of other expressions, and
+    // thus can not be extracted as a common expression.
+    conditional: bool,
 }
 
-/// Record item that used when traversing a expression tree.
+/// Record item that used when traversing an expression tree.
 enum VisitRecord<'n> {
-    /// `usize` postorder index assigned in `f-down`(). Starts from 0.
+    /// Marks the beginning of expression. It contains:
+    /// - The post-order index assigned during the first, visiting traversal.
     EnterMark(usize),
-    /// the node's children were skipped => jump to f_up on same node
-    JumpMark,
-    /// Accumulated identifier of sub expression.
-    ExprItem(Identifier<'n>),
+
+    /// Marks an accumulated subexpression tree. It contains:
+    /// - The accumulated identifier of a subexpression.
+    /// - A boolean flag if the expression is valid for subexpression elimination.
+    ///   The flag is propagated up from children to parent. (E.g. volatile expressions
+    ///   are not valid and can't be extracted, but non-volatile children of volatile
+    ///   expressions can be extracted.)
+    ExprItem(Identifier<'n>, bool),
 }
 
 impl<'n> ExprIdentifierVisitor<'_, 'n> {
-    /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
-    /// before it.
-    fn pop_enter_mark(&mut self) -> Option<(usize, Option<Identifier<'n>>)> {
+    /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem` before
+    /// it. Returns a tuple that contains:
+    /// - The pre-order index of the expression we marked.
+    /// - The accumulated identifier of the children of the marked expression.
+    /// - An accumulated boolean flag from the children of the marked expression if all
+    ///   children are valid for subexpression elimination (i.e. it is safe to extract the
+    ///   expression as a common expression from its children POV).
+    ///   (E.g. if any of the children of the marked expression is not valid (e.g. is
+    ///   volatile) then the expression is also not valid, so we can propagate this
+    ///   information up from children to parents via `visit_stack` during the first,
+    ///   visiting traversal and no need to test the expression's validity beforehand with
+    ///   an extra traversal).
+    fn pop_enter_mark(&mut self) -> (usize, Option<Identifier<'n>>, bool) {
         let mut expr_id = None;
+        let mut is_valid = true;
 
         while let Some(item) = self.visit_stack.pop() {
             match item {
-                VisitRecord::EnterMark(idx) => {
-                    return Some((idx, expr_id));
+                VisitRecord::EnterMark(down_index) => {
+                    return (down_index, expr_id, is_valid);
                 }
-                VisitRecord::ExprItem(id) => {
-                    expr_id = Some(id.combine(expr_id));
+                VisitRecord::ExprItem(sub_expr_id, sub_expr_is_valid) => {
+                    expr_id = Some(sub_expr_id.combine(expr_id));
+                    is_valid &= sub_expr_is_valid;
                 }
-                VisitRecord::JumpMark => return None,
             }
         }
         unreachable!("Enter mark should paired with node number");
+    }
+
+    /// Save the current `conditional` status and run `f` with `conditional` set to true.
+    fn conditionally<F: FnMut(&mut Self) -> Result<()>>(
+        &mut self,
+        mut f: F,
+    ) -> Result<()> {
+        let conditional = self.conditional;
+        self.conditional = true;
+        f(self)?;
+        self.conditional = conditional;
+
+        Ok(())
     }
 }
 
@@ -943,42 +1019,98 @@ impl<'n> TreeNodeVisitor<'n> for ExprIdentifierVisitor<'_, 'n> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
-        // TODO: consider non-volatile sub-expressions for CSE
-        // TODO: consider surely executed children of "short circuited"s for CSE
-
-        // If an expression can short circuit its children then don't consider it for CSE
-        // (https://github.com/apache/arrow-datafusion/issues/8814).
-        if expr.short_circuits() {
-            self.visit_stack.push(VisitRecord::JumpMark);
-
-            return Ok(TreeNodeRecursion::Jump);
-        }
-
         self.id_array.push((0, None));
         self.visit_stack
             .push(VisitRecord::EnterMark(self.down_index));
         self.down_index += 1;
 
-        Ok(TreeNodeRecursion::Continue)
+        // If an expression can short-circuit then some of its children might not be
+        // executed so count the occurrence of subexpressions as conditional in all
+        // children.
+        Ok(match expr {
+            // If we are already in a conditionally evaluated subtree then continue
+            // traversal.
+            _ if self.conditional => TreeNodeRecursion::Continue,
+
+            // In case of `ScalarFunction`s we don't know which children are surely
+            // executed so start visiting all children conditionally and stop the
+            // recursion with `TreeNodeRecursion::Jump`.
+            Expr::ScalarFunction(ScalarFunction { func, args })
+                if func.short_circuits() =>
+            {
+                self.conditionally(|visitor| {
+                    args.iter().try_for_each(|e| e.visit(visitor).map(|_| ()))
+                })?;
+
+                TreeNodeRecursion::Jump
+            }
+
+            // In case of `And` and `Or` the first child is surely executed, but we
+            // account subexpressions as conditional in the second.
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::And | Operator::Or,
+                right,
+            }) => {
+                left.visit(self)?;
+                self.conditionally(|visitor| right.visit(visitor).map(|_| ()))?;
+
+                TreeNodeRecursion::Jump
+            }
+
+            // In case of `Case` the optional base expression and the first when
+            // expressions are surely executed, but we account subexpressions as
+            // conditional in the others.
+            Expr::Case(Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            }) => {
+                expr.iter().try_for_each(|e| e.visit(self).map(|_| ()))?;
+                when_then_expr.iter().take(1).try_for_each(|(when, then)| {
+                    when.visit(self)?;
+                    self.conditionally(|visitor| then.visit(visitor).map(|_| ()))
+                })?;
+                self.conditionally(|visitor| {
+                    when_then_expr.iter().skip(1).try_for_each(|(when, then)| {
+                        when.visit(visitor)?;
+                        then.visit(visitor).map(|_| ())
+                    })?;
+                    else_expr
+                        .iter()
+                        .try_for_each(|e| e.visit(visitor).map(|_| ()))
+                })?;
+
+                TreeNodeRecursion::Jump
+            }
+
+            // In case of non-short-circuit expressions continue the traversal.
+            _ => TreeNodeRecursion::Continue,
+        })
     }
 
     fn f_up(&mut self, expr: &'n Expr) -> Result<TreeNodeRecursion> {
-        let Some((down_index, sub_expr_id)) = self.pop_enter_mark() else {
-            return Ok(TreeNodeRecursion::Continue);
-        };
+        let (down_index, sub_expr_id, sub_expr_is_valid) = self.pop_enter_mark();
 
         let expr_id = Identifier::new(expr, self.random_state).combine(sub_expr_id);
+        let is_valid = !expr.is_volatile_node() && sub_expr_is_valid;
 
         self.id_array[down_index].0 = self.up_index;
-        if !self.expr_mask.ignores(expr) {
+        if is_valid && !self.expr_mask.ignores(expr) {
             self.id_array[down_index].1 = Some(expr_id);
-            let count = self.expr_stats.entry(expr_id).or_insert(0);
-            *count += 1;
-            if *count > 1 {
+            let (count, conditional_count) =
+                self.expr_stats.entry(expr_id).or_insert((0, 0));
+            if self.conditional {
+                *conditional_count += 1;
+            } else {
+                *count += 1;
+            }
+            if *count > 1 || (*count == 1 && *conditional_count > 0) {
                 self.found_common = true;
             }
         }
-        self.visit_stack.push(VisitRecord::ExprItem(expr_id));
+        self.visit_stack
+            .push(VisitRecord::ExprItem(expr_id, is_valid));
         self.up_index += 1;
 
         Ok(TreeNodeRecursion::Continue)
@@ -1012,48 +1144,40 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_, '_> {
             self.alias_counter += 1;
         }
 
-        // The `CommonSubexprRewriter` relies on `ExprIdentifierVisitor` to generate
-        // the `id_array`, which records the expr's identifier used to rewrite expr. So if we
-        // skip an expr in `ExprIdentifierVisitor`, we should skip it here, too.
-        if expr.short_circuits() {
-            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
-        }
-
         let (up_index, expr_id) = self.id_array[self.down_index];
         self.down_index += 1;
 
-        // skip `Expr`s without identifier (empty identifier).
-        let Some(expr_id) = expr_id else {
-            return Ok(Transformed::no(expr));
-        };
+        // Handle `Expr`s with identifiers only
+        if let Some(expr_id) = expr_id {
+            let (count, conditional_count) = self.expr_stats.get(&expr_id).unwrap();
+            if *count > 1 || *count == 1 && *conditional_count > 0 {
+                // step index to skip all sub-node (which has smaller series number).
+                while self.down_index < self.id_array.len()
+                    && self.id_array[self.down_index].0 < up_index
+                {
+                    self.down_index += 1;
+                }
 
-        let count = self.expr_stats.get(&expr_id).unwrap();
-        if *count > 1 {
-            // step index to skip all sub-node (which has smaller series number).
-            while self.down_index < self.id_array.len()
-                && self.id_array[self.down_index].0 < up_index
-            {
-                self.down_index += 1;
+                let expr_name = expr.schema_name().to_string();
+                let (_, expr_alias) =
+                    self.common_exprs.entry(expr_id).or_insert_with(|| {
+                        let expr_alias = self.alias_generator.next(CSE_PREFIX);
+                        (expr, expr_alias)
+                    });
+
+                // alias the expressions without an `Alias` ancestor node
+                let rewritten = if self.alias_counter > 0 {
+                    col(expr_alias.clone())
+                } else {
+                    self.alias_counter += 1;
+                    col(expr_alias.clone()).alias(expr_name)
+                };
+
+                return Ok(Transformed::new(rewritten, true, TreeNodeRecursion::Jump));
             }
-
-            let expr_name = expr.display_name()?;
-            let (_, expr_alias) = self.common_exprs.entry(expr_id).or_insert_with(|| {
-                let expr_alias = self.alias_generator.next(CSE_PREFIX);
-                (expr, expr_alias)
-            });
-
-            // alias the expressions without an `Alias` ancestor node
-            let rewritten = if self.alias_counter > 0 {
-                col(expr_alias.clone())
-            } else {
-                self.alias_counter += 1;
-                col(expr_alias.clone()).alias(expr_name)
-            };
-
-            Ok(Transformed::new(rewritten, true, TreeNodeRecursion::Jump))
-        } else {
-            Ok(Transformed::no(expr))
         }
+
+        Ok(Transformed::no(expr))
     }
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Self::Node>> {
@@ -1073,7 +1197,7 @@ fn replace_common_expr<'n>(
     expr_stats: &ExprStats<'n>,
     common_exprs: &mut CommonExprs<'n>,
     alias_generator: &AliasGenerator,
-) -> Result<Transformed<Expr>> {
+) -> Result<Expr> {
     if id_array.is_empty() {
         Ok(Transformed::no(expr))
     } else {
@@ -1086,10 +1210,12 @@ fn replace_common_expr<'n>(
             alias_generator,
         })
     }
+    .data()
 }
 
 #[cfg(test)]
 mod test {
+    use std::any::Any;
     use std::collections::HashSet;
     use std::iter;
 
@@ -1097,48 +1223,29 @@ mod test {
     use datafusion_expr::expr::AggregateFunction;
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
-        grouping_set, AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Signature,
-        SimpleAggregateUDF, Volatility,
+        grouping_set, AccumulatorFactoryFunction, AggregateUDF, BinaryExpr,
+        ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
+        Volatility,
     };
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
 
+    use super::*;
     use crate::optimizer::OptimizerContext;
     use crate::test::*;
+    use crate::Optimizer;
     use datafusion_expr::test::function_stub::{avg, sum};
-
-    use super::*;
-
-    fn assert_non_optimized_plan_eq(
-        expected: &str,
-        plan: LogicalPlan,
-        config: Option<&dyn OptimizerConfig>,
-    ) {
-        assert_eq!(expected, format!("{plan:?}"), "Unexpected starting plan");
-        let optimizer = CommonSubexprEliminate::new();
-        let default_config = OptimizerContext::new();
-        let config = config.unwrap_or(&default_config);
-        let optimized_plan = optimizer.rewrite(plan, config).unwrap();
-        assert!(!optimized_plan.transformed, "unexpectedly optimize plan");
-        let optimized_plan = optimized_plan.data;
-        assert_eq!(
-            expected,
-            format!("{optimized_plan:?}"),
-            "Unexpected optimized plan"
-        );
-    }
 
     fn assert_optimized_plan_eq(
         expected: &str,
         plan: LogicalPlan,
         config: Option<&dyn OptimizerConfig>,
     ) {
-        let optimizer = CommonSubexprEliminate::new();
+        let optimizer =
+            Optimizer::with_rules(vec![Arc::new(CommonSubexprEliminate::new())]);
         let default_config = OptimizerContext::new();
         let config = config.unwrap_or(&default_config);
-        let optimized_plan = optimizer.rewrite(plan, config).unwrap();
-        assert!(optimized_plan.transformed, "failed to optimize plan");
-        let optimized_plan = optimized_plan.data;
-        let formatted_plan = format!("{optimized_plan:?}");
+        let optimized_plan = optimizer.optimize(plan, config, |_, _| ()).unwrap();
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(expected, formatted_plan);
     }
 
@@ -1353,7 +1460,7 @@ mod test {
                     "my_agg",
                     Signature::exact(vec![DataType::UInt32], Volatility::Stable),
                     return_type.clone(),
-                    accumulator.clone(),
+                    Arc::clone(&accumulator),
                     vec![Field::new("value", DataType::UInt32, true)],
                 ))),
                 vec![inner],
@@ -1527,7 +1634,7 @@ mod test {
         let expected = "Projection: Int32(1) + test.a, test.a + Int32(1)\
         \n  TableScan: test";
 
-        assert_non_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_eq(expected, plan, None);
 
         Ok(())
     }
@@ -1545,12 +1652,8 @@ mod test {
         \n  Projection: Int32(1) + test.a, test.a\
         \n    TableScan: test";
 
-        assert_non_optimized_plan_eq(expected, plan, None);
+        assert_optimized_plan_eq(expected, plan, None);
         Ok(())
-    }
-
-    fn test_identifier(hash: u64, expr: &Expr) -> Identifier {
-        Identifier { hash, expr }
     }
 
     #[test]
@@ -1558,28 +1661,16 @@ mod test {
         let table_scan = test_table_scan().unwrap();
         let c_plus_a = col("c") + col("a");
         let b_plus_a = col("b") + col("a");
-        let common_exprs_1 = CommonExprs::from([
-            (
-                test_identifier(0, &c_plus_a),
-                (c_plus_a.clone(), format!("{CSE_PREFIX}_1")),
-            ),
-            (
-                test_identifier(1, &b_plus_a),
-                (b_plus_a.clone(), format!("{CSE_PREFIX}_2")),
-            ),
-        ]);
+        let common_exprs_1 = vec![
+            (c_plus_a, format!("{CSE_PREFIX}_1")),
+            (b_plus_a, format!("{CSE_PREFIX}_2")),
+        ];
         let c_plus_a_2 = col(format!("{CSE_PREFIX}_1"));
         let b_plus_a_2 = col(format!("{CSE_PREFIX}_2"));
-        let common_exprs_2 = CommonExprs::from([
-            (
-                test_identifier(3, &c_plus_a_2),
-                (c_plus_a_2.clone(), format!("{CSE_PREFIX}_3")),
-            ),
-            (
-                test_identifier(4, &b_plus_a_2),
-                (b_plus_a_2.clone(), format!("{CSE_PREFIX}_4")),
-            ),
-        ]);
+        let common_exprs_2 = vec![
+            (c_plus_a_2, format!("{CSE_PREFIX}_3")),
+            (b_plus_a_2, format!("{CSE_PREFIX}_4")),
+        ];
         let project = build_common_expr_project_plan(table_scan, common_exprs_1).unwrap();
         let project_2 = build_common_expr_project_plan(project, common_exprs_2).unwrap();
 
@@ -1600,28 +1691,16 @@ mod test {
             .unwrap();
         let c_plus_a = col("test1.c") + col("test1.a");
         let b_plus_a = col("test1.b") + col("test1.a");
-        let common_exprs_1 = CommonExprs::from([
-            (
-                test_identifier(0, &c_plus_a),
-                (c_plus_a.clone(), format!("{CSE_PREFIX}_1")),
-            ),
-            (
-                test_identifier(1, &b_plus_a),
-                (b_plus_a.clone(), format!("{CSE_PREFIX}_2")),
-            ),
-        ]);
+        let common_exprs_1 = vec![
+            (c_plus_a, format!("{CSE_PREFIX}_1")),
+            (b_plus_a, format!("{CSE_PREFIX}_2")),
+        ];
         let c_plus_a_2 = col(format!("{CSE_PREFIX}_1"));
         let b_plus_a_2 = col(format!("{CSE_PREFIX}_2"));
-        let common_exprs_2 = CommonExprs::from([
-            (
-                test_identifier(3, &c_plus_a_2),
-                (c_plus_a_2.clone(), format!("{CSE_PREFIX}_3")),
-            ),
-            (
-                test_identifier(4, &b_plus_a_2),
-                (b_plus_a_2.clone(), format!("{CSE_PREFIX}_4")),
-            ),
-        ]);
+        let common_exprs_2 = vec![
+            (c_plus_a_2, format!("{CSE_PREFIX}_3")),
+            (b_plus_a_2, format!("{CSE_PREFIX}_4")),
+        ];
         let project = build_common_expr_project_plan(join, common_exprs_1).unwrap();
         let project_2 = build_common_expr_project_plan(project, common_exprs_2).unwrap();
 
@@ -1653,7 +1732,7 @@ mod test {
             .unwrap();
         let rule = CommonSubexprEliminate::new();
         let optimized_plan = rule.rewrite(plan, &OptimizerContext::new()).unwrap();
-        assert!(!optimized_plan.transformed);
+        assert!(optimized_plan.transformed);
         let optimized_plan = optimized_plan.data;
 
         let schema = optimized_plan.schema();
@@ -1798,5 +1877,181 @@ mod test {
 
         assert!(result.len() == 1);
         Ok(())
+    }
+
+    #[test]
+    fn test_short_circuits() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let extracted_short_circuit = col("a").eq(lit(0)).or(col("b").eq(lit(0)));
+        let extracted_short_circuit_leg_1 = (col("a") + col("b")).eq(lit(0));
+        let not_extracted_short_circuit_leg_2 = (col("a") - col("b")).eq(lit(0));
+        let extracted_short_circuit_leg_3 = (col("a") * col("b")).eq(lit(0));
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![
+                extracted_short_circuit.clone().alias("c1"),
+                extracted_short_circuit.alias("c2"),
+                extracted_short_circuit_leg_1
+                    .clone()
+                    .or(not_extracted_short_circuit_leg_2.clone())
+                    .alias("c3"),
+                extracted_short_circuit_leg_1
+                    .and(not_extracted_short_circuit_leg_2)
+                    .alias("c4"),
+                extracted_short_circuit_leg_3
+                    .clone()
+                    .or(extracted_short_circuit_leg_3.clone())
+                    .alias("c5"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 OR test.a - test.b = Int32(0) AS c3, __common_expr_2 AND test.a - test.b = Int32(0) AS c4, __common_expr_3 OR __common_expr_3 AS c5\
+        \n  Projection: test.a = Int32(0) OR test.b = Int32(0) AS __common_expr_1, test.a + test.b = Int32(0) AS __common_expr_2, test.a * test.b = Int32(0) AS __common_expr_3, test.a, test.b, test.c\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_volatile() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let extracted_child = col("a") + col("b");
+        let rand = rand_func().call(vec![]);
+        let not_extracted_volatile = extracted_child + rand;
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![
+                not_extracted_volatile.clone().alias("c1"),
+                not_extracted_volatile.alias("c2"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: __common_expr_1 + random() AS c1, __common_expr_1 + random() AS c2\
+        \n  Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_volatile_short_circuits() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let rand = rand_func().call(vec![]);
+        let extracted_short_circuit_leg_1 = col("a").eq(lit(0));
+        let not_extracted_volatile_short_circuit_1 =
+            extracted_short_circuit_leg_1.or(rand.clone().eq(lit(0)));
+        let not_extracted_short_circuit_leg_2 = col("b").eq(lit(0));
+        let not_extracted_volatile_short_circuit_2 =
+            rand.eq(lit(0)).or(not_extracted_short_circuit_leg_2);
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .project(vec![
+                not_extracted_volatile_short_circuit_1.clone().alias("c1"),
+                not_extracted_volatile_short_circuit_1.alias("c2"),
+                not_extracted_volatile_short_circuit_2.clone().alias("c3"),
+                not_extracted_volatile_short_circuit_2.alias("c4"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: __common_expr_1 OR random() = Int32(0) AS c1, __common_expr_1 OR random() = Int32(0) AS c2, random() = Int32(0) OR test.b = Int32(0) AS c3, random() = Int32(0) OR test.b = Int32(0) AS c4\
+        \n  Projection: test.a = Int32(0) AS __common_expr_1, test.a, test.b, test.c\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_top_level_common_expression() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let common_expr = col("a") + col("b");
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                common_expr.clone().alias("c1"),
+                common_expr.alias("c2"),
+            ])?
+            .project(vec![col("c1"), col("c2")])?
+            .build()?;
+
+        let expected = "Projection: c1, c2\
+        \n  Projection: __common_expr_1 AS c1, __common_expr_1 AS c2\
+        \n    Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_common_expression() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let nested_common_expr = col("a") + col("b");
+        let common_expr = nested_common_expr.clone() * nested_common_expr;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                common_expr.clone().alias("c1"),
+                common_expr.alias("c2"),
+            ])?
+            .build()?;
+
+        let expected = "Projection: __common_expr_1 AS c1, __common_expr_1 AS c2\
+        \n  Projection: __common_expr_2 * __common_expr_2 AS __common_expr_1, test.a, test.b, test.c\
+        \n    Projection: test.a + test.b AS __common_expr_2, test.a, test.b, test.c\
+        \n      TableScan: test";
+
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    /// returns a "random" function that is marked volatile (aka each invocation
+    /// returns a different value)
+    ///
+    /// Does not use datafusion_functions::rand to avoid introducing a
+    /// dependency on that crate.
+    fn rand_func() -> ScalarUDF {
+        ScalarUDF::new_from_impl(RandomStub::new())
+    }
+
+    #[derive(Debug)]
+    struct RandomStub {
+        signature: Signature,
+    }
+
+    impl RandomStub {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![], Volatility::Volatile),
+            }
+        }
+    }
+    impl ScalarUDFImpl for RandomStub {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "random"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Float64)
+        }
+
+        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            unimplemented!()
+        }
     }
 }

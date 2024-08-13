@@ -17,6 +17,7 @@
 
 //! This module provides the bisect function, which implements binary search.
 
+pub mod expr;
 pub mod memory;
 pub mod proxy;
 
@@ -36,7 +37,7 @@ use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
-use std::cmp::Ordering;
+use std::cmp::{min, Ordering};
 use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
@@ -245,7 +246,10 @@ pub fn evaluate_partition_ranges(
             end: num_rows,
         }]
     } else {
-        let cols: Vec<_> = partition_columns.iter().map(|x| x.values.clone()).collect();
+        let cols: Vec<_> = partition_columns
+            .iter()
+            .map(|x| Arc::clone(&x.values))
+            .collect();
         partition(&cols)?.ranges()
     })
 }
@@ -332,7 +336,7 @@ pub fn get_at_indices<T: Clone, I: Borrow<usize>>(
 /// This function finds the longest prefix of the form 0, 1, 2, ... within the
 /// collection `sequence`. Examples:
 /// - For 0, 1, 2, 4, 5; we would produce 3, meaning 0, 1, 2 is the longest satisfying
-/// prefix.
+///   prefix.
 /// - For 1, 2, 3, 4; we would produce 0, meaning there is no such prefix.
 pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     sequence: impl IntoIterator<Item = T>,
@@ -677,6 +681,69 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
             result
         }
     }
+}
+
+/// Computes the `skip` and `fetch` parameters of a single limit that would be
+/// equivalent to two consecutive limits with the given `skip`/`fetch` parameters.
+///
+/// There are multiple cases to consider:
+///
+/// # Case 0: Parent and child are disjoint (`child_fetch <= skip`).
+///
+/// ```text
+///   Before merging:
+///                     |........skip........|---fetch-->|     Parent limit
+///    |...child_skip...|---child_fetch-->|                    Child limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |.........(child_skip + skip).........|
+/// ```
+///
+/// # Case 1: Parent is beyond child's range (`skip < child_fetch <= skip + fetch`).
+///
+///   Before merging:
+/// ```text
+///                     |...skip...|------------fetch------------>|   Parent limit
+///    |...child_skip...|-------------child_fetch------------>|       Child limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
+/// ```
+///
+///  # Case 2: Parent is within child's range (`skip + fetch < child_fetch`).
+///
+///   Before merging:
+/// ```text
+///                     |...skip...|---fetch-->|                   Parent limit
+///    |...child_skip...|-------------child_fetch------------>|    Child limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |....(child_skip + skip)....|---fetch-->|
+/// ```
+pub fn combine_limit(
+    parent_skip: usize,
+    parent_fetch: Option<usize>,
+    child_skip: usize,
+    child_fetch: Option<usize>,
+) -> (usize, Option<usize>) {
+    let combined_skip = child_skip.saturating_add(parent_skip);
+
+    let combined_fetch = match (parent_fetch, child_fetch) {
+        (Some(parent_fetch), Some(child_fetch)) => {
+            Some(min(parent_fetch, child_fetch.saturating_sub(parent_skip)))
+        }
+        (Some(parent_fetch), None) => Some(parent_fetch),
+        (None, Some(child_fetch)) => Some(child_fetch.saturating_sub(parent_skip)),
+        (None, None) => None,
+    };
+
+    (combined_skip, combined_fetch)
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use arrow::compute::{and, filter, is_not_null};
 use arrow::{
@@ -35,7 +36,7 @@ use datafusion_expr::{
     utils::format_state_name,
     Accumulator, AggregateUDFImpl, Signature, Volatility,
 };
-use datafusion_physical_expr_common::aggregate::stats::StatsType;
+use datafusion_functions_aggregate_common::stats::StatsType;
 
 make_udaf_expr_and_func!(
     Correlation,
@@ -192,13 +193,21 @@ impl Accumulator for CorrelationAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let states_c = [
-            states[0].clone(),
-            states[1].clone(),
-            states[3].clone(),
-            states[5].clone(),
+            Arc::clone(&states[0]),
+            Arc::clone(&states[1]),
+            Arc::clone(&states[3]),
+            Arc::clone(&states[5]),
         ];
-        let states_s1 = [states[0].clone(), states[1].clone(), states[2].clone()];
-        let states_s2 = [states[0].clone(), states[3].clone(), states[4].clone()];
+        let states_s1 = [
+            Arc::clone(&states[0]),
+            Arc::clone(&states[1]),
+            Arc::clone(&states[2]),
+        ];
+        let states_s2 = [
+            Arc::clone(&states[0]),
+            Arc::clone(&states[3]),
+            Arc::clone(&states[4]),
+        ];
 
         self.covar.merge_batch(&states_c)?;
         self.stddev1.merge_batch(&states_s1)?;

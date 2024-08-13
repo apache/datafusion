@@ -36,6 +36,7 @@ use std::sync::Arc;
 pub struct RegexpMatchFunc {
     signature: Signature,
 }
+
 impl Default for RegexpMatchFunc {
     fn default() -> Self {
         Self::new()
@@ -73,17 +74,9 @@ impl ScalarUDFImpl for RegexpMatchFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-
         Ok(match &arg_types[0] {
-            LargeUtf8 => List(Arc::new(Field::new("item", LargeUtf8, true))),
-            Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
-            Null => Null,
-            other => {
-                return plan_err!(
-                    "The regexp_match function can only accept strings. Got {other}"
-                );
-            }
+            DataType::Null => DataType::Null,
+            other => DataType::List(Arc::new(Field::new("item", other.clone(), true))),
         })
     }
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

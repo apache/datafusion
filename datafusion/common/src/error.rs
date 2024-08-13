@@ -321,7 +321,8 @@ impl From<DataFusionError> for io::Error {
 }
 
 impl DataFusionError {
-    const BACK_TRACE_SEP: &'static str = "\n\nbacktrace: ";
+    /// The separator between the error message and the backtrace
+    pub const BACK_TRACE_SEP: &'static str = "\n\nbacktrace: ";
 
     /// Get deepest underlying [`DataFusionError`]
     ///
@@ -553,6 +554,9 @@ make_error!(config_err, config_datafusion_err, Configuration);
 // Exposes a macro to create `DataFusionError::Substrait` with optional backtrace
 make_error!(substrait_err, substrait_datafusion_err, Substrait);
 
+// Exposes a macro to create `DataFusionError::ResourcesExhausted` with optional backtrace
+make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
+
 // Exposes a macro to create `DataFusionError::SQL` with optional backtrace
 #[macro_export]
 macro_rules! sql_datafusion_err {
@@ -658,11 +662,16 @@ mod test {
         assert_eq!(res.strip_backtrace(), "Arrow error: Schema error: bar");
     }
 
-    // RUST_BACKTRACE=1 cargo test --features backtrace --package datafusion-common --lib -- error::test::test_backtrace
+    // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
     #[cfg(feature = "backtrace")]
     #[test]
     #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_enabled_backtrace() {
+        match std::env::var("RUST_BACKTRACE") {
+            Ok(val) if val == "1" => {}
+            _ => panic!("Environment variable RUST_BACKTRACE must be set to 1"),
+        };
+
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let err = res.unwrap_err().to_string();
         assert!(err.contains(DataFusionError::BACK_TRACE_SEP));

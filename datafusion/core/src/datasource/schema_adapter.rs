@@ -92,8 +92,10 @@ pub trait SchemaMapper: Debug + Send + Sync {
     ) -> datafusion_common::Result<RecordBatch>;
 }
 
+/// Basic implementation of [`SchemaAdapterFactory`] that maps columns by name
+/// and casts columns to the expected type.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct DefaultSchemaAdapterFactory {}
+pub struct DefaultSchemaAdapterFactory {}
 
 impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
     fn create(&self, table_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
@@ -246,12 +248,13 @@ mod tests {
     use crate::datasource::schema_adapter::{
         SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
+    #[cfg(feature = "parquet")]
     use parquet::arrow::ArrowWriter;
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn can_override_schema_adapter() {
-        // Test shows that SchemaAdapter can add a column that doesn't existin in the
+        // Test shows that SchemaAdapter can add a column that doesn't existing in the
         // record batches returned from parquet.  This can be useful for schema evolution
         // where older files may not have all columns.
         let tmp_dir = TempDir::new().unwrap();

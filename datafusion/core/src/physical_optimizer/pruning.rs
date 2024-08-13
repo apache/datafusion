@@ -173,10 +173,10 @@ pub trait PruningStatistics {
 /// 1. Arbitrary expressions (including user defined functions)
 ///
 /// 2. Vectorized evaluation (provide more than one set of statistics at a time)
-/// so it is suitable for pruning 1000s of containers.
+///    so it is suitable for pruning 1000s of containers.
 ///
 /// 3. Any source of information that implements the [`PruningStatistics`] trait
-/// (not just Parquet metadata).
+///    (not just Parquet metadata).
 ///
 /// # Example
 ///
@@ -278,17 +278,17 @@ pub trait PruningStatistics {
 /// 2. A predicate (expression that evaluates to a boolean)
 ///
 /// 3. [`PruningStatistics`] that provides information about columns in that
-/// schema, for multiple “containers”. For each column in each container, it
-/// provides optional information on contained values, min_values, max_values,
-/// null_counts counts, and row_counts counts.
+///    schema, for multiple “containers”. For each column in each container, it
+///    provides optional information on contained values, min_values, max_values,
+///    null_counts counts, and row_counts counts.
 ///
 /// **Outputs**:
 /// A (non null) boolean value for each container:
 /// * `true`: There MAY be rows that match the predicate
 ///
 /// * `false`: There are no rows that could possibly match the predicate (the
-/// predicate can never possibly be true). The container can be pruned (skipped)
-/// entirely.
+///   predicate can never possibly be true). The container can be pruned (skipped)
+///   entirely.
 ///
 /// Note that in order to be correct, `PruningPredicate` must return false
 /// **only** if it can determine that for all rows in the container, the
@@ -609,6 +609,8 @@ impl PruningPredicate {
     ///
     /// This happens if the predicate is a literal `true`  and
     /// literal_guarantees is empty.
+    ///
+    /// This can happen when a predicate is simplified to a constant `true`
     pub fn always_true(&self) -> bool {
         is_always_true(&self.predicate_expr) && self.literal_guarantees.is_empty()
     }
@@ -623,7 +625,7 @@ impl PruningPredicate {
     ///
     /// This is useful to avoid fetching statistics for columns that will not be
     /// used in the predicate. For example, it can be used to avoid reading
-    /// uneeded bloom filters (a non trivial operation).
+    /// unneeded bloom filters (a non trivial operation).
     pub fn literal_columns(&self) -> Vec<String> {
         let mut seen = HashSet::new();
         self.literal_guarantees
@@ -736,12 +738,25 @@ impl RequiredColumns {
         Self::default()
     }
 
-    /// Returns number of unique columns
-    pub(crate) fn n_columns(&self) -> usize {
-        self.iter()
-            .map(|(c, _s, _f)| c)
-            .collect::<HashSet<_>>()
-            .len()
+    /// Returns Some(column) if this is a single column predicate.
+    ///
+    /// Returns None if this is a multi-column predicate.
+    ///
+    /// Examples:
+    /// * `a > 5 OR a < 10` returns `Some(a)`
+    /// * `a > 5 OR b < 10` returns `None`
+    /// * `true` returns None
+    pub(crate) fn single_column(&self) -> Option<&phys_expr::Column> {
+        if self.columns.windows(2).all(|w| {
+            // check if all columns are the same (ignoring statistics and field)
+            let c1 = &w[0].0;
+            let c2 = &w[1].0;
+            c1 == c2
+        }) {
+            self.columns.first().map(|r| &r.0)
+        } else {
+            None
+        }
     }
 
     /// Returns an iterator over items in columns (see doc on
@@ -987,8 +1002,8 @@ impl<'a> PruningExpressionBuilder<'a> {
         })
     }
 
-    fn op(&self) -> &Operator {
-        &self.op
+    fn op(&self) -> Operator {
+        self.op
     }
 
     fn scalar_expr(&self) -> &Arc<dyn PhysicalExpr> {
@@ -1064,7 +1079,7 @@ fn rewrite_expr_to_prunable(
     scalar_expr: &PhysicalExprRef,
     schema: DFSchema,
 ) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
-    if !is_compare_op(&op) {
+    if !is_compare_op(op) {
         return plan_err!("rewrite_expr_to_prunable only support compare expression");
     }
 
@@ -1131,7 +1146,7 @@ fn rewrite_expr_to_prunable(
     }
 }
 
-fn is_compare_op(op: &Operator) -> bool {
+fn is_compare_op(op: Operator) -> bool {
     matches!(
         op,
         Operator::Eq
@@ -1358,13 +1373,11 @@ fn build_predicate_expression(
                 .map(|e| {
                     Arc::new(phys_expr::BinaryExpr::new(
                         in_list.expr().clone(),
-                        eq_op.clone(),
+                        eq_op,
                         e.clone(),
                     )) as _
                 })
-                .reduce(|a, b| {
-                    Arc::new(phys_expr::BinaryExpr::new(a, re_op.clone(), b)) as _
-                })
+                .reduce(|a, b| Arc::new(phys_expr::BinaryExpr::new(a, re_op, b)) as _)
                 .unwrap();
             return build_predicate_expression(&change_expr, schema, required_columns);
         } else {
@@ -1376,7 +1389,7 @@ fn build_predicate_expression(
         if let Some(bin_expr) = expr_any.downcast_ref::<phys_expr::BinaryExpr>() {
             (
                 bin_expr.left().clone(),
-                bin_expr.op().clone(),
+                *bin_expr.op(),
                 bin_expr.right().clone(),
             )
         } else {
@@ -1388,7 +1401,7 @@ fn build_predicate_expression(
         let left_expr = build_predicate_expression(&left, schema, required_columns);
         let right_expr = build_predicate_expression(&right, schema, required_columns);
         // simplify boolean expression if applicable
-        let expr = match (&left_expr, &op, &right_expr) {
+        let expr = match (&left_expr, op, &right_expr) {
             (left, Operator::And, _) if is_always_true(left) => right_expr,
             (_, Operator::And, right) if is_always_true(right) => left_expr,
             (left, Operator::Or, right)
@@ -1396,11 +1409,7 @@ fn build_predicate_expression(
             {
                 unhandled
             }
-            _ => Arc::new(phys_expr::BinaryExpr::new(
-                left_expr,
-                op.clone(),
-                right_expr,
-            )),
+            _ => Arc::new(phys_expr::BinaryExpr::new(left_expr, op, right_expr)),
         };
         return expr;
     }

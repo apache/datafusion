@@ -120,12 +120,17 @@ impl GroupValues for GroupValuesRows {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
-        for (row, &hash) in batch_hashes.iter().enumerate() {
-            let entry = self.map.get_mut(hash, |(_hash, group_idx)| {
-                // verify that a group that we are inserting with hash is
-                // actually the same key value as the group in
-                // existing_idx  (aka group_values @ row)
-                group_rows.row(row) == group_values.row(*group_idx)
+        for (row, &target_hash) in batch_hashes.iter().enumerate() {
+            let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
+                // Somewhat surprisingly, this closure can be called even if the
+                // hash doesn't match, so check the hash first with an integer
+                // comparison first avoid the more expensive comparison with
+                // group value. https://github.com/apache/datafusion/pull/11718
+                target_hash == *exist_hash
+                    // verify that the group that we are inserting with hash is
+                    // actually the same key value as the group in
+                    // existing_idx  (aka group_values @ row)
+                    && group_rows.row(row) == group_values.row(*group_idx)
             });
 
             let group_idx = match entry {
@@ -139,7 +144,7 @@ impl GroupValues for GroupValuesRows {
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
-                        (hash, group_idx),
+                        (target_hash, group_idx),
                         |(hash, _group_index)| *hash,
                         &mut self.map_size,
                     );
@@ -190,7 +195,7 @@ impl GroupValues for GroupValuesRows {
                 let groups_rows = group_values.iter().take(n);
                 let output = self.row_converter.convert_rows(groups_rows)?;
                 // Clear out first n group keys by copying them to a new Rows.
-                // TODO file some ticket in arrow-rs to make this more efficent?
+                // TODO file some ticket in arrow-rs to make this more efficient?
                 let mut new_group_values = self.row_converter.empty_rows(0, 0);
                 for row in group_values.iter().skip(n) {
                     new_group_values.push(row);

@@ -66,7 +66,7 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 /// If the buffered Arrow data exceeds this size, it is flushed to object store
 const BUFFER_FLUSH_BYTES: usize = 1024000;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 /// Factory struct used to create [ArrowFormat]
 pub struct ArrowFormatFactory;
 
@@ -88,6 +88,10 @@ impl FileFormatFactory for ArrowFormatFactory {
 
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ArrowFormat)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -353,7 +357,7 @@ async fn infer_schema_from_file_stream(
     // Expected format:
     // <magic number "ARROW1"> - 6 bytes
     // <empty padding bytes [to 8 byte boundary]> - 2 bytes
-    // <continutation: 0xFFFFFFFF> - 4 bytes, not present below v0.15.0
+    // <continuation: 0xFFFFFFFF> - 4 bytes, not present below v0.15.0
     // <metadata_size: int32> - 4 bytes
     // <metadata_flatbuffer: bytes>
     // <rest of file bytes>
@@ -365,7 +369,7 @@ async fn infer_schema_from_file_stream(
     // Files should start with these magic bytes
     if bytes[0..6] != ARROW_MAGIC {
         return Err(ArrowError::ParseError(
-            "Arrow file does not contian correct header".to_string(),
+            "Arrow file does not contain correct header".to_string(),
         ))?;
     }
 

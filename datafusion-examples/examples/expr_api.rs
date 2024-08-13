@@ -33,7 +33,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::{AggregateExt, ColumnarValue, ExprSchemable, Operator};
+use datafusion_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
 
 /// This example demonstrates the DataFusion [`Expr`] API.
 ///
@@ -46,7 +46,7 @@ use datafusion_expr::{AggregateExt, ColumnarValue, ExprSchemable, Operator};
 ///
 /// The code in this example shows how to:
 /// 1. Create [`Expr`]s using different APIs: [`main`]`
-/// 2. Use the fluent API to easly create complex [`Expr`]s:  [`expr_fn_demo`]
+/// 2. Use the fluent API to easily create complex [`Expr`]s:  [`expr_fn_demo`]
 /// 3. Evaluate [`Expr`]s against data: [`evaluate_demo`]
 /// 4. Simplify expressions: [`simplify_demo`]
 /// 5. Analyze predicates for boundary ranges: [`range_analysis_demo`]
@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Datafusion's `expr_fn` API makes it easy to create [`Expr`]s for the
+/// DataFusion's `expr_fn` API makes it easy to create [`Expr`]s for the
 /// full range of expression types such as aggregates and window functions.
 fn expr_fn_demo() -> Result<()> {
     // Let's say you want to call the "first_value" aggregate function
@@ -95,7 +95,7 @@ fn expr_fn_demo() -> Result<()> {
     let agg = first_value.call(vec![col("price")]);
     assert_eq!(agg.to_string(), "first_value(price)");
 
-    // You can use the AggregateExt trait to create more complex aggregates
+    // You can use the ExprFunctionExt trait to create more complex aggregates
     // such as `FIRST_VALUE(price FILTER quantity > 100 ORDER BY ts )
     let agg = first_value
         .call(vec![col("price")])
@@ -177,16 +177,12 @@ fn simplify_demo() -> Result<()> {
     );
 
     // here are some other examples of what DataFusion is capable of
-    let schema = Schema::new(vec![
-        make_field("i", DataType::Int64),
-        make_field("b", DataType::Boolean),
-    ])
-    .to_dfschema_ref()?;
+    let schema = Schema::new(vec![make_field("i", DataType::Int64)]).to_dfschema_ref()?;
     let context = SimplifyContext::new(&props).with_schema(schema.clone());
     let simplifier = ExprSimplifier::new(context);
 
     // basic arithmetic simplification
-    // i + 1 + 2 => a + 3
+    // i + 1 + 2 => i + 3
     // (note this is not done if the expr is (col("i") + (lit(1) + lit(2))))
     assert_eq!(
         simplifier.simplify(col("i") + (lit(1) + lit(2)))?,
@@ -209,7 +205,7 @@ fn simplify_demo() -> Result<()> {
     );
 
     // String --> Date simplification
-    // `cast('2020-09-01' as date)` --> 18500
+    // `cast('2020-09-01' as date)` --> 18506 # number of days since epoch 1970-01-01
     assert_eq!(
         simplifier.simplify(lit("2020-09-01").cast_to(&DataType::Date32, &schema)?)?,
         lit(ScalarValue::Date32(Some(18506)))

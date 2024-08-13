@@ -35,7 +35,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
 };
 
-use datafusion_physical_expr_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
 
 // returns the new value after bool_and/bool_or with the new values, taking nullability into account
 macro_rules! typed_bool_and_or_batch {
@@ -149,27 +149,20 @@ impl AggregateUDFImpl for BoolAnd {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        match args.data_type {
+        match args.return_type {
             DataType::Boolean => {
                 Ok(Box::new(BooleanGroupsAccumulator::new(|x, y| x && y)))
             }
             _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 args.name,
-                args.data_type
+                args.return_type
             ),
         }
     }
 
     fn aliases(&self) -> &[String] {
         &[]
-    }
-
-    fn create_sliding_accumulator(
-        &self,
-        _: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::<BoolAndAccumulator>::default())
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
@@ -276,27 +269,20 @@ impl AggregateUDFImpl for BoolOr {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        match args.data_type {
+        match args.return_type {
             DataType::Boolean => {
                 Ok(Box::new(BooleanGroupsAccumulator::new(|x, y| x || y)))
             }
             _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 args.name,
-                args.data_type
+                args.return_type
             ),
         }
     }
 
     fn aliases(&self) -> &[String] {
         &[]
-    }
-
-    fn create_sliding_accumulator(
-        &self,
-        _: AccumulatorArgs,
-    ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::<BoolOrAccumulator>::default())
     }
 
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {

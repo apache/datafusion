@@ -17,7 +17,7 @@
 
 statement ok
 CREATE TABLE test(
-  s TEXT,
+  s TEXT
 ) as VALUES
   ('p1'),
   ('p1e1'),

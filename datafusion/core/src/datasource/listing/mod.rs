@@ -22,8 +22,8 @@ mod helpers;
 mod table;
 mod url;
 
-use crate::error::Result;
 use chrono::TimeZone;
+use datafusion_common::Result;
 use datafusion_common::{ScalarValue, Statistics};
 use futures::Stream;
 use object_store::{path::Path, ObjectMeta};
@@ -82,6 +82,7 @@ pub struct PartitionedFile {
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
+
 impl PartitionedFile {
     /// Create a simple file without metadata or partition
     pub fn new(path: impl Into<String>, size: u64) -> Self {
@@ -161,7 +162,7 @@ impl From<ObjectMeta> for PartitionedFile {
 
 #[cfg(test)]
 mod tests {
-    use crate::datasource::listing::ListingTableUrl;
+    use super::ListingTableUrl;
     use datafusion_execution::object_store::{
         DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };

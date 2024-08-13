@@ -101,11 +101,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 array_exprs,
                 with_offset: false,
                 with_offset_alias: None,
+                with_ordinality,
             } => {
+                if with_ordinality {
+                    return not_impl_err!("UNNEST with ordinality is not supported yet");
+                }
+
                 // Unnest table factor has empty input
                 let schema = DFSchema::empty();
                 let input = LogicalPlanBuilder::empty(true).build()?;
-                // Unnest table factor can have multiple arugments.
+                // Unnest table factor can have multiple arguments.
                 // We treat each argument as a separate unnest expression.
                 let unnest_exprs = array_exprs
                     .into_iter()

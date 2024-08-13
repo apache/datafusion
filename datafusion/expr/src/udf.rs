@@ -17,20 +17,19 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
-use std::any::Any;
-use std::fmt::{self, Debug, Formatter};
-use std::sync::Arc;
-
-use crate::expr::create_name;
-use crate::interval_arithmetic::Interval;
+use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
     ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
 };
-
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result};
+use datafusion_expr_common::interval_arithmetic::Interval;
+use std::any::Any;
+use std::fmt::{self, Debug, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 
 /// Logical representation of a Scalar User Defined Function.
 ///
@@ -42,7 +41,9 @@ use datafusion_common::{not_impl_err, ExprSchema, Result};
 /// 1. For simple use cases, use [`create_udf`] (examples in [`simple_udf.rs`]).
 ///
 /// 2. For advanced use cases, use [`ScalarUDFImpl`] which provides full API
-/// access (examples in  [`advanced_udf.rs`]).
+///    access (examples in  [`advanced_udf.rs`]).
+///
+/// See [`Self::call`] to invoke a `ScalarUDF` with arguments.
 ///
 /// # API Note
 ///
@@ -59,16 +60,15 @@ pub struct ScalarUDF {
 
 impl PartialEq for ScalarUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
+        self.inner.equals(other.inner.as_ref())
     }
 }
 
 impl Eq for ScalarUDF {}
 
-impl std::hash::Hash for ScalarUDF {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name().hash(state);
-        self.signature().hash(state);
+impl Hash for ScalarUDF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.inner.hash_value().hash(state)
     }
 }
 
@@ -87,8 +87,8 @@ impl ScalarUDF {
         Self::new_from_impl(ScalarUdfLegacyWrapper {
             name: name.to_owned(),
             signature: signature.clone(),
-            return_type: return_type.clone(),
-            fun: fun.clone(),
+            return_type: Arc::clone(return_type),
+            fun: Arc::clone(fun),
         })
     }
 
@@ -114,13 +114,22 @@ impl ScalarUDF {
     ///
     /// If you implement [`ScalarUDFImpl`] directly you should return aliases directly.
     pub fn with_aliases(self, aliases: impl IntoIterator<Item = &'static str>) -> Self {
-        Self::new_from_impl(AliasedScalarUDFImpl::new(self.inner.clone(), aliases))
+        Self::new_from_impl(AliasedScalarUDFImpl::new(Arc::clone(&self.inner), aliases))
     }
 
     /// Returns a [`Expr`] logical expression to call this UDF with specified
     /// arguments.
     ///
-    /// This utility allows using the UDF without requiring access to the registry.
+    /// This utility allows easily calling UDFs
+    ///
+    /// # Example
+    /// ```no_run
+    /// use datafusion_expr::{col, lit, ScalarUDF};
+    /// # fn my_udf() -> ScalarUDF { unimplemented!() }
+    /// let my_func: ScalarUDF = my_udf();
+    /// // Create an expr for `my_func(a, 12.3)`
+    /// let expr = my_func.call(vec![col("a"), lit(12.3)]);
+    /// ```
     pub fn call(&self, args: Vec<Expr>) -> Expr {
         Expr::ScalarFunction(crate::expr::ScalarFunction::new_udf(
             Arc::new(self.clone()),
@@ -140,6 +149,13 @@ impl ScalarUDF {
     /// See [`ScalarUDFImpl::display_name`] for more details
     pub fn display_name(&self, args: &[Expr]) -> Result<String> {
         self.inner.display_name(args)
+    }
+
+    /// Returns this function's schema_name.
+    ///
+    /// See [`ScalarUDFImpl::schema_name`] for more details
+    pub fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        self.inner.schema_name(args)
     }
 
     /// Returns the aliases for this function.
@@ -199,7 +215,7 @@ impl ScalarUDF {
     /// Returns a `ScalarFunctionImplementation` that can invoke the function
     /// during execution
     pub fn fun(&self) -> ScalarFunctionImplementation {
-        let captured = self.inner.clone();
+        let captured = Arc::clone(&self.inner);
         Arc::new(move |args| captured.invoke(args))
     }
 
@@ -294,7 +310,7 @@ where
 /// #[derive(Debug)]
 /// struct AddOne {
 ///   signature: Signature
-/// };
+/// }
 ///
 /// impl AddOne {
 ///   fn new() -> Self {
@@ -333,10 +349,21 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn name(&self) -> &str;
 
     /// Returns the user-defined display name of the UDF given the arguments
-    ///
     fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let names: Vec<String> = args.iter().map(create_name).collect::<Result<_>>()?;
+        let names: Vec<String> = args.iter().map(ToString::to_string).collect();
+        // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
         Ok(format!("{}({})", self.name(), names.join(",")))
+    }
+
+    /// Returns the name of the column this expression would create
+    ///
+    /// See [`Expr::schema_name`] for details
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        Ok(format!(
+            "{}({})",
+            self.name(),
+            schema_name_from_exprs_comma_seperated_without_space(args)?
+        ))
     }
 
     /// Returns the function's [`Signature`] for information about what input
@@ -540,6 +567,33 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
+
+    /// Return true if this scalar UDF is equal to the other.
+    ///
+    /// Allows customizing the equality of scalar UDFs.
+    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
+    ///
+    /// - reflexive: `a.equals(a)`;
+    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
+    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
+    ///
+    /// By default, compares [`Self::name`] and [`Self::signature`].
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        self.name() == other.name() && self.signature() == other.signature()
+    }
+
+    /// Returns a hash value for this scalar UDF.
+    ///
+    /// Allows customizing the hash code of scalar UDFs. Similarly to [`Hash`] and [`Eq`],
+    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
+    ///
+    /// By default, hashes [`Self::name`] and [`Self::signature`].
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.name().hash(hasher);
+        self.signature().hash(hasher);
+        hasher.finish()
+    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
@@ -557,7 +611,6 @@ impl AliasedScalarUDFImpl {
     ) -> Self {
         let mut aliases = inner.aliases().to_vec();
         aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
-
         Self { inner, aliases }
     }
 }
@@ -585,6 +638,21 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        if let Some(other) = other.as_any().downcast_ref::<AliasedScalarUDFImpl>() {
+            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
+        } else {
+            false
+        }
+    }
+
+    fn hash_value(&self) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        self.inner.hash_value().hash(hasher);
+        self.aliases.hash(hasher);
+        hasher.finish()
     }
 }
 

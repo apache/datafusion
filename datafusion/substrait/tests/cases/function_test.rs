@@ -38,7 +38,7 @@ mod tests {
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
 
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
 
         assert_eq!(
             plan_str,

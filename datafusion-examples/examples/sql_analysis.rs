@@ -87,7 +87,7 @@ fn count_trees(plan: &LogicalPlan) -> (usize, Vec<usize>) {
     let mut groups = vec![];
 
     while let Some(node) = to_visit.pop() {
-        // if we encouter a join, we know were at the root of the tree
+        // if we encounter a join, we know were at the root of the tree
         // count this tree and recurse on it's inputs
         if matches!(node, LogicalPlan::Join(_) | LogicalPlan::CrossJoin(_)) {
             let (group_count, inputs) = count_tree(node);

@@ -42,7 +42,7 @@ physical_plan
 statement ok
 set datafusion.execution.coalesce_batches = false
 
-# expect no coalsece
+# expect no coalescence
 query TT
 explain SELECT * FROM a WHERE c0 < 1;
 ----

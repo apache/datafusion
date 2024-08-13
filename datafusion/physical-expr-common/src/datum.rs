@@ -22,7 +22,8 @@ use arrow::compute::SortOptions;
 use arrow::error::ArrowError;
 use datafusion_common::internal_err;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Operator};
+use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_expr_common::operator::Operator;
 use std::sync::Arc;
 
 /// Applies a binary [`Datum`] kernel `f` to `lhs` and `rhs`
@@ -63,7 +64,7 @@ pub fn apply_cmp(
 /// Applies a binary [`Datum`] comparison kernel `f` to `lhs` and `rhs` for nested type like
 /// List, FixedSizeList, LargeList, Struct, Union, Map, or a dictionary of a nested type
 pub fn apply_cmp_for_nested(
-    op: &Operator,
+    op: Operator,
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
 ) -> Result<ColumnarValue> {
@@ -88,7 +89,7 @@ pub fn apply_cmp_for_nested(
 
 /// Compare on nested type List, Struct, and so on
 pub fn compare_op_for_nested(
-    op: &Operator,
+    op: Operator,
     lhs: &dyn Datum,
     rhs: &dyn Datum,
 ) -> Result<BooleanArray> {

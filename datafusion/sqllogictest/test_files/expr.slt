@@ -22,7 +22,7 @@ SELECT true, false, false = false, true = false
 true false true false
 
 # test_mathematical_expressions_with_null
-query RRRRRRRRRRRRRRRRRR?RRRRRRRIRRRRRRBB
+query RRRRRRRRRRRRRRRRRR?RRRRRIIIRRRRRRBB
 SELECT
     sqrt(NULL),
     cbrt(NULL),
@@ -365,7 +365,7 @@ SELECT bit_length('josé')
 ----
 40
 
-query ?
+query I
 SELECT bit_length(NULL)
 ----
 NULL
@@ -395,7 +395,7 @@ SELECT btrim('\nxyxtrimyyx\n', 'xyz\n')
 ----
 trim
 
-query ?
+query T
 SELECT btrim(NULL, 'xyz')
 ----
 NULL
@@ -476,7 +476,7 @@ SELECT initcap('hi THOMAS')
 ----
 Hi Thomas
 
-query ?
+query T
 SELECT initcap(NULL)
 ----
 NULL
@@ -491,7 +491,7 @@ SELECT lower('TOM')
 ----
 tom
 
-query ?
+query T
 SELECT lower(NULL)
 ----
 NULL
@@ -511,7 +511,7 @@ SELECT ltrim('zzzytest', 'xyz')
 ----
 test
 
-query ?
+query T
 SELECT ltrim(NULL, 'xyz')
 ----
 NULL
@@ -531,7 +531,7 @@ SELECT octet_length('josé')
 ----
 5
 
-query ?
+query I
 SELECT octet_length(NULL)
 ----
 NULL
@@ -551,7 +551,7 @@ SELECT repeat('Pg', CAST(NULL AS INT))
 ----
 NULL
 
-query ?
+query T
 SELECT repeat(NULL, 4)
 ----
 NULL
@@ -576,7 +576,7 @@ SELECT replace('abcdefabcdef', NULL, 'XX')
 ----
 NULL
 
-query ?
+query T
 SELECT replace(NULL, 'cd', 'XX')
 ----
 NULL
@@ -596,7 +596,7 @@ SELECT rtrim('testxxzx', 'xyz')
 ----
 test
 
-query ?
+query T
 SELECT rtrim(NULL, 'xyz')
 ----
 NULL
@@ -611,7 +611,7 @@ SELECT split_part('abc~@~def~@~ghi', '~@~', 20)
 ----
 (empty)
 
-query ?
+query T
 SELECT split_part(NULL, '~@~', 20)
 ----
 NULL
@@ -788,7 +788,7 @@ SELECT upper('tom')
 ----
 TOM
 
-query ?
+query T
 SELECT upper(NULL)
 ----
 NULL
@@ -1774,7 +1774,7 @@ SELECT arrow_cast(decode(arrow_cast('746f6d', 'LargeBinary'),'hex'), 'Utf8');
 ----
 tom
 
-query ?
+query T
 SELECT encode(NULL,'base64');
 ----
 NULL
@@ -1784,7 +1784,7 @@ SELECT decode(NULL,'base64');
 ----
 NULL
 
-query ?
+query T
 SELECT encode(NULL,'hex');
 ----
 NULL
@@ -1829,7 +1829,7 @@ SELECT md5('');
 ----
 d41d8cd98f00b204e9800998ecf8427e
 
-query ?
+query T
 SELECT md5(NULL);
 ----
 NULL
@@ -2356,7 +2356,7 @@ CREATE TABLE t_source(
     column1 String,
     column2 String,
     column3 String,
-    column4 String,
+    column4 String
 ) AS VALUES
 ('one', 'one', 'one', 'one'),
 ('two', 'two', '', 'two'),
@@ -2606,12 +2606,12 @@ query TT
 explain select min(a) filter (where a > 1) as x from t;
 ----
 logical_plan
-01)Projection: MIN(t.a) FILTER (WHERE t.a > Int64(1)) AS x
-02)--Aggregate: groupBy=[[]], aggr=[[MIN(t.a) FILTER (WHERE t.a > Float32(1)) AS MIN(t.a) FILTER (WHERE t.a > Int64(1))]]
+01)Projection: min(t.a) FILTER (WHERE t.a > Int64(1)) AS x
+02)--Aggregate: groupBy=[[]], aggr=[[min(t.a) FILTER (WHERE t.a > Float32(1)) AS min(t.a) FILTER (WHERE t.a > Int64(1))]]
 03)----TableScan: t projection=[a]
 physical_plan
-01)ProjectionExec: expr=[MIN(t.a) FILTER (WHERE t.a > Int64(1))@0 as x]
-02)--AggregateExec: mode=Single, gby=[], aggr=[MIN(t.a) FILTER (WHERE t.a > Int64(1))]
+01)ProjectionExec: expr=[min(t.a) FILTER (WHERE t.a > Int64(1))@0 as x]
+02)--AggregateExec: mode=Single, gby=[], aggr=[min(t.a) FILTER (WHERE t.a > Int64(1))]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 

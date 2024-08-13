@@ -92,15 +92,17 @@ pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<Cs
         work_dir,
     )?;
     let config = partitioned_csv_config(schema, file_groups);
-    Ok(Arc::new(CsvExec::new(
-        config,
-        true,
-        b',',
-        b'"',
-        None,
-        None,
-        FileCompressionType::UNCOMPRESSED,
-    )))
+    Ok(Arc::new(
+        CsvExec::builder(config)
+            .with_has_header(true)
+            .with_delimeter(b',')
+            .with_quote(b'"')
+            .with_escape(None)
+            .with_comment(None)
+            .with_newlines_in_values(false)
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .build(),
+    ))
 }
 
 /// Returns file groups [`Vec<Vec<PartitionedFile>>`] for scanning `partitions` of `filename`
@@ -274,17 +276,24 @@ pub fn csv_exec_sorted(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
-    Arc::new(CsvExec::new(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
+    Arc::new(
+        CsvExec::builder(
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
             .with_file(PartitionedFile::new("x".to_string(), 100))
             .with_output_ordering(vec![sort_exprs]),
-        false,
-        0,
-        0,
-        None,
-        None,
-        FileCompressionType::UNCOMPRESSED,
-    ))
+        )
+        .with_has_header(false)
+        .with_delimeter(0)
+        .with_quote(0)
+        .with_escape(None)
+        .with_comment(None)
+        .with_newlines_in_values(false)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+        .build(),
+    )
 }
 
 // construct a stream partition for test purposes
@@ -330,17 +339,24 @@ pub fn csv_exec_ordered(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
-    Arc::new(CsvExec::new(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
+    Arc::new(
+        CsvExec::builder(
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
             .with_file(PartitionedFile::new("file_path".to_string(), 100))
             .with_output_ordering(vec![sort_exprs]),
-        true,
-        0,
-        b'"',
-        None,
-        None,
-        FileCompressionType::UNCOMPRESSED,
-    ))
+        )
+        .with_has_header(true)
+        .with_delimeter(0)
+        .with_quote(b'"')
+        .with_escape(None)
+        .with_comment(None)
+        .with_newlines_in_values(false)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+        .build(),
+    )
 }
 
 /// A mock execution plan that simply returns the provided statistics

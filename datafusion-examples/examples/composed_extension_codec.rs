@@ -30,18 +30,19 @@
 //!           DeltaScan
 //! ```
 
-use datafusion::common::Result;
-use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
-use datafusion::prelude::SessionContext;
-use datafusion_common::internal_err;
-use datafusion_expr::registry::FunctionRegistry;
-use datafusion_expr::ScalarUDF;
-use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
-use datafusion_proto::protobuf;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
+
+use datafusion::common::Result;
+use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
+use datafusion::prelude::SessionContext;
+use datafusion_common::{internal_err, DataFusionError};
+use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::{AggregateUDF, ScalarUDF};
+use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
+use datafusion_proto::protobuf;
 
 #[tokio::main]
 async fn main() {
@@ -239,6 +240,25 @@ struct ComposedPhysicalExtensionCodec {
     codecs: Vec<Arc<dyn PhysicalExtensionCodec>>,
 }
 
+impl ComposedPhysicalExtensionCodec {
+    fn try_any<T>(
+        &self,
+        mut f: impl FnMut(&dyn PhysicalExtensionCodec) -> Result<T>,
+    ) -> Result<T> {
+        let mut last_err = None;
+        for codec in &self.codecs {
+            match f(codec.as_ref()) {
+                Ok(node) => return Ok(node),
+                Err(err) => last_err = Some(err),
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            DataFusionError::NotImplemented("Empty list of composed codecs".to_owned())
+        }))
+    }
+}
+
 impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     fn try_decode(
         &self,
@@ -246,46 +266,26 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
         inputs: &[Arc<dyn ExecutionPlan>],
         registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut last_err = None;
-        for codec in &self.codecs {
-            match codec.try_decode(buf, inputs, registry) {
-                Ok(plan) => return Ok(plan),
-                Err(e) => last_err = Some(e),
-            }
-        }
-        Err(last_err.unwrap())
+        self.try_any(|codec| codec.try_decode(buf, inputs, registry))
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        let mut last_err = None;
-        for codec in &self.codecs {
-            match codec.try_encode(node.clone(), buf) {
-                Ok(_) => return Ok(()),
-                Err(e) => last_err = Some(e),
-            }
-        }
-        Err(last_err.unwrap())
+        self.try_any(|codec| codec.try_encode(node.clone(), buf))
     }
 
-    fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        let mut last_err = None;
-        for codec in &self.codecs {
-            match codec.try_decode_udf(name, _buf) {
-                Ok(plan) => return Ok(plan),
-                Err(e) => last_err = Some(e),
-            }
-        }
-        Err(last_err.unwrap())
+    fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
+        self.try_any(|codec| codec.try_decode_udf(name, buf))
     }
 
-    fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
-        let mut last_err = None;
-        for codec in &self.codecs {
-            match codec.try_encode_udf(_node, _buf) {
-                Ok(_) => return Ok(()),
-                Err(e) => last_err = Some(e),
-            }
-        }
-        Err(last_err.unwrap())
+    fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
+        self.try_any(|codec| codec.try_encode_udf(node, buf))
+    }
+
+    fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
+        self.try_any(|codec| codec.try_decode_udaf(name, buf))
+    }
+
+    fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
+        self.try_any(|codec| codec.try_encode_udaf(node, buf))
     }
 }

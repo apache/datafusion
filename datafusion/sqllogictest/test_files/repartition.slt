@@ -123,7 +123,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--CoalescePartitionsExec
-03)----CoalesceBatchesExec: target_batch_size=8192
+03)----CoalesceBatchesExec: target_batch_size=8192, fetch=5
 04)------FilterExec: c3@2 > 0
 05)--------RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
 06)----------StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true

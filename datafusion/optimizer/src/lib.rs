@@ -14,17 +14,19 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
 //! # DataFusion Optimizer
 //!
 //! Contains rules for rewriting [`LogicalPlan`]s
 //!
 //! 1. [`Analyzer`] applies [`AnalyzerRule`]s to transform `LogicalPlan`s
-//! to make the plan valid prior to the rest of the DataFusion optimization
-//! process (for example, [`TypeCoercion`]).
+//!    to make the plan valid prior to the rest of the DataFusion optimization
+//!    process (for example, [`TypeCoercion`]).
 //!
 //! 2. [`Optimizer`] applies [`OptimizerRule`]s to transform `LogicalPlan`s
-//! into equivalent, but more efficient plans.
+//!    into equivalent, but more efficient plans.
 //!
 //! [`LogicalPlan`]: datafusion_expr::LogicalPlan
 //! [`TypeCoercion`]: analyzer::type_coercion::TypeCoercion

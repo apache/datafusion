@@ -412,14 +412,14 @@ impl LogicalPlanBuilder {
 
     /// Add missing sort columns to all downstream projection
     ///
-    /// Thus, if you have a LogialPlan that selects A and B and have
+    /// Thus, if you have a LogicalPlan that selects A and B and have
     /// not requested a sort by C, this code will add C recursively to
     /// all input projections.
     ///
     /// Adding a new column is not correct if there is a `Distinct`
     /// node, which produces only distinct values of its
     /// inputs. Adding a new column to its input will result in
-    /// potententially different results than with the original column.
+    /// potentially different results than with the original column.
     ///
     /// For example, if the input is like:
     ///
@@ -1223,17 +1223,17 @@ pub fn build_join_schema(
         JoinType::Inner => {
             // left then right
             let left_fields = left_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect::<Vec<_>>();
             let right_fields = right_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect::<Vec<_>>();
             left_fields.into_iter().chain(right_fields).collect()
         }
         JoinType::Left => {
             // left then right, right set to nullable in case of not matched scenario
             let left_fields = left_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect::<Vec<_>>();
             left_fields
                 .into_iter()
@@ -1243,7 +1243,7 @@ pub fn build_join_schema(
         JoinType::Right => {
             // left then right, left set to nullable in case of not matched scenario
             let right_fields = right_fields
-                .map(|(q, f)| (q.cloned(), f.clone()))
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect::<Vec<_>>();
             nullify_fields(left_fields)
                 .into_iter()
@@ -1259,11 +1259,15 @@ pub fn build_join_schema(
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
-            left_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
+            left_fields
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                .collect()
         }
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
-            right_fields.map(|(q, f)| (q.cloned(), f.clone())).collect()
+            right_fields
+                .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                .collect()
         }
     };
     let func_dependencies = left.functional_dependencies().join(
@@ -1294,15 +1298,15 @@ fn add_group_by_exprs_from_dependencies(
     // c1 + 1` produces an output field named `"c1 + 1"`
     let mut group_by_field_names = group_expr
         .iter()
-        .map(|e| e.display_name())
-        .collect::<Result<Vec<_>>>()?;
+        .map(|e| e.schema_name().to_string())
+        .collect::<Vec<_>>();
 
     if let Some(target_indices) =
         get_target_functional_dependencies(schema, &group_by_field_names)
     {
         for idx in target_indices {
             let expr = Expr::Column(Column::from(schema.qualified_field(idx)));
-            let expr_name = expr.display_name()?;
+            let expr_name = expr.schema_name().to_string();
             if !group_by_field_names.contains(&expr_name) {
                 group_by_field_names.push(expr_name);
                 group_expr.push(expr);
@@ -1319,7 +1323,7 @@ pub(crate) fn validate_unique_names<'a>(
     let mut unique_names = HashMap::new();
 
     expressions.into_iter().enumerate().try_for_each(|(position, expr)| {
-        let name = expr.display_name()?;
+        let name = expr.schema_name().to_string();
         match unique_names.get(&name) {
             None => {
                 unique_names.insert(name, (position, expr));
@@ -1455,7 +1459,6 @@ pub fn project(
             _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
         }
     }
-
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
@@ -1528,7 +1531,12 @@ pub fn wrap_projection_for_join_if_necessary(
 
     let need_project = join_keys.iter().any(|key| !matches!(key, Expr::Column(_)));
     let plan = if need_project {
-        let mut projection = expand_wildcard(input_schema, &input, None)?;
+        // Include all columns from the input and extend them with the join keys
+        let mut projection = input_schema
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<_>>();
         let join_key_items = alias_join_keys
             .iter()
             .flat_map(|expr| expr.try_as_col().is_none().then_some(expr))
@@ -1549,7 +1557,7 @@ pub fn wrap_projection_for_join_if_necessary(
             if let Some(col) = key.try_as_col() {
                 Ok(col.clone())
             } else {
-                let name = key.display_name()?;
+                let name = key.schema_name().to_string();
                 Ok(Column::from_name(name))
             }
         })
@@ -1578,7 +1586,7 @@ impl TableSource for LogicalTableSource {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.table_schema.clone()
+        Arc::clone(&self.table_schema)
     }
 
     fn supports_filters_pushdown(
@@ -1692,7 +1700,10 @@ pub fn unnest_with_options(
                 }
                 None => {
                     dependency_indices.push(index);
-                    Ok(vec![(original_qualifier.cloned(), original_field.clone())])
+                    Ok(vec![(
+                        original_qualifier.cloned(),
+                        Arc::clone(original_field),
+                    )])
                 }
             }
         })
@@ -1738,7 +1749,7 @@ mod tests {
         \n  Filter: employee_csv.state = Utf8(\"CO\")\
         \n    TableScan: employee_csv projection=[id, state]";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1757,7 +1768,7 @@ mod tests {
         .unwrap();
         assert_eq!(&expected, plan.schema().as_ref());
 
-        // Note scan of "EMPLOYEE_CSV" is treated as a SQL identifer
+        // Note scan of "EMPLOYEE_CSV" is treated as a SQL identifier
         // (and thus normalized to "employee"csv") as well
         let projection = None;
         let plan =
@@ -1791,7 +1802,7 @@ mod tests {
         let expected = "Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST\
         \n  TableScan: employee_csv projection=[state, salary]";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1811,7 +1822,7 @@ mod tests {
         \n    TableScan: t1\
         \n    TableScan: t2";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1836,7 +1847,7 @@ mod tests {
         \n    TableScan: employee_csv projection=[state, salary]\
         \n  TableScan: employee_csv projection=[state, salary]";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1865,7 +1876,7 @@ mod tests {
         \n        TableScan: employee_csv projection=[state, salary]\
         \n    TableScan: employee_csv projection=[state, salary]";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1902,7 +1913,7 @@ mod tests {
         \n    Filter: employee_csv.state = Utf8(\"CO\")\
         \n      TableScan: employee_csv projection=[id, state]";
 
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         Ok(())
     }
@@ -1929,7 +1940,7 @@ mod tests {
         \n        TableScan: foo\
         \n  Projection: bar.a\
         \n    TableScan: bar";
-        assert_eq!(expected, format!("{outer_query:?}"));
+        assert_eq!(expected, format!("{outer_query}"));
 
         Ok(())
     }
@@ -1957,7 +1968,7 @@ mod tests {
         \n        TableScan: foo\
         \n  Projection: bar.a\
         \n    TableScan: bar";
-        assert_eq!(expected, format!("{outer_query:?}"));
+        assert_eq!(expected, format!("{outer_query}"));
 
         Ok(())
     }
@@ -1983,7 +1994,7 @@ mod tests {
         \n      Projection: foo.b\
         \n        TableScan: foo\
         \n  TableScan: bar";
-        assert_eq!(expected, format!("{outer_query:?}"));
+        assert_eq!(expected, format!("{outer_query}"));
 
         Ok(())
     }
@@ -2105,7 +2116,7 @@ mod tests {
         let expected = "\
         Unnest: lists[test_table.strings] structs[]\
         \n  TableScan: test_table";
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         // Check unnested field is a scalar
         let field = plan.schema().field_with_name(None, "strings").unwrap();
@@ -2119,7 +2130,7 @@ mod tests {
         let expected = "\
         Unnest: lists[] structs[test_table.struct_singular]\
         \n  TableScan: test_table";
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         for field_name in &["a", "b"] {
             // Check unnested struct field is a scalar
@@ -2142,7 +2153,7 @@ mod tests {
         \n  Unnest: lists[test_table.structs] structs[]\
         \n    Unnest: lists[test_table.strings] structs[]\
         \n      TableScan: test_table";
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         // Check unnested struct list field should be a struct.
         let field = plan.schema().field_with_name(None, "structs").unwrap();
@@ -2160,7 +2171,7 @@ mod tests {
         let expected = "\
         Unnest: lists[test_table.strings, test_table.structs] structs[test_table.struct_singular]\
         \n  TableScan: test_table";
-        assert_eq!(expected, format!("{plan:?}"));
+        assert_eq!(expected, format!("{plan}"));
 
         // Unnesting missing column should fail.
         let plan = nested_table_scan("test_table")?.unnest_column("missing");
@@ -2252,9 +2263,9 @@ mod tests {
                 ])?
                 .build()?;
 
-        let plan_expected = format!("{plan:?}");
+        let plan_expected = format!("{plan}");
         let plan_builder: LogicalPlanBuilder = Arc::new(plan).into();
-        assert_eq!(plan_expected, format!("{:?}", plan_builder.plan));
+        assert_eq!(plan_expected, format!("{}", plan_builder.plan));
 
         Ok(())
     }

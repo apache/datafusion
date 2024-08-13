@@ -20,7 +20,6 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::AggregateExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -29,6 +28,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint into grouped aggregations which don't require all
@@ -193,7 +193,6 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
 mod tests {
 
     use super::*;
-    use crate::physical_optimizer::aggregate_statistics::tests::TestAggregate;
     use crate::physical_optimizer::enforce_distribution::tests::{
         parquet_exec_with_sort, schema, trim_plan_display,
     };
@@ -201,6 +200,7 @@ mod tests {
     use crate::physical_plan::collect;
     use crate::physical_plan::memory::MemoryExec;
     use crate::prelude::SessionContext;
+    use crate::test_util::TestAggregate;
 
     use arrow::array::Int32Array;
     use arrow::compute::SortOptions;

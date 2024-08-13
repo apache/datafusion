@@ -218,7 +218,7 @@ impl fmt::Display for CreateExternalTable {
 ///
 /// This can either be a [`Statement`] from [`sqlparser`] from a
 /// standard SQL dialect, or a DataFusion extension such as `CREATE
-/// EXTERAL TABLE`. See [`DFParser`] for more information.
+/// EXTERNAL TABLE`. See [`DFParser`] for more information.
 ///
 /// [`Statement`]: sqlparser::ast::Statement
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,7 +253,7 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
     Ok(())
 }
 
-/// Datafusion SQL Parser based on [`sqlparser`]
+/// DataFusion SQL Parser based on [`sqlparser`]
 ///
 /// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s [`Parser`].
 ///
@@ -625,6 +625,7 @@ impl<'a> DFParser<'a> {
             expr,
             asc,
             nulls_first,
+            with_fill: None,
         })
     }
 
@@ -1006,14 +1007,15 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // positive case: it is ok for sql stmt with `COMPRESSION TYPE GZIP` tokens
-        let sqls = vec![
-             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS 
+        let sqls =
+            vec![
+             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS
              ('format.compression' 'GZIP')", "GZIP"),
-             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS 
+             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS
              ('format.compression' 'BZIP2')", "BZIP2"),
-             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS 
+             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS
              ('format.compression' 'XZ')", "XZ"),
-             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS 
+             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS
              ('format.compression' 'ZSTD')", "ZSTD"),
          ];
         for (sql, compression) in sqls {
@@ -1100,7 +1102,7 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
-        // positive case: column definiton allowed in 'partition by' clause
+        // positive case: column definition allowed in 'partition by' clause
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
@@ -1123,7 +1125,10 @@ mod tests {
         // negative case: mixed column defs and column names in `PARTITIONED BY` clause
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int, c1) LOCATION 'foo.csv'";
-        expect_parse_error(sql, "sql parser error: Expected a data type name, found: )");
+        expect_parse_error(
+            sql,
+            "sql parser error: Expected: a data type name, found: )",
+        );
 
         // negative case: mixed column defs and column names in `PARTITIONED BY` clause
         let sql =
@@ -1202,6 +1207,7 @@ mod tests {
                     }),
                     asc,
                     nulls_first,
+                    with_fill: None,
                 }]],
                 if_not_exists: false,
                 unbounded: false,
@@ -1231,6 +1237,7 @@ mod tests {
                     }),
                     asc: Some(true),
                     nulls_first: None,
+                    with_fill: None,
                 },
                 OrderByExpr {
                     expr: Identifier(Ident {
@@ -1239,6 +1246,7 @@ mod tests {
                     }),
                     asc: Some(false),
                     nulls_first: Some(true),
+                    with_fill: None,
                 },
             ]],
             if_not_exists: false,
@@ -1274,6 +1282,7 @@ mod tests {
                 },
                 asc: Some(true),
                 nulls_first: None,
+                with_fill: None,
             }]],
             if_not_exists: false,
             unbounded: false,
@@ -1291,7 +1300,7 @@ mod tests {
             LOCATION 'foo.parquet'
             OPTIONS ('format.compression' 'zstd',
                      'format.delimiter' '*',
-                     'ROW_GROUP_SIZE' '1024', 
+                     'ROW_GROUP_SIZE' '1024',
                      'TRUNCATE' 'NO',
                      'format.has_header' 'true')";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
@@ -1317,6 +1326,7 @@ mod tests {
                 },
                 asc: Some(true),
                 nulls_first: None,
+                with_fill: None,
             }]],
             if_not_exists: true,
             unbounded: true,
@@ -1522,10 +1532,10 @@ mod tests {
     /// that:
     ///
     /// 1. parsing `sql` results in the same [`Statement`] as parsing
-    /// `canonical`.
+    ///    `canonical`.
     ///
     /// 2. re-serializing the result of parsing `sql` produces the same
-    /// `canonical` sql string
+    ///    `canonical` sql string
     fn one_statement_parses_to(sql: &str, canonical: &str) -> Statement {
         let mut statements = DFParser::parse_sql(sql).unwrap();
         assert_eq!(statements.len(), 1);

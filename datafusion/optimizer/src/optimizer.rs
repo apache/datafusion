@@ -205,7 +205,7 @@ impl OptimizerConfig for OptimizerContext {
     }
 
     fn alias_generator(&self) -> Arc<AliasGenerator> {
-        self.alias_generator.clone()
+        Arc::clone(&self.alias_generator)
     }
 
     fn options(&self) -> &ConfigOptions {
@@ -381,7 +381,7 @@ impl Optimizer {
                     .skip_failed_rules
                     .then(|| new_plan.clone());
 
-                let starting_schema = new_plan.schema().clone();
+                let starting_schema = Arc::clone(new_plan.schema());
 
                 let result = match rule.apply_order() {
                     // optimizer handles recursion
@@ -579,7 +579,7 @@ mod tests {
         let config = OptimizerContext::new().with_skip_failing_rules(false);
 
         let input = Arc::new(test_table_scan()?);
-        let input_schema = input.schema().clone();
+        let input_schema = Arc::clone(input.schema());
 
         let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
             vec![col("a"), col("b"), col("c")],
@@ -760,7 +760,7 @@ mod tests {
             }
 
             Ok(Transformed::yes(LogicalPlan::Projection(
-                Projection::try_new(exprs, projection.input.clone())?,
+                Projection::try_new(exprs, Arc::clone(&projection.input))?,
             )))
         }
     }

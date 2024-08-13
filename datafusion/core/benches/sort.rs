@@ -21,7 +21,7 @@
 //! 1. Creates a list of tuples (sorted if necessary)
 //!
 //! 2. Divides those tuples across some number of streams of [`RecordBatch`]
-//! preserving any ordering
+//!    preserving any ordering
 //!
 //! 3. Times how long it takes for a given sort plan to process the input
 //!

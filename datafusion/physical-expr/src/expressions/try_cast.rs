@@ -31,7 +31,7 @@ use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-/// TRY_CAST expression casts an expression to a specific data type and retuns NULL on invalid cast
+/// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
 #[derive(Debug, Hash)]
 pub struct TryCastExpr {
     /// The expression to cast
@@ -106,7 +106,7 @@ impl PhysicalExpr for TryCastExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(TryCastExpr::new(
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.cast_type.clone(),
         )))
     }
@@ -137,7 +137,7 @@ pub fn try_cast(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {
-        Ok(expr.clone())
+        Ok(Arc::clone(&expr))
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
     } else {

@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![deny(clippy::clone_on_ref_ptr)]
 
 //! Aggregate Function packages for [DataFusion].
 //!
@@ -50,18 +52,20 @@
 //! 3. Add a new feature to `Cargo.toml`, with any optional dependencies
 //!
 //! 4. Use the `make_package!` macro to expose the module when the
-//! feature is enabled.
+//!    feature is enabled.
 
 #[macro_use]
 pub mod macros;
 
 pub mod approx_distinct;
+pub mod array_agg;
 pub mod correlation;
 pub mod count;
 pub mod covariance;
 pub mod first_last;
 pub mod hyperloglog;
 pub mod median;
+pub mod min_max;
 pub mod regr;
 pub mod stddev;
 pub mod sum;
@@ -73,6 +77,8 @@ pub mod approx_percentile_cont_with_weight;
 pub mod average;
 pub mod bit_and_or_xor;
 pub mod bool_and_or;
+pub mod grouping;
+pub mod nth_value;
 pub mod string_agg;
 
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
@@ -85,10 +91,11 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
-    pub use super::approx_distinct;
+    pub use super::approx_distinct::approx_distinct;
     pub use super::approx_median::approx_median;
     pub use super::approx_percentile_cont::approx_percentile_cont;
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
+    pub use super::array_agg::array_agg;
     pub use super::average::avg;
     pub use super::bit_and_or_xor::bit_and;
     pub use super::bit_and_or_xor::bit_or;
@@ -102,7 +109,10 @@ pub mod expr_fn {
     pub use super::covariance::covar_samp;
     pub use super::first_last::first_value;
     pub use super::first_last::last_value;
+    pub use super::grouping::grouping;
     pub use super::median::median;
+    pub use super::min_max::max;
+    pub use super::min_max::min;
     pub use super::regr::regr_avgx;
     pub use super::regr::regr_avgy;
     pub use super::regr::regr_count;
@@ -122,12 +132,15 @@ pub mod expr_fn {
 /// Returns all default aggregate functions
 pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
     vec![
+        array_agg::array_agg_udaf(),
         first_last::first_value_udaf(),
         first_last::last_value_udaf(),
         covariance::covar_samp_udaf(),
         covariance::covar_pop_udaf(),
         correlation::corr_udaf(),
         sum::sum_udaf(),
+        min_max::max_udaf(),
+        min_max::min_udaf(),
         median::median_udaf(),
         count::count_udaf(),
         regr::regr_slope_udaf(),
@@ -154,6 +167,8 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         bool_and_or::bool_and_udaf(),
         bool_and_or::bool_or_udaf(),
         average::avg_udaf(),
+        grouping::grouping_udaf(),
+        nth_value::nth_value_udaf(),
     ]
 }
 
@@ -181,10 +196,11 @@ mod tests {
     #[test]
     fn test_no_duplicate_name() -> Result<()> {
         let mut names = HashSet::new();
+        let migrated_functions = ["array_agg", "count", "max", "min"];
         for func in all_default_aggregate_functions() {
             // TODO: remove this
             // These functions are in intermediate migration state, skip them
-            if func.name().to_lowercase() == "count" {
+            if migrated_functions.contains(&func.name().to_lowercase().as_str()) {
                 continue;
             }
             assert!(

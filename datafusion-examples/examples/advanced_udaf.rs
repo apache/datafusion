@@ -92,7 +92,7 @@ impl AggregateUDFImpl for GeoMeanUdaf {
     }
 
     /// This is the description of the state. accumulator's state() must match the types here.
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<arrow_schema::Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new("prod", args.return_type.clone(), true),
             Field::new("n", DataType::UInt32, true),
@@ -339,7 +339,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         Ok(())
     }
 
-    /// Generate output, as specififed by `emit_to` and update the intermediate state
+    /// Generate output, as specified by `emit_to` and update the intermediate state
     fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
         let counts = emit_to.take_needed(&mut self.counts);
         let prods = emit_to.take_needed(&mut self.prods);

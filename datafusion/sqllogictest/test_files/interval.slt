@@ -325,7 +325,7 @@ select
 ----
 Interval(MonthDayNano) Interval(MonthDayNano)
 
-# cast with explicit cast sytax
+# cast with explicit cast syntax
 query TT
 select
   arrow_typeof(cast ('5 months' as interval)),

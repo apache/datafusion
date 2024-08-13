@@ -90,6 +90,7 @@ message ListingTableScanNode {
     datafusion_common.CsvFormat csv = 10;
     datafusion_common.ParquetFormat parquet = 11;
     datafusion_common.AvroFormat avro = 12;
+    datafusion_common.NdJsonFormat json = 15;
   }
   repeated LogicalExprNodeCollection file_sort_order = 13;
 }
@@ -164,7 +165,7 @@ message CreateExternalTableNode {
   map<string, string> options = 8;
   datafusion_common.Constraints constraints = 12;
   map<string, LogicalExprNode> column_defaults = 13;
- }
+}
 
 message PrepareNode {
   string name = 1;
@@ -249,24 +250,24 @@ message DistinctOnNode {
 }
 
 message CopyToNode {
-    LogicalPlanNode input = 1;
-    string output_url = 2;
-    bytes file_type = 3;
-    repeated string partition_by = 7;
+  LogicalPlanNode input = 1;
+  string output_url = 2;
+  bytes file_type = 3;
+  repeated string partition_by = 7;
 }
 
 message UnnestNode {
-    LogicalPlanNode input = 1;
-    repeated datafusion_common.Column exec_columns = 2;
-    repeated uint64 list_type_columns = 3;
-    repeated uint64 struct_type_columns = 4;
-    repeated uint64 dependency_indices = 5;
-    datafusion_common.DfSchema schema = 6;
-    UnnestOptions options = 7;
+  LogicalPlanNode input = 1;
+  repeated datafusion_common.Column exec_columns = 2;
+  repeated uint64 list_type_columns = 3;
+  repeated uint64 struct_type_columns = 4;
+  repeated uint64 dependency_indices = 5;
+  datafusion_common.DfSchema schema = 6;
+  UnnestOptions options = 7;
 }
 
 message UnnestOptions {
-    bool preserve_nulls = 1;
+  bool preserve_nulls = 1;
 }
 
 message UnionNode {
@@ -310,8 +311,6 @@ message LogicalExprNode {
     // binary expressions
     BinaryExprNode binary_expr = 4;
 
-    // aggregate expressions
-    AggregateExprNode aggregate_expr = 5;
 
     // null checks
     IsNull is_null_expr = 6;
@@ -465,51 +464,6 @@ message InListNode {
   bool negated = 3;
 }
 
-enum AggregateFunction {
-  MIN = 0;
-  MAX = 1;
-  // SUM = 2;
-  // AVG = 3;
-  // COUNT = 4;
-  // APPROX_DISTINCT = 5;
-  ARRAY_AGG = 6;
-  // VARIANCE = 7;
-  // VARIANCE_POP = 8;
-  // COVARIANCE = 9;
-  // COVARIANCE_POP = 10;
-  // STDDEV = 11;
-  // STDDEV_POP = 12;
-  // CORRELATION = 13;
-  // APPROX_PERCENTILE_CONT = 14;
-  // APPROX_MEDIAN = 15;
-  // APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
-  GROUPING = 17;
-  // MEDIAN = 18;
-  // BIT_AND = 19;
-  // BIT_OR = 20;
-  // BIT_XOR = 21;
-//  BOOL_AND = 22;
-//  BOOL_OR = 23;
-  // REGR_SLOPE = 26;
-  // REGR_INTERCEPT = 27;
-  // REGR_COUNT = 28;
-  // REGR_R2 = 29;
-  // REGR_AVGX = 30;
-  // REGR_AVGY = 31;
-  // REGR_SXX = 32;
-  // REGR_SYY = 33;
-  // REGR_SXY = 34;
-  // STRING_AGG = 35;
-  NTH_VALUE_AGG = 36;
-}
-
-message AggregateExprNode {
-  AggregateFunction aggr_function = 1;
-  repeated LogicalExprNode expr = 2;
-  bool distinct = 3;
-  LogicalExprNode filter = 4;
-  repeated LogicalExprNode order_by = 5;
-}
 
 message AggregateUDFExprNode {
   string fun_name = 1;
@@ -517,6 +471,7 @@ message AggregateUDFExprNode {
   bool distinct = 5;
   LogicalExprNode filter = 3;
   repeated LogicalExprNode order_by = 4;
+  optional bytes fun_definition = 6;
 }
 
 message ScalarUDFExprNode {
@@ -541,7 +496,6 @@ enum BuiltInWindowFunction {
 
 message WindowExprNode {
   oneof window_function {
-    AggregateFunction aggr_function = 1;
     BuiltInWindowFunction built_in_function = 2;
     string udaf = 3;
     string udwf = 9;
@@ -551,6 +505,7 @@ message WindowExprNode {
   repeated LogicalExprNode order_by = 6;
   // repeated LogicalExprNode filter = 7;
   WindowFrame window_frame = 8;
+  optional bytes fun_definition = 10;
 }
 
 message BetweenNode {
@@ -836,6 +791,8 @@ message PhysicalExprNode {
     // was PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
 
     PhysicalLikeExprNode like_expr = 18;
+
+    PhysicalExtensionExprNode extension = 19;
   }
 }
 
@@ -848,17 +805,17 @@ message PhysicalScalarUdfNode {
 
 message PhysicalAggregateExprNode {
   oneof AggregateFunction {
-    AggregateFunction aggr_function = 1;
     string user_defined_aggr_function = 4;
   }
   repeated PhysicalExprNode expr = 2;
   repeated PhysicalSortExprNode ordering_req = 5;
   bool distinct = 3;
+  bool ignore_nulls = 6;
+  optional bytes fun_definition = 7;
 }
 
 message PhysicalWindowExprNode {
   oneof window_function {
-    AggregateFunction aggr_function = 1;
     BuiltInWindowFunction built_in_function = 2;
     string user_defined_aggr_function = 3;
   }
@@ -867,6 +824,7 @@ message PhysicalWindowExprNode {
   repeated PhysicalSortExprNode order_by = 6;
   WindowFrame window_frame = 7;
   string name = 8;
+  optional bytes fun_definition = 9;
 }
 
 message PhysicalIsNull {
@@ -942,6 +900,11 @@ message PhysicalNegativeNode {
   PhysicalExprNode expr = 1;
 }
 
+message PhysicalExtensionExprNode {
+  bytes expr = 1;
+  repeated PhysicalExprNode inputs = 2;
+}
+
 message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
@@ -995,6 +958,7 @@ message CsvScanExecNode {
   oneof optional_comment {
     string comment = 6;
   }
+  bool newlines_in_values = 7;
 }
 
 message AvroScanExecNode {

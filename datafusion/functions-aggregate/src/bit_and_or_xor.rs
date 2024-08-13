@@ -38,7 +38,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
 };
 
-use datafusion_physical_expr_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use std::ops::{BitAndAssign, BitOrAssign, BitXorAssign};
 
 /// This macro helps create group accumulators based on bitwise operations typically used internally
@@ -84,7 +84,7 @@ macro_rules! accumulator_helper {
 /// `is_distinct` is boolean value indicating whether the operation is distinct or not.
 macro_rules! downcast_bitwise_accumulator {
     ($args:ident, $opr:expr, $is_distinct: expr) => {
-        match $args.data_type {
+        match $args.return_type {
             DataType::Int8 => accumulator_helper!(Int8Type, $opr, $is_distinct),
             DataType::Int16 => accumulator_helper!(Int16Type, $opr, $is_distinct),
             DataType::Int32 => accumulator_helper!(Int32Type, $opr, $is_distinct),
@@ -98,7 +98,7 @@ macro_rules! downcast_bitwise_accumulator {
                     "{} not supported for {}: {}",
                     stringify!($opr),
                     $args.name,
-                    $args.data_type
+                    $args.return_type
                 )
             }
         }
@@ -203,6 +203,7 @@ impl AggregateUDFImpl for BitwiseOperation {
                     args.name,
                     format!("{} distinct", self.name()).as_str(),
                 ),
+                // See COMMENTS.md to understand why nullable is set to true
                 Field::new("item", args.return_type.clone(), true),
                 false,
             )])
@@ -223,7 +224,7 @@ impl AggregateUDFImpl for BitwiseOperation {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        let data_type = args.data_type;
+        let data_type = args.return_type;
         let operation = &self.operation;
         downcast_integer! {
             data_type => (group_accumulator_helper, data_type, operation),
@@ -245,7 +246,7 @@ struct BitAndAccumulator<T: ArrowNumericType> {
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for BitAndAccumulator<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "BitAndAccumulator({})", T::DATA_TYPE)
     }
 }
@@ -290,7 +291,7 @@ struct BitOrAccumulator<T: ArrowNumericType> {
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for BitOrAccumulator<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "BitOrAccumulator({})", T::DATA_TYPE)
     }
 }
@@ -335,7 +336,7 @@ struct BitXorAccumulator<T: ArrowNumericType> {
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for BitXorAccumulator<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "BitXorAccumulator({})", T::DATA_TYPE)
     }
 }
@@ -356,6 +357,15 @@ where
             *v = *v ^ x;
         }
         Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // XOR is it's own inverse
+        self.update_batch(values)
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -380,7 +390,7 @@ struct DistinctBitXorAccumulator<T: ArrowNumericType> {
 }
 
 impl<T: ArrowNumericType> std::fmt::Debug for DistinctBitXorAccumulator<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "DistinctBitXorAccumulator({})", T::DATA_TYPE)
     }
 }
@@ -454,5 +464,43 @@ where
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{ArrayRef, UInt64Array};
+    use arrow::datatypes::UInt64Type;
+    use datafusion_common::ScalarValue;
+
+    use crate::bit_and_or_xor::BitXorAccumulator;
+    use datafusion_expr::Accumulator;
+
+    #[test]
+    fn test_bit_xor_accumulator() {
+        let mut accumulator = BitXorAccumulator::<UInt64Type> { value: None };
+        let batches: Vec<_> = vec![vec![1, 2], vec![1]]
+            .into_iter()
+            .map(|b| Arc::new(b.into_iter().collect::<UInt64Array>()) as ArrayRef)
+            .collect();
+
+        let added = &[Arc::clone(&batches[0])];
+        let retracted = &[Arc::clone(&batches[1])];
+
+        // XOR of 1..3 is 3
+        accumulator.update_batch(added).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(3))
+        );
+
+        // Removing [1] ^ 3 = 2
+        accumulator.retract_batch(retracted).unwrap();
+        assert_eq!(
+            accumulator.evaluate().unwrap(),
+            ScalarValue::UInt64(Some(2))
+        );
     }
 }

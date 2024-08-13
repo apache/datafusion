@@ -170,7 +170,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                         .filter_map(|expr| {
                             if let Expr::Literal(item) = expr {
                                 match interval
-                                    .contains(&NullableInterval::from(item.clone()))
+                                    .contains(NullableInterval::from(item.clone()))
                                 {
                                     // If we know for certain the value isn't in the column's interval,
                                     // we can skip checking it.

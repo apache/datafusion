@@ -19,6 +19,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
+use std::sync::Arc;
 
 use crate::simplify_expressions::ExprSimplifier;
 use crate::utils::collect_subquery_cols;
@@ -27,10 +28,10 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{plan_err, Column, DFSchemaRef, Result, ScalarValue};
-use datafusion_expr::expr::{AggregateFunctionDefinition, Alias};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
-use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{expr, lit, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -147,7 +148,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     }
 
     fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        let subquery_schema = plan.schema().clone();
+        let subquery_schema = Arc::clone(plan.schema());
         match &plan {
             LogicalPlan::Filter(plan_filter) => {
                 let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
@@ -172,7 +173,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     if let Some(expr) = conjunction(subquery_filters.clone()) {
                         filter_exprs_evaluation_result_on_empty_batch(
                             &expr,
-                            plan_filter.input.schema().clone(),
+                            Arc::clone(plan_filter.input.schema()),
                             expr_result_map,
                             &mut expr_result_map_for_count_bug,
                         )?
@@ -230,7 +231,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 {
                     proj_exprs_evaluation_result_on_empty_batch(
                         &projection.expr,
-                        projection.input.schema().clone(),
+                        Arc::clone(projection.input.schema()),
                         expr_result_map,
                         &mut expr_result_map_for_count_bug,
                     )?;
@@ -276,14 +277,12 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 {
                     agg_exprs_evaluation_result_on_empty_batch(
                         &aggregate.aggr_expr,
-                        aggregate.input.schema().clone(),
+                        Arc::clone(aggregate.input.schema()),
                         &mut expr_result_map_for_count_bug,
                     )?;
                     if !expr_result_map_for_count_bug.is_empty() {
                         // has count bug
-                        let un_matched_row =
-                            Expr::Literal(ScalarValue::Boolean(Some(true)))
-                                .alias(UN_MATCHED_ROW_INDICATOR);
+                        let un_matched_row = lit(true).alias(UN_MATCHED_ROW_INDICATOR);
                         // add the unmatched rows indicator to the Aggregation's group expressions
                         missing_exprs.push(un_matched_row);
                     }
@@ -332,7 +331,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         if limit.fetch.filter(|limit_row| *limit_row == 0).is_some() {
                             LogicalPlan::EmptyRelation(EmptyRelation {
                                 produce_one_row: false,
-                                schema: limit.input.schema().clone(),
+                                schema: Arc::clone(limit.input.schema()),
                             })
                         } else {
                             LogicalPlanBuilder::from((*limit.input).clone()).build()?
@@ -432,22 +431,13 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .clone()
             .transform_up(|expr| {
                 let new_expr = match expr {
-                    Expr::AggregateFunction(expr::AggregateFunction {
-                        func_def, ..
-                    }) => match func_def {
-                        AggregateFunctionDefinition::BuiltIn(_fun) => {
+                    Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
+                        if func.name() == "count" {
+                            Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(0))))
+                        } else {
                             Transformed::yes(Expr::Literal(ScalarValue::Null))
                         }
-                        AggregateFunctionDefinition::UDF(fun) => {
-                            if fun.name() == "count" {
-                                Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(
-                                    0,
-                                ))))
-                            } else {
-                                Transformed::yes(Expr::Literal(ScalarValue::Null))
-                            }
-                        }
-                    },
+                    }
                     _ => Transformed::no(expr),
                 };
                 Ok(new_expr)
@@ -456,11 +446,12 @@ fn agg_exprs_evaluation_result_on_empty_batch(
 
         let result_expr = result_expr.unalias();
         let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(schema.clone());
+        let info = SimplifyContext::new(&props).with_schema(Arc::clone(&schema));
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_))) {
-            expr_result_map_for_count_bug.insert(e.display_name()?, result_expr);
+            expr_result_map_for_count_bug
+                .insert(e.schema_name().to_string(), result_expr);
         }
     }
     Ok(())
@@ -492,13 +483,13 @@ fn proj_exprs_evaluation_result_on_empty_batch(
 
         if result_expr.ne(expr) {
             let props = ExecutionProps::new();
-            let info = SimplifyContext::new(&props).with_schema(schema.clone());
+            let info = SimplifyContext::new(&props).with_schema(Arc::clone(&schema));
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
                 Expr::Alias(Alias { name, .. }) => name.to_string(),
                 Expr::Column(Column { relation: _, name }) => name.to_string(),
-                _ => expr.display_name()?,
+                _ => expr.schema_name().to_string(),
             };
             expr_result_map_for_count_bug.insert(expr_name, result_expr);
         }
@@ -554,8 +545,8 @@ fn filter_exprs_evaluation_result_on_empty_batch(
                         )],
                         else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
                     });
-                    expr_result_map_for_count_bug
-                        .insert(new_expr.display_name()?, new_expr);
+                    let expr_key = new_expr.schema_name().to_string();
+                    expr_result_map_for_count_bug.insert(expr_key, new_expr);
                 }
                 None
             }

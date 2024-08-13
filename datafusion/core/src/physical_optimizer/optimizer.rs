@@ -17,47 +17,22 @@
 
 //! Physical optimizer traits
 
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use std::sync::Arc;
 
 use super::projection_pushdown::ProjectionPushdown;
 use super::update_aggr_exprs::OptimizeAggregateOrder;
-use crate::config::ConfigOptions;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
 use crate::physical_optimizer::enforce_sorting::EnforceSorting;
 use crate::physical_optimizer::join_selection::JoinSelection;
+use crate::physical_optimizer::limit_pushdown::LimitPushdown;
 use crate::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::physical_optimizer::output_requirements::OutputRequirements;
-use crate::physical_optimizer::pipeline_checker::PipelineChecker;
+use crate::physical_optimizer::sanity_checker::SanityCheckPlan;
 use crate::physical_optimizer::topk_aggregation::TopKAggregation;
-use crate::{error::Result, physical_plan::ExecutionPlan};
-
-/// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
-/// computes the same results, but in a potentially more efficient way.
-///
-/// Use [`SessionState::add_physical_optimizer_rule`] to register additional
-/// `PhysicalOptimizerRule`s.
-///
-/// [`SessionState::add_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_physical_optimizer_rule
-pub trait PhysicalOptimizerRule {
-    /// Rewrite `plan` to an optimized form
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
-
-    /// A human readable name for this optimizer rule
-    fn name(&self) -> &str;
-
-    /// A flag to indicate whether the physical planner should valid the rule will not
-    /// change the schema of the plan after the rewriting.
-    /// Some of the optimization rules might change the nullable properties of the schema
-    /// and should disable the schema check.
-    fn schema_check(&self) -> bool;
-}
 
 /// A rule-based physical optimizer.
 #[derive(Clone)]
@@ -124,11 +99,19 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
-            // The PipelineChecker rule will reject non-runnable query plans that use
-            // pipeline-breaking operators on infinite input(s). The rule generates a
-            // diagnostic error message when this happens. It makes no changes to the
-            // given query plan; i.e. it only acts as a final gatekeeping rule.
-            Arc::new(PipelineChecker::new()),
+            // The LimitPushdown rule tries to push limits down as far as possible,
+            // replacing operators with fetching variants, or adding limits
+            // past operators that support limit pushdown.
+            Arc::new(LimitPushdown::new()),
+            // The SanityCheckPlan rule checks whether the order and
+            // distribution requirements of each node in the plan
+            // is satisfied. It will also reject non-runnable query
+            // plans that use pipeline-breaking operators on infinite
+            // input(s). The rule generates a diagnostic error
+            // message for invalid plans. It makes no changes to the
+            // given query plan; i.e. it only acts as a final
+            // gatekeeping rule.
+            Arc::new(SanityCheckPlan::new()),
         ];
 
         Self::with_rules(rules)

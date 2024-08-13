@@ -94,7 +94,7 @@ const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 ///   - If so record the visited rows. If the matched row results must be produced (INNER, LEFT), output the [RecordBatch].
 ///   - Try to prune other side (probe) with new [RecordBatch].
 ///   - If the join type indicates that the unmatched rows results must be produced (LEFT, FULL etc.),
-/// output the [RecordBatch] when a pruning happens or at the end of the data.
+///     output the [RecordBatch] when a pruning happens or at the end of the data.
 ///
 ///
 /// ``` text
@@ -215,7 +215,7 @@ impl SymmetricHashJoinExec {
         let left_schema = left.schema();
         let right_schema = right.schema();
 
-        // Error out if no "on" contraints are given:
+        // Error out if no "on" constraints are given:
         if on.is_empty() {
             return plan_err!(
                 "On constraints in SymmetricHashJoinExec should be non-empty"
@@ -233,7 +233,7 @@ impl SymmetricHashJoinExec {
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let schema = Arc::new(schema);
         let cache =
-            Self::compute_properties(&left, &right, schema.clone(), *join_type, &on);
+            Self::compute_properties(&left, &right, Arc::clone(&schema), *join_type, &on);
         Ok(SymmetricHashJoinExec {
             left,
             right,
@@ -397,7 +397,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 let (left_expr, right_expr) = self
                     .on
                     .iter()
-                    .map(|(l, r)| (l.clone() as _, r.clone() as _))
+                    .map(|(l, r)| (Arc::clone(l) as _, Arc::clone(r) as _))
                     .unzip();
                 vec![
                     Distribution::HashPartitioned(left_expr),
@@ -430,8 +430,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(SymmetricHashJoinExec::try_new(
-            children[0].clone(),
-            children[1].clone(),
+            Arc::clone(&children[0]),
+            Arc::clone(&children[1]),
             self.on.clone(),
             self.filter.clone(),
             &self.join_type,
@@ -489,9 +489,9 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let right_side_joiner =
             OneSideHashJoiner::new(JoinSide::Right, on_right, self.right.schema());
 
-        let left_stream = self.left.execute(partition, context.clone())?;
+        let left_stream = self.left.execute(partition, Arc::clone(&context))?;
 
-        let right_stream = self.right.execute(partition, context.clone())?;
+        let right_stream = self.right.execute(partition, Arc::clone(&context))?;
 
         let reservation = Arc::new(Mutex::new(
             MemoryConsumer::new(format!("SymmetricHashJoinStream[{partition}]"))
@@ -559,7 +559,7 @@ struct SymmetricHashJoinStream {
 
 impl RecordBatchStream for SymmetricHashJoinStream {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 }
 
@@ -584,7 +584,7 @@ impl Stream for SymmetricHashJoinStream {
 ///
 /// * `buffer`: The record batch to be pruned.
 /// * `build_side_filter_expr`: The filter expression on the build side used
-/// to determine the pruning length.
+///   to determine the pruning length.
 ///
 /// # Returns
 ///
@@ -1634,13 +1634,13 @@ mod tests {
         task_ctx: Arc<TaskContext>,
     ) -> Result<()> {
         let first_batches = partitioned_sym_join_with_filter(
-            left.clone(),
-            right.clone(),
+            Arc::clone(&left),
+            Arc::clone(&right),
             on.clone(),
             filter.clone(),
             &join_type,
             false,
-            task_ctx.clone(),
+            Arc::clone(&task_ctx),
         )
         .await?;
         let second_batches = partitioned_hash_join_with_filter(

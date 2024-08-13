@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`StringAgg`] and [`StringAggAccumulator`] accumulator for the `string_agg` function
+//! [`StringAgg`] accumulator for the `string_agg` function
 
 use arrow::array::ArrayRef;
 use arrow_schema::DataType;
@@ -24,8 +24,9 @@ use datafusion_common::Result;
 use datafusion_common::{not_impl_err, ScalarValue};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Expr, Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
 };
+use datafusion_physical_expr::expressions::Literal;
 use std::any::Any;
 
 make_udaf_expr_and_func!(
@@ -82,21 +83,20 @@ impl AggregateUDFImpl for StringAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        match &acc_args.input_exprs[1] {
-            Expr::Literal(ScalarValue::Utf8(Some(delimiter)))
-            | Expr::Literal(ScalarValue::LargeUtf8(Some(delimiter))) => {
-                Ok(Box::new(StringAggAccumulator::new(delimiter)))
-            }
-            Expr::Literal(ScalarValue::Utf8(None))
-            | Expr::Literal(ScalarValue::LargeUtf8(None))
-            | Expr::Literal(ScalarValue::Null) => {
-                Ok(Box::new(StringAggAccumulator::new("")))
-            }
-            _ => not_impl_err!(
-                "StringAgg not supported for delimiter {}",
-                &acc_args.input_exprs[1]
-            ),
+        if let Some(lit) = acc_args.exprs[1].as_any().downcast_ref::<Literal>() {
+            return match lit.value() {
+                ScalarValue::Utf8(Some(delimiter))
+                | ScalarValue::LargeUtf8(Some(delimiter)) => {
+                    Ok(Box::new(StringAggAccumulator::new(delimiter.as_str())))
+                }
+                ScalarValue::Utf8(None)
+                | ScalarValue::LargeUtf8(None)
+                | ScalarValue::Null => Ok(Box::new(StringAggAccumulator::new(""))),
+                e => not_impl_err!("StringAgg not supported for delimiter {}", e),
+            };
         }
+
+        not_impl_err!("expect literal")
     }
 }
 
