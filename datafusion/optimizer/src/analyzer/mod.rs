@@ -42,7 +42,6 @@ pub mod function_rewrite;
 pub mod inline_table_scan;
 pub mod subquery;
 pub mod type_coercion;
-mod union_coercion;
 
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
 /// the plan valid prior to the rest of the DataFusion optimization process.
