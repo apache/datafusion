@@ -432,9 +432,9 @@ impl BatchCoalescer {
         }
     }
 
-    /// After getting the `batch`, the function checks if the buffer can reach limit.
-    /// If it is so, it slices the received batch as needed, and updates the buffer with it,
-    /// and finally returns `true`. Otherwise; the function does nothing and returns false.
+    /// The function checks if the buffer can reach the specified limit after getting `batch`.
+    /// If it does, it slices the received batch as needed, updates the buffer with it, and
+    /// finally returns `true`. Otherwise; the function does nothing and returns `false`.
     fn limit_reached(&mut self, batch: &RecordBatch) -> bool {
         match self.fetch {
             Some(fetch) if self.total_rows + batch.num_rows() >= fetch => {
@@ -452,8 +452,8 @@ impl BatchCoalescer {
         }
     }
 
-    /// Updates the buffer with the given batch. If the target batch count is reached,
-    /// the function returns true. Otherwise, it returns false.
+    /// Updates the buffer with the given batch. If the target batch size is reached,
+    /// the function returns `true`. Otherwise, it returns `false`.
     fn target_reached(&mut self, batch: RecordBatch) -> bool {
         if batch.num_rows() == 0 {
             false
@@ -465,8 +465,7 @@ impl BatchCoalescer {
         }
     }
 
-    /// Concatenates and returns the all buffered batches. It must be noticed that
-    /// the buffer is cleared during this operations.
+    /// Concatenates and returns all buffered batches, and clears the buffer.
     fn finish_batch(&mut self) -> Result<RecordBatch> {
         let batch = concat_batches(&self.schema, &self.buffer)?;
         self.buffer.clear();
@@ -475,14 +474,14 @@ impl BatchCoalescer {
     }
 }
 
-/// This variants are used to indicate the final status of the buffer of [`BatchCoalescer`]
-/// after a [`BatchCoalescer::push_batch()`] operation.
+/// This enumeration acts as a status indicator for the [`BatchCoalescer`] after a
+/// [`BatchCoalescer::push_batch()`] operation.
 enum CoalescerState {
-    /// Neither the limit nor the target batch is reached.
+    /// Neither the limit nor the target batch size is reached.
     Continue,
-    /// The required row count for downstream operators to generate a result is reached.
+    /// The sufficient row count to produce a complete query result is reached.
     LimitReached,
-    /// Specified minimum number of rows which a batch should have is reached.
+    /// The specified minimum number of rows a batch should have is reached.
     TargetReached,
 }
 
