@@ -22,22 +22,22 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
+use crate::{
+    DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+};
+
 use arrow::array::{AsArray, StringViewBuilder};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ArrayRef};
-use futures::stream::{Stream, StreamExt};
-
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 
-use crate::{
-    DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
-};
-
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
+use futures::ready;
+use futures::stream::{Stream, StreamExt};
 
 /// `CoalesceBatchesExec` combines small batches into larger batches for more
 /// efficient use of vectorized processing by later operators.
@@ -269,30 +269,39 @@ impl Stream for CoalesceBatchesStream {
 /// `[3000]`: A batch with size 3000
 /// `{[2000], [3000]}`: `CoalesceBatchStream`'s internal buffer with 2 batches buffered
 /// Input of `CoalesceBatchStream` will generate three batches `[2000], [3000], [4000]`
-/// The coalescing procedure will go through the following steps:
-/// 1. The initial state and coalescing threshold is 4096.
-/// - state: `Pull`
-/// - buffer: `{}`
-/// 2. Read the first batch and get it buffered.
-/// - state: `Pull`
-/// - buffer: `{[2000]}`
-/// 3. Read the second batch, the coalescing target is reached since 2000 + 3000 > 4096
-/// - state: `ReturnBuffer`
-/// - buffer: `{[2000], [3000]}`
+/// The coalescing procedure will go through the following steps with 4096 coalescing threshold:
+/// 1. Read the first batch and get it buffered.
+/// - initial state: `Pull`
+/// - initial buffer: `{}`
+/// - updated buffer: `{[2000]}`
+/// - next state: `Pull`
+/// 2. Read the second batch, the coalescing target is reached since 2000 + 3000 > 4096
+/// - initial state: `Pull`
+/// - initial buffer: `{[2000]}`
+/// - updated buffer: `{[2000], [3000]}`
+/// - next state: `ReturnBuffer`
 /// 4. Two batches in the batch get merged and consumed by the upstream operator.
-/// - state: `Pull`
-/// - buffer: `{}`
-/// 5. Read the third input batch, the input is ended now
-/// - state: `Exhausted`
-/// - buffer: `{[4000]}`
-/// After emptying the buffer, the operation is complete.
+/// - initial state: `ReturnBuffer`
+/// - initial buffer: `{[2000], [3000]}`
+/// - updated buffer: `{}`
+/// - next state: `Pull`
+/// 5. Read the third input batch.
+/// - initial state: `Pull`
+/// - initial buffer: `{}`
+/// - updated buffer: `{[4000]}`
+/// - next state: `Pull`
+/// 5. The input is ended now. Jump to exhaustion state preparing the finalized data.
+/// - initial state: `Pull`
+/// - initial buffer: `{[4000]}`
+/// - updated buffer: `{[4000]}`
+/// - next state: `Exhausted`
 #[derive(Debug, Clone, Eq, PartialEq)]
 enum CoalesceBatchesStreamState {
-    // State to pull a new batch from the input stream.
+    /// State to pull a new batch from the input stream.
     Pull,
-    // State to return a buffered batch.
+    /// State to return a buffered batch.
     ReturnBuffer,
-    // State indicating that the stream is exhausted.
+    /// State indicating that the stream is exhausted.
     Exhausted,
 }
 
@@ -303,16 +312,10 @@ impl CoalesceBatchesStream {
     ) -> Poll<Option<Result<RecordBatch>>> {
         let cloned_time = self.baseline_metrics.elapsed_compute().clone();
         loop {
-            match self.inner_state.clone() {
+            match &self.inner_state {
                 CoalesceBatchesStreamState::Pull => {
                     // Attempt to pull the next batch from the input stream.
-                    let input_batch = match self.input.poll_next_unpin(cx) {
-                        Poll::Ready(t) => t,
-                        Poll::Pending => {
-                            // If the batch is not ready, do not alter the current state and return `Poll::Pending`.
-                            return Poll::Pending;
-                        }
-                    };
+                    let input_batch = ready!(self.input.poll_next_unpin(cx));
                     // Start timing the operation. The timer records time upon being dropped.
                     let _timer = cloned_time.timer();
 
@@ -336,7 +339,7 @@ impl CoalesceBatchesStream {
                 }
                 CoalesceBatchesStreamState::ReturnBuffer => {
                     // Combine buffered batches into one batch and return it.
-                    let batch = self.coalescer.finish()?;
+                    let batch = self.coalescer.finish_batch()?;
                     // Set to pull state for the next iteration.
                     self.inner_state = CoalesceBatchesStreamState::Pull;
                     return Poll::Ready(Some(Ok(batch)));
@@ -348,7 +351,7 @@ impl CoalesceBatchesStream {
                         Poll::Ready(None)
                     } else {
                         // If the buffer still contains batches, prepare to return them.
-                        let batch = self.coalescer.finish()?;
+                        let batch = self.coalescer.finish_batch()?;
                         Poll::Ready(Some(Ok(batch)))
                     };
                 }
@@ -416,9 +419,10 @@ impl BatchCoalescer {
         Arc::clone(&self.schema)
     }
 
+    /// Given a batch, it updates the buffer of [`BatchCoalescer`]. It returns
+    /// a variant of [`CoalescerState`] indicating the final state of the buffer.
     fn push_batch(&mut self, batch: RecordBatch) -> CoalescerState {
         let batch = gc_string_view_batch(&batch);
-
         if self.limit_reached(&batch) {
             CoalescerState::LimitReached
         } else if self.target_reached(batch) {
@@ -428,6 +432,9 @@ impl BatchCoalescer {
         }
     }
 
+    /// After getting the `batch`, the function checks if the buffer can reach limit.
+    /// If it is so, it slices the received batch as needed, and updates the buffer with it,
+    /// and finally returns `true`. Otherwise; the function does nothing and returns false.
     fn limit_reached(&mut self, batch: &RecordBatch) -> bool {
         match self.fetch {
             Some(fetch) if self.total_rows + batch.num_rows() >= fetch => {
@@ -445,6 +452,8 @@ impl BatchCoalescer {
         }
     }
 
+    /// Updates the buffer with the given batch. If the target batch count is reached,
+    /// the function returns true. Otherwise, it returns false.
     fn target_reached(&mut self, batch: RecordBatch) -> bool {
         if batch.num_rows() == 0 {
             false
@@ -456,7 +465,9 @@ impl BatchCoalescer {
         }
     }
 
-    fn finish(&mut self) -> Result<RecordBatch> {
+    /// Concatenates and returns the all buffered batches. It must be noticed that
+    /// the buffer is cleared during this operations.
+    fn finish_batch(&mut self) -> Result<RecordBatch> {
         let batch = concat_batches(&self.schema, &self.buffer)?;
         self.buffer.clear();
         self.buffered_rows = 0;
@@ -464,9 +475,14 @@ impl BatchCoalescer {
     }
 }
 
+/// This variants are used to indicate the final status of the buffer of [`BatchCoalescer`]
+/// after a [`BatchCoalescer::push_batch()`] operation.
 enum CoalescerState {
+    /// Neither the limit nor the target batch is reached.
     Continue,
+    /// The required row count for downstream operators to generate a result is reached.
     LimitReached,
+    /// Specified minimum number of rows which a batch should have is reached.
     TargetReached,
 }
 
@@ -543,7 +559,6 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
 
 #[cfg(test)]
 mod tests {
-    use std::mem;
     use std::ops::Range;
 
     use super::*;
@@ -703,25 +718,12 @@ mod tests {
                 match coalescer.push_batch(batch) {
                     CoalescerState::Continue => {}
                     CoalescerState::LimitReached => {
-                        output_batches.push(
-                            concat_batches(
-                                &schema,
-                                mem::take(&mut coalescer.buffer).iter(),
-                            )
-                            .unwrap(),
-                        );
-                        coalescer.buffered_rows = 0;
+                        output_batches.push(coalescer.finish_batch().unwrap());
                         break;
                     }
                     CoalescerState::TargetReached => {
                         coalescer.buffered_rows = 0;
-                        output_batches.push(
-                            concat_batches(
-                                &schema,
-                                mem::take(&mut coalescer.buffer).iter(),
-                            )
-                            .unwrap(),
-                        );
+                        output_batches.push(coalescer.finish_batch().unwrap());
                     }
                 }
             }
