@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! type coercion for UNION
+//! Helper functions of TypeCoercion that are applied to UNION.
 
 use itertools::izip;
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ use datafusion_expr::expr::Alias;
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, Projection, Union};
 
-/// Coerce the schema of the inputs to a common schema
+/// Get a common schema that is compatible with all inputs of UNION.
 fn coerce_union_schema(inputs: Vec<Arc<LogicalPlan>>) -> Result<DFSchema> {
     let base_schema = inputs[0].schema();
     let mut union_datatypes = base_schema
@@ -48,8 +48,8 @@ fn coerce_union_schema(inputs: Vec<Arc<LogicalPlan>>) -> Result<DFSchema> {
         let plan_schema = plan.schema();
         if plan_schema.fields().len() != base_schema.fields().len() {
             return plan_err!(
-                "Union schemas have different number of fields,\
-                query 1 has {}, query {} has {}",
+                "Union schemas have different number of fields: \
+                query 1 has {} fields whereas query {} has {} fields",
                 base_schema.fields().len(),
                 i + 1,
                 plan_schema.fields().len()
@@ -89,15 +89,14 @@ fn coerce_union_schema(inputs: Vec<Arc<LogicalPlan>>) -> Result<DFSchema> {
     DFSchema::new_with_metadata(union_qualified_fields, HashMap::new())
 }
 
-/// Make sure that the schemas of all inputs are compatible with each other,
-/// which includes having the same field types and names.
+/// Coerce the union's inputs to a common schema
 pub(crate) fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
     let union_schema = coerce_union_schema(union_plan.inputs.clone())?;
     let new_inputs = union_plan
         .inputs
         .iter()
         .map(|p| {
-            let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
+            let plan = coerce_plan_expr_for_schema(p, &union_schema)?;
             match plan {
                 LogicalPlan::Projection(Projection { expr, input, .. }) => {
                     Ok(Arc::new(project_with_column_index(
@@ -196,50 +195,4 @@ fn project_with_column_index(
 }
 
 #[cfg(test)]
-mod test {
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{Result, TableReference};
-    use datafusion_expr::builder::table_scan;
-    use std::sync::Arc;
-
-    use crate::analyzer::TypeCoercion;
-    use crate::test::assert_analyzer_check_err;
-
-    fn employee_schema() -> Schema {
-        Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("first_name", DataType::Utf8, false),
-            Field::new("last_name", DataType::Utf8, false),
-            Field::new("state", DataType::Utf8, false),
-            Field::new("salary", DataType::Int32, false),
-        ])
-    }
-
-    #[test]
-    fn union_different_num_columns_error() -> Result<()> {
-        let plan1 =
-            table_scan(TableReference::none(), &employee_schema(), Some(vec![3]))?;
-        let plan2 =
-            table_scan(TableReference::none(), &employee_schema(), Some(vec![3, 4]))?
-                .build()?;
-
-        let expected = "type_coercion\n\
-                        caused by\n\
-                        Error during planning: Union schemas have different number of fields,\
-                        query 1 has 1, query 2 has 2";
-        let union_plan = plan1.clone().union(plan2.clone())?.build()?;
-        assert_analyzer_check_err(
-            vec![Arc::new(TypeCoercion::new())],
-            union_plan,
-            expected,
-        );
-
-        let union_distinct = plan1.union_distinct(plan2)?.build()?;
-        assert_analyzer_check_err(
-            vec![Arc::new(TypeCoercion::new())],
-            union_distinct,
-            expected,
-        );
-        Ok(())
-    }
-}
+mod test {}

@@ -51,7 +51,7 @@ use datafusion_expr::{
     ScalarUDF, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
-use crate::analyzer::union::coerce_union;
+use crate::analyzer::union_coercion::coerce_union;
 use crate::analyzer::AnalyzerRule;
 use crate::utils::NamePreserver;
 
@@ -121,7 +121,7 @@ fn analyze_internal(
         expr.rewrite(&mut expr_rewrite)?
             .map_data(|expr| original_name.restore(expr))
     })?
-    // some plans need to be rewritten after the expressions have been updated
+    // some plans need extra coercion after their expressions are coerced
     .map_data(|plan| expr_rewrite.coerce_plan(plan))?
     // recompute the schema after the expressions have been rewritten as the types may have changed
     .map_data(|plan| plan.recompute_schema())
