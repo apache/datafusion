@@ -202,7 +202,6 @@ impl ExecutionPlan for CoalesceBatchesExec {
                 self.target_batch_size,
                 self.fetch,
             ),
-            is_closed: false,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
             // Start by pulling data
             inner_state: CoalesceBatchesStreamState::Pull,
