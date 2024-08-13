@@ -365,7 +365,9 @@ impl Signature {
     /// Specialized Signature for MapArray and similar functions
     pub fn map_array_and_key(volatility: Volatility) -> Self {
         Signature {
-            type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::MapArrayAndKey),
+            type_signature: TypeSignature::ArraySignature(
+                ArrayFunctionSignature::MapArrayAndKey,
+            ),
             volatility,
         }
     }
