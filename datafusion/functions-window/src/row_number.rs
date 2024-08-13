@@ -81,6 +81,10 @@ impl WindowUDFImpl for RowNumber {
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::<NumRowsEvaluator>::default())
     }
+
+    fn nullable(&self) -> bool {
+        false
+    }
 }
 
 /// State for the 'ROW_NUMBER' built-in window function.

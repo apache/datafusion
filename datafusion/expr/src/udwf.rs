@@ -176,6 +176,10 @@ impl WindowUDF {
     pub fn partition_evaluator_factory(&self) -> Result<Box<dyn PartitionEvaluator>> {
         self.inner.partition_evaluator()
     }
+
+    pub fn nullable(&self) -> bool {
+        self.inner.nullable()
+    }
 }
 
 impl<F> From<F> for WindowUDF
@@ -318,6 +322,10 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         self.name().hash(hasher);
         self.signature().hash(hasher);
         hasher.finish()
+    }
+
+    fn nullable(&self) -> bool {
+        true
     }
 }
 

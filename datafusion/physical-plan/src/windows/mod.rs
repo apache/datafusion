@@ -356,8 +356,11 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        let nullable = true;
-        Ok(Field::new(&self.name, self.data_type.clone(), nullable))
+        Ok(Field::new(
+            &self.name,
+            self.data_type.clone(),
+            self.fun.nullable(),
+        ))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
