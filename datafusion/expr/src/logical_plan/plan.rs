@@ -25,7 +25,7 @@ use std::sync::Arc;
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Placeholder, Sort as SortExpr};
+use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
 use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -37,7 +37,7 @@ use crate::utils::{
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Expr,
     ExprSchemable, LogicalPlanBuilder, Operator, TableProviderFilterPushDown,
-    TableSource,
+    TableSource, WindowFunctionDefinition,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -2210,23 +2210,18 @@ impl Window {
             .iter()
             .enumerate()
             .filter_map(|(idx, expr)| {
-                // TODO: commented out to skip build error when converting `row_number` to user-defined window function
-                // if let Expr::WindowFunction(WindowFunction {
-                //     // Function is ROW_NUMBER
-                //     fun:
-                //         WindowFunctionDefinition::BuiltInWindowFunction(
-                //             BuiltInWindowFunction::RowNumber,
-                //         ),
-                //     partition_by,
-                //     ..
-                // }) = expr
-                // {
-                //     // When there is no PARTITION BY, row number will be unique
-                //     // across the entire table.
-                //     if partition_by.is_empty() {
-                //         return Some(idx + input_len);
-                //     }
-                // }
+                if let Expr::WindowFunction(WindowFunction {
+                    fun: WindowFunctionDefinition::WindowUDF(udwf),
+                    partition_by,
+                    ..
+                }) = expr
+                {
+                    // When there is no PARTITION BY, row number will be unique
+                    // across the entire table.
+                    if udwf.name() == "row_number" && partition_by.is_empty() {
+                        return Some(idx + input_len);
+                    }
+                }
                 None
             })
             .map(|idx| {
