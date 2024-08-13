@@ -46,7 +46,10 @@ impl TranslateFunc {
         use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![Exact(vec![Utf8, Utf8, Utf8])],
+                vec![
+                    Exact(vec![Utf8View, Utf8, Utf8]),
+                    Exact(vec![Utf8, Utf8, Utf8])
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -72,6 +75,7 @@ impl ScalarUDFImpl for TranslateFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args[0].data_type() {
+            DataType::Utf8View => make_scalar_function(translate::<i32>, vec![])(args),
             DataType::Utf8 => make_scalar_function(translate::<i32>, vec![])(args),
             DataType::LargeUtf8 => make_scalar_function(translate::<i64>, vec![])(args),
             other => {
