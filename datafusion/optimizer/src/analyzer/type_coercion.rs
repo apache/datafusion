@@ -867,7 +867,7 @@ fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
     }))
 }
 
-/// See https://github.com/apache/datafusion/pull/2108
+/// See `<https://github.com/apache/datafusion/pull/2108>`
 fn project_with_column_index(
     expr: Vec<Expr>,
     input: Arc<LogicalPlan>,
