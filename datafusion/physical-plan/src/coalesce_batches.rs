@@ -279,7 +279,6 @@ impl CoalesceBatchesStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         let cloned_time = self.baseline_metrics.elapsed_compute().clone();
-
         loop {
             match self.inner_state.clone() {
                 CoalesceBatchesStreamState::Pull => {
@@ -291,7 +290,6 @@ impl CoalesceBatchesStream {
                             return Poll::Pending;
                         }
                     };
-
                     // Start timing the operation. The timer records time upon being dropped.
                     let _timer = cloned_time.timer();
 
@@ -328,7 +326,6 @@ impl CoalesceBatchesStream {
                     } else {
                         // If the buffer still contains batches, prepare to return them.
                         let batch = self.coalescer.finish()?;
-                        self.inner_state = CoalesceBatchesStreamState::Exhausted;
                         Poll::Ready(Some(Ok(batch)))
                     };
                 }
