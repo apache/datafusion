@@ -2783,8 +2783,6 @@ mod test {
     #[test]
     fn test_window_function_case_insensitive() -> Result<()> {
         let names = vec![
-            // TODO: commented out to skip build error when converting `row_number` to user-defined window function
-            // "row_number",
             "rank",
             "dense_rank",
             "percent_rank",
