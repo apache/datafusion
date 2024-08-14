@@ -104,7 +104,7 @@ logical_plan
 05)----EmptyRelation
 
 # union_with_incompatible_data_type()
-query error Error during planning: UNION Column 'Int64\(1\)' \(type: Int64\) is not compatible with other type: Interval\(MonthDayNano\)
+query error Incompatible inputs for Union: Previous inputs were of type Interval\(MonthDayNano\), but got incompatible type Int64 on column 'Int64\(1\)'
 SELECT interval '1 year 1 day' UNION ALL SELECT 1
 
 # union_with_different_decimal_data_types()
@@ -210,7 +210,7 @@ logical_plan
 11)----------EmptyRelation
 
 # union_with_incompatible_data_types()
-query error Error during planning: UNION Column 'a' \(type: Boolean\) is not compatible with other type: Utf8
+query error Incompatible inputs for Union: Previous inputs were of type Utf8, but got incompatible type Boolean on column 'a'
 SELECT 'a' a UNION ALL SELECT true a
 
 statement ok

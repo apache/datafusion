@@ -816,11 +816,12 @@ fn coerce_union_schema(inputs: Vec<Arc<LogicalPlan>>) -> Result<DFSchema> {
                 comparison_coercion(union_datatype, plan_field.data_type()).ok_or_else(
                     || {
                         plan_datafusion_err!(
-                    "UNION Column '{}' (type: {}) is not compatible with other type: {}",
-                    plan_field.name(),
-                    plan_field.data_type(),
-                    union_datatype
-                )
+                            "Incompatible inputs for Union: Previous inputs were \
+                            of type {}, but got incompatible type {} on column '{}'",
+                            union_datatype,
+                            plan_field.data_type(),
+                            plan_field.name()
+                        )
                     },
                 )?;
             *union_datatype = coerced_type;
