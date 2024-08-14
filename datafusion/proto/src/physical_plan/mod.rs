@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![allow(unused_imports)] // required for disabling features
 use arrow::datatypes::Schema;
 use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use prost::bytes::BufMut;
@@ -255,7 +256,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 Ok(builder.build_arc())
             }
             #[cfg(not(feature = "parquet"))]
-            PhysicalPlanType::ParquetScan => {
+            PhysicalPlanType::ParquetScan(_) => {
                 unreachable!("The `parquet` feature is disabled")
             }
             PhysicalPlanType::AvroScan(scan) => {
@@ -1096,7 +1097,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 )))
             }
             #[cfg(not(feature = "parquet"))]
-            PhysicalPlanType::ParquetSink => {
+            PhysicalPlanType::ParquetSink(_) => {
                 unreachable!("The `parquet` feature is disabled")
             }
             #[cfg(feature = "flight")]
@@ -1161,7 +1162,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 )))
             }
             #[cfg(not(feature = "flight"))]
-            PhysicalPlanType::FlightScan => {
+            PhysicalPlanType::FlightScan(_) => {
                 unreachable!("The `flight` feature is disabled")
             }
         }
