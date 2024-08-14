@@ -62,6 +62,7 @@ pub mod expr_fn {
     ));
 }
 
+/// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![digest(), md5(), sha224(), sha256(), sha384(), sha512()]
 }
