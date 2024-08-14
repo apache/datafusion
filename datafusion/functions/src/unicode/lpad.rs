@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::fmt::Write;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -192,9 +193,9 @@ where
                 if length < graphemes.len() {
                     builder.append_value(graphemes[..length].concat());
                 } else {
-                    let mut s: String = " ".repeat(length - graphemes.len());
-                    s.push_str(string);
-                    builder.append_value(s);
+                    builder.write_str(" ".repeat(length - graphemes.len()).as_str())?;
+                    builder.write_str(string)?;
+                    builder.append_value("");
                 }
             } else {
                 builder.append_null();
@@ -229,14 +230,12 @@ where
                 } else if fill_chars.is_empty() {
                     builder.append_value(string);
                 } else {
-                    let capacity = length - graphemes.len();
-                    let mut char_vector = Vec::<char>::with_capacity(capacity);
-                    for l in 0..capacity {
-                        char_vector.push(*fill_chars.get(l % fill_chars.len()).unwrap());
+                    for l in 0..length - graphemes.len() {
+                        let c = *fill_chars.get(l % fill_chars.len()).unwrap();
+                        builder.write_char(c)?;
                     }
-                    let mut s = char_vector.iter().collect::<String>();
-                    s.push_str(string);
-                    builder.append_value(s);
+                    builder.write_str(string)?;
+                    builder.append_value("");
                 }
             } else {
                 builder.append_null();
