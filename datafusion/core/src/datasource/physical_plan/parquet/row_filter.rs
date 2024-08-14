@@ -341,14 +341,9 @@ pub fn build_row_filter(
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .flat_map(|expr| {
-            if let Ok(candidate) =
-                FilterCandidateBuilder::new(expr.clone(), file_schema, table_schema)
-                    .build(metadata)
-            {
-                candidate
-            } else {
-                None
-            }
+            FilterCandidateBuilder::new(expr.clone(), file_schema, table_schema)
+                .build(metadata)
+                .unwrap_or_default()
         })
         .collect();
 

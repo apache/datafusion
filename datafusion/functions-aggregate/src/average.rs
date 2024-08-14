@@ -19,8 +19,9 @@
 
 use arrow::array::{
     self, Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType,
-    AsArray, PrimitiveArray, PrimitiveBuilder, UInt64Array,
+    AsArray, BooleanArray, PrimitiveArray, PrimitiveBuilder, UInt64Array,
 };
+
 use arrow::compute::sum;
 use arrow::datatypes::{
     i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType, Field,
@@ -34,7 +35,12 @@ use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
 };
+
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
+    filtered_null_mask, set_nulls,
+};
+
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use log::debug;
 use std::any::Any;
@@ -549,6 +555,30 @@ where
         );
 
         Ok(())
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let sums = values[0]
+            .as_primitive::<T>()
+            .clone()
+            .with_data_type(self.sum_data_type.clone());
+        let counts = UInt64Array::from_value(1, sums.len());
+
+        let nulls = filtered_null_mask(opt_filter, &sums);
+
+        // set nulls on the arrays
+        let counts = set_nulls(counts, nulls.clone());
+        let sums = set_nulls(sums, nulls);
+
+        Ok(vec![Arc::new(counts) as ArrayRef, Arc::new(sums)])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {

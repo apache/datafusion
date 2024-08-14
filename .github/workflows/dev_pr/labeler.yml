@@ -33,15 +33,36 @@ logical-expr:
 
 physical-expr:
 - changed-files:
-  - any-glob-to-any-file: ['datafusion/physical-expr/**/*']
+  - any-glob-to-any-file: ['datafusion/physical-expr/**/*', 'datafusion/physical-expr-common/**/*', 'datafusion/physical-expr-aggregate/**/*', 'datafusion/physical-plan/**/*']
+
+catalog:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/catalog/**/*']
+
+common:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/common/**/*', 'datafusion/common-runtime/**/*']
+
+execution:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/execution/**/*']
+
+functions:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/functions/**/*', 'datafusion/functions-aggregate/**/*', 'datafusion/functions-aggregate-common', 'datafusion/functions-nested']
+
 
 optimizer:
 - changed-files:
-  - any-glob-to-any-file: ['datafusion/optimizer/**/*']
+  - any-glob-to-any-file: ['datafusion/optimizer/**/*', 'datafusion/physical-optimizer/**/*']
 
 core:
 - changed-files:
   - any-glob-to-any-file: ['datafusion/core/**/*']
+
+proto:
+  - changed-files:
+      - any-glob-to-any-file: ['datafusion/proto/**/*', 'datafusion/proto-common/**/*']
 
 substrait:
 - changed-files:

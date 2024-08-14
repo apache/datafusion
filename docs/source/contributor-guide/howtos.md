@@ -24,7 +24,7 @@
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
 
 - Add the actual implementation of the function to a new module file within:
-  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions-array) for array functions
+  - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions-nested) for arrays, maps and structs functions
   - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/crypto) for crypto functions
   - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/datetime) for datetime functions
   - [here](https://github.com/apache/datafusion/tree/main/datafusion/functions/src/encoding) for encoding functions
