@@ -1066,7 +1066,7 @@ docs.apache.com docs com
 community.influxdata.com community com
 arrow.apache.org arrow org
 
-
+# find_in_set tests
 query I
 SELECT find_in_set('b', 'a,b,c,d')
 ----
@@ -1109,6 +1109,23 @@ query I
 SELECT find_in_set(NULL, NULL)
 ----
 NULL
+
+# find_in_set tests with utf8view
+query I
+SELECT find_in_set(arrow_cast('b', 'Utf8View'), 'a,b,c,d')
+----
+2
+
+
+query I
+SELECT find_in_set('a', arrow_cast('a,b,c,d,a', 'Utf8View'))
+----
+1
+
+query I
+SELECT find_in_set(arrow_cast('', 'Utf8View'), arrow_cast('a,b,c,d,a', 'Utf8View'))
+----
+0
 
 # Verify that multiple calls to volatile functions like `random()` are not combined / optimized away
 query B

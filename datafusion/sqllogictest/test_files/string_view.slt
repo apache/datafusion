@@ -906,7 +906,6 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for FIND_IN_SET
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   FIND_IN_SET(column1_utf8view, 'a,b,c,d') as c
@@ -916,8 +915,15 @@ logical_plan
 01)Projection: find_in_set(test.column1_utf8view, Utf8View("a,b,c,d")) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
-
-
+query I
+SELECT
+  FIND_IN_SET(column1_utf8view, 'a,b,c,d') as c
+FROM test;
+----
+0
+0
+0
+NULL
 
 statement ok
 drop table test;
