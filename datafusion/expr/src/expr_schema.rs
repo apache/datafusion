@@ -478,7 +478,6 @@ impl ExprSchemable for Expr {
         match self {
             Expr::Column(c) => {
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                // println!("data type: {:?}, nullable: {:?}", data_type, nullable);
                 Ok((
                     c.relation.clone(),
                     Field::new(&c.name, data_type, nullable)
@@ -488,7 +487,6 @@ impl ExprSchemable for Expr {
             }
             Expr::Alias(Alias { relation, name, .. }) => {
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                // println!("alias {} data type: {:?}, nullable: {:?}", self, data_type, nullable);
                 Ok((
                     relation.clone(),
                     Field::new(name, data_type, nullable)
@@ -498,7 +496,6 @@ impl ExprSchemable for Expr {
             }
             _ => {
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                // println!("otehr data type: {:?}, nullable: {:?}", data_type, nullable);
                 Ok((
                     None,
                     Field::new(self.schema_name().to_string(), data_type, nullable)
