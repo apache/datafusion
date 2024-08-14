@@ -125,7 +125,7 @@ pub mod expr_fn {
     }
 }
 
-///   Return a list of all functions in this package
+/// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         character_length(),
