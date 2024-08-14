@@ -154,7 +154,7 @@ fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         ),
 
         _ => {
-            return exec_err!("Unsupported key type for map_extract");
+            exec_err!("Unsupported key type for map_extract")
         }
     }
 }
