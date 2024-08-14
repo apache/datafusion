@@ -68,6 +68,9 @@ impl ScalarUDFImpl for MapExtract {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() != 2 {
+            return exec_err!("map_extract expects two arguments");
+        }
         let map_type = &arg_types[0];
         let map_fields = get_map_entry_field(map_type)?;
         Ok(map_fields[1].data_type().clone())
