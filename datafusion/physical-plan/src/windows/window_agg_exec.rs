@@ -17,11 +17,7 @@
 
 //! Stream and channel implementations for window function expressions.
 
-use std::any::Any;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
+use super::utils::create_schema;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
@@ -33,10 +29,9 @@ use crate::{
     ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-
 use arrow::array::ArrayRef;
 use arrow::compute::{concat, concat_batches};
-use arrow::datatypes::{Schema, SchemaBuilder, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
@@ -44,8 +39,11 @@ use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortRequirement;
-
 use futures::{ready, Stream, StreamExt};
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 /// Window execution plan
 #[derive(Debug)]
@@ -263,20 +261,6 @@ impl ExecutionPlan for WindowAggExec {
             total_byte_size: Precision::Absent,
         })
     }
-}
-
-fn create_schema(
-    input_schema: &Schema,
-    window_expr: &[Arc<dyn WindowExpr>],
-) -> Result<Schema> {
-    let capacity = input_schema.fields().len() + window_expr.len();
-    let mut builder = SchemaBuilder::with_capacity(capacity);
-    builder.extend(input_schema.fields().iter().cloned());
-    // append results to the schema
-    for expr in window_expr {
-        builder.push(expr.field()?);
-    }
-    Ok(builder.finish())
 }
 
 /// Compute the window aggregate columns

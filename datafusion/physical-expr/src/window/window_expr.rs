@@ -157,6 +157,8 @@ pub trait WindowExpr: Send + Sync + Debug {
     ) -> Option<Arc<dyn WindowExpr>> {
         None
     }
+
+    fn func_name(&self) -> Result<&str>;
 }
 
 /// Stores the physical expressions used inside the `WindowExpr`.

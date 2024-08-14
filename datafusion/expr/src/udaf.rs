@@ -196,6 +196,10 @@ impl AggregateUDF {
         self.inner.state_fields(args)
     }
 
+    pub fn fields(&self, args: StateFieldsArgs) -> Result<Field> {
+        self.inner.field(args)
+    }
+
     /// See [`AggregateUDFImpl::groups_accumulator_supported`] for more details.
     pub fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
         self.inner.groups_accumulator_supported(args)
@@ -381,6 +385,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             .into_iter()
             .chain(args.ordering_fields.to_vec())
             .collect())
+    }
+
+    fn field(&self, args: StateFieldsArgs) -> Result<Field> {
+        Ok(Field::new(args.name, args.return_type.clone(), true))
     }
 
     /// If the aggregate expression has a specialized

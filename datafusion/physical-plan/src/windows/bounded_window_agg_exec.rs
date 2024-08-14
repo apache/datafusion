@@ -20,13 +20,7 @@
 //! the input data seen so far), which makes it appropriate when processing
 //! infinite inputs.
 
-use std::any::Any;
-use std::cmp::{min, Ordering};
-use std::collections::{HashMap, VecDeque};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
+use super::utils::create_schema;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
@@ -38,11 +32,11 @@ use crate::{
     ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
-
+use ahash::RandomState;
 use arrow::{
     array::{Array, ArrayRef, RecordBatchOptions, UInt32Builder},
     compute::{concat, concat_batches, sort_to_indices},
-    datatypes::{Schema, SchemaBuilder, SchemaRef},
+    datatypes::SchemaRef,
     record_batch::RecordBatch,
 };
 use datafusion_common::hash_utils::create_hashes;
@@ -59,13 +53,17 @@ use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-
-use ahash::RandomState;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use hashbrown::raw::RawTable;
 use indexmap::IndexMap;
 use log::debug;
+use std::any::Any;
+use std::cmp::{min, Ordering};
+use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 /// Window execution plan
 #[derive(Debug)]
@@ -850,20 +848,6 @@ impl SortedSearch {
             minima
         })
     }
-}
-
-fn create_schema(
-    input_schema: &Schema,
-    window_expr: &[Arc<dyn WindowExpr>],
-) -> Result<Schema> {
-    let capacity = input_schema.fields().len() + window_expr.len();
-    let mut builder = SchemaBuilder::with_capacity(capacity);
-    builder.extend(input_schema.fields.iter().cloned());
-    // append results to the schema
-    for expr in window_expr {
-        builder.push(expr.field()?);
-    }
-    Ok(builder.finish())
 }
 
 /// Stream for the bounded window aggregation plan.

@@ -138,6 +138,11 @@ impl AggregateUDFImpl for Count {
         }
     }
 
+    fn field(&self, args: StateFieldsArgs) -> Result<Field> {
+        // count always return non-null value
+        Ok(Field::new(args.name, args.return_type.clone(), false))
+    }
+
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if !acc_args.is_distinct {
             return Ok(Box::new(CountAccumulator::new()));

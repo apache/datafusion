@@ -82,6 +82,14 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     }
 
     fn field(&self) -> Result<Field> {
+        // TODO: Fix window function to always return non-null for count
+        if let Ok(name) = self.func_name() {
+            if name == "count" {
+                let field = self.aggregate.field()?;
+                return Ok(field.with_nullable(true));
+            }
+        }
+
         self.aggregate.field()
     }
 
@@ -165,6 +173,10 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             order_by: new_order_by,
             window_frame: Arc::clone(&self.window_frame),
         }))
+    }
+
+    fn func_name(&self) -> Result<&str> {
+        Ok(self.aggregate.func_name())
     }
 }
 

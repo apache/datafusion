@@ -328,10 +328,45 @@ impl ExprSchemable for Expr {
                     Ok(true)
                 }
             }
+            Expr::WindowFunction(WindowFunction { fun, .. }) => {
+                match fun {
+                    WindowFunctionDefinition::BuiltInWindowFunction(func) => {
+                        if func.name() == "ROW_NUMBER"
+                            || func.name() == "RANK"
+                            || func.name() == "NTILE"
+                            || func.name() == "CUME_DIST"
+                        {
+                            Ok(false)
+                        } else {
+                            Ok(true)
+                        }
+                    }
+                    WindowFunctionDefinition::AggregateUDF(func) => {
+                        // TODO: UDF should be able to customize nullability
+                        if func.name() == "count" {
+                            // TODO: there is issue unsolved for count with window, should return false
+                            Ok(true)
+                        } else {
+                            Ok(true)
+                        }
+                    }
+                    _ => Ok(true),
+                }
+            }
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                // If all the element in coalesce is non-null, the result is non-null
+                if func.name() == "coalesce"
+                    && args
+                        .iter()
+                        .all(|e| !e.nullable(input_schema).ok().unwrap_or(true))
+                {
+                    return Ok(false);
+                }
+
+                Ok(true)
+            }
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
-            | Expr::ScalarFunction(..)
-            | Expr::WindowFunction { .. }
             | Expr::Unnest(_)
             | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
@@ -443,6 +478,7 @@ impl ExprSchemable for Expr {
         match self {
             Expr::Column(c) => {
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+                // println!("data type: {:?}, nullable: {:?}", data_type, nullable);
                 Ok((
                     c.relation.clone(),
                     Field::new(&c.name, data_type, nullable)
@@ -452,6 +488,7 @@ impl ExprSchemable for Expr {
             }
             Expr::Alias(Alias { relation, name, .. }) => {
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+                // println!("alias {} data type: {:?}, nullable: {:?}", self, data_type, nullable);
                 Ok((
                     relation.clone(),
                     Field::new(name, data_type, nullable)
@@ -461,6 +498,7 @@ impl ExprSchemable for Expr {
             }
             _ => {
                 let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+                // println!("otehr data type: {:?}, nullable: {:?}", data_type, nullable);
                 Ok((
                     None,
                     Field::new(self.schema_name().to_string(), data_type, nullable)

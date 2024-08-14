@@ -171,6 +171,9 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     fn get_minmax_desc(&self) -> Option<(Field, bool)> {
         None
     }
+
+    /// Get function's name, for example `count(x)` returns `count`
+    fn func_name(&self) -> &str;
 }
 
 /// Stores the physical expressions used inside the `AggregateExpr`.

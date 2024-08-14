@@ -32,7 +32,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
 
@@ -97,6 +97,10 @@ impl BuiltInWindowExpr {
 }
 
 impl WindowExpr for BuiltInWindowExpr {
+    fn func_name(&self) -> Result<&str> {
+        not_impl_err!("function name not determined")
+    }
+
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

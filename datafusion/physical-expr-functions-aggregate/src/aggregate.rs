@@ -241,7 +241,15 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+        let args = StateFieldsArgs {
+            name: &self.name,
+            input_types: &self.input_types,
+            return_type: &self.data_type,
+            ordering_fields: &self.ordering_fields,
+            is_distinct: self.is_distinct,
+        };
+
+        self.fun.fields(args)
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
@@ -434,6 +442,10 @@ impl AggregateExpr for AggregateFunctionExpr {
         self.fun
             .is_descending()
             .and_then(|flag| self.field().ok().map(|f| (f, flag)))
+    }
+
+    fn func_name(&self) -> &str {
+        self.fun.name()
     }
 }
 
