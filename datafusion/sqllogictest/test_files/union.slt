@@ -480,7 +480,7 @@ logical_plan
 04)------Limit: skip=0, fetch=3
 05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
 06)----------SubqueryAlias: a
-07)------------Projection:
+07)------------Projection: 
 08)--------------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 09)----------------Projection: aggregate_test_100.c1
 10)------------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
@@ -495,7 +495,7 @@ logical_plan
 19)------------Projection: Int64(1) AS c1
 20)--------------EmptyRelation
 physical_plan
-01)LocalLimitExec: fetch=3
+01)GlobalLimitExec: skip=0, fetch=3
 02)--CoalescePartitionsExec
 03)----UnionExec
 04)------ProjectionExec: expr=[count(*)@0 as cnt]

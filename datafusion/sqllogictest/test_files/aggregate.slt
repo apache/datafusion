@@ -4572,7 +4572,7 @@ logical_plan
 03)----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[min(aggregate_test_100.c1)]]
 04)------TableScan: aggregate_test_100 projection=[c1, c3]
 physical_plan
-01)LocalLimitExec: fetch=5
+01)GlobalLimitExec: skip=0, fetch=5
 02)--CoalescePartitionsExec
 03)----AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
 04)------CoalesceBatchesExec: target_batch_size=8192
@@ -4603,7 +4603,7 @@ logical_plan
 02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
 03)----TableScan: aggregate_test_100 projection=[c3]
 physical_plan
-01)LocalLimitExec: fetch=5
+01)GlobalLimitExec: skip=0, fetch=5
 02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
@@ -4655,7 +4655,7 @@ logical_plan
 05)--------Filter: aggregate_test_100.c3 >= Int16(10) AND aggregate_test_100.c3 <= Int16(20)
 06)----------TableScan: aggregate_test_100 projection=[c2, c3], partial_filters=[aggregate_test_100.c3 >= Int16(10), aggregate_test_100.c3 <= Int16(20)]
 physical_plan
-01)LocalLimitExec: fetch=4
+01)GlobalLimitExec: skip=0, fetch=4
 02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[4]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[4]
@@ -4688,7 +4688,7 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c1, c2, c3]
 physical_plan
 01)ProjectionExec: expr=[max(aggregate_test_100.c1)@2 as max(aggregate_test_100.c1), c2@0 as c2, c3@1 as c3]
-02)--LocalLimitExec: fetch=5
+02)--GlobalLimitExec: skip=0, fetch=5
 03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[max(aggregate_test_100.c1)]
 04)------CoalescePartitionsExec
 05)--------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[max(aggregate_test_100.c1)]
@@ -4734,7 +4734,7 @@ logical_plan
 02)--Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
 03)----TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
-01)LocalLimitExec: fetch=3
+01)GlobalLimitExec: skip=0, fetch=3
 02)--AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[3]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
@@ -4761,7 +4761,7 @@ logical_plan
 02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
 03)----TableScan: aggregate_test_100 projection=[c3]
 physical_plan
-01)LocalLimitExec: fetch=5
+01)GlobalLimitExec: skip=0, fetch=5
 02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]

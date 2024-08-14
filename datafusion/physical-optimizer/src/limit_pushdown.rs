@@ -29,7 +29,7 @@ use datafusion_common::utils::combine_limit;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
@@ -313,7 +313,7 @@ fn add_limit(
     skip: usize,
     fetch: usize,
 ) -> Arc<dyn ExecutionPlan> {
-    if skip > 0 {
+    if skip > 0 || pushdown_plan.output_partitioning().partition_count() == 1 {
         return add_global_limit(pushdown_plan, skip, Some(fetch));
     }
     add_local_limit(pushdown_plan, fetch + skip)

@@ -4140,7 +4140,7 @@ logical_plan
 04)------TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
 physical_plan
 01)ProjectionExec: expr=[c@0 as c, a@1 as a, sum(multiple_ordered_table_with_pk.d)@2 as sum1]
-02)--LocalLimitExec: fetch=5
+02)--GlobalLimitExec: skip=0, fetch=5
 03)----AggregateExec: mode=Single, gby=[c@1 as c, a@0 as a], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=Sorted
 04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_orderings=[[a@0 ASC NULLS LAST], [c@1 ASC NULLS LAST]], has_header=true
 
