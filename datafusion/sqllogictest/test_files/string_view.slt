@@ -438,6 +438,30 @@ Xiangpeng
 Raphael
 NULL
 
+# Should run TRANSLATE using utf8 column successfully
+query T
+SELECT
+  TRANSLATE(column1_utf8, 'foo', 'bar') as c
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+# Should run TRANSLATE using large_utf8 column successfully
+query T
+SELECT
+  TRANSLATE(column1_large_utf8, 'foo', 'bar') as c
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+
+
 ### Initcap
 
 query TT
