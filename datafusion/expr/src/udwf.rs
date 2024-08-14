@@ -185,7 +185,7 @@ impl WindowUDF {
         self.inner.nullable()
     }
 
-    /// Returns ordering if any introduced by this window function
+    /// Returns ordering if any introduced by this window function.
     ///
     /// See [`WindowUDFImpl::sort_options`] for more details.
     pub fn sort_options(&self) -> Option<SortOptions> {
