@@ -115,7 +115,7 @@ pub(crate) fn unproject_window_exprs(expr: &Expr, windows: &[&Window]) -> Result
                 if let Some(unproj) = windows
                     .iter()
                     .flat_map(|w| w.window_expr.iter())
-                    .find(|window_expr| window_expr.display_name().unwrap() == c.name)
+                    .find(|window_expr| window_expr.schema_name().to_string() == c.name)
                 {
                     Ok(Transformed::yes(unproj.clone()))
                 } else {

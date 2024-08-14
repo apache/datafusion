@@ -556,6 +556,11 @@ pub mod physical_expr_common {
     pub use datafusion_physical_expr_common::*;
 }
 
+/// re-export of [`datafusion_physical_expr_functions_aggregate`] crate
+pub mod physical_expr_functions_aggregate {
+    pub use datafusion_physical_expr_functions_aggregate::*;
+}
+
 /// re-export of [`datafusion_physical_expr`] crate
 pub mod physical_expr {
     pub use datafusion_physical_expr::*;

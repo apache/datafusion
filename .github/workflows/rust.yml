@@ -233,11 +233,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run cargo doc
-        run: |
-          export RUSTDOCFLAGS="-D warnings"
-          cargo doc --document-private-items --no-deps --workspace
-          cd datafusion-cli
-          cargo doc --document-private-items --no-deps
+        run: ci/scripts/rust_docs.sh
 
   linux-wasm-pack:
     name: build with wasm-pack

@@ -29,12 +29,9 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr::{Accumulator, Signature, Volatility};
-use datafusion_physical_expr_common::aggregate::merge_arrays::merge_ordered_arrays;
-use datafusion_physical_expr_common::aggregate::utils::ordering_fields;
-use datafusion_physical_expr_common::sort_expr::{
-    limited_convert_logical_sort_exprs_to_physical_with_dfschema, LexOrdering,
-    PhysicalSortExpr,
-};
+use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
+use datafusion_functions_aggregate_common::utils::ordering_fields;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
@@ -117,32 +114,26 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
+
         if acc_args.is_distinct {
-            return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
-                &acc_args.input_types[0],
-            )?));
+            return Ok(Box::new(DistinctArrayAggAccumulator::try_new(&data_type)?));
         }
 
-        if acc_args.sort_exprs.is_empty() {
-            return Ok(Box::new(ArrayAggAccumulator::try_new(
-                &acc_args.input_types[0],
-            )?));
+        if acc_args.ordering_req.is_empty() {
+            return Ok(Box::new(ArrayAggAccumulator::try_new(&data_type)?));
         }
 
-        let ordering_req = limited_convert_logical_sort_exprs_to_physical_with_dfschema(
-            acc_args.sort_exprs,
-            acc_args.dfschema,
-        )?;
-
-        let ordering_dtypes = ordering_req
+        let ordering_dtypes = acc_args
+            .ordering_req
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
         OrderSensitiveArrayAggAccumulator::try_new(
-            &acc_args.input_types[0],
+            &data_type,
             &ordering_dtypes,
-            ordering_req,
+            acc_args.ordering_req.to_vec(),
             acc_args.is_reversed,
         )
         .map(|acc| Box::new(acc) as _)

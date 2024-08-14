@@ -213,13 +213,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        statistics_with_fetch(
-            self.input.statistics()?,
-            self.schema(),
-            self.fetch,
-            0,
-            self.properties().partitioning.partition_count(),
-        )
+        Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

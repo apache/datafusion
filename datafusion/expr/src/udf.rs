@@ -17,22 +17,19 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
-use std::any::Any;
-use std::fmt::{self, Debug, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
-
-use arrow::datatypes::DataType;
-
-use datafusion_common::{not_impl_err, ExprSchema, Result};
-
-use crate::expr::create_name;
-use crate::interval_arithmetic::Interval;
+use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
     ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
 };
+use arrow::datatypes::DataType;
+use datafusion_common::{not_impl_err, ExprSchema, Result};
+use datafusion_expr_common::interval_arithmetic::Interval;
+use std::any::Any;
+use std::fmt::{self, Debug, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 
 /// Logical representation of a Scalar User Defined Function.
 ///
@@ -152,6 +149,13 @@ impl ScalarUDF {
     /// See [`ScalarUDFImpl::display_name`] for more details
     pub fn display_name(&self, args: &[Expr]) -> Result<String> {
         self.inner.display_name(args)
+    }
+
+    /// Returns this function's schema_name.
+    ///
+    /// See [`ScalarUDFImpl::schema_name`] for more details
+    pub fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        self.inner.schema_name(args)
     }
 
     /// Returns the aliases for this function.
@@ -345,10 +349,21 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn name(&self) -> &str;
 
     /// Returns the user-defined display name of the UDF given the arguments
-    ///
     fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let names: Vec<String> = args.iter().map(create_name).collect::<Result<_>>()?;
+        let names: Vec<String> = args.iter().map(ToString::to_string).collect();
+        // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
         Ok(format!("{}({})", self.name(), names.join(",")))
+    }
+
+    /// Returns the name of the column this expression would create
+    ///
+    /// See [`Expr::schema_name`] for details
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        Ok(format!(
+            "{}({})",
+            self.name(),
+            schema_name_from_exprs_comma_seperated_without_space(args)?
+        ))
     }
 
     /// Returns the function's [`Signature`] for information about what input

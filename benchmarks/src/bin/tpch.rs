@@ -21,6 +21,11 @@ use datafusion::error::Result;
 use datafusion_benchmarks::tpch;
 use structopt::StructOpt;
 
+#[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
+compile_error!(
+    "feature \"snmalloc\" and feature \"mimalloc\" cannot be enabled at the same time"
+);
+
 #[cfg(feature = "snmalloc")]
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;

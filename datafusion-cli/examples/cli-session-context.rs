@@ -82,7 +82,7 @@ impl CliSessionContext for MyUnionerContext {
 #[tokio::main]
 /// Runs the example.
 pub async fn main() {
-    let mut my_ctx = MyUnionerContext::default();
+    let my_ctx = MyUnionerContext::default();
 
     let mut print_options = PrintOptions {
         format: datafusion_cli::print_format::PrintFormat::Automatic,
@@ -91,7 +91,5 @@ pub async fn main() {
         color: true,
     };
 
-    exec_from_repl(&mut my_ctx, &mut print_options)
-        .await
-        .unwrap();
+    exec_from_repl(&my_ctx, &mut print_options).await.unwrap();
 }

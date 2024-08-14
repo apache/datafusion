@@ -62,6 +62,7 @@ use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::{Partitioning, PhysicalSortExpr, PhysicalSortRequirement};
+use datafusion_physical_plan::limit::LocalLimitExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
@@ -414,7 +415,12 @@ fn analyze_immediate_sort_removal(
             } else {
                 // Remove the sort:
                 node.children = node.children.swap_remove(0).children;
-                sort_input.clone()
+                if let Some(fetch) = sort_exec.fetch() {
+                    // If the sort has a fetch, we need to add a limit:
+                    Arc::new(LocalLimitExec::new(sort_input.clone(), fetch))
+                } else {
+                    sort_input.clone()
+                }
             };
             for child in node.children.iter_mut() {
                 child.data = false;
@@ -496,10 +502,10 @@ fn adjust_window_sort_removal(
     Ok(window_tree)
 }
 
-/// Removes parallelization-reducing, avoidable [`CoalescePartitionsExec`]s from the plan in `node`.
-/// After the removal of such `CoalescePartitionsExec`s from the plan, some of the
-/// `RepartitionExec`s might become redundant. Removes those `RepartitionExec`s from the plan as
-/// well.
+/// Removes parallelization-reducing, avoidable [`CoalescePartitionsExec`]s from
+/// the plan in `node`. After the removal of such `CoalescePartitionsExec`s from
+/// the plan, some of the remaining `RepartitionExec`s might become unnecessary.
+/// Removes such `RepartitionExec`s from the plan as well.
 fn remove_bottleneck_in_subplan(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<PlanWithCorrespondingCoalescePartitions> {
@@ -1109,6 +1115,38 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_unnecessary_sort7() -> Result<()> {
+        let schema = create_test_schema()?;
+        let source = memory_exec(&schema);
+        let input = Arc::new(SortExec::new(
+            vec![
+                sort_expr("non_nullable_col", &schema),
+                sort_expr("nullable_col", &schema),
+            ],
+            source,
+        ));
+
+        let physical_plan = Arc::new(
+            SortExec::new(vec![sort_expr("non_nullable_col", &schema)], input)
+                .with_fetch(Some(2)),
+        ) as Arc<dyn ExecutionPlan>;
+
+        let expected_input = [
+            "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
+            "  SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        let expected_optimized = [
+            "LocalLimitExec: fetch=2",
+            "  SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_unnecessary_sort8() -> Result<()> {
         let schema = create_test_schema()?;
         let source = memory_exec(&schema);
         let input = Arc::new(SortExec::new(

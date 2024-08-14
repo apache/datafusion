@@ -28,11 +28,12 @@ use datafusion_common::{
     assert_contains, DataFusionError, ParamValues, Result, ScalarValue,
 };
 use datafusion_expr::{
+    col,
     dml::CopyTo,
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
-    ColumnarValue, CreateExternalTable, DdlStatement, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, CreateExternalTable, CreateIndex, DdlStatement, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -40,6 +41,7 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
+use crate::common::MockSessionState;
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
@@ -1494,8 +1496,9 @@ fn recursive_ctes_disabled() {
         select * from numbers;";
 
     // manually setting up test here so that we can disable recursive ctes
-    let mut context = MockContextProvider::default();
-    context.options_mut().execution.enable_recursive_ctes = false;
+    let mut state = MockSessionState::default();
+    state.config_options.execution.enable_recursive_ctes = false;
+    let context = MockContextProvider { state };
 
     let planner = SqlToRel::new_with_options(&context, ParserOptions::default());
     let result = DFParser::parse_sql_with_dialect(sql, &GenericDialect {});
@@ -2726,7 +2729,8 @@ fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<Logica
 }
 
 fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
-    let context = MockContextProvider::default().with_udaf(sum_udaf());
+    let state = MockSessionState::default().with_aggregate_function(sum_udaf());
+    let context = MockContextProvider { state };
     let planner = SqlToRel::new(&context);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -2738,39 +2742,44 @@ fn logical_plan_with_dialect_and_options(
     dialect: &dyn Dialect,
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
-    let context = MockContextProvider::default()
-        .with_udf(unicode::character_length().as_ref().clone())
-        .with_udf(string::concat().as_ref().clone())
-        .with_udf(make_udf(
+    let state = MockSessionState::default()
+        .with_scalar_function(Arc::new(unicode::character_length().as_ref().clone()))
+        .with_scalar_function(Arc::new(string::concat().as_ref().clone()))
+        .with_scalar_function(Arc::new(make_udf(
             "nullif",
             vec![DataType::Int32, DataType::Int32],
             DataType::Int32,
-        ))
-        .with_udf(make_udf(
+        )))
+        .with_scalar_function(Arc::new(make_udf(
             "round",
             vec![DataType::Float64, DataType::Int64],
             DataType::Float32,
-        ))
-        .with_udf(make_udf(
+        )))
+        .with_scalar_function(Arc::new(make_udf(
             "arrow_cast",
             vec![DataType::Int64, DataType::Utf8],
             DataType::Float64,
-        ))
-        .with_udf(make_udf(
+        )))
+        .with_scalar_function(Arc::new(make_udf(
             "date_trunc",
             vec![DataType::Utf8, DataType::Timestamp(Nanosecond, None)],
             DataType::Int32,
-        ))
-        .with_udf(make_udf("sqrt", vec![DataType::Int64], DataType::Int64))
-        .with_udaf(sum_udaf())
-        .with_udaf(approx_median_udaf())
-        .with_udaf(count_udaf())
-        .with_udaf(avg_udaf())
-        .with_udaf(min_udaf())
-        .with_udaf(max_udaf())
-        .with_udaf(grouping_udaf())
+        )))
+        .with_scalar_function(Arc::new(make_udf(
+            "sqrt",
+            vec![DataType::Int64],
+            DataType::Int64,
+        )))
+        .with_aggregate_function(sum_udaf())
+        .with_aggregate_function(approx_median_udaf())
+        .with_aggregate_function(count_udaf())
+        .with_aggregate_function(avg_udaf())
+        .with_aggregate_function(min_udaf())
+        .with_aggregate_function(max_udaf())
+        .with_aggregate_function(grouping_udaf())
         .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
+    let context = MockContextProvider { state };
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
@@ -4424,6 +4433,35 @@ fn test_parse_escaped_string_literal_value() {
         logical_plan(sql).unwrap_err().strip_backtrace(),
         "SQL error: TokenizerError(\"Unterminated encoded string literal at Line: 1, Column: 25\")"
     )
+}
+
+#[test]
+fn plan_create_index() {
+    let sql =
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_name ON test USING btree (name, age DESC)";
+    let plan = logical_plan_with_options(sql, ParserOptions::default()).unwrap();
+    match plan {
+        LogicalPlan::Ddl(DdlStatement::CreateIndex(CreateIndex {
+            name,
+            table,
+            using,
+            columns,
+            unique,
+            if_not_exists,
+            ..
+        })) => {
+            assert_eq!(name, Some("idx_name".to_string()));
+            assert_eq!(format!("{table}"), "test");
+            assert_eq!(using, Some("btree".to_string()));
+            assert_eq!(
+                columns,
+                vec![col("name").sort(true, false), col("age").sort(false, true),]
+            );
+            assert!(unique);
+            assert!(if_not_exists);
+        }
+        _ => panic!("wrong plan type"),
+    }
 }
 
 fn assert_field_not_found(err: DataFusionError, name: &str) {

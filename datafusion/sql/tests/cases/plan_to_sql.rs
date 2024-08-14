@@ -33,7 +33,7 @@ use datafusion_functions::core::planner::CoreFunctionPlanner;
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
-use crate::common::MockContextProvider;
+use crate::common::{MockContextProvider, MockSessionState};
 
 #[test]
 fn roundtrip_expr() {
@@ -59,8 +59,8 @@ fn roundtrip_expr() {
     let roundtrip = |table, sql: &str| -> Result<String> {
         let dialect = GenericDialect {};
         let sql_expr = Parser::new(&dialect).try_with_sql(sql)?.parse_expr()?;
-
-        let context = MockContextProvider::default().with_udaf(sum_udaf());
+        let state = MockSessionState::default().with_aggregate_function(sum_udaf());
+        let context = MockContextProvider { state };
         let schema = context.get_table_source(table)?.schema();
         let df_schema = DFSchema::try_from(schema.as_ref().clone())?;
         let sql_to_rel = SqlToRel::new(&context);
@@ -156,11 +156,11 @@ fn roundtrip_statement() -> Result<()> {
         let statement = Parser::new(&dialect)
             .try_with_sql(query)?
             .parse_statement()?;
-
-        let context = MockContextProvider::default()
-            .with_udaf(sum_udaf())
-            .with_udaf(count_udaf())
+        let state = MockSessionState::default()
+            .with_aggregate_function(sum_udaf())
+            .with_aggregate_function(count_udaf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+        let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
@@ -189,8 +189,10 @@ fn roundtrip_crossjoin() -> Result<()> {
         .try_with_sql(query)?
         .parse_statement()?;
 
-    let context = MockContextProvider::default()
+    let state = MockSessionState::default()
         .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+
+    let context = MockContextProvider { state };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
@@ -373,6 +375,38 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
+        // Test query that has calculation in derived table with columns
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT j1_id + 1 * 3 from j1) AS c (id)",
+            expected: r#"SELECT c.id FROM (SELECT (j1.j1_id + (1 * 3)) FROM j1) AS c (id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        // Test query that has limit/distinct/order in derived table with columns
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT distinct (j1_id + 1 * 3) FROM j1 LIMIT 1) AS c (id)",
+            expected: r#"SELECT c.id FROM (SELECT DISTINCT (j1.j1_id + (1 * 3)) FROM j1 LIMIT 1) AS c (id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT j1_id + 1 FROM j1 ORDER BY j1_id DESC LIMIT 1) AS c (id)",
+            expected: r#"SELECT c.id FROM (SELECT (j1.j1_id + 1) FROM j1 ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 1) AS c (id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT CAST((CAST(j1_id as BIGINT) + 1) as int) * 10 FROM j1 LIMIT 1) AS c (id)",
+            expected: r#"SELECT c.id FROM (SELECT (CAST((CAST(j1.j1_id AS BIGINT) + 1) AS INTEGER) * 10) FROM j1 LIMIT 1) AS c (id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT id FROM (SELECT CAST(j1_id as BIGINT) + 1 FROM j1 ORDER BY j1_id LIMIT 1) AS c (id)",
+            expected: r#"SELECT c.id FROM (SELECT (CAST(j1.j1_id AS BIGINT) + 1) FROM j1 ORDER BY j1.j1_id ASC NULLS LAST LIMIT 1) AS c (id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        }
     ];
 
     for query in tests {
@@ -380,10 +414,12 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             .try_with_sql(query.sql)?
             .parse_statement()?;
 
-        let context = MockContextProvider::default()
-            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
-            .with_udaf(max_udaf())
-            .with_udaf(min_udaf());
+        let state = MockSessionState::default()
+            .with_aggregate_function(max_udaf())
+            .with_aggregate_function(min_udaf())
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+
+        let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel
             .sql_statement_to_plan(statement)
@@ -411,14 +447,16 @@ fn test_unnest_logical_plan() -> Result<()> {
         .try_with_sql(query)?
         .parse_statement()?;
 
-    let context = MockContextProvider::default();
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
 
-    let expected = "Projection: unnest(unnest_table.struct_col).field1, unnest(unnest_table.struct_col).field2, unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
-        \n  Unnest: lists[unnest(unnest_table.array_col)] structs[unnest(unnest_table.struct_col)]\
-        \n    Projection: unnest_table.struct_col AS unnest(unnest_table.struct_col), unnest_table.array_col AS unnest(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
-        \n      TableScan: unnest_table";
+    let expected = "Projection: UNNEST(unnest_table.struct_col).field1, UNNEST(unnest_table.struct_col).field2, UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+    \n  Unnest: lists[UNNEST(unnest_table.array_col)] structs[UNNEST(unnest_table.struct_col)]\
+    \n    Projection: unnest_table.struct_col AS UNNEST(unnest_table.struct_col), unnest_table.array_col AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
+    \n      TableScan: unnest_table";
 
     assert_eq!(format!("{plan}"), expected);
 
@@ -484,7 +522,9 @@ fn test_pretty_roundtrip() -> Result<()> {
 
     let df_schema = DFSchema::try_from(schema)?;
 
-    let context = MockContextProvider::default();
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
     let sql_to_rel = SqlToRel::new(&context);
 
     let unparser = Unparser::default().with_pretty(true);
@@ -548,4 +588,37 @@ fn test_pretty_roundtrip() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn sql_round_trip(query: &str, expect: &str) {
+    let statement = Parser::new(&GenericDialect {})
+        .try_with_sql(query)
+        .unwrap()
+        .parse_statement()
+        .unwrap();
+
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan).unwrap();
+    assert_eq!(roundtrip_statement.to_string(), expect);
+}
+
+#[test]
+fn test_interval_lhs_eq() {
+    sql_round_trip(
+        "select interval '2 seconds' = interval '2 seconds'",
+        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' = INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+    );
+}
+
+#[test]
+fn test_interval_lhs_lt() {
+    sql_round_trip(
+        "select interval '2 seconds' < interval '2 seconds'",
+        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' < INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+    );
 }
