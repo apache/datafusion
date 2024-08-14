@@ -48,7 +48,7 @@ struct RowNumber {
 }
 
 impl RowNumber {
-    /// Create a new ROW_NUMBER function
+    /// Create a new `row_number` function
     fn new() -> Self {
         Self {
             signature: Signature::any(0, Volatility::Immutable),
@@ -95,7 +95,7 @@ impl WindowUDFImpl for RowNumber {
     }
 }
 
-/// State for the 'ROW_NUMBER' built-in window function.
+/// State for the `row_number` built-in window function.
 #[derive(Debug, Default)]
 struct NumRowsEvaluator {
     n_rows: usize,
