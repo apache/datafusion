@@ -23,6 +23,7 @@ use std::ops::Range;
 
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::UInt64Array;
+use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
@@ -84,6 +85,13 @@ impl WindowUDFImpl for RowNumber {
 
     fn nullable(&self) -> bool {
         false
+    }
+
+    fn sort_options(&self) -> Option<SortOptions> {
+        Some(SortOptions {
+            descending: false,
+            nulls_first: false,
+        })
     }
 }
 

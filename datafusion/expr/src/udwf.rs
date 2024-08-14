@@ -17,6 +17,7 @@
 
 //! [`WindowUDF`]: User Defined Window Functions
 
+use arrow::compute::SortOptions;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
     any::Any,
@@ -180,6 +181,9 @@ impl WindowUDF {
     pub fn nullable(&self) -> bool {
         self.inner.nullable()
     }
+    pub fn sort_options(&self) -> Option<SortOptions> {
+        self.inner.sort_options()
+    }
 }
 
 impl<F> From<F> for WindowUDF
@@ -326,6 +330,10 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
 
     fn nullable(&self) -> bool {
         true
+    }
+
+    fn sort_options(&self) -> Option<SortOptions> {
+        None
     }
 }
 
