@@ -121,7 +121,7 @@ pub use writer::plan_to_parquet;
 ///   file.
 ///
 /// * Predicate push down: skips row groups and pages and rows based on metadata
-/// and late materialization. See "Predicate Pushdown" below.
+///   and late materialization. See "Predicate Pushdown" below.
 ///
 /// * Projection pushdown: reads and decodes only the columns required.
 ///
