@@ -102,17 +102,21 @@ fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("map_extract expects two arguments");
     }
 
-    let map_array = as_map_array(&args[0])?;
+    let map_array = match args[0].data_type() {
+        DataType::Map(_, _) => as_map_array(&args[0])?,
+        _ => return exec_err!("The first argument in map_extract must be a map"),
+    };
 
-    if map_array.key_type() != args[1].data_type() {
+    let key_type = map_array.key_type();
+
+    if key_type != args[1].data_type() {
         return exec_err!(
             "The key type {} does not match the map key type {}",
             args[1].data_type(),
-            map_array.key_type()
+            key_type
         );
     }
 
-    let key_type = map_array.key_type();
     if key_type.is_integer() {
         generic_map_extract_inner::<Int64Type>(
             map_array,
