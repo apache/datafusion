@@ -17,6 +17,9 @@
 
 //! Default [FlightDriver] for Flight SQL
 
+use std::collections::HashMap;
+use std::str::FromStr;
+
 use arrow_flight::error::Result;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt};
@@ -28,8 +31,6 @@ use base64::Engine;
 use bytes::Bytes;
 use futures::{stream, TryStreamExt};
 use prost::Message;
-use std::collections::HashMap;
-use std::str::FromStr;
 use tonic::metadata::{AsciiMetadataKey, MetadataMap};
 use tonic::transport::Channel;
 use tonic::IntoRequest;
@@ -232,7 +233,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use arrow_array::{Int8Array, RecordBatch};
+    use arrow_array::{Array, Float32Array, Int64Array, Int8Array, RecordBatch};
     use arrow_flight::encode::FlightDataEncoderBuilder;
     use arrow_flight::flight_service_server::{FlightService, FlightServiceServer};
     use arrow_flight::sql::server::FlightSqlService;
@@ -391,12 +392,14 @@ mod tests {
     #[tokio::test]
     async fn flight_sql_data_source() -> datafusion_common::Result<()> {
         let partition_data = RecordBatch::try_new(
-            Arc::new(Schema::new([Arc::new(Field::new(
-                "col1",
-                DataType::Int8,
-                false,
-            ))])),
-            vec![Arc::new(Int8Array::from(vec![0, 1, 2, 3]))],
+            Arc::new(Schema::new([
+                Arc::new(Field::new("col1", DataType::Float32, false)),
+                Arc::new(Field::new("col2", DataType::Int8, false)),
+            ])),
+            vec![
+                Arc::new(Float32Array::from(vec![0.0, 0.1, 0.2, 0.3])),
+                Arc::new(Int8Array::from(vec![10, 20, 30, 40])),
+            ],
         )
         .unwrap();
         let rows_per_partition = partition_data.num_rows();
@@ -447,14 +450,26 @@ mod tests {
             .await
             .unwrap();
         let df = ctx.sql("select col1 from fsql").await.unwrap();
+        df.clone().show().await?;
         assert_eq!(
             df.count().await.unwrap(),
             rows_per_partition * num_partitions
         );
-        assert!(ctx
-            .sql("select count(distinct col1) from fsql")
-            .await
-            .is_ok());
+        let df = ctx.sql("select sum(col2) from fsql").await?;
+        df.clone().show().await?;
+        let rb = df
+            .collect()
+            .await?
+            .first()
+            .cloned()
+            .expect("no record batch");
+        assert_eq!(rb.schema().fields.len(), 1);
+        let arr = rb
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("wrong type of column");
+        assert_eq!(arr.iter().next().unwrap().unwrap(), 300);
         Ok(())
     }
 }

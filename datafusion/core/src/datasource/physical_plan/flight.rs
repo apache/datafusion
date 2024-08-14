@@ -23,10 +23,11 @@ use std::error::Error;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use arrow_flight::error::FlightError;
 use arrow_flight::{FlightClient, FlightEndpoint, Ticket};
 use arrow_schema::SchemaRef;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 use tonic::transport::Channel;
 
@@ -182,8 +183,30 @@ async fn try_fetch_stream(
     client.metadata_mut().clone_from(grpc.as_ref());
     let stream = client.do_get(ticket).await?;
     Ok(Box::pin(RecordBatchStreamAdapter::new(
-        stream.schema().map(Arc::to_owned).unwrap_or(schema),
-        stream.map_err(|e| DataFusionError::External(Box::new(e))),
+        schema.clone(),
+        stream.map(move |rb| {
+            let schema = schema.clone();
+            rb.map(move |rb| {
+                if schema.fields.is_empty() || rb.schema() == schema {
+                    rb
+                } else if schema.contains(rb.schema_ref()) {
+                    rb.with_schema(schema.clone()).unwrap()
+                } else {
+                    let columns = schema
+                        .fields
+                        .iter()
+                        .map(|field| {
+                            rb.column_by_name(field.name())
+                                .expect("missing fields in record batch")
+                                .clone()
+                        })
+                        .collect();
+                    RecordBatch::try_new(schema.clone(), columns)
+                        .expect("cannot impose desired schema on record batch")
+                }
+            })
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+        }),
     )))
 }
 
