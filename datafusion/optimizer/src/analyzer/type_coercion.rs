@@ -178,7 +178,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
     /// This occurs after wildcard expansion and the coercion of the input expressions.
     fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
-        let union_schema = coerce_union_schema(union_plan.inputs.clone())?;
+        let union_schema = Arc::new(coerce_union_schema(&union_plan.inputs)?);
         let new_inputs = union_plan
             .inputs
             .iter()
@@ -189,7 +189,7 @@ impl<'a> TypeCoercionRewriter<'a> {
                         Ok(Arc::new(project_with_column_index(
                             expr,
                             input,
-                            Arc::new(union_schema.clone()),
+                            Arc::clone(&union_schema),
                         )?))
                     }
                     other_plan => Ok(Arc::new(other_plan)),
@@ -198,7 +198,7 @@ impl<'a> TypeCoercionRewriter<'a> {
             .collect::<Result<Vec<_>>>()?;
         Ok(LogicalPlan::Union(Union {
             inputs: new_inputs,
-            schema: Arc::new(union_schema),
+            schema: union_schema,
         }))
     }
 
@@ -809,7 +809,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 }
 
 /// Get a common schema that is compatible with all inputs of UNION.
-fn coerce_union_schema(inputs: Vec<Arc<LogicalPlan>>) -> Result<DFSchema> {
+fn coerce_union_schema(inputs: &Vec<Arc<LogicalPlan>>) -> Result<DFSchema> {
     let base_schema = inputs[0].schema();
     let mut union_datatypes = base_schema
         .fields()
