@@ -62,7 +62,7 @@ use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::{Partitioning, PhysicalSortExpr, PhysicalSortRequirement};
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::limit::LocalLimitExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
@@ -389,7 +389,6 @@ fn analyze_immediate_sort_removal(
 ) -> Transformed<PlanWithCorrespondingSort> {
     if let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() {
         let sort_input = sort_exec.input();
-        let fetch = sort_exec.fetch();
         // If this sort is unnecessary, we should remove it:
         if sort_input
             .equivalence_properties()
@@ -401,16 +400,6 @@ fn analyze_immediate_sort_removal(
                 // Replace the sort with a sort-preserving merge:
                 let expr = sort_exec.expr().to_vec();
                 Arc::new(SortPreservingMergeExec::new(expr, sort_input.clone())) as _
-            } else if let Some(fetch) = fetch {
-                // Remove the sort:
-                node.children = node.children.swap_remove(0).children;
-                // Add limit
-                if sort_input.output_partitioning().partition_count() > 1 {
-                    Arc::new(LocalLimitExec::new(sort_input.clone(), fetch)) as _
-                } else {
-                    Arc::new(GlobalLimitExec::new(sort_input.clone(), 0, Some(fetch)))
-                        as _
-                }
             } else {
                 // Remove the sort:
                 node.children = node.children.swap_remove(0).children;
@@ -1135,7 +1124,7 @@ mod tests {
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         let expected_optimized = [
-            "GlobalLimitExec: skip=0, fetch=2",
+            "LocalLimitExec: fetch=2",
             "  SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
