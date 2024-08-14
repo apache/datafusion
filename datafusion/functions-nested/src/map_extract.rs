@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front and array_pop_back functions.
+//! [`ScalarUDFImpl`] definitions for map_extract functions.
 
 use arrow::array::ArrayRef;
 
