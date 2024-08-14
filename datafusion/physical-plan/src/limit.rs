@@ -325,7 +325,7 @@ impl ExecutionPlan for LocalLimitExec {
             self.schema(),
             Some(self.fetch),
             0,
-            1,
+            self.properties().output_partitioning().partition_count(),
         )
     }
 

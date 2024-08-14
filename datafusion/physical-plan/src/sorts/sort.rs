@@ -26,7 +26,6 @@ use std::sync::Arc;
 
 use crate::common::spawn_buffered;
 use crate::expressions::PhysicalSortExpr;
-use crate::limit::statistics_with_fetch;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };

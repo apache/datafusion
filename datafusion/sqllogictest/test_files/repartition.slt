@@ -121,7 +121,7 @@ logical_plan
 02)--Filter: sink_table.c3 > Int16(0)
 03)----TableScan: sink_table projection=[c1, c2, c3]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
+01)LocalLimitExec: fetch=5
 02)--CoalescePartitionsExec
 03)----CoalesceBatchesExec: target_batch_size=8192, fetch=5
 04)------FilterExec: c3@2 > 0

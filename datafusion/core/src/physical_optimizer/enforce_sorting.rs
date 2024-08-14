@@ -62,13 +62,12 @@ use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::{Partitioning, PhysicalSortExpr, PhysicalSortRequirement};
-use datafusion_physical_plan::limit::LocalLimitExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
@@ -1136,7 +1135,7 @@ mod tests {
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         let expected_optimized = [
-            "LocalLimitExec: fetch=2",
+            "GlobalLimitExec: skip=0, fetch=2",
             "  SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];

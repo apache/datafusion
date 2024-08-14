@@ -779,17 +779,19 @@ physical_plan
 04)------ProjectionExec: expr=[0 as m, t@0 as t]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
-09)----------------ProjectionExec: expr=[column1@0 as t]
-10)------------------ValuesExec
-11)------ProjectionExec: expr=[1 as m, t@0 as t]
-12)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
-13)----------CoalesceBatchesExec: target_batch_size=8192
-14)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
-15)--------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
-16)----------------ProjectionExec: expr=[column1@0 as t]
-17)------------------ValuesExec
+07)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+09)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
+10)------------------ProjectionExec: expr=[column1@0 as t]
+11)--------------------ValuesExec
+12)------ProjectionExec: expr=[1 as m, t@0 as t]
+13)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
+14)----------CoalesceBatchesExec: target_batch_size=8192
+15)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=2
+16)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+17)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
+18)------------------ProjectionExec: expr=[column1@0 as t]
+19)--------------------ValuesExec
 
 #####
 # Multi column sorting with lists
@@ -1146,13 +1148,13 @@ EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
 ----
 logical_plan
 01)Projection: ordered_table.a + ordered_table.b AS sum1
-02)--Limit: skip=0, fetch=1
-03)----Sort: ordered_table.a ASC NULLS LAST, fetch=1
-04)------TableScan: ordered_table projection=[a, b]
+02)--Sort: ordered_table.a ASC NULLS LAST, fetch=1
+03)----TableScan: ordered_table projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
-02)--SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
 
 statement ok
 set datafusion.execution.use_row_number_estimates_to_optimize_partitioning = true;
@@ -1166,9 +1168,8 @@ EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
 ----
 logical_plan
 01)Projection: ordered_table.a + ordered_table.b AS sum1
-02)--Limit: skip=0, fetch=1
-03)----Sort: ordered_table.a ASC NULLS LAST, fetch=1
-04)------TableScan: ordered_table projection=[a, b]
+02)--Sort: ordered_table.a ASC NULLS LAST, fetch=1
+03)----TableScan: ordered_table projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
 02)--SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -1186,9 +1187,8 @@ EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
 ----
 logical_plan
 01)Projection: ordered_table.a + ordered_table.b AS sum1
-02)--Limit: skip=0, fetch=1
-03)----Sort: ordered_table.a ASC NULLS LAST, fetch=1
-04)------TableScan: ordered_table projection=[a, b]
+02)--Sort: ordered_table.a ASC NULLS LAST, fetch=1
+03)----TableScan: ordered_table projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1

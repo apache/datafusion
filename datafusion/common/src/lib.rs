@@ -19,7 +19,6 @@
 
 mod column;
 mod dfschema;
-mod error;
 mod functional_dependencies;
 mod join_type;
 mod param_value;
@@ -33,6 +32,7 @@ pub mod alias;
 pub mod cast;
 pub mod config;
 pub mod display;
+pub mod error;
 pub mod file_options;
 pub mod format;
 pub mod hash_utils;
