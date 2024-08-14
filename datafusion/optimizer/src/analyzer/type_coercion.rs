@@ -141,7 +141,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     fn coerce_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
-            LogicalPlan::Union(union) => coerce_union(union),
+            LogicalPlan::Union(union) => Self::coerce_union(union),
             _ => Ok(plan),
         }
     }
@@ -173,6 +173,33 @@ impl<'a> TypeCoercionRewriter<'a> {
             .transpose()?;
 
         Ok(LogicalPlan::Join(join))
+    }
+
+    /// Coerce the union’s inputs to a common schema compatible with all inputs.
+    /// This occurs after wildcard expansion and the coercion of the input expressions.
+    fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
+        let union_schema = coerce_union_schema(union_plan.inputs.clone())?;
+        let new_inputs = union_plan
+            .inputs
+            .iter()
+            .map(|p| {
+                let plan = coerce_plan_expr_for_schema(p, &union_schema)?;
+                match plan {
+                    LogicalPlan::Projection(Projection { expr, input, .. }) => {
+                        Ok(Arc::new(project_with_column_index(
+                            expr,
+                            input,
+                            Arc::new(union_schema.clone()),
+                        )?))
+                    }
+                    other_plan => Ok(Arc::new(other_plan)),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(LogicalPlan::Union(Union {
+            inputs: new_inputs,
+            schema: Arc::new(union_schema),
+        }))
     }
 
     fn coerce_join_filter(&self, expr: Expr) -> Result<Expr> {
@@ -839,33 +866,6 @@ fn coerce_union_schema(inputs: Vec<Arc<LogicalPlan>>) -> Result<DFSchema> {
     })
     .collect::<Vec<_>>();
     DFSchema::new_with_metadata(union_qualified_fields, HashMap::new())
-}
-
-/// Coerce the union’s inputs to a common schema. This occurs after
-/// wildcard expansion and the coercion of the input expressions.
-fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
-    let union_schema = coerce_union_schema(union_plan.inputs.clone())?;
-    let new_inputs = union_plan
-        .inputs
-        .iter()
-        .map(|p| {
-            let plan = coerce_plan_expr_for_schema(p, &union_schema)?;
-            match plan {
-                LogicalPlan::Projection(Projection { expr, input, .. }) => {
-                    Ok(Arc::new(project_with_column_index(
-                        expr,
-                        input,
-                        Arc::new(union_schema.clone()),
-                    )?))
-                }
-                other_plan => Ok(Arc::new(other_plan)),
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(LogicalPlan::Union(Union {
-        inputs: new_inputs,
-        schema: Arc::new(union_schema),
-    }))
 }
 
 /// See `<https://github.com/apache/datafusion/pull/2108>`
