@@ -284,8 +284,8 @@ mod tests {
     use crate::unicode::lpad::LPadFunc;
     use crate::utils::test::test_function;
 
-    use arrow::array::{Array,StringArray};
-    use arrow::datatypes::DataType::{Utf8};
+    use arrow::array::{Array, StringArray};
+    use arrow::datatypes::DataType::Utf8;
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};

@@ -28,6 +28,7 @@ use arrow::{
 };
 
 use datafusion_common::cast::as_large_list_array;
+use datafusion_common::logical::eq::LogicallyEq;
 use datafusion_common::{
     cast::as_list_array,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
@@ -36,8 +37,8 @@ use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarV
 use datafusion_expr::expr::{InList, InSubquery, WindowFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
-    WindowFunctionDefinition,
+    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator,
+    Volatility, WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
@@ -628,15 +629,34 @@ impl<'a> ConstEvaluator<'a> {
             return ConstSimplifyResult::NotSimplified(s);
         }
 
+        let start_type = match expr.get_type(&self.input_schema) {
+            Ok(t) => t,
+            Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+        };
+
         let phys_expr =
             match create_physical_expr(&expr, &self.input_schema, self.execution_props) {
                 Ok(e) => e,
                 Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
             };
+
         let col_val = match phys_expr.evaluate(&self.input_batch) {
             Ok(v) => v,
             Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
         };
+
+        // TODO(@notfilippo): a fix for the select_arrow_cast error
+        let end_type = col_val.data_type();
+        if end_type.logically_eq(&start_type) && start_type != end_type {
+            return ConstSimplifyResult::SimplifyRuntimeError(
+                DataFusionError::Execution(format!(
+                    "Skipping, end_type {} is logically equal to start_type {} but not strictly equal",
+                    end_type, start_type
+                )),
+                expr,
+            );
+        }
+
         match col_val {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {

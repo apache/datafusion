@@ -261,7 +261,7 @@ explain SELECT column1_utf8 from test where column1_utf8view = 'Andrew';
 ----
 logical_plan
 01)Projection: test.column1_utf8
-02)--Filter: test.column1_utf8view = Utf8View("Andrew")
+02)--Filter: test.column1_utf8view = CAST(Utf8("Andrew") AS Utf8View)
 03)----TableScan: test projection=[column1_utf8, column1_utf8view]
 
 # reverse order should be the same
@@ -270,21 +270,21 @@ explain SELECT column1_utf8 from test where 'Andrew' = column1_utf8view;
 ----
 logical_plan
 01)Projection: test.column1_utf8
-02)--Filter: test.column1_utf8view = Utf8View("Andrew")
+02)--Filter: CAST(Utf8("Andrew") AS Utf8View) = test.column1_utf8view
 03)----TableScan: test projection=[column1_utf8, column1_utf8view]
 
 query TT
 explain SELECT column1_utf8 from test where column1_utf8 = arrow_cast('Andrew', 'Utf8View');
 ----
 logical_plan
-01)Filter: test.column1_utf8 = Utf8("Andrew")
+01)Filter: CAST(test.column1_utf8 AS Utf8View) = CAST(Utf8("Andrew") AS Utf8View)
 02)--TableScan: test projection=[column1_utf8]
 
 query TT
 explain SELECT column1_utf8 from test where arrow_cast('Andrew', 'Utf8View') = column1_utf8;
 ----
 logical_plan
-01)Filter: test.column1_utf8 = Utf8("Andrew")
+01)Filter: CAST(Utf8("Andrew") AS Utf8View) = CAST(test.column1_utf8 AS Utf8View)
 02)--TableScan: test projection=[column1_utf8]
 
 query TT
@@ -292,7 +292,7 @@ explain SELECT column1_utf8 from test where column1_utf8view = arrow_cast('Andre
 ----
 logical_plan
 01)Projection: test.column1_utf8
-02)--Filter: test.column1_utf8view = Utf8View("Andrew")
+02)--Filter: test.column1_utf8view = CAST(CAST(Utf8("Andrew") AS Dictionary(Int32, Utf8)) AS Utf8View)
 03)----TableScan: test projection=[column1_utf8, column1_utf8view]
 
 query TT
@@ -300,7 +300,7 @@ explain SELECT column1_utf8 from test where arrow_cast('Andrew', 'Dictionary(Int
 ----
 logical_plan
 01)Projection: test.column1_utf8
-02)--Filter: test.column1_utf8view = Utf8View("Andrew")
+02)--Filter: CAST(CAST(Utf8("Andrew") AS Dictionary(Int32, Utf8)) AS Utf8View) = test.column1_utf8view
 03)----TableScan: test projection=[column1_utf8, column1_utf8view]
 
 # compare string / stringview
@@ -422,8 +422,10 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
-02)--TableScan: test projection=[column1_utf8view]
+01)Projection: starts_with(test.column1_utf8view, CAST(Utf8("äöüß") AS Utf8View)) AS c1, starts_with(test.column1_utf8view, CAST(Utf8("") AS Utf8View)) AS c2, starts_with(test.column1_utf8view, __common_expr_1) AS c3, starts_with(__common_expr_1, test.column1_utf8view) AS c4
+02)--Projection: CAST(NULL AS Utf8View) AS __common_expr_1, test.column1_utf8view
+03)----TableScan: test projection=[column1_utf8view]
+
 
 ### Initcap
 
@@ -481,8 +483,9 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: test.column1_utf8view LIKE Utf8View("foo") AS like, test.column1_utf8view ILIKE Utf8View("foo") AS ilike
-02)--TableScan: test projection=[column1_utf8view]
+01)Projection: test.column1_utf8view LIKE __common_expr_1 AS like, test.column1_utf8view ILIKE __common_expr_1 AS ilike
+02)--Projection: CAST(Utf8("foo") AS Utf8View) AS __common_expr_1, test.column1_utf8view
+03)----TableScan: test projection=[column1_utf8view]
 
 
 
@@ -580,7 +583,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: btrim(test.column1_utf8view, Utf8View("foo")) AS l
+01)Projection: btrim(test.column1_utf8view, CAST(Utf8("foo") AS Utf8View)) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test BTRIM with Utf8View bytes longer than 12
@@ -590,7 +593,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: btrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+01)Projection:  btrim(test.column1_utf8view, CAST(Utf8("this is longer than 12") AS Utf8View)) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test BTRIM outputs

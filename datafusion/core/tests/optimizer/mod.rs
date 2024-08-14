@@ -56,7 +56,8 @@ fn init() {
 #[test]
 fn select_arrow_cast() {
     let sql = "SELECT arrow_cast(1234, 'Float64') as f64, arrow_cast('foo', 'LargeUtf8') as large";
-    let expected = "Projection: Float64(1234) AS f64, LargeUtf8(\"foo\") AS large\
+    let expected =
+        "Projection: Float64(1234) AS f64, CAST(Utf8(\"foo\") AS LargeUtf8) AS large\
         \n  EmptyRelation";
     quick_test(sql, expected);
 }

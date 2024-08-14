@@ -17,13 +17,14 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
 use arrow::array::NullArray;
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::sync::Arc;
+use datafusion_common::logical::eq::LogicallyEq;
 
 /// The result of evaluating an expression.
 ///
@@ -130,6 +131,20 @@ impl ColumnarValue {
         })
     }
 
+    pub fn into_array_of_type(self, num_rows: usize, data_type: &DataType) -> Result<ArrayRef> {
+        let array = self.into_array(num_rows)?;
+        if array.data_type() == data_type {
+            Ok(array)
+        } else {
+            let cast_array = kernels::cast::cast_with_options(
+                &array,
+                data_type,
+                &DEFAULT_CAST_OPTIONS,
+            )?;
+            Ok(cast_array)
+        }
+    }
+
     /// null columnar values are implemented as a null array in order to pass batch
     /// num_rows
     pub fn create_null_array(num_rows: usize) -> Self {
@@ -195,6 +210,10 @@ impl ColumnarValue {
                 kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
             )),
             ColumnarValue::Scalar(scalar) => {
+                if scalar.data_type().logically_eq(cast_type) {
+                    return Ok(self.clone())
+                }
+
                 let scalar_array =
                     if cast_type == &DataType::Timestamp(TimeUnit::Nanosecond, None) {
                         if let ScalarValue::Float64(Some(float_ts)) = scalar {
