@@ -178,9 +178,16 @@ impl WindowUDF {
         self.inner.partition_evaluator()
     }
 
+    /// Returns if column values are nullable for this window function.
+    ///
+    /// See [`WindowUDFImpl::nullable`] for more details.
     pub fn nullable(&self) -> bool {
         self.inner.nullable()
     }
+
+    /// Returns ordering if any introduced by this window function
+    ///
+    /// See [`WindowUDFImpl::sort_options`] for more details.
     pub fn sort_options(&self) -> Option<SortOptions> {
         self.inner.sort_options()
     }
@@ -337,6 +344,7 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         true
     }
 
+    /// Allows the window UDF to define a new ordering.
     fn sort_options(&self) -> Option<SortOptions> {
         None
     }
