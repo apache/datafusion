@@ -49,7 +49,8 @@ pub(super) struct MapExtract {
 impl MapExtract {
     pub fn new() -> Self {
         Self {
-            signature: Signature::map_array_and_key(Volatility::Immutable),
+            // signature: Signature::map_array_and_key(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![String::from("element_at")],
         }
     }

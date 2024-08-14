@@ -766,14 +766,11 @@ pub fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
                     )
                 }
                 _ => {
-                    return _internal_err!(
-                        "Expected a Struct type, got {:?}",
-                        field_data_type
-                    )
+                    _internal_err!("Expected a Struct type, got {:?}", field_data_type)
                 }
             }
         }
-        _ => return _internal_err!("Expected a Map type, got {:?}", data_type),
+        _ => _internal_err!("Expected a Map type, got {:?}", data_type),
     }
 }
 
