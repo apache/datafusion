@@ -22,9 +22,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::utils::{
-    coerced_fixed_size_list_to_list, list_ndims,
-};
+use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err, Result,
 };
