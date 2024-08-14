@@ -41,8 +41,8 @@ pub fn register_all(
 ) -> datafusion_common::Result<()> {
     let functions: Vec<Arc<WindowUDF>> = all_default_window_functions();
 
-    functions.into_iter().try_for_each(|udf| {
-        let existing_udwf = registry.register_udwf(udf)?;
+    functions.into_iter().try_for_each(|fun| {
+        let existing_udwf = registry.register_udwf(fun)?;
         if let Some(existing_udwf) = existing_udwf {
             debug!("Overwrite existing UDWF: {}", existing_udwf.name());
         }
