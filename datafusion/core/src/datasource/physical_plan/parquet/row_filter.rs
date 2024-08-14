@@ -95,7 +95,7 @@ use super::ParquetFileMetrics;
 /// * Does not reference columns with non-primitive types (e.g. structs / lists)
 #[derive(Debug)]
 pub(crate) struct DatafusionArrowPredicate {
-    /// the filter epxression
+    /// the filter expression
     physical_expr: Arc<dyn PhysicalExpr>,
     /// Path to the columns in the parquet schema required to evaluate the
     /// expression
