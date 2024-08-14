@@ -884,14 +884,13 @@ logical_plan
 03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for REVERSE
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   REVERSE(column1_utf8view) as c1
 FROM test;
 ----
 logical_plan
-01)Projection: reverse(CAST(test.column1_utf8view AS Utf8)) AS c1
+01)Projection: reverse(test.column1_utf8view) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 
