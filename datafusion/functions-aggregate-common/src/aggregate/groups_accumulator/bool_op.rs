@@ -17,8 +17,9 @@
 
 use std::sync::Arc;
 
+use crate::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
-use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::buffer::BooleanBuffer;
 use datafusion_common::Result;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
@@ -143,25 +144,9 @@ where
     ) -> Result<Vec<ArrayRef>> {
         let values = values[0].as_boolean().clone();
 
-        let values_filtered = match opt_filter {
-            None => values,
-            Some(filter) => {
-                let (filter_values, filter_nulls) = filter.clone().into_parts();
-                // Calculating filter mask as a result of bitand of filter, and converting it to null buffer
-                let filter_bool = match filter_nulls {
-                    Some(filter_nulls) => filter_nulls.inner() & &filter_values,
-                    None => filter_values,
-                };
-                let filter_nulls = NullBuffer::from(filter_bool);
-
-                // Rebuilding input values with a new nulls mask, which is equal to
-                // the union of original nulls and filter mask
-                let (values_buf, original_nulls) = values.clone().into_parts();
-                let nulls_buf =
-                    NullBuffer::union(original_nulls.as_ref(), Some(&filter_nulls));
-                BooleanArray::new(values_buf, nulls_buf)
-            }
-        };
+        let values_null_buffer_filtered = filtered_null_mask(opt_filter, &values);
+        let (values_buf, _) = values.into_parts();
+        let values_filtered = BooleanArray::new(values_buf, values_null_buffer_filtered);
 
         Ok(vec![Arc::new(values_filtered)])
     }
