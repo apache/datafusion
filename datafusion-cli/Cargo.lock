@@ -1376,7 +1376,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window"
-version = "40.0.0"
+version = "41.0.0"
 dependencies = [
  "datafusion-common",
  "datafusion-expr",
