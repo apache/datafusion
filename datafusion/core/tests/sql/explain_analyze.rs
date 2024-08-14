@@ -71,7 +71,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "LocalLimitExec: fetch=3, ",
+        "GlobalLimitExec: skip=0, fetch=3, ",
         "metrics=[output_rows=3, elapsed_compute="
     );
     assert_metrics!(

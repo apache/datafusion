@@ -1133,7 +1133,7 @@ mod tests {
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         let expected_optimized = [
-            "LocalLimitExec: fetch=2",
+            "GlobalLimitExec: skip=0, fetch=2",
             "  SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];

@@ -129,7 +129,7 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
         LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
 
     let expected = [
-        "LocalLimitExec: fetch=5",
+        "GlobalLimitExec: skip=0, fetch=5",
         "  CoalescePartitionsExec",
         "    CoalesceBatchesExec: target_batch_size=8192, fetch=5",
         "      FilterExec: c3@2 > 0",
@@ -163,7 +163,7 @@ fn pushes_global_limit_exec_through_projection_exec() -> datafusion_common::Resu
 
     let expected = [
         "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-        "  LocalLimitExec: fetch=5",
+        "  GlobalLimitExec: skip=0, fetch=5",
         "    FilterExec: c3@2 > 0",
         "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
     ];
@@ -274,7 +274,7 @@ fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions(
         LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
 
     let expected = [
-        "LocalLimitExec: fetch=5",
+        "GlobalLimitExec: skip=0, fetch=5",
         "  CoalescePartitionsExec",
         "    FilterExec: c3@2 > 0",
         "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
@@ -304,7 +304,7 @@ fn merges_local_limit_with_local_limit() -> datafusion_common::Result<()> {
     let after_optimize =
         LimitPushdown::new().optimize(parent_local_limit, &ConfigOptions::new())?;
 
-    let expected = ["LocalLimitExec: fetch=10", "  EmptyExec"];
+    let expected = ["GlobalLimitExec: skip=0, fetch=10", "  EmptyExec"];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
     Ok(())
