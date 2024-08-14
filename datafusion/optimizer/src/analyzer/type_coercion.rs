@@ -17,22 +17,24 @@
 
 //! Optimizer rule for type validation and coercion
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, IntervalUnit};
+use itertools::izip;
+
+use arrow::datatypes::{DataType, Field, IntervalUnit};
 
 use crate::analyzer::AnalyzerRule;
 use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
-    DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Column,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::builder::project_with_column_index;
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
-    WindowFunction,
+    self, Alias, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like,
+    ScalarFunction, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -51,7 +53,7 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, Operator,
+    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, LogicalPlan, Operator,
     Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
@@ -121,9 +123,8 @@ fn analyze_internal(
         expr.rewrite(&mut expr_rewrite)?
             .map_data(|expr| original_name.restore(expr))
     })?
-    // coerce join expressions specially
-    .map_data(|plan| expr_rewrite.coerce_joins(plan))?
-    .map_data(|plan| expr_rewrite.coerce_union(plan))?
+    // some plans need extra coercion after their expressions are coerced
+    .map_data(|plan| expr_rewrite.coerce_plan(plan))?
     // recompute the schema after the expressions have been rewritten as the types may have changed
     .map_data(|plan| plan.recompute_schema())
 }
@@ -137,6 +138,14 @@ impl<'a> TypeCoercionRewriter<'a> {
         Self { schema }
     }
 
+    fn coerce_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        match plan {
+            LogicalPlan::Join(join) => self.coerce_join(join),
+            LogicalPlan::Union(union) => Self::coerce_union(union),
+            _ => Ok(plan),
+        }
+    }
+
     /// Coerce join equality expressions and join filter
     ///
     /// Joins must be treated specially as their equality expressions are stored
@@ -145,11 +154,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     ///
     /// For example, on_exprs like `t1.a = t2.b AND t1.x = t2.y` will be stored
     /// as a list of `(t1.a, t2.b), (t1.x, t2.y)`
-    fn coerce_joins(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
-        let LogicalPlan::Join(mut join) = plan else {
-            return Ok(plan);
-        };
-
+    fn coerce_join(&mut self, mut join: Join) -> Result<LogicalPlan> {
         join.on = join
             .on
             .into_iter()
@@ -170,36 +175,30 @@ impl<'a> TypeCoercionRewriter<'a> {
         Ok(LogicalPlan::Join(join))
     }
 
-    /// Corece the union inputs after expanding the wildcard expressions
-    ///
-    /// Union inputs must have the same schema, so we coerce the expressions to match the schema
-    /// after expanding the wildcard expressions
-    fn coerce_union(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
-        let LogicalPlan::Union(union) = plan else {
-            return Ok(plan);
-        };
-
-        let inputs = union
+    /// Coerce the union’s inputs to a common schema compatible with all inputs.
+    /// This occurs after wildcard expansion and the coercion of the input expressions.
+    fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
+        let union_schema = Arc::new(coerce_union_schema(&union_plan.inputs)?);
+        let new_inputs = union_plan
             .inputs
-            .into_iter()
+            .iter()
             .map(|p| {
-                let plan = coerce_plan_expr_for_schema(&p, &union.schema)?;
+                let plan = coerce_plan_expr_for_schema(p, &union_schema)?;
                 match plan {
                     LogicalPlan::Projection(Projection { expr, input, .. }) => {
                         Ok(Arc::new(project_with_column_index(
                             expr,
                             input,
-                            Arc::clone(&union.schema),
+                            Arc::clone(&union_schema),
                         )?))
                     }
                     other_plan => Ok(Arc::new(other_plan)),
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-
         Ok(LogicalPlan::Union(Union {
-            inputs,
-            schema: Arc::clone(&union.schema),
+            inputs: new_inputs,
+            schema: union_schema,
         }))
     }
 
@@ -807,6 +806,92 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
         .map(Box::new);
 
     Ok(Case::new(case_expr, when_then, else_expr))
+}
+
+/// Get a common schema that is compatible with all inputs of UNION.
+fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
+    let base_schema = inputs[0].schema();
+    let mut union_datatypes = base_schema
+        .fields()
+        .iter()
+        .map(|f| f.data_type().clone())
+        .collect::<Vec<_>>();
+    let mut union_nullabilities = base_schema
+        .fields()
+        .iter()
+        .map(|f| f.is_nullable())
+        .collect::<Vec<_>>();
+
+    for (i, plan) in inputs.iter().enumerate().skip(1) {
+        let plan_schema = plan.schema();
+        if plan_schema.fields().len() != base_schema.fields().len() {
+            return plan_err!(
+                "Union schemas have different number of fields: \
+                query 1 has {} fields whereas query {} has {} fields",
+                base_schema.fields().len(),
+                i + 1,
+                plan_schema.fields().len()
+            );
+        }
+        // coerce data type and nullablity for each field
+        for (union_datatype, union_nullable, plan_field) in izip!(
+            union_datatypes.iter_mut(),
+            union_nullabilities.iter_mut(),
+            plan_schema.fields()
+        ) {
+            let coerced_type =
+                comparison_coercion(union_datatype, plan_field.data_type()).ok_or_else(
+                    || {
+                        plan_datafusion_err!(
+                            "Incompatible inputs for Union: Previous inputs were \
+                            of type {}, but got incompatible type {} on column '{}'",
+                            union_datatype,
+                            plan_field.data_type(),
+                            plan_field.name()
+                        )
+                    },
+                )?;
+            *union_datatype = coerced_type;
+            *union_nullable = *union_nullable || plan_field.is_nullable();
+        }
+    }
+    let union_qualified_fields = izip!(
+        base_schema.iter(),
+        union_datatypes.into_iter(),
+        union_nullabilities
+    )
+    .map(|((qualifier, field), datatype, nullable)| {
+        let field = Arc::new(Field::new(field.name().clone(), datatype, nullable));
+        (qualifier.cloned(), field)
+    })
+    .collect::<Vec<_>>();
+    DFSchema::new_with_metadata(union_qualified_fields, HashMap::new())
+}
+
+/// See `<https://github.com/apache/datafusion/pull/2108>`
+fn project_with_column_index(
+    expr: Vec<Expr>,
+    input: Arc<LogicalPlan>,
+    schema: DFSchemaRef,
+) -> Result<LogicalPlan> {
+    let alias_expr = expr
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| match e {
+            Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
+                e.unalias().alias(schema.field(i).name())
+            }
+            Expr::Column(Column {
+                relation: _,
+                ref name,
+            }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
+            Expr::Alias { .. } | Expr::Column { .. } => e,
+            _ => e.alias(schema.field(i).name()),
+        })
+        .collect::<Vec<_>>();
+
+    Projection::try_new_with_schema(alias_expr, input, schema)
+        .map(LogicalPlan::Projection)
 }
 
 #[cfg(test)]
