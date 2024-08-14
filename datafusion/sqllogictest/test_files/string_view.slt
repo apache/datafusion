@@ -926,10 +926,26 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: rpad(__common_expr_1, Int64(1)) AS c1, rpad(__common_expr_1, Int64(2), CAST(test.column2_utf8view AS Utf8)) AS c2
-02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
-03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+01)Projection: rpad(test.column1_utf8view, Int64(1)) AS c1, rpad(test.column1_utf8view, Int64(2), test.column2_utf8view) AS c2
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
+query TT
+EXPLAIN SELECT
+  RPAD(column1_utf8view, 12, column2_large_utf8) as c1
+FROM test;
+----
+logical_plan
+01)Projection: rpad(test.column1_utf8view, Int64(12), test.column2_large_utf8) AS c1
+02)--TableScan: test projection=[column2_large_utf8, column1_utf8view]
+
+query TT
+EXPLAIN SELECT
+  RPAD(column1_utf8view, 12, column2_utf8view) as c1
+FROM test;
+----
+logical_plan
+01)Projection: rpad(test.column1_utf8view, Int64(12), test.column2_utf8view) AS c1
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for SPLIT_PART
 ## TODO file ticket

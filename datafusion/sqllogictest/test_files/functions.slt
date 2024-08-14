@@ -294,6 +294,7 @@ SELECT right(NULL, CAST(NULL AS INT))
 ----
 NULL
 
+
 query T
 SELECT rpad('hi', -1, 'xy')
 ----
@@ -353,6 +354,33 @@ query T
 SELECT rpad('xyxhi', 3)
 ----
 xyx
+
+# test for rpad with largeutf8 and utf8View
+
+query T
+SELECT rpad(arrow_cast('hi', 'LargeUtf8'), 5, 'xy')
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast('hi', 'Utf8View'), 5, 'xy')
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast('hi', 'LargeUtf8'), 5, arrow_cast('xy', 'LargeUtf8'))
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast('hi', 'Utf8View'), 5, arrow_cast('xy', 'Utf8View'))
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast(NULL, 'Utf8View'), 5, 'xy')
+----
+NULL
 
 query I
 SELECT strpos('abc', 'c')
