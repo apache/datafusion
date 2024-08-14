@@ -116,6 +116,7 @@ impl SessionStateDefaults {
     pub fn default_window_functions() -> Vec<Arc<WindowUDF>> {
         functions_window::all_default_window_functions()
     }
+
     /// returns the list of default [`FileFormatFactory']'s
     pub fn default_file_formats() -> Vec<Arc<dyn FileFormatFactory>> {
         let file_formats: Vec<Arc<dyn FileFormatFactory>> = vec![
