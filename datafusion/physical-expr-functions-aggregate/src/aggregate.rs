@@ -17,7 +17,6 @@
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_expr::expr::create_function_physical_name;
 use datafusion_expr::AggregateUDF;
 use datafusion_expr::ReversedUDAF;
 use datafusion_expr_common::accumulator::Accumulator;
@@ -110,8 +109,7 @@ impl AggregateExprBuilder {
 
         let data_type = fun.return_type(&input_exprs_types)?;
         let name = match alias {
-            // TODO: Ideally, we should build the name from physical expressions
-            None => create_function_physical_name(fun.name(), is_distinct, &[], None)?,
+            None => return internal_err!("alias should be provided"),
             Some(alias) => alias,
         };
 
