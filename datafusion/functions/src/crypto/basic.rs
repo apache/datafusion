@@ -121,9 +121,7 @@ pub fn digest(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
     let digest_algorithm = match &args[1] {
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
-                method.parse::<DigestAlgorithm>()
-            }
+            ScalarValue::Utf8(Some(method)) => method.parse::<DigestAlgorithm>(),
             other => exec_err!("Unsupported data type {other:?} for function digest"),
         },
         ColumnarValue::Array(_) => {
@@ -338,16 +336,16 @@ pub fn digest_process(
                 "Unsupported data type {other:?} for function {digest_algorithm}"
             ),
         },
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
-                Ok(digest_algorithm
-                    .digest_scalar(a.as_ref().map(|s: &String| s.as_bytes())))
+        ColumnarValue::Scalar(scalar) => {
+            match scalar {
+                ScalarValue::Utf8(a) => Ok(digest_algorithm
+                    .digest_scalar(a.as_ref().map(|s: &String| s.as_bytes()))),
+                ScalarValue::Binary(a) => Ok(digest_algorithm
+                    .digest_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
+                other => exec_err!(
+                    "Unsupported data type {other:?} for function {digest_algorithm}"
+                ),
             }
-            ScalarValue::Binary(a) | ScalarValue::LargeBinary(a) => Ok(digest_algorithm
-                .digest_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
-            other => exec_err!(
-                "Unsupported data type {other:?} for function {digest_algorithm}"
-            ),
-        },
+        }
     }
 }

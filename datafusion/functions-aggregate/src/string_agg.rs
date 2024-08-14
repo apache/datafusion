@@ -85,13 +85,12 @@ impl AggregateUDFImpl for StringAgg {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if let Some(lit) = acc_args.exprs[1].as_any().downcast_ref::<Literal>() {
             return match lit.value() {
-                ScalarValue::Utf8(Some(delimiter))
-                | ScalarValue::LargeUtf8(Some(delimiter)) => {
+                ScalarValue::Utf8(Some(delimiter)) => {
                     Ok(Box::new(StringAggAccumulator::new(delimiter.as_str())))
                 }
-                ScalarValue::Utf8(None)
-                | ScalarValue::LargeUtf8(None)
-                | ScalarValue::Null => Ok(Box::new(StringAggAccumulator::new(""))),
+                ScalarValue::Utf8(None) | ScalarValue::Null => {
+                    Ok(Box::new(StringAggAccumulator::new("")))
+                }
                 e => not_impl_err!("StringAgg not supported for delimiter {}", e),
             };
         }
@@ -142,7 +141,7 @@ impl Accumulator for StringAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::LargeUtf8(self.values.clone()))
+        Ok(ScalarValue::Utf8(self.values.clone()))
     }
 
     fn size(&self) -> usize {

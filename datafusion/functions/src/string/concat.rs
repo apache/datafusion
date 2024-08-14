@@ -151,11 +151,11 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     for arg in args.clone() {
         match arg {
             // filter out `null` args
-            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None)) => {}
+            Expr::Literal(ScalarValue::Utf8(None)) => {}
             // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
             // Concatenate it with the `contiguous_scalar`.
             Expr::Literal(
-                ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)),
+                ScalarValue::Utf8(Some(v)),
             ) => contiguous_scalar += &v,
             Expr::Literal(x) => {
                 return internal_err!(

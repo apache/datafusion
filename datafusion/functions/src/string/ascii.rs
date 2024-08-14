@@ -128,24 +128,6 @@ mod tests {
                 Int32,
                 Int32Array
             );
-
-            test_function!(
-                AsciiFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-
-            test_function!(
-                AsciiFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
         };
     }
 

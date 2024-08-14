@@ -1696,16 +1696,12 @@ fn from_substrait_literal(
         Some(LiteralType::Date(d)) => ScalarValue::Date32(Some(*d)),
         Some(LiteralType::String(s)) => match lit.type_variation_reference {
             DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8(Some(s.clone())),
-            LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeUtf8(Some(s.clone())),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
         },
         Some(LiteralType::Binary(b)) => match lit.type_variation_reference {
             DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Binary(Some(b.clone())),
-            LARGE_CONTAINER_TYPE_VARIATION_REF => {
-                ScalarValue::LargeBinary(Some(b.clone()))
-            }
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
@@ -2052,7 +2048,6 @@ fn from_substrait_null(
             },
             r#type::Kind::Binary(binary) => match binary.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::Binary(None)),
-                LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::LargeBinary(None)),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {kind:?}"
                 ),
@@ -2060,7 +2055,6 @@ fn from_substrait_null(
             // FixedBinary is not supported because `None` doesn't have length
             r#type::Kind::String(string) => match string.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::Utf8(None)),
-                LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::LargeUtf8(None)),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {kind:?}"
                 ),

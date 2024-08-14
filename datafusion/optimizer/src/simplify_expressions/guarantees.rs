@@ -406,7 +406,6 @@ mod tests {
             ScalarValue::Boolean(Some(true)),
             ScalarValue::Boolean(None),
             ScalarValue::from("abc"),
-            ScalarValue::LargeUtf8(Some("def".to_string())),
             ScalarValue::Date32(Some(18628)),
             ScalarValue::Date32(None),
             ScalarValue::Decimal128(Some(1000), 19, 2),

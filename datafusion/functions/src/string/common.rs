@@ -218,10 +218,6 @@ where
                 let result = a.as_ref().map(|x| op(x));
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
             }
-            ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| op(x));
-                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
-            }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
     }

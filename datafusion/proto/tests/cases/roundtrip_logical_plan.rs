@@ -1190,7 +1190,6 @@ fn round_trip_scalar_values() {
         ScalarValue::UInt32(None),
         ScalarValue::UInt64(None),
         ScalarValue::Utf8(None),
-        ScalarValue::LargeUtf8(None),
         ScalarValue::List(ScalarValue::new_list_nullable(&[], &DataType::Boolean)),
         ScalarValue::LargeList(ScalarValue::new_large_list(&[], &DataType::Boolean)),
         ScalarValue::Date32(None),
@@ -1229,7 +1228,6 @@ fn round_trip_scalar_values() {
         ScalarValue::UInt64(Some(u64::MAX)),
         ScalarValue::UInt64(Some(0)),
         ScalarValue::Utf8(Some(String::from("Test string   "))),
-        ScalarValue::LargeUtf8(Some(String::from("Test Large utf8"))),
         ScalarValue::Date32(Some(0)),
         ScalarValue::Date32(Some(i32::MAX)),
         ScalarValue::Date32(None),
@@ -1349,18 +1347,8 @@ fn round_trip_scalar_values() {
             vec![Some(vec![Some(1), Some(2), Some(3)])],
             3,
         ))),
-        ScalarValue::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(ScalarValue::from("foo")),
-        ),
-        ScalarValue::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(ScalarValue::Utf8(None)),
-        ),
         ScalarValue::Binary(Some(b"bar".to_vec())),
         ScalarValue::Binary(None),
-        ScalarValue::LargeBinary(Some(b"bar".to_vec())),
-        ScalarValue::LargeBinary(None),
         ScalarStructBuilder::new()
             .with_scalar(
                 Field::new("a", DataType::Int32, true),
@@ -1380,20 +1368,6 @@ fn round_trip_scalar_values() {
             .with_scalar(
                 Field::new("b", DataType::Boolean, false),
                 ScalarValue::from(false),
-            )
-            .with_scalar(
-                Field::new(
-                    "c",
-                    DataType::Dictionary(
-                        Box::new(DataType::UInt16),
-                        Box::new(DataType::Utf8),
-                    ),
-                    false,
-                ),
-                ScalarValue::Dictionary(
-                    Box::new(DataType::UInt16),
-                    Box::new("value".into()),
-                ),
             )
             .build()
             .unwrap(),
@@ -1737,7 +1711,6 @@ fn roundtrip_null_scalar_values() {
         ScalarValue::UInt32(None),
         ScalarValue::UInt64(None),
         ScalarValue::Utf8(None),
-        ScalarValue::LargeUtf8(None),
         ScalarValue::Date32(None),
         ScalarValue::TimestampMicrosecond(None, None),
         ScalarValue::TimestampNanosecond(None, None),

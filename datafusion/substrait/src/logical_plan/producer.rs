@@ -1855,10 +1855,6 @@ fn to_substrait_literal(
             LiteralType::Binary(b.clone()),
             DEFAULT_CONTAINER_TYPE_VARIATION_REF,
         ),
-        ScalarValue::LargeBinary(Some(b)) => (
-            LiteralType::Binary(b.clone()),
-            LARGE_CONTAINER_TYPE_VARIATION_REF,
-        ),
         ScalarValue::FixedSizeBinary(_, Some(b)) => (
             LiteralType::FixedBinary(b.clone()),
             DEFAULT_TYPE_VARIATION_REF,
@@ -1866,10 +1862,6 @@ fn to_substrait_literal(
         ScalarValue::Utf8(Some(s)) => (
             LiteralType::String(s.clone()),
             DEFAULT_CONTAINER_TYPE_VARIATION_REF,
-        ),
-        ScalarValue::LargeUtf8(Some(s)) => (
-            LiteralType::String(s.clone()),
-            LARGE_CONTAINER_TYPE_VARIATION_REF,
         ),
         ScalarValue::Decimal128(v, p, s) if v.is_some() => (
             LiteralType::Decimal(Decimal {

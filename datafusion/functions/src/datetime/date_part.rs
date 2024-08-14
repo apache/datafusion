@@ -140,8 +140,6 @@ impl ScalarUDFImpl for DatePartFunc {
 
         let part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = part {
             v
-        } else if let ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v))) = part {
-            v
         } else {
             return exec_err!(
                 "First argument of `DATE_PART` must be non-null scalar Utf8"

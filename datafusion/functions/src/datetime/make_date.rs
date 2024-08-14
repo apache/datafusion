@@ -221,7 +221,7 @@ mod tests {
         let res = MakeDateFunc::new()
             .invoke(&[
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("2024".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("1".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("1".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("14".to_string()))),
             ])
             .expect("that make_date parsed values without error");

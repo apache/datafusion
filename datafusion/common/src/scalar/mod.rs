@@ -224,18 +224,10 @@ pub enum ScalarValue {
     UInt64(Option<u64>),
     /// utf-8 encoded string.
     Utf8(Option<String>),
-    /// utf-8 encoded string but from view types.
-    Utf8View(Option<String>),
-    /// utf-8 encoded string representing a LargeString's arrow type.
-    LargeUtf8(Option<String>),
     /// binary
     Binary(Option<Vec<u8>>),
-    /// binary but from view types.
-    BinaryView(Option<Vec<u8>>),
     /// fixed size binary
     FixedSizeBinary(i32, Option<Vec<u8>>),
-    /// large binary
-    LargeBinary(Option<Vec<u8>>),
     /// Fixed size list scalar.
     ///
     /// The array must be a FixedSizeListArray with length 1.
@@ -293,8 +285,6 @@ pub enum ScalarValue {
     /// `.1`: the list of fields, zero-to-one of which will by set in `.0`
     /// `.2`: the physical storage of the source/destination UnionArray from which this Scalar came
     Union(Option<(i8, Box<ScalarValue>)>, UnionFields, UnionMode),
-    /// Dictionary type: index type and value
-    Dictionary(Box<DataType>, Box<ScalarValue>),
 }
 
 impl Hash for Fl<f16> {
@@ -354,18 +344,10 @@ impl PartialEq for ScalarValue {
             (UInt64(_), _) => false,
             (Utf8(v1), Utf8(v2)) => v1.eq(v2),
             (Utf8(_), _) => false,
-            (Utf8View(v1), Utf8View(v2)) => v1.eq(v2),
-            (Utf8View(_), _) => false,
-            (LargeUtf8(v1), LargeUtf8(v2)) => v1.eq(v2),
-            (LargeUtf8(_), _) => false,
             (Binary(v1), Binary(v2)) => v1.eq(v2),
             (Binary(_), _) => false,
-            (BinaryView(v1), BinaryView(v2)) => v1.eq(v2),
-            (BinaryView(_), _) => false,
             (FixedSizeBinary(_, v1), FixedSizeBinary(_, v2)) => v1.eq(v2),
             (FixedSizeBinary(_, _), _) => false,
-            (LargeBinary(v1), LargeBinary(v2)) => v1.eq(v2),
-            (LargeBinary(_), _) => false,
             (FixedSizeList(v1), FixedSizeList(v2)) => v1.eq(v2),
             (FixedSizeList(_), _) => false,
             (List(v1), List(v2)) => v1.eq(v2),
@@ -414,8 +396,6 @@ impl PartialEq for ScalarValue {
                 val1.eq(val2) && fields1.eq(fields2) && mode1.eq(mode2)
             }
             (Union(_, _, _), _) => false,
-            (Dictionary(k1, v1), Dictionary(k2, v2)) => k1.eq(k2) && v1.eq(v2),
-            (Dictionary(_, _), _) => false,
             (Null, Null) => true,
             (Null, _) => false,
         }
@@ -483,18 +463,10 @@ impl PartialOrd for ScalarValue {
             (UInt64(_), _) => None,
             (Utf8(v1), Utf8(v2)) => v1.partial_cmp(v2),
             (Utf8(_), _) => None,
-            (LargeUtf8(v1), LargeUtf8(v2)) => v1.partial_cmp(v2),
-            (LargeUtf8(_), _) => None,
-            (Utf8View(v1), Utf8View(v2)) => v1.partial_cmp(v2),
-            (Utf8View(_), _) => None,
             (Binary(v1), Binary(v2)) => v1.partial_cmp(v2),
             (Binary(_), _) => None,
-            (BinaryView(v1), BinaryView(v2)) => v1.partial_cmp(v2),
-            (BinaryView(_), _) => None,
             (FixedSizeBinary(_, v1), FixedSizeBinary(_, v2)) => v1.partial_cmp(v2),
             (FixedSizeBinary(_, _), _) => None,
-            (LargeBinary(v1), LargeBinary(v2)) => v1.partial_cmp(v2),
-            (LargeBinary(_), _) => None,
             // ScalarValue::List / ScalarValue::FixedSizeList / ScalarValue::LargeList are ensure to have length 1
             (List(arr1), List(arr2)) => partial_cmp_list(arr1.as_ref(), arr2.as_ref()),
             (FixedSizeList(arr1), FixedSizeList(arr2)) => {
@@ -558,15 +530,6 @@ impl PartialOrd for ScalarValue {
                 }
             }
             (Union(_, _, _), _) => None,
-            (Dictionary(k1, v1), Dictionary(k2, v2)) => {
-                // Don't compare if the key types don't match (it is effectively a different datatype)
-                if k1 == k2 {
-                    v1.partial_cmp(v2)
-                } else {
-                    None
-                }
-            }
-            (Dictionary(_, _), _) => None,
             (Null, Null) => Some(Ordering::Equal),
             (Null, _) => None,
         }
@@ -716,10 +679,8 @@ impl std::hash::Hash for ScalarValue {
             UInt16(v) => v.hash(state),
             UInt32(v) => v.hash(state),
             UInt64(v) => v.hash(state),
-            Utf8(v) | LargeUtf8(v) | Utf8View(v) => v.hash(state),
-            Binary(v) | FixedSizeBinary(_, v) | LargeBinary(v) | BinaryView(v) => {
-                v.hash(state)
-            }
+            Utf8(v) => v.hash(state),
+            Binary(v) | FixedSizeBinary(_, v) => v.hash(state),
             List(arr) => {
                 hash_nested_array(arr.to_owned() as ArrayRef, state);
             }
@@ -757,10 +718,6 @@ impl std::hash::Hash for ScalarValue {
                 t.hash(state);
                 m.hash(state);
             }
-            Dictionary(k, v) => {
-                k.hash(state);
-                v.hash(state);
-            }
             // stable hash for Null value
             Null => 1.hash(state),
         }
@@ -789,68 +746,6 @@ pub fn get_dict_value<K: ArrowDictionaryKeyType>(
 ) -> Result<(&ArrayRef, Option<usize>)> {
     let dict_array = as_dictionary_array::<K>(array)?;
     Ok((dict_array.values(), dict_array.key(index)))
-}
-
-/// Create a dictionary array representing `value` repeated `size`
-/// times
-fn dict_from_scalar<K: ArrowDictionaryKeyType>(
-    value: &ScalarValue,
-    size: usize,
-) -> Result<ArrayRef> {
-    // values array is one element long (the value)
-    let values_array = value.to_array_of_size(1)?;
-
-    // Create a key array with `size` elements, each of 0
-    let key_array: PrimitiveArray<K> = std::iter::repeat(if value.is_null() {
-        None
-    } else {
-        Some(K::default_value())
-    })
-    .take(size)
-    .collect();
-
-    // create a new DictionaryArray
-    //
-    // Note: this path could be made faster by using the ArrayData
-    // APIs and skipping validation, if it every comes up in
-    // performance traces.
-    Ok(Arc::new(
-        DictionaryArray::<K>::try_new(key_array, values_array)?, // should always be valid by construction above
-    ))
-}
-
-/// Create a dictionary array representing all the values in values
-fn dict_from_values<K: ArrowDictionaryKeyType>(
-    values_array: ArrayRef,
-) -> Result<ArrayRef> {
-    // Create a key array with `size` elements of 0..array_len for all
-    // non-null value elements
-    let key_array: PrimitiveArray<K> = (0..values_array.len())
-        .map(|index| {
-            if values_array.is_valid(index) {
-                let native_index = K::Native::from_usize(index).ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "Can not create index of type {} from value {}",
-                        K::DATA_TYPE,
-                        index
-                    ))
-                })?;
-                Ok(Some(native_index))
-            } else {
-                Ok(None)
-            }
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .collect();
-
-    // create a new DictionaryArray
-    //
-    // Note: this path could be made faster by using the ArrayData
-    // APIs and skipping validation, if it every comes up in
-    // performance traces.
-    let dict_array = DictionaryArray::<K>::try_new(key_array, values_array)?;
-    Ok(Arc::new(dict_array))
 }
 
 macro_rules! typed_cast_tz {
@@ -1279,12 +1174,8 @@ impl ScalarValue {
             ScalarValue::Float32(_) => DataType::Float32,
             ScalarValue::Float64(_) => DataType::Float64,
             ScalarValue::Utf8(_) => DataType::Utf8,
-            ScalarValue::LargeUtf8(_) => DataType::LargeUtf8,
-            ScalarValue::Utf8View(_) => DataType::Utf8View,
             ScalarValue::Binary(_) => DataType::Binary,
-            ScalarValue::BinaryView(_) => DataType::BinaryView,
             ScalarValue::FixedSizeBinary(sz, _) => DataType::FixedSizeBinary(*sz),
-            ScalarValue::LargeBinary(_) => DataType::LargeBinary,
             ScalarValue::List(arr) => arr.data_type().to_owned(),
             ScalarValue::LargeList(arr) => arr.data_type().to_owned(),
             ScalarValue::FixedSizeList(arr) => arr.data_type().to_owned(),
@@ -1314,9 +1205,6 @@ impl ScalarValue {
                 DataType::Duration(TimeUnit::Nanosecond)
             }
             ScalarValue::Union(_, fields, mode) => DataType::Union(fields.clone(), *mode),
-            ScalarValue::Dictionary(k, v) => {
-                DataType::Dictionary(k.clone(), Box::new(v.data_type()))
-            }
             ScalarValue::Null => DataType::Null,
         }
     }
@@ -1548,13 +1436,8 @@ impl ScalarValue {
             ScalarValue::UInt16(v) => v.is_none(),
             ScalarValue::UInt32(v) => v.is_none(),
             ScalarValue::UInt64(v) => v.is_none(),
-            ScalarValue::Utf8(v)
-            | ScalarValue::Utf8View(v)
-            | ScalarValue::LargeUtf8(v) => v.is_none(),
-            ScalarValue::Binary(v)
-            | ScalarValue::BinaryView(v)
-            | ScalarValue::FixedSizeBinary(_, v)
-            | ScalarValue::LargeBinary(v) => v.is_none(),
+            ScalarValue::Utf8(v) => v.is_none(),
+            ScalarValue::Binary(v) | ScalarValue::FixedSizeBinary(_, v) => v.is_none(),
             // arr.len() should be 1 for a list scalar, but we don't seem to
             // enforce that anywhere, so we still check against array length.
             ScalarValue::List(arr) => arr.len() == arr.null_count(),
@@ -1583,7 +1466,6 @@ impl ScalarValue {
                 Some((_, s)) => s.is_null(),
                 None => true,
             },
-            ScalarValue::Dictionary(_, v) => v.is_null(),
         }
     }
 
@@ -1802,12 +1684,8 @@ impl ScalarValue {
             DataType::UInt16 => build_array_primitive!(UInt16Array, UInt16),
             DataType::UInt32 => build_array_primitive!(UInt32Array, UInt32),
             DataType::UInt64 => build_array_primitive!(UInt64Array, UInt64),
-            DataType::Utf8View => build_array_string!(StringViewArray, Utf8View),
             DataType::Utf8 => build_array_string!(StringArray, Utf8),
-            DataType::LargeUtf8 => build_array_string!(LargeStringArray, LargeUtf8),
-            DataType::BinaryView => build_array_string!(BinaryViewArray, BinaryView),
             DataType::Binary => build_array_string!(BinaryArray, Binary),
-            DataType::LargeBinary => build_array_string!(LargeBinaryArray, LargeBinary),
             DataType::Date32 => build_array_primitive!(Date32Array, Date32),
             DataType::Date64 => build_array_primitive!(Date64Array, Date64),
             DataType::Time32(TimeUnit::Second) => {
@@ -1900,40 +1778,6 @@ impl ScalarValue {
                 let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
                 arrow::compute::concat(arrays.as_slice())?
             }
-            DataType::Dictionary(key_type, value_type) => {
-                // create the values array
-                let value_scalars = scalars
-                    .map(|scalar| match scalar {
-                        ScalarValue::Dictionary(inner_key_type, scalar) => {
-                            if &inner_key_type == key_type {
-                                Ok(*scalar)
-                            } else {
-                                _internal_err!("Expected inner key type of {key_type} but found: {inner_key_type}, value was ({scalar:?})")
-                            }
-                        }
-                        _ => {
-                            _internal_err!(
-                                "Expected scalar of type {value_type} but found: {scalar} {scalar:?}"
-                            )
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                let values = Self::iter_to_array(value_scalars)?;
-                assert_eq!(values.data_type(), value_type.as_ref());
-
-                match key_type.as_ref() {
-                    DataType::Int8 => dict_from_values::<Int8Type>(values)?,
-                    DataType::Int16 => dict_from_values::<Int16Type>(values)?,
-                    DataType::Int32 => dict_from_values::<Int32Type>(values)?,
-                    DataType::Int64 => dict_from_values::<Int64Type>(values)?,
-                    DataType::UInt8 => dict_from_values::<UInt8Type>(values)?,
-                    DataType::UInt16 => dict_from_values::<UInt16Type>(values)?,
-                    DataType::UInt32 => dict_from_values::<UInt32Type>(values)?,
-                    DataType::UInt64 => dict_from_values::<UInt64Type>(values)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
-                }
-            }
             DataType::FixedSizeBinary(size) => {
                 let array = scalars
                     .map(|sv| {
@@ -1964,6 +1808,11 @@ impl ScalarValue {
             | DataType::Time64(TimeUnit::Millisecond)
             | DataType::RunEndEncoded(_, _)
             | DataType::ListView(_)
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::LargeUtf8
+            | DataType::Utf8View
+            | DataType::Dictionary(_, _)
             | DataType::LargeListView(_) => {
                 return _internal_err!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
@@ -2186,7 +2035,7 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(array_into_large_list_array(values))
+        Arc::new(array_into_large_list_array(values, true))
     }
 
     /// Converts a scalar value into an array of `size` rows.
@@ -2275,18 +2124,6 @@ impl ScalarValue {
                 }
                 None => new_null_array(&DataType::Utf8, size),
             },
-            ScalarValue::Utf8View(e) => match e {
-                Some(value) => {
-                    Arc::new(StringViewArray::from_iter_values(repeat(value).take(size)))
-                }
-                None => new_null_array(&DataType::Utf8View, size),
-            },
-            ScalarValue::LargeUtf8(e) => match e {
-                Some(value) => {
-                    Arc::new(LargeStringArray::from_iter_values(repeat(value).take(size)))
-                }
-                None => new_null_array(&DataType::LargeUtf8, size),
-            },
             ScalarValue::Binary(e) => match e {
                 Some(value) => Arc::new(
                     repeat(Some(value.as_slice()))
@@ -2295,16 +2132,6 @@ impl ScalarValue {
                 ),
                 None => {
                     Arc::new(repeat(None::<&str>).take(size).collect::<BinaryArray>())
-                }
-            },
-            ScalarValue::BinaryView(e) => match e {
-                Some(value) => Arc::new(
-                    repeat(Some(value.as_slice()))
-                        .take(size)
-                        .collect::<BinaryViewArray>(),
-                ),
-                None => {
-                    Arc::new(repeat(None::<&str>).take(size).collect::<BinaryViewArray>())
                 }
             },
             ScalarValue::FixedSizeBinary(s, e) => match e {
@@ -2321,18 +2148,6 @@ impl ScalarValue {
                         *s,
                     )
                     .unwrap(),
-                ),
-            },
-            ScalarValue::LargeBinary(e) => match e {
-                Some(value) => Arc::new(
-                    repeat(Some(value.as_slice()))
-                        .take(size)
-                        .collect::<LargeBinaryArray>(),
-                ),
-                None => Arc::new(
-                    repeat(None::<&str>)
-                        .take(size)
-                        .collect::<LargeBinaryArray>(),
                 ),
             },
             ScalarValue::List(arr) => {
@@ -2473,20 +2288,6 @@ impl ScalarValue {
                     new_null_array(&dt, size)
                 }
             },
-            ScalarValue::Dictionary(key_type, v) => {
-                // values array is one element long (the value)
-                match key_type.as_ref() {
-                    DataType::Int8 => dict_from_scalar::<Int8Type>(v, size)?,
-                    DataType::Int16 => dict_from_scalar::<Int16Type>(v, size)?,
-                    DataType::Int32 => dict_from_scalar::<Int32Type>(v, size)?,
-                    DataType::Int64 => dict_from_scalar::<Int64Type>(v, size)?,
-                    DataType::UInt8 => dict_from_scalar::<UInt8Type>(v, size)?,
-                    DataType::UInt16 => dict_from_scalar::<UInt16Type>(v, size)?,
-                    DataType::UInt32 => dict_from_scalar::<UInt32Type>(v, size)?,
-                    DataType::UInt64 => dict_from_scalar::<UInt64Type>(v, size)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
-                }
-            }
             ScalarValue::Null => new_null_array(&DataType::Null, size),
         })
     }
@@ -2651,17 +2452,11 @@ impl ScalarValue {
             DataType::Int16 => typed_cast!(array, index, Int16Array, Int16)?,
             DataType::Int8 => typed_cast!(array, index, Int8Array, Int8)?,
             DataType::Binary => typed_cast!(array, index, BinaryArray, Binary)?,
-            DataType::LargeBinary => {
-                typed_cast!(array, index, LargeBinaryArray, LargeBinary)?
-            }
-            DataType::BinaryView => {
-                typed_cast!(array, index, BinaryViewArray, BinaryView)?
-            }
+            DataType::LargeBinary => typed_cast!(array, index, LargeBinaryArray, Binary)?,
+            DataType::BinaryView => typed_cast!(array, index, BinaryViewArray, Binary)?,
             DataType::Utf8 => typed_cast!(array, index, StringArray, Utf8)?,
-            DataType::LargeUtf8 => {
-                typed_cast!(array, index, LargeStringArray, LargeUtf8)?
-            }
-            DataType::Utf8View => typed_cast!(array, index, StringViewArray, Utf8View)?,
+            DataType::LargeUtf8 => typed_cast!(array, index, LargeStringArray, Utf8)?,
+            DataType::Utf8View => typed_cast!(array, index, StringViewArray, Utf8)?,
             DataType::List(field) => {
                 let list_array = array.as_list::<i32>();
                 let nested_array = list_array.value(index);
@@ -2671,11 +2466,14 @@ impl ScalarValue {
 
                 ScalarValue::List(arr)
             }
-            DataType::LargeList(_) => {
+            DataType::LargeList(field) => {
                 let list_array = as_large_list_array(array);
                 let nested_array = list_array.value(index);
                 // Produces a single element `LargeListArray` with the value at `index`.
-                let arr = Arc::new(array_into_large_list_array(nested_array));
+                let arr = Arc::new(array_into_large_list_array(
+                    nested_array,
+                    field.is_nullable(),
+                ));
 
                 ScalarValue::LargeList(arr)
             }
@@ -2745,15 +2543,13 @@ impl ScalarValue {
                     _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
                 };
                 // look up the index in the values dictionary
-                let value = match values_index {
+                match values_index {
                     Some(values_index) => {
                         ScalarValue::try_from_array(values_array, values_index)
                     }
                     // else entry was null, so return null
                     None => values_array.data_type().try_into(),
-                }?;
-
-                Self::Dictionary(key_type.clone(), Box::new(value))
+                }?
             }
             DataType::Struct(_) => {
                 let a = array.slice(index, 1);
@@ -2897,6 +2693,7 @@ impl ScalarValue {
     /// Panics if `self` is a dictionary with invalid key type
     #[inline]
     pub fn eq_array(&self, array: &ArrayRef, index: usize) -> Result<bool> {
+        // TODO(@notfilippo): maybe match on the array DataType instead of self
         Ok(match self {
             ScalarValue::Decimal128(v, precision, scale) => {
                 ScalarValue::eq_array_decimal(
@@ -2953,23 +2750,11 @@ impl ScalarValue {
             ScalarValue::Utf8(val) => {
                 eq_array_primitive!(array, index, StringArray, val)?
             }
-            ScalarValue::Utf8View(val) => {
-                eq_array_primitive!(array, index, StringViewArray, val)?
-            }
-            ScalarValue::LargeUtf8(val) => {
-                eq_array_primitive!(array, index, LargeStringArray, val)?
-            }
             ScalarValue::Binary(val) => {
                 eq_array_primitive!(array, index, BinaryArray, val)?
             }
-            ScalarValue::BinaryView(val) => {
-                eq_array_primitive!(array, index, BinaryViewArray, val)?
-            }
             ScalarValue::FixedSizeBinary(_, val) => {
                 eq_array_primitive!(array, index, FixedSizeBinaryArray, val)?
-            }
-            ScalarValue::LargeBinary(val) => {
-                eq_array_primitive!(array, index, LargeBinaryArray, val)?
             }
             ScalarValue::List(arr) => {
                 Self::eq_array_list(&(arr.to_owned() as ArrayRef), array, index)
@@ -3040,24 +2825,6 @@ impl ScalarValue {
             ScalarValue::Union(_, _, _) => {
                 return _not_impl_err!("Union is not supported yet")
             }
-            ScalarValue::Dictionary(key_type, v) => {
-                let (values_array, values_index) = match key_type.as_ref() {
-                    DataType::Int8 => get_dict_value::<Int8Type>(array, index)?,
-                    DataType::Int16 => get_dict_value::<Int16Type>(array, index)?,
-                    DataType::Int32 => get_dict_value::<Int32Type>(array, index)?,
-                    DataType::Int64 => get_dict_value::<Int64Type>(array, index)?,
-                    DataType::UInt8 => get_dict_value::<UInt8Type>(array, index)?,
-                    DataType::UInt16 => get_dict_value::<UInt16Type>(array, index)?,
-                    DataType::UInt32 => get_dict_value::<UInt32Type>(array, index)?,
-                    DataType::UInt64 => get_dict_value::<UInt64Type>(array, index)?,
-                    _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
-                };
-                // was the value in the array non null?
-                match values_index {
-                    Some(values_index) => v.eq_array(values_array, values_index)?,
-                    None => v.is_null(),
-                }
-            }
             ScalarValue::Null => array.is_null(index),
         })
     }
@@ -3100,9 +2867,7 @@ impl ScalarValue {
                 | ScalarValue::DurationMillisecond(_)
                 | ScalarValue::DurationMicrosecond(_)
                 | ScalarValue::DurationNanosecond(_) => 0,
-                ScalarValue::Utf8(s)
-                | ScalarValue::LargeUtf8(s)
-                | ScalarValue::Utf8View(s) => {
+                ScalarValue::Utf8(s) => {
                     s.as_ref().map(|s| s.capacity()).unwrap_or_default()
                 }
                 ScalarValue::TimestampSecond(_, s)
@@ -3111,10 +2876,7 @@ impl ScalarValue {
                 | ScalarValue::TimestampNanosecond(_, s) => {
                     s.as_ref().map(|s| s.len()).unwrap_or_default()
                 }
-                ScalarValue::Binary(b)
-                | ScalarValue::FixedSizeBinary(_, b)
-                | ScalarValue::LargeBinary(b)
-                | ScalarValue::BinaryView(b) => {
+                ScalarValue::Binary(b) | ScalarValue::FixedSizeBinary(_, b) => {
                     b.as_ref().map(|b| b.capacity()).unwrap_or_default()
                 }
                 ScalarValue::List(arr) => arr.get_array_memory_size(),
@@ -3130,10 +2892,6 @@ impl ScalarValue {
                         + std::mem::size_of_val(fields)
                         + (std::mem::size_of::<Field>() * fields.len())
                         + fields.iter().map(|(_idx, field)| field.size() - std::mem::size_of_val(field)).sum::<usize>()
-                }
-                ScalarValue::Dictionary(dt, sv) => {
-                    // `dt` and `sv` are boxed, so they are NOT already included in `self`
-                    dt.size() + sv.size()
                 }
             }
     }
@@ -3381,12 +3139,12 @@ impl TryFrom<&DataType> for ScalarValue {
                 ScalarValue::Decimal256(None, *precision, *scale)
             }
             DataType::Utf8 => ScalarValue::Utf8(None),
-            DataType::LargeUtf8 => ScalarValue::LargeUtf8(None),
-            DataType::Utf8View => ScalarValue::Utf8View(None),
+            DataType::LargeUtf8 => ScalarValue::Utf8(None),
+            DataType::Utf8View => ScalarValue::Utf8(None),
             DataType::Binary => ScalarValue::Binary(None),
-            DataType::BinaryView => ScalarValue::BinaryView(None),
+            DataType::BinaryView => ScalarValue::Binary(None),
             DataType::FixedSizeBinary(len) => ScalarValue::FixedSizeBinary(*len, None),
-            DataType::LargeBinary => ScalarValue::LargeBinary(None),
+            DataType::LargeBinary => ScalarValue::Binary(None),
             DataType::Date32 => ScalarValue::Date32(None),
             DataType::Date64 => ScalarValue::Date64(None),
             DataType::Time32(TimeUnit::Second) => ScalarValue::Time32Second(None),
@@ -3428,10 +3186,7 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::Duration(TimeUnit::Nanosecond) => {
                 ScalarValue::DurationNanosecond(None)
             }
-            DataType::Dictionary(index_type, value_type) => ScalarValue::Dictionary(
-                index_type.clone(),
-                Box::new(value_type.as_ref().try_into()?),
-            ),
+            DataType::Dictionary(_, value_type) => Self::try_from(value_type.as_ref())?,
             // `ScalaValue::List` contains single element `ListArray`.
             DataType::List(field_ref) => ScalarValue::List(Arc::new(
                 GenericListArray::new_null(Arc::clone(field_ref), 1),
@@ -3512,13 +3267,8 @@ impl fmt::Display for ScalarValue {
             ScalarValue::TimestampMillisecond(e, _) => format_option!(f, e)?,
             ScalarValue::TimestampMicrosecond(e, _) => format_option!(f, e)?,
             ScalarValue::TimestampNanosecond(e, _) => format_option!(f, e)?,
-            ScalarValue::Utf8(e)
-            | ScalarValue::LargeUtf8(e)
-            | ScalarValue::Utf8View(e) => format_option!(f, e)?,
-            ScalarValue::Binary(e)
-            | ScalarValue::FixedSizeBinary(_, e)
-            | ScalarValue::LargeBinary(e)
-            | ScalarValue::BinaryView(e) => match e {
+            ScalarValue::Utf8(e) => format_option!(f, e)?,
+            ScalarValue::Binary(e) | ScalarValue::FixedSizeBinary(_, e) => match e {
                 Some(l) => write!(
                     f,
                     "{}",
@@ -3631,7 +3381,6 @@ impl fmt::Display for ScalarValue {
                 Some((id, val)) => write!(f, "{}:{}", id, val)?,
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
             ScalarValue::Null => write!(f, "NULL")?,
         };
         Ok(())
@@ -3679,22 +3428,14 @@ impl fmt::Debug for ScalarValue {
             }
             ScalarValue::Utf8(None) => write!(f, "Utf8({self})"),
             ScalarValue::Utf8(Some(_)) => write!(f, "Utf8(\"{self}\")"),
-            ScalarValue::Utf8View(None) => write!(f, "Utf8View({self})"),
-            ScalarValue::Utf8View(Some(_)) => write!(f, "Utf8View(\"{self}\")"),
-            ScalarValue::LargeUtf8(None) => write!(f, "LargeUtf8({self})"),
-            ScalarValue::LargeUtf8(Some(_)) => write!(f, "LargeUtf8(\"{self}\")"),
             ScalarValue::Binary(None) => write!(f, "Binary({self})"),
             ScalarValue::Binary(Some(_)) => write!(f, "Binary(\"{self}\")"),
-            ScalarValue::BinaryView(None) => write!(f, "BinaryView({self})"),
-            ScalarValue::BinaryView(Some(_)) => write!(f, "BinaryView(\"{self}\")"),
             ScalarValue::FixedSizeBinary(size, None) => {
                 write!(f, "FixedSizeBinary({size}, {self})")
             }
             ScalarValue::FixedSizeBinary(size, Some(_)) => {
                 write!(f, "FixedSizeBinary({size}, \"{self}\")")
             }
-            ScalarValue::LargeBinary(None) => write!(f, "LargeBinary({self})"),
-            ScalarValue::LargeBinary(Some(_)) => write!(f, "LargeBinary(\"{self}\")"),
             ScalarValue::FixedSizeList(_) => write!(f, "FixedSizeList({self})"),
             ScalarValue::List(_) => write!(f, "List({self})"),
             ScalarValue::LargeList(_) => write!(f, "LargeList({self})"),
@@ -3782,7 +3523,6 @@ impl fmt::Debug for ScalarValue {
                 Some((id, val)) => write!(f, "Union {}:{}", id, val),
                 None => write!(f, "Union(NULL)"),
             },
-            ScalarValue::Dictionary(k, v) => write!(f, "Dictionary({k:?}, {v:?})"),
             ScalarValue::Null => write!(f, "NULL"),
         }
     }
@@ -3834,9 +3574,7 @@ impl ScalarType<i32> for Date32Type {
 mod tests {
 
     use super::*;
-    use crate::cast::{
-        as_map_array, as_string_array, as_struct_array, as_uint32_array, as_uint64_array,
-    };
+    use crate::cast::{as_map_array, as_struct_array, as_uint32_array, as_uint64_array};
 
     use crate::assert_batches_eq;
     use crate::utils::array_into_list_array_nullable;
@@ -4805,19 +4543,9 @@ mod tests {
             StringArray,
             vec![Some("foo"), None, Some("bar")]
         );
-        check_scalar_iter_string!(
-            LargeUtf8,
-            LargeStringArray,
-            vec![Some("foo"), None, Some("bar")]
-        );
         check_scalar_iter_binary!(
             Binary,
             BinaryArray,
-            vec![Some(b"foo"), None, Some(b"bar")]
-        );
-        check_scalar_iter_binary!(
-            LargeBinary,
-            LargeBinaryArray,
             vec![Some(b"foo"), None, Some(b"bar")]
         );
     }
@@ -4834,38 +4562,6 @@ mod tests {
             "{}",
             result
         );
-    }
-
-    #[test]
-    fn scalar_iter_to_dictionary() {
-        fn make_val(v: Option<String>) -> ScalarValue {
-            let key_type = DataType::Int32;
-            let value = ScalarValue::Utf8(v);
-            ScalarValue::Dictionary(Box::new(key_type), Box::new(value))
-        }
-
-        let scalars = [
-            make_val(Some("Foo".into())),
-            make_val(None),
-            make_val(Some("Bar".into())),
-        ];
-
-        let array = ScalarValue::iter_to_array(scalars).unwrap();
-        let array = as_dictionary_array::<Int32Type>(&array).unwrap();
-        let values_array = as_string_array(array.values()).unwrap();
-
-        let values = array
-            .keys_iter()
-            .map(|k| {
-                k.map(|k| {
-                    assert!(values_array.is_valid(k));
-                    values_array.value(k)
-                })
-            })
-            .collect::<Vec<_>>();
-
-        let expected = vec![Some("Foo"), None, Some("Bar")];
-        assert_eq!(values, expected);
     }
 
     #[test]
@@ -4995,18 +4691,6 @@ mod tests {
         let nested_list_scalar: ScalarValue = data_type.try_into().unwrap();
 
         assert_ne!(list_scalar, nested_list_scalar);
-    }
-
-    #[test]
-    fn scalar_try_from_dict_datatype() {
-        let data_type =
-            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
-        let data_type = &data_type;
-        let expected = ScalarValue::Dictionary(
-            Box::new(DataType::Int8),
-            Box::new(ScalarValue::Utf8(None)),
-        );
-        assert_eq!(expected, data_type.try_into().unwrap())
     }
 
     #[test]
@@ -5149,29 +4833,6 @@ mod tests {
             }};
         }
 
-        /// create a test case for DictionaryArray<$INDEX_TY>
-        macro_rules! make_str_dict_test_case {
-            ($INPUT:expr, $INDEX_TY:ident) => {{
-                TestCase {
-                    array: Arc::new(
-                        $INPUT
-                            .iter()
-                            .cloned()
-                            .collect::<DictionaryArray<$INDEX_TY>>(),
-                    ),
-                    scalars: $INPUT
-                        .iter()
-                        .map(|v| {
-                            ScalarValue::Dictionary(
-                                Box::new($INDEX_TY::DATA_TYPE),
-                                Box::new(ScalarValue::Utf8(v.map(|v| v.to_string()))),
-                            )
-                        })
-                        .collect(),
-                }
-            }};
-        }
-
         let cases = vec![
             make_test_case!(bool_vals, BooleanArray, Boolean),
             make_test_case!(f32_vals, Float32Array, Float32),
@@ -5185,9 +4846,7 @@ mod tests {
             make_test_case!(u32_vals, UInt32Array, UInt32),
             make_test_case!(u64_vals, UInt64Array, UInt64),
             make_str_test_case!(str_vals, StringArray, Utf8),
-            make_str_test_case!(str_vals, LargeStringArray, LargeUtf8),
             make_binary_test_case!(str_vals, BinaryArray, Binary),
-            make_binary_test_case!(str_vals, LargeBinaryArray, LargeBinary),
             make_test_case!(i32_vals, Date32Array, Date32),
             make_test_case!(i64_vals, Date64Array, Date64),
             make_test_case!(i32_vals, Time32SecondArray, Time32Second),
@@ -5244,14 +4903,6 @@ mod tests {
                 IntervalMonthDayNanoArray,
                 IntervalMonthDayNano
             ),
-            make_str_dict_test_case!(str_vals, Int8Type),
-            make_str_dict_test_case!(str_vals, Int16Type),
-            make_str_dict_test_case!(str_vals, Int32Type),
-            make_str_dict_test_case!(str_vals, Int64Type),
-            make_str_dict_test_case!(str_vals, UInt8Type),
-            make_str_dict_test_case!(str_vals, UInt16Type),
-            make_str_dict_test_case!(str_vals, UInt32Type),
-            make_str_dict_test_case!(str_vals, UInt64Type),
         ];
 
         for case in cases {
@@ -6677,16 +6328,5 @@ mod tests {
             UnionMode::Dense,
         );
         assert!(dense_scalar.is_null());
-    }
-
-    #[test]
-    fn null_dictionary_scalar_produces_null_dictionary_array() {
-        let dictionary_scalar = ScalarValue::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(ScalarValue::Null),
-        );
-        assert!(dictionary_scalar.is_null());
-        let dictionary_array = dictionary_scalar.to_array().unwrap();
-        assert!(dictionary_array.is_null(0));
     }
 }

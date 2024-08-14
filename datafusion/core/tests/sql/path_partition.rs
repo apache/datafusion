@@ -64,13 +64,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         ],
         &[
             ("year", DataType::Int32),
-            (
-                "month",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt16),
-                    Box::new(DataType::Utf8),
-                ),
-            ),
+            ("month", DataType::Utf8),
             ("day", DataType::Utf8),
         ],
         "mirror:///",
@@ -170,7 +164,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     let s = ScalarValue::try_from_array(results[0].column(1), 0)?;
     let month = match extract_as_utf(&s) {
         Some(month) => month,
-        s => panic!("Expected month as Dict(_, Utf8) found {s:?}"),
+        _ => panic!("Expected month as Utf8 found {s:?}"),
     };
 
     let sql_on_partition_boundary = format!(
@@ -192,10 +186,8 @@ async fn parquet_distinct_partition_col() -> Result<()> {
 }
 
 fn extract_as_utf(v: &ScalarValue) -> Option<String> {
-    if let ScalarValue::Dictionary(_, v) = v {
-        if let ScalarValue::Utf8(v) = v.as_ref() {
-            return v.clone();
-        }
+    if let ScalarValue::Utf8(v) = v {
+        return v.clone();
     }
     None
 }

@@ -122,8 +122,8 @@ where
 mod tests {
     use crate::unicode::character_length::CharacterLengthFunc;
     use crate::utils::test::test_function;
-    use arrow::array::{Array, Int32Array, Int64Array};
-    use arrow::datatypes::DataType::{Int32, Int64};
+    use arrow::array::{Array, Int32Array};
+    use arrow::datatypes::DataType::Int32;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -132,24 +132,6 @@ mod tests {
             test_function!(
                 CharacterLengthFunc::new(),
                 &[ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-
-            test_function!(
-                CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
-                $EXPECTED,
-                i64,
-                Int64,
-                Int64Array
-            );
-
-            test_function!(
-                CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,

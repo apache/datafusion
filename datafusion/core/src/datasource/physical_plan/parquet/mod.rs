@@ -1619,10 +1619,7 @@ mod tests {
             partition_values: vec![
                 ScalarValue::from("2021"),
                 ScalarValue::UInt8(Some(10)),
-                ScalarValue::Dictionary(
-                    Box::new(DataType::UInt16),
-                    Box::new(ScalarValue::from("26")),
-                ),
+                ScalarValue::from("26"),
             ],
             range: None,
             statistics: None,
@@ -1634,14 +1631,7 @@ mod tests {
             Field::new("bool_col", DataType::Boolean, true),
             Field::new("tinyint_col", DataType::Int32, true),
             Field::new("month", DataType::UInt8, false),
-            Field::new(
-                "day",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt16),
-                    Box::new(DataType::Utf8),
-                ),
-                false,
-            ),
+            Field::new("day", DataType::Utf8, false),
         ]);
 
         let parquet_exec = ParquetExec::builder(
@@ -1652,14 +1642,7 @@ mod tests {
                 .with_table_partition_cols(vec![
                     Field::new("year", DataType::Utf8, false),
                     Field::new("month", DataType::UInt8, false),
-                    Field::new(
-                        "day",
-                        DataType::Dictionary(
-                            Box::new(DataType::UInt16),
-                            Box::new(DataType::Utf8),
-                        ),
-                        false,
-                    ),
+                    Field::new("day", DataType::Utf8, false),
                 ]),
         )
         .build();

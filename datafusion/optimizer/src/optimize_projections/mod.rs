@@ -1678,6 +1678,21 @@ mod tests {
     }
 
     #[test]
+    fn cast_literal() -> Result<()> {
+        let projection = LogicalPlanBuilder::empty(false)
+            .project(vec![Expr::Cast(Cast::new(
+                Box::new(lit("hello")),
+                DataType::LargeUtf8,
+            ))])?
+            .build()?;
+
+        let expected = "Projection: CAST(Utf8(\"hello\") AS LargeUtf8)\
+        \n  EmptyRelation";
+
+        assert_optimized_plan_equal(projection, expected)
+    }
+
+    #[test]
     fn table_scan_projected_schema() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(test_table_scan()?)

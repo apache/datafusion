@@ -368,8 +368,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
         Ok(match value {
             Value::BoolValue(v) => Self::Boolean(Some(*v)),
             Value::Utf8Value(v) => Self::Utf8(Some(v.to_owned())),
-            Value::Utf8ViewValue(v) => Self::Utf8View(Some(v.to_owned())),
-            Value::LargeUtf8Value(v) => Self::LargeUtf8(Some(v.to_owned())),
+            Value::Utf8ViewValue(v) => Self::Utf8(Some(v.to_owned())),
+            Value::LargeUtf8Value(v) => Self::Utf8(Some(v.to_owned())),
             Value::Int8Value(v) => Self::Int8(Some(*v as i8)),
             Value::Int16Value(v) => Self::Int16(Some(*v as i16)),
             Value::Int32Value(v) => Self::Int32(Some(*v)),
@@ -564,25 +564,15 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     }
                 }
             }
-            Value::DictionaryValue(v) => {
-                let index_type: DataType = v
-                    .index_type
-                    .as_ref()
-                    .ok_or_else(|| Error::required("index_type"))?
-                    .try_into()?;
-
-                let value: Self = v
-                    .value
-                    .as_ref()
-                    .ok_or_else(|| Error::required("value"))?
-                    .as_ref()
-                    .try_into()?;
-
-                Self::Dictionary(Box::new(index_type), Box::new(value))
-            }
+            Value::DictionaryValue(v) => v
+                .value
+                .as_ref()
+                .ok_or_else(|| Error::required("value"))?
+                .as_ref()
+                .try_into()?,
             Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
-            Value::BinaryViewValue(v) => Self::BinaryView(Some(v.clone())),
-            Value::LargeBinaryValue(v) => Self::LargeBinary(Some(v.clone())),
+            Value::BinaryViewValue(v) => Self::Binary(Some(v.clone())),
+            Value::LargeBinaryValue(v) => Self::Binary(Some(v.clone())),
             Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(
                 IntervalDayTimeType::make_value(v.days, v.milliseconds),
             )),

@@ -284,8 +284,8 @@ mod tests {
     use crate::unicode::lpad::LPadFunc;
     use crate::utils::test::test_function;
 
-    use arrow::array::{Array, LargeStringArray, StringArray};
-    use arrow::datatypes::DataType::{LargeUtf8, Utf8};
+    use arrow::array::{Array,StringArray};
+    use arrow::datatypes::DataType::{Utf8};
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -303,30 +303,6 @@ mod tests {
                 Utf8,
                 StringArray
             );
-
-            test_function!(
-                LPadFunc::new(),
-                &[
-                    ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT)),
-                    ColumnarValue::Scalar($LENGTH)
-                ],
-                $EXPECTED,
-                &str,
-                LargeUtf8,
-                LargeStringArray
-            );
-
-            test_function!(
-                LPadFunc::new(),
-                &[
-                    ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT)),
-                    ColumnarValue::Scalar($LENGTH)
-                ],
-                $EXPECTED,
-                &str,
-                Utf8,
-                StringArray
-            );
         };
 
         ($INPUT:expr, $LENGTH:expr, $REPLACE:expr, $EXPECTED:expr) => {
@@ -337,112 +313,6 @@ mod tests {
                     ColumnarValue::Scalar(ScalarValue::Utf8($INPUT)),
                     ColumnarValue::Scalar($LENGTH),
                     ColumnarValue::Scalar(ScalarValue::Utf8($REPLACE))
-                ],
-                $EXPECTED,
-                &str,
-                Utf8,
-                StringArray
-            );
-            // utf8, largeutf8
-            test_function!(
-                LPadFunc::new(),
-                &[
-                    ColumnarValue::Scalar(ScalarValue::Utf8($INPUT)),
-                    ColumnarValue::Scalar($LENGTH),
-                    ColumnarValue::Scalar(ScalarValue::LargeUtf8($REPLACE))
-                ],
-                $EXPECTED,
-                &str,
-                Utf8,
-                StringArray
-            );
-            // utf8, utf8view
-            test_function!(
-                LPadFunc::new(),
-                &[
-                    ColumnarValue::Scalar(ScalarValue::Utf8($INPUT)),
-                    ColumnarValue::Scalar($LENGTH),
-                    ColumnarValue::Scalar(ScalarValue::Utf8View($REPLACE))
-                ],
-                $EXPECTED,
-                &str,
-                Utf8,
-                StringArray
-            );
-
-            // largeutf8, utf8
-            test_function!(
-                LPadFunc::new(),
-                &[
-                    ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT)),
-                    ColumnarValue::Scalar($LENGTH),
-                    ColumnarValue::Scalar(ScalarValue::Utf8($REPLACE))
-                ],
-                $EXPECTED,
-                &str,
-                LargeUtf8,
-                LargeStringArray
-            );
-            // largeutf8, largeutf8
-            test_function!(
-                LPadFunc::new(),
-                &[
-                    ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT)),
-                    ColumnarValue::Scalar($LENGTH),
-                    ColumnarValue::Scalar(ScalarValue::LargeUtf8($REPLACE))
-                ],
-                $EXPECTED,
-                &str,
-                LargeUtf8,
-                LargeStringArray
-            );
-            // largeutf8, utf8view
-            test_function!(
-                LPadFunc::new(),
-                &[
-                    ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT)),
-                    ColumnarValue::Scalar($LENGTH),
-                    ColumnarValue::Scalar(ScalarValue::Utf8View($REPLACE))
-                ],
-                $EXPECTED,
-                &str,
-                LargeUtf8,
-                LargeStringArray
-            );
-
-            // utf8view, utf8
-            test_function!(
-                LPadFunc::new(),
-                &[
-                    ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT)),
-                    ColumnarValue::Scalar($LENGTH),
-                    ColumnarValue::Scalar(ScalarValue::Utf8($REPLACE))
-                ],
-                $EXPECTED,
-                &str,
-                Utf8,
-                StringArray
-            );
-            // utf8view, largeutf8
-            test_function!(
-                LPadFunc::new(),
-                &[
-                    ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT)),
-                    ColumnarValue::Scalar($LENGTH),
-                    ColumnarValue::Scalar(ScalarValue::LargeUtf8($REPLACE))
-                ],
-                $EXPECTED,
-                &str,
-                Utf8,
-                StringArray
-            );
-            // utf8view, utf8view
-            test_function!(
-                LPadFunc::new(),
-                &[
-                    ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT)),
-                    ColumnarValue::Scalar($LENGTH),
-                    ColumnarValue::Scalar(ScalarValue::Utf8View($REPLACE))
                 ],
                 $EXPECTED,
                 &str,

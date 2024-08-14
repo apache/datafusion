@@ -18,9 +18,7 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
-use std::{
-    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc, vec,
-};
+use std::{collections::HashMap, sync::Arc, vec};
 
 use super::{
     get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
@@ -28,39 +26,11 @@ use super::{
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 
-use arrow::array::{ArrayData, BufferBuilder};
-use arrow::buffer::Buffer;
-use arrow::datatypes::{ArrowNativeType, UInt16Type};
-use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
+use arrow_schema::{Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-
-use log::warn;
-
-/// Convert type to a type suitable for use as a [`ListingTable`]
-/// partition column. Returns `Dictionary(UInt16, val_type)`, which is
-/// a reasonable trade off between a reasonable number of partition
-/// values and space efficiency.
-///
-/// This use this to specify types for partition columns. However
-/// you MAY also choose not to dictionary-encode the data or to use a
-/// different dictionary type.
-///
-/// Use [`wrap_partition_value_in_dict`] to wrap a [`ScalarValue`] in the same say.
-///
-/// [`ListingTable`]: crate::datasource::listing::ListingTable
-pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
-    DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
-}
-
-/// Convert a [`ScalarValue`] of partition columns to a type, as
-/// described in the documentation of [`wrap_partition_type_in_dict`],
-/// which can wrap the types.
-pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
-    ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
-}
 
 /// The base configurations to provide when creating a physical plan for
 /// any given file format.
@@ -382,10 +352,6 @@ impl FileScanConfig {
 /// have all their keys equal to 0. This enables us to re-use the same "all-zero" buffer across batches,
 /// which makes the space consumption of the partition columns O(batch_size) instead of O(record_count).
 pub struct PartitionColumnProjector {
-    /// An Arrow buffer initialized to zeros that represents the key array of all partition
-    /// columns (partition columns are materialized by dictionary arrays with only one
-    /// value in the dictionary, thus all the keys are equal to zero).
-    key_buffer_cache: ZeroBufferGenerators,
     /// Mapping between the indexes in the list of partition columns and the target
     /// schema. Sorted by index in the target schema so that we can iterate on it to
     /// insert the partition columns in the target record batch.
@@ -411,7 +377,6 @@ impl PartitionColumnProjector {
 
         Self {
             projected_partition_indexes,
-            key_buffer_cache: Default::default(),
             projected_schema,
         }
     }
@@ -445,30 +410,7 @@ impl PartitionColumnProjector {
                         "Invalid partitioning found on disk".to_string(),
                     ))?;
 
-            let mut partition_value = Cow::Borrowed(p_value);
-
-            // check if user forgot to dict-encode the partition value
-            let field = self.projected_schema.field(sidx);
-            let expected_data_type = field.data_type();
-            let actual_data_type = partition_value.data_type();
-            if let DataType::Dictionary(key_type, _) = expected_data_type {
-                if !matches!(actual_data_type, DataType::Dictionary(_, _)) {
-                    warn!("Partition value for column {} was not dictionary-encoded, applied auto-fix.", field.name());
-                    partition_value = Cow::Owned(ScalarValue::Dictionary(
-                        key_type.clone(),
-                        Box::new(partition_value.as_ref().clone()),
-                    ));
-                }
-            }
-
-            cols.insert(
-                sidx,
-                create_output_array(
-                    &mut self.key_buffer_cache,
-                    partition_value.as_ref(),
-                    file_batch.num_rows(),
-                )?,
-            )
+            cols.insert(sidx, create_output_array(p_value, file_batch.num_rows())?)
         }
 
         RecordBatch::try_new_with_options(
@@ -480,155 +422,17 @@ impl PartitionColumnProjector {
     }
 }
 
-#[derive(Debug, Default)]
-struct ZeroBufferGenerators {
-    gen_i8: ZeroBufferGenerator<i8>,
-    gen_i16: ZeroBufferGenerator<i16>,
-    gen_i32: ZeroBufferGenerator<i32>,
-    gen_i64: ZeroBufferGenerator<i64>,
-    gen_u8: ZeroBufferGenerator<u8>,
-    gen_u16: ZeroBufferGenerator<u16>,
-    gen_u32: ZeroBufferGenerator<u32>,
-    gen_u64: ZeroBufferGenerator<u64>,
-}
-
-/// Generate a arrow [`Buffer`] that contains zero values.
-#[derive(Debug, Default)]
-struct ZeroBufferGenerator<T>
-where
-    T: ArrowNativeType,
-{
-    cache: Option<Buffer>,
-    _t: PhantomData<T>,
-}
-
-impl<T> ZeroBufferGenerator<T>
-where
-    T: ArrowNativeType,
-{
-    const SIZE: usize = std::mem::size_of::<T>();
-
-    fn get_buffer(&mut self, n_vals: usize) -> Buffer {
-        match &mut self.cache {
-            Some(buf) if buf.len() >= n_vals * Self::SIZE => {
-                buf.slice_with_length(0, n_vals * Self::SIZE)
-            }
-            _ => {
-                let mut key_buffer_builder = BufferBuilder::<T>::new(n_vals);
-                key_buffer_builder.advance(n_vals); // keys are all 0
-                self.cache.insert(key_buffer_builder.finish()).clone()
-            }
-        }
-    }
-}
-
-fn create_dict_array<T>(
-    buffer_gen: &mut ZeroBufferGenerator<T>,
-    dict_val: &ScalarValue,
-    len: usize,
-    data_type: DataType,
-) -> Result<ArrayRef>
-where
-    T: ArrowNativeType,
-{
-    let dict_vals = dict_val.to_array()?;
-
-    let sliced_key_buffer = buffer_gen.get_buffer(len);
-
-    // assemble pieces together
-    let mut builder = ArrayData::builder(data_type)
-        .len(len)
-        .add_buffer(sliced_key_buffer);
-    builder = builder.add_child_data(dict_vals.to_data());
-    Ok(Arc::new(DictionaryArray::<UInt16Type>::from(
-        builder.build().unwrap(),
-    )))
-}
-
-fn create_output_array(
-    key_buffer_cache: &mut ZeroBufferGenerators,
-    val: &ScalarValue,
-    len: usize,
-) -> Result<ArrayRef> {
-    if let ScalarValue::Dictionary(key_type, dict_val) = &val {
-        match key_type.as_ref() {
-            DataType::Int8 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_i8,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::Int16 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_i16,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::Int32 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_i32,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::Int64 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_i64,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::UInt8 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_u8,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::UInt16 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_u16,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::UInt32 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_u32,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::UInt64 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_u64,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            _ => {}
-        }
-    }
-
+fn create_output_array(val: &ScalarValue, len: usize) -> Result<ArrayRef> {
+    // TODO(@notfilippo): should we reintroduce a way to encode as dictionaries?
     val.to_array_of_size(len)
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::Int32Array;
-
     use super::*;
     use crate::{test::columns, test_util::aggr_test_schema};
+    use arrow_array::Int32Array;
+    use arrow_schema::DataType;
 
     #[test]
     fn physical_plan_config_no_projection() {
@@ -637,10 +441,7 @@ mod tests {
             Arc::clone(&file_schema),
             None,
             Statistics::new_unknown(&file_schema),
-            to_partition_cols(vec![(
-                "date".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            )]),
+            to_partition_cols(vec![("date".to_owned(), DataType::Utf8)]),
         );
 
         let (proj_schema, proj_statistics, _) = conf.project();
@@ -669,11 +470,9 @@ mod tests {
 
         // make a table_partition_col as a field
         let table_partition_col =
-            Field::new("date", wrap_partition_type_in_dict(DataType::Utf8), true)
-                .with_metadata(HashMap::from_iter(vec![(
-                    "key_whatever".to_owned(),
-                    "value_whatever".to_owned(),
-                )]));
+            Field::new("date", DataType::Utf8, true).with_metadata(HashMap::from_iter(
+                vec![("key_whatever".to_owned(), "value_whatever".to_owned())],
+            ));
 
         let conf = config_for_projection(
             Arc::clone(&file_schema),
@@ -710,10 +509,7 @@ mod tests {
                     .collect(),
                 total_byte_size: Precision::Absent,
             },
-            to_partition_cols(vec![(
-                "date".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            )]),
+            to_partition_cols(vec![("date".to_owned(), DataType::Utf8)]),
         );
 
         let (proj_schema, proj_statistics, _) = conf.project();
@@ -742,18 +538,9 @@ mod tests {
             ("c", &vec![10, 11, 12]),
         );
         let partition_cols = vec![
-            (
-                "year".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-            (
-                "month".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-            (
-                "day".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
+            ("year".to_owned(), DataType::Utf8),
+            ("month".to_owned(), DataType::Utf8),
+            ("day".to_owned(), DataType::Utf8),
         ];
         // create a projected schema
         let conf = config_for_projection(
@@ -785,9 +572,9 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    wrap_partition_value_in_dict(ScalarValue::from("2021")),
-                    wrap_partition_value_in_dict(ScalarValue::from("10")),
-                    wrap_partition_value_in_dict(ScalarValue::from("26")),
+                    ScalarValue::from("2021"),
+                    ScalarValue::from("10"),
+                    ScalarValue::from("26"),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -813,9 +600,9 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    wrap_partition_value_in_dict(ScalarValue::from("2021")),
-                    wrap_partition_value_in_dict(ScalarValue::from("10")),
-                    wrap_partition_value_in_dict(ScalarValue::from("27")),
+                    ScalarValue::from("2021"),
+                    ScalarValue::from("10"),
+                    ScalarValue::from("27"),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -843,9 +630,9 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    wrap_partition_value_in_dict(ScalarValue::from("2021")),
-                    wrap_partition_value_in_dict(ScalarValue::from("10")),
-                    wrap_partition_value_in_dict(ScalarValue::from("28")),
+                    ScalarValue::from("2021"),
+                    ScalarValue::from("10"),
+                    ScalarValue::from("28"),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -893,14 +680,8 @@ mod tests {
     fn test_projected_file_schema_with_partition_col() {
         let schema = aggr_test_schema();
         let partition_cols = vec![
-            (
-                "part1".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-            (
-                "part2".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
+            ("part1".to_owned(), DataType::Utf8),
+            ("part2".to_owned(), DataType::Utf8),
         ];
 
         // Projected file schema for config with projection including partition column
@@ -926,14 +707,8 @@ mod tests {
     fn test_projected_file_schema_without_projection() {
         let schema = aggr_test_schema();
         let partition_cols = vec![
-            (
-                "part1".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-            (
-                "part2".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
+            ("part1".to_owned(), DataType::Utf8),
+            ("part2".to_owned(), DataType::Utf8),
         ];
 
         // Projected file schema for config without projection

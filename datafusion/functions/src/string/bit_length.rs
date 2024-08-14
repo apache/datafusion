@@ -81,9 +81,6 @@ impl ScalarUDFImpl for BitLengthFunc {
                 ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
                     v.as_ref().map(|x| (x.len() * 8) as i32),
                 ))),
-                ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64)),
-                )),
                 _ => unreachable!(),
             },
         }

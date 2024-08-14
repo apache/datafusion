@@ -436,15 +436,10 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
             typed_min_max_batch_string!(values, StringArray, Utf8, min_string)
         }
         DataType::LargeUtf8 => {
-            typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, min_string)
+            typed_min_max_batch_string!(values, LargeStringArray, Utf8, min_string)
         }
         DataType::Utf8View => {
-            typed_min_max_batch_string!(
-                values,
-                StringViewArray,
-                Utf8View,
-                min_string_view
-            )
+            typed_min_max_batch_string!(values, StringViewArray, Utf8, min_string_view)
         }
         DataType::Boolean => {
             typed_min_max_batch!(values, BooleanArray, Boolean, min_boolean)
@@ -453,20 +448,10 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
             typed_min_max_batch_binary!(&values, BinaryArray, Binary, min_binary)
         }
         DataType::LargeBinary => {
-            typed_min_max_batch_binary!(
-                &values,
-                LargeBinaryArray,
-                LargeBinary,
-                min_binary
-            )
+            typed_min_max_batch_binary!(&values, LargeBinaryArray, Binary, min_binary)
         }
         DataType::BinaryView => {
-            typed_min_max_batch_binary!(
-                &values,
-                BinaryViewArray,
-                BinaryView,
-                min_binary_view
-            )
+            typed_min_max_batch_binary!(&values, BinaryViewArray, Binary, min_binary_view)
         }
         _ => min_max_batch!(values, min),
     })
@@ -479,15 +464,10 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
             typed_min_max_batch_string!(values, StringArray, Utf8, max_string)
         }
         DataType::LargeUtf8 => {
-            typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, max_string)
+            typed_min_max_batch_string!(values, LargeStringArray, Utf8, max_string)
         }
         DataType::Utf8View => {
-            typed_min_max_batch_string!(
-                values,
-                StringViewArray,
-                Utf8View,
-                max_string_view
-            )
+            typed_min_max_batch_string!(values, StringViewArray, Utf8, max_string_view)
         }
         DataType::Boolean => {
             typed_min_max_batch!(values, BooleanArray, Boolean, max_boolean)
@@ -496,20 +476,10 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
             typed_min_max_batch_binary!(&values, BinaryArray, Binary, max_binary)
         }
         DataType::BinaryView => {
-            typed_min_max_batch_binary!(
-                &values,
-                BinaryViewArray,
-                BinaryView,
-                max_binary_view
-            )
+            typed_min_max_batch_binary!(&values, BinaryViewArray, Binary, max_binary_view)
         }
         DataType::LargeBinary => {
-            typed_min_max_batch_binary!(
-                &values,
-                LargeBinaryArray,
-                LargeBinary,
-                max_binary
-            )
+            typed_min_max_batch_binary!(&values, LargeBinaryArray, Binary, max_binary)
         }
         _ => min_max_batch!(values, max),
     })
@@ -643,20 +613,8 @@ macro_rules! min_max {
             (ScalarValue::Utf8(lhs), ScalarValue::Utf8(rhs)) => {
                 typed_min_max_string!(lhs, rhs, Utf8, $OP)
             }
-            (ScalarValue::LargeUtf8(lhs), ScalarValue::LargeUtf8(rhs)) => {
-                typed_min_max_string!(lhs, rhs, LargeUtf8, $OP)
-            }
-            (ScalarValue::Utf8View(lhs), ScalarValue::Utf8View(rhs)) => {
-                typed_min_max_string!(lhs, rhs, Utf8View, $OP)
-            }
             (ScalarValue::Binary(lhs), ScalarValue::Binary(rhs)) => {
                 typed_min_max_string!(lhs, rhs, Binary, $OP)
-            }
-            (ScalarValue::LargeBinary(lhs), ScalarValue::LargeBinary(rhs)) => {
-                typed_min_max_string!(lhs, rhs, LargeBinary, $OP)
-            }
-            (ScalarValue::BinaryView(lhs), ScalarValue::BinaryView(rhs)) => {
-                typed_min_max_string!(lhs, rhs, BinaryView, $OP)
             }
             (ScalarValue::TimestampSecond(lhs, l_tz), ScalarValue::TimestampSecond(rhs, _)) => {
                 typed_min_max!(lhs, rhs, TimestampSecond, $OP, l_tz)

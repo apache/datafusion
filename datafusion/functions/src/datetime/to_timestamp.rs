@@ -922,40 +922,6 @@ mod tests {
                 panic!("Expected a columnar array")
             }
 
-            // test LargeUTF8
-            let string_array = [
-                ColumnarValue::Array(Arc::new(data.clone()) as ArrayRef),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("%s".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("%c".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("%+".to_string()))),
-            ];
-            let parsed_timestamps = func(&string_array)
-                .expect("that to_timestamp with format args parsed values without error");
-            if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
-                assert_eq!(parsed_array.len(), 1);
-                assert!(matches!(
-                    parsed_array.data_type(),
-                    DataType::Timestamp(_, None)
-                ));
-
-                match time_unit {
-                    Nanosecond => {
-                        assert_eq!(nanos_expected_timestamps, parsed_array.as_ref())
-                    }
-                    Millisecond => {
-                        assert_eq!(millis_expected_timestamps, parsed_array.as_ref())
-                    }
-                    Microsecond => {
-                        assert_eq!(micros_expected_timestamps, parsed_array.as_ref())
-                    }
-                    Second => {
-                        assert_eq!(sec_expected_timestamps, parsed_array.as_ref())
-                    }
-                };
-            } else {
-                panic!("Expected a columnar array")
-            }
-
             // test other types
             let string_array = [
                 ColumnarValue::Array(Arc::new(data.clone()) as ArrayRef),

@@ -345,16 +345,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::Utf8Value(s.to_owned())
                 })
             }
-            ScalarValue::LargeUtf8(val) => {
-                create_proto_scalar(val.as_ref(), &data_type, |s| {
-                    Value::LargeUtf8Value(s.to_owned())
-                })
-            }
-            ScalarValue::Utf8View(val) => {
-                create_proto_scalar(val.as_ref(), &data_type, |s| {
-                    Value::Utf8ViewValue(s.to_owned())
-                })
-            }
             ScalarValue::List(arr) => {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
@@ -470,16 +460,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             ScalarValue::Binary(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| {
                     Value::BinaryValue(s.to_owned())
-                })
-            }
-            ScalarValue::BinaryView(val) => {
-                create_proto_scalar(val.as_ref(), &data_type, |s| {
-                    Value::BinaryViewValue(s.to_owned())
-                })
-            }
-            ScalarValue::LargeBinary(val) => {
-                create_proto_scalar(val.as_ref(), &data_type, |s| {
-                    Value::LargeBinaryValue(s.to_owned())
                 })
             }
             ScalarValue::FixedSizeBinary(length, val) => {
@@ -621,18 +601,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 let val = Value::UnionValue(Box::new(val));
                 let val = protobuf::ScalarValue { value: Some(val) };
                 Ok(val)
-            }
-
-            ScalarValue::Dictionary(index_type, val) => {
-                let value: protobuf::ScalarValue = val.as_ref().try_into()?;
-                Ok(protobuf::ScalarValue {
-                    value: Some(Value::DictionaryValue(Box::new(
-                        protobuf::ScalarDictionaryValue {
-                            index_type: Some(index_type.as_ref().try_into()?),
-                            value: Some(Box::new(value)),
-                        },
-                    ))),
-                })
             }
         }
     }

@@ -378,10 +378,10 @@ pub fn array_into_list_array(arr: ArrayRef, nullable: bool) -> ListArray {
 
 /// Wrap an array into a single element `LargeListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
+pub fn array_into_large_list_array(arr: ArrayRef, nullable: bool) -> LargeListArray {
     let offsets = OffsetBuffer::from_lengths([arr.len()]);
     LargeListArray::new(
-        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
+        Arc::new(Field::new_list_field(arr.data_type().to_owned(), nullable)),
         offsets,
         arr,
         None,

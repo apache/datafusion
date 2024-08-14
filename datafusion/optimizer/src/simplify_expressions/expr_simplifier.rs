@@ -27,8 +27,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
+use datafusion_common::cast::as_large_list_array;
 use datafusion_common::{
-    cast::{as_large_list_array, as_list_array},
+    cast::as_list_array,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};

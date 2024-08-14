@@ -171,7 +171,7 @@ where
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
+            ScalarValue::Utf8(a) => {
                 let result = a.as_ref().map(|x| (op)(x)).transpose()?;
                 Ok(ColumnarValue::Scalar(S::scalar(result)))
             }
@@ -228,7 +228,7 @@ where
         },
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
+            ScalarValue::Utf8(a) => {
                 let a = a.as_ref();
                 // ASK: Why do we trust `a` to be non-null at this point?
                 let a = unwrap_or_internal_err!(a);
@@ -236,10 +236,7 @@ where
                 let mut ret = None;
 
                 for (pos, v) in args.iter().enumerate().skip(1) {
-                    let ColumnarValue::Scalar(
-                        ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x),
-                    ) = v
-                    else {
+                    let ColumnarValue::Scalar(ScalarValue::Utf8(x)) = v else {
                         return exec_err!("Unsupported data type {v:?} for function {name}, arg # {pos}");
                     };
 
@@ -304,7 +301,7 @@ where
                 Ok(Either::Left(as_generic_string_array::<T>(a.as_ref())?))
             }
             ColumnarValue::Scalar(s) => match s {
-                ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => Ok(Either::Right(a)),
+                ScalarValue::Utf8(a) => Ok(Either::Right(a)),
                 other => exec_err!(
                     "Unexpected scalar type encountered '{other}' for function '{name}'"
                 ),
