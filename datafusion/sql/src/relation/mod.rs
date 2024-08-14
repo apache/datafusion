@@ -155,12 +155,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 }
 
 fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-    // When a subquery is initialized, we look for the sort options since they might be unnecessary.
-    // It's only important if the subquery result is affected by the ORDER BY statement, which can
-    // happen when we have:
-    // 1. DISTINCT ON / ARRAY_AGG ... => It's handled as an Aggregate plan and keep the sorting
-    // 2. RANK / ROW_NUMBER ... => It's handled as a WindowAggr plan sorting is preserved
-    // 3. LIMIT => It's handled as a Sort plan type so that we need to search for it
+    // When initializing subqueries, we examine sort options since they might be unnecessary.
+    // They are only important if the subquery result is affected by the ORDER BY statement,
+    // which can happen when we have:
+    // 1. DISTINCT ON / ARRAY_AGG ... => Handled by an `Aggregate` and its requirements.
+    // 2. RANK / ROW_NUMBER ... => Handled by a `WindowAggr` and its requirements.
+    // 3. LIMIT => Handled by a `Sort`, so we need to search for it.
     let mut has_limit = false;
     let new_plan = plan.clone().transform_down(|c| {
         if let LogicalPlan::Limit(_) = c {

@@ -70,8 +70,7 @@ impl PhysicalOptimizerRule for LimitPushdown {
             skip: 0,
             satisfied: false,
         };
-        let updated_plan = pushdown_limits(plan, global_state)?;
-        Ok(updated_plan)
+        pushdown_limits(plan, global_state)
     }
 
     fn name(&self) -> &str {
@@ -123,15 +122,17 @@ impl From<LimitExec> for Arc<dyn ExecutionPlan> {
     }
 }
 
-/// pushdown_limit_helper function is the main helper function of the `LimitPushDown` rule
-/// The helper takes the `ExecutionPlan` and a global state which is an instance of `GlobalRequirements`
-/// and modifies these parameters while checking if the limits can be pushed down or not.
+/// This function is the main helper function of the `LimitPushDown` rule.
+/// The helper takes an `ExecutionPlan` and a global (algorithm) state which is an instance of
+/// `GlobalRequirements` and modifies these parameters while checking if the limits can be
+/// pushed down or not.
 pub fn pushdown_limit_helper(
     mut pushdown_plan: Arc<dyn ExecutionPlan>,
     mut global_state: GlobalRequirements,
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
     if let Some(limit_exec) = extract_limit(&pushdown_plan) {
-        // If we have fetch/skip info in global state already we need to decide which one to continue with
+        // If we have fetch/skip info in the global state already, we need to decide
+        // which one to continue with:
         let (skip, fetch) = combine_limit(
             global_state.skip,
             global_state.fetch,
@@ -141,11 +142,11 @@ pub fn pushdown_limit_helper(
         global_state.skip = skip;
         global_state.fetch = fetch;
 
-        // Now we have info in the global_state we can remove the LimitExec plan.
-        // We will decide later if we should add it again or not
+        // Now the global state has the most recent information, we can remove the `LimitExec`
+        // plan. We will decide later if we should add it again or not.
         return Ok((
             Transformed {
-                data: Arc::<dyn ExecutionPlan>::clone(limit_exec.input()),
+                data: Arc::clone(limit_exec.input()),
                 transformed: true,
                 tnr: TreeNodeRecursion::Stop,
             },
@@ -153,9 +154,8 @@ pub fn pushdown_limit_helper(
         ));
     }
 
-    // The plan is not LimitExec
+    // If we have a non-limit operator with fetch capability, update global state as necessary:
     if pushdown_plan.fetch().is_some() {
-        // Plan has its own fetch info, decide which one to use in global_state
         if global_state.fetch.is_none() {
             global_state.satisfied = true;
         }
@@ -167,35 +167,33 @@ pub fn pushdown_limit_helper(
         );
     }
 
-    if global_state.fetch.is_none() {
-        // There's no valid Fetch info
-        if global_state.skip > 0 {
-            // There might be a case with only offset, if so add a global limit
-            if !global_state.satisfied {
-                global_state.satisfied = true;
-                return Ok((
-                    Transformed::yes(add_global_limit(
-                        pushdown_plan,
-                        global_state.skip,
-                        global_state.fetch,
-                    )),
-                    global_state,
-                ));
-            }
+    let global_fetch = Some(global_state.fetch) else {
+        // There's no valid fetch information, exit early:
+        return if global_state.skip > 0 && !global_state.satisfied {
+            // There might be a case with only offset, if so add a global limit:
+            global_state.satisfied = true;
+            Ok((
+                Transformed::yes(add_global_limit(
+                    pushdown_plan,
+                    global_state.skip,
+                    None,
+                )),
+                global_state,
+            ));
+        } else {
+            // There's no info on fetch, nothing to do:
+            Ok((Transformed::no(pushdown_plan), global_state))
         }
-        // There's no info on fetch, nothing to do
+    };
+
+    if pushdown_plan.supports_limit_pushdown() && !combines_input_partitions(&pushdown_plan) {
+        // We have information in the global state and the plan pushes down, continue:
         return Ok((Transformed::no(pushdown_plan), global_state));
     }
 
-    if pushdown_plan.supports_limit_pushdown() {
-        if !combines_input_partitions(&pushdown_plan) {
-            // We have the info in global state and the plan is pushing down, continue
-            return Ok((Transformed::no(pushdown_plan), global_state));
-        }
-
         // This plan is combining input partitions we need to add the fetch info to plan if possible
         // if not, we must add a LimitExec with the global_state info
-        let skip_and_fetch = Some(global_state.fetch.unwrap() + global_state.skip);
+        let skip_and_fetch = Some(global_fetch + global_state.skip);
         if let Some(plan_with_fetch) = pushdown_plan.with_fetch(skip_and_fetch) {
             global_state.fetch = skip_and_fetch;
             global_state.skip = 0;
@@ -204,57 +202,53 @@ pub fn pushdown_limit_helper(
             return Ok((Transformed::yes(pushdown_plan), global_state));
         }
 
-        if global_state.satisfied {
-            // If the plan is already satisfied do not add a limit info
-            return Ok((Transformed::no(pushdown_plan), global_state));
+        return if global_state.satisfied {
+            // If the plan is already satisfied, do not add a limit:
+            Ok((Transformed::no(pushdown_plan), global_state));
+        } else {
+            global_state.satisfied = true;
+            Ok((
+                Transformed::yes(add_limit(
+                    pushdown_plan,
+                    global_state.skip,
+                    global_fetch,
+                )),
+                global_state,
+            ));
         }
 
-        // Add LimitExec
-        global_state.satisfied = true;
-        return Ok((
-            Transformed::yes(add_limit(
-                pushdown_plan,
-                global_state.skip,
-                global_state.fetch.unwrap(),
-            )),
-            global_state,
-        ));
-    }
+    // The plan does not support push down and it is not a limit.
+    // We will need to add a limit or a fetch. If the plan is already satisfied,
+    // we will try to add the fetch info and return the plan.
 
-    // The plan does not support push down and not a LimitExec
-    // We will need to add a LimitExec or Fetch info if the plan is not satisfied
-    // If the plan is already satisfied we will try to add the Fetch info and return the plan
-
-    let fetch = global_state.fetch;
-    let skip = global_state.skip;
-    let skip_and_fetch = Some(fetch.unwrap() + skip);
+    let skip_and_fetch = Some(global_fetch + global_state.skip);
 
     // There's no push down change fetch & skip to default values
     global_state.fetch = None;
     global_state.skip = 0;
     if global_state.satisfied {
-        if let Some(plan_with_fetch) = pushdown_plan.with_fetch(skip_and_fetch) {
-            pushdown_plan = plan_with_fetch;
-            return Ok((Transformed::yes(pushdown_plan), global_state));
+        return if let Some(plan_with_fetch) = pushdown_plan.with_fetch(skip_and_fetch) {
+            Ok((Transformed::yes(plan_with_fetch), global_state));
+        } else {
+            Ok((Transformed::no(pushdown_plan), global_state));
         }
-        return Ok((Transformed::no(pushdown_plan), global_state));
     }
 
     // Add Fetch / LimitExec
     global_state.satisfied = true;
     if let Some(plan_with_fetch) = pushdown_plan.with_fetch(skip_and_fetch) {
-        pushdown_plan = plan_with_fetch;
-        if skip > 0 {
-            return Ok((
-                Transformed::yes(add_global_limit(pushdown_plan, skip, fetch)),
+        return if skip > 0 {
+            Ok((
+                Transformed::yes(add_global_limit(plan_with_fetch, skip, fetch)),
                 global_state,
             ));
-        }
-        return Ok((Transformed::yes(pushdown_plan), global_state));
+        } else {
+            Ok((Transformed::yes(pushdown_plan), global_state));
+        };
     }
 
     Ok((
-        Transformed::yes(add_limit(pushdown_plan, skip, fetch.unwrap())),
+        Transformed::yes(add_limit(pushdown_plan, skip, global_fetch)),
         global_state,
     ))
 }
@@ -287,7 +281,7 @@ pub(crate) fn pushdown_limits(
 fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
     if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
         Some(LimitExec::Global(GlobalLimitExec::new(
-            Arc::<dyn ExecutionPlan>::clone(global_limit.input()),
+            Arc::clone(global_limit.input()),
             global_limit.skip(),
             global_limit.fetch(),
         )))
@@ -296,7 +290,7 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
             .downcast_ref::<LocalLimitExec>()
             .map(|local_limit| {
                 LimitExec::Local(LocalLimitExec::new(
-                    Arc::<dyn ExecutionPlan>::clone(local_limit.input()),
+                    Arc::clone(local_limit.input()),
                     local_limit.fetch(),
                 ))
             })
@@ -314,19 +308,17 @@ fn add_limit(
     fetch: usize,
 ) -> Arc<dyn ExecutionPlan> {
     if skip > 0 || pushdown_plan.output_partitioning().partition_count() == 1 {
-        return add_global_limit(pushdown_plan, skip, Some(fetch));
+        add_global_limit(pushdown_plan, skip, Some(fetch))
+    } else {
+        add_local_limit(pushdown_plan, fetch + skip)
     }
-    add_local_limit(pushdown_plan, fetch + skip)
 }
 
 fn add_local_limit(
     mut pushdown_plan: Arc<dyn ExecutionPlan>,
     fetch: usize,
 ) -> Arc<dyn ExecutionPlan> {
-    let new_plan: Arc<dyn ExecutionPlan> =
-        Arc::new(LocalLimitExec::new(pushdown_plan, fetch));
-    pushdown_plan = new_plan;
-    pushdown_plan
+    Arc::new(LocalLimitExec::new(pushdown_plan, fetch)) as _
 }
 
 fn add_global_limit(
@@ -334,10 +326,7 @@ fn add_global_limit(
     skip: usize,
     fetch: Option<usize>,
 ) -> Arc<dyn ExecutionPlan> {
-    let new_plan: Arc<dyn ExecutionPlan> =
-        Arc::new(GlobalLimitExec::new(pushdown_plan, skip, fetch));
-    pushdown_plan = new_plan;
-    pushdown_plan
+    Arc::new(GlobalLimitExec::new(pushdown_plan, skip, fetch)) as _
 }
 
 // See tests in datafusion/core/tests/physical_optimizer
