@@ -19,14 +19,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayAccessor, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait,
+    ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait,
 };
 use arrow::datatypes::DataType;
 use hashbrown::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
-use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -116,14 +115,13 @@ where
     V: ArrayAccessor<Item = &'a str>,
     B: ArrayAccessor<Item = &'a str>,
 {
-    let string_array_iter = as_generic_string_array::<T>(&string_array)?;
-    let from_array_iter = as_generic_string_array::<T>(&from_array)?;
-    let to_array_iter = as_generic_string_array::<T>(&to_array)?;
+    let string_array_iter = ArrayIter::new(string_array);
+    let from_array_iter = ArrayIter::new(from_array);
+    let to_array_iter = ArrayIter::new(to_array);
 
     let result = string_array_iter
-        .iter()
-        .zip(from_array_iter.iter())
-        .zip(to_array_iter.iter())
+        .zip(from_array_iter)
+        .zip(to_array_iter)
         .map(|((string, from), to)| match (string, from, to) {
             (Some(string), Some(from), Some(to)) => {
                 // create a hashmap of [char, index] to change from O(n) to O(1) for from list
