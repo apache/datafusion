@@ -43,7 +43,7 @@ pub struct LimitPushdown {}
 ///
 /// For example: If the plan is satisfied with current fetch info, we decide to not add a LocalLimit
 ///
-/// [`LimitPushdown`]: crate::physical_optimizer::limit_pushdown::LimitPushdown
+/// [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
 #[derive(Default, Clone, Debug)]
 pub struct GlobalRequirements {
     fetch: Option<usize>,
@@ -85,7 +85,7 @@ impl PhysicalOptimizerRule for LimitPushdown {
 /// This enumeration makes `skip` and `fetch` calculations easier by providing
 /// a single API for both local and global limit operators.
 #[derive(Debug)]
-enum LimitExec {
+pub enum LimitExec {
     Global(GlobalLimitExec),
     Local(LocalLimitExec),
 }
