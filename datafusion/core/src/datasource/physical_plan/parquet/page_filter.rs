@@ -28,7 +28,7 @@ use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
-use parquet::format::PageLocation;
+use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 use parquet::schema::types::SchemaDescriptor;
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
@@ -362,7 +362,7 @@ struct PagesPruningStatistics<'a> {
     converter: StatisticsConverter<'a>,
     column_index: &'a ParquetColumnIndex,
     offset_index: &'a ParquetOffsetIndex,
-    page_offsets: &'a Vec<PageLocation>,
+    page_offsets: &'a OffsetIndexMetaData,
 }
 
 impl<'a> PagesPruningStatistics<'a> {

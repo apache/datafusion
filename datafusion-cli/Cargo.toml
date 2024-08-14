@@ -62,3 +62,15 @@ assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.17"
+
+[patch.crates-io]
+arrow = { path = "../../arrow-rs/arrow" }
+arrow-array = { path = "../../arrow-rs/arrow-array" }
+arrow-buffer = { path = "../../arrow-rs/arrow-buffer" }
+arrow-data = { path = "../../arrow-rs/arrow-data" }
+arrow-flight = { path = "../../arrow-rs/arrow-flight" }
+arrow-ipc = { path = "../../arrow-rs/arrow-ipc" }
+arrow-ord = { path = "../../arrow-rs/arrow-ord" }
+arrow-schema = { path = "../../arrow-rs/arrow-schema" }
+arrow-select = { path = "../../arrow-rs/arrow-select" }
+arrow-string = { path = "../../arrow-rs/arrow-string" }

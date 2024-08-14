@@ -2002,7 +2002,7 @@ mod tests {
         let int_col_offset = offset_index.get(4).unwrap();
 
         // 325 pages in int_col
-        assert_eq!(int_col_offset.len(), 325);
+        assert_eq!(int_col_offset.page_locations.len(), 325);
         match int_col_index {
             Index::INT32(index) => {
                 assert_eq!(index.indexes.len(), 325);

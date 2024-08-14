@@ -69,22 +69,22 @@ version = "41.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "52.2.0", features = [
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94", features = [
     "prettyprint",
 ] }
-arrow-array = { version = "52.2.0", default-features = false, features = [
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94", default-features = false, features = [
     "chrono-tz",
 ] }
-arrow-buffer = { version = "52.2.0", default-features = false }
-arrow-flight = { version = "52.2.0", features = [
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94", default-features = false }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "52.2.0", default-features = false, features = [
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "52.2.0", default-features = false }
-arrow-schema = { version = "52.2.0", default-features = false }
-arrow-string = { version = "52.2.0", default-features = false }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94", default-features = false }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94", default-features = false }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
@@ -123,9 +123,9 @@ indexmap = "2.0.0"
 itertools = "0.13"
 log = "^0.4"
 num_cpus = "1.13.0"
-object_store = { version = "0.10.2", default-features = false }
+object_store = { version = "0.11", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "52.2.0", default-features = false, features = [
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -134,7 +134,7 @@ rand = "0.8"
 regex = "1.8"
 rstest = "0.22.0"
 serde_json = "1"
-sqlparser = { version = "0.50.0", features = ["visitor"] }
+sqlparser = { git = "https://github.com/sqlparser-rs/sqlparser-rs.git", rev = "fab834d", features = ["visitor"] }
 tempfile = "3"
 thiserror = "1.0.44"
 tokio = { version = "1.36", features = ["macros", "rt", "sync"] }
@@ -165,3 +165,15 @@ large_futures = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_imports = "deny"
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "2795b94" }
