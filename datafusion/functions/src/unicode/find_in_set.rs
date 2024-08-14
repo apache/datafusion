@@ -104,7 +104,9 @@ fn find_in_set(args: &[ArrayRef]) -> Result<ArrayRef> {
             let str_list_array = args[1].as_string_view();
             find_in_set_general::<Int32Type, _>(string_array, str_list_array)
         }
-        _ => unreachable!(),
+        other => {
+            exec_err!("Unsupported data type {other:?} for function find_in_set")
+        }
     }
 }
 
