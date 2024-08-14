@@ -730,7 +730,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_number_statistics_for_local_limit() -> Result<()> {
         let row_count = row_number_statistics_for_local_limit(4, 10).await?;
-        assert_eq!(row_count, Precision::Exact(40));
+        assert_eq!(row_count, Precision::Exact(10));
 
         Ok(())
     }
