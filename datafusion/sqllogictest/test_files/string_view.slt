@@ -719,7 +719,6 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for OVERLAY
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   OVERLAY(column1_utf8view PLACING 'foo' FROM 2 ) as c1
@@ -728,6 +727,14 @@ FROM test;
 logical_plan
 01)Projection: overlay(test.column1_utf8view, Utf8View("foo"), Int64(2)) AS c1
 02)--TableScan: test projection=[column1_utf8view]
+
+query T
+SELECT OVERLAY(column1_utf8view PLACING 'foo' FROM 2 ) as c1 FROM test;
+----
+Afooew
+Xfoogpeng
+Rfooael
+NULL
 
 ## Ensure no casts for REGEXP_LIKE
 query TT
