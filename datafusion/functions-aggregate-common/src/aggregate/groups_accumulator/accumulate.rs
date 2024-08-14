@@ -23,7 +23,9 @@ use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowPrimitiveType;
 
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::EmitTo;
+
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -329,7 +331,7 @@ impl NullState {
     /// for the `emit_to` rows.
     ///
     /// resets the internal state appropriately
-    pub fn build(&mut self, emit_to: EmitTo) -> NullBuffer {
+    pub fn build(&mut self, emit_to: EmitTo) -> Result<NullBuffer> {
         let nulls: BooleanBuffer = self.seen_values.finish();
 
         let nulls = match emit_to {
@@ -346,8 +348,13 @@ impl NullState {
                 }
                 first_n_null
             }
+            EmitTo::CurrentBlock(_) => {
+                return Err(DataFusionError::NotImplemented(
+                    "blocked group values management is not supported".to_string(),
+                ))
+            }
         };
-        NullBuffer::new(nulls)
+        Ok(NullBuffer::new(nulls))
     }
 }
 

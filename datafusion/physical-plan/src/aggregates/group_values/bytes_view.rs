@@ -17,6 +17,7 @@
 
 use crate::aggregates::group_values::GroupValues;
 use arrow_array::{Array, ArrayRef, RecordBatch};
+use datafusion_common::DataFusionError;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 use datafusion_physical_expr_common::binary_view_map::ArrowBytesViewMap;
@@ -115,6 +116,11 @@ impl GroupValues for GroupValuesBytesView {
                 assert_eq!(0, group_indexes[0]);
 
                 emit_group_values
+            }
+            EmitTo::CurrentBlock(_) => {
+                return Err(DataFusionError::NotImplemented(
+                    "blocked group values is not supported yet".to_string(),
+                ))
             }
         };
 

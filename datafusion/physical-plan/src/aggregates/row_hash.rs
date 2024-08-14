@@ -45,6 +45,7 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
+use datafusion_expr::groups_accumulator::GroupStatesMode;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -62,6 +63,7 @@ pub(crate) enum ExecutionState {
     /// When producing output, the remaining rows to output are stored
     /// here and are sliced off as needed in batch_size chunks
     ProducingOutput(RecordBatch),
+    ProducingBlocks(Option<usize>),
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
     ///
@@ -431,6 +433,9 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// The [`RuntimeEnv`] associated with the [`TaskContext`] argument
     runtime: Arc<RuntimeEnv>,
+    enable_blocked_group_states: bool,
+
+    group_states_size: usize,
 }
 
 impl GroupedHashAggregateStream {
@@ -477,7 +482,7 @@ impl GroupedHashAggregateStream {
         };
 
         // Instantiate the accumulators
-        let accumulators: Vec<_> = aggregate_exprs
+        let mut accumulators: Vec<_> = aggregate_exprs
             .iter()
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
@@ -507,7 +512,7 @@ impl GroupedHashAggregateStream {
             ordering.as_slice(),
         )?;
 
-        let group_values = new_group_values(group_schema)?;
+        let mut group_values = new_group_values(group_schema)?;
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
@@ -551,6 +556,14 @@ impl GroupedHashAggregateStream {
             None
         };
 
+        // Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
+        let enable_blocked_group_states = maybe_enable_blocked_group_states(
+            group_values.as_mut(),
+            &mut accumulators,
+            batch_size,
+            &group_ordering,
+        )?;
+
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
             input,
@@ -571,8 +584,38 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
+            enable_blocked_group_states,
+            group_states_size: batch_size,
         })
     }
+}
+
+/// Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
+/// The blocked optimization will be enabled when:
+///   - It is not streaming aggregation(because blocked mode can't support Emit::first(exact n))
+///   - The accumulator is not empty
+///   - `GroupValues` and all `GroupsAccumulator`s support blocked mode
+fn maybe_enable_blocked_group_states(
+    group_values: &mut dyn GroupValues,
+    accumulators: &mut [Box<dyn GroupsAccumulator>],
+    block_size: usize,
+    group_ordering: &GroupOrdering,
+) -> Result<bool> {
+    if matches!(group_ordering, GroupOrdering::None) || accumulators.is_empty() {
+        return Ok(false);
+    }
+
+    let group_supports_blocked = group_values.supports_blocked_mode();
+    let accumulators_support_blocked =
+        accumulators.iter().any(|acc| acc.supports_blocked_mode());
+    if group_supports_blocked && accumulators_support_blocked {
+        group_values.switch_to_mode(GroupStatesMode::Blocked(block_size))?;
+        accumulators
+            .iter_mut()
+            .try_for_each(|acc| acc.switch_to_mode(GroupStatesMode::Blocked(block_size)))?;
+    }
+
+    Ok(true)
 }
 
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
@@ -717,6 +760,44 @@ impl Stream for GroupedHashAggregateStream {
                     };
                     return Poll::Ready(Some(Ok(
                         output_batch.record_output(&self.baseline_metrics)
+                    )));
+                }
+
+                ExecutionState::ProducingBlocks(blocks) => {
+                    if let Some(blk) = blocks {
+                        if *blk > 0 {
+                            self.exec_state =
+                                ExecutionState::ProducingBlocks(Some(*blk - 1));
+                        } else {
+                            self.exec_state = if self.input_done {
+                                ExecutionState::Done
+                            } else if self.should_skip_aggregation() {
+                                ExecutionState::SkippingAggregation
+                            } else {
+                                ExecutionState::ReadingInput
+                            };
+                            continue;
+                        }
+                    }
+
+                    let emit_result = self.emit(EmitTo::CurrentBlock(true), false);
+                    if emit_result.is_err() {
+                        return Poll::Ready(Some(emit_result));
+                    }
+
+                    let emit_batch = emit_result.unwrap();
+                    if emit_batch.num_rows() == 0 {
+                        self.exec_state = if self.input_done {
+                            ExecutionState::Done
+                        } else if self.should_skip_aggregation() {
+                            ExecutionState::SkippingAggregation
+                        } else {
+                            ExecutionState::ReadingInput
+                        };
+                    }
+
+                    return Poll::Ready(Some(Ok(
+                        emit_batch.record_output(&self.baseline_metrics)
                     )));
                 }
 
@@ -945,9 +1026,14 @@ impl GroupedHashAggregateStream {
             && matches!(self.mode, AggregateMode::Partial)
             && self.update_memory_reservation().is_err()
         {
-            let n = self.group_values.len() / self.batch_size * self.batch_size;
-            let batch = self.emit(EmitTo::First(n), false)?;
-            self.exec_state = ExecutionState::ProducingOutput(batch);
+            if self.enable_blocked_group_states {
+                let n = self.group_values.len() / self.batch_size * self.batch_size;
+                let batch = self.emit(EmitTo::First(n), false)?;
+                self.exec_state = ExecutionState::ProducingOutput(batch);
+            } else {
+                let blocks = self.group_values.len() / self.group_states_size;
+                self.exec_state = ExecutionState::ProducingBlocks(Some(blocks));
+            }
         }
         Ok(())
     }
@@ -1005,8 +1091,12 @@ impl GroupedHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
-            let batch = self.emit(EmitTo::All, false)?;
-            ExecutionState::ProducingOutput(batch)
+            if !self.enable_blocked_group_states {
+                let batch = self.emit(EmitTo::All, false)?;
+                ExecutionState::ProducingOutput(batch)
+            } else {
+                ExecutionState::ProducingBlocks(None)
+            }
         } else {
             // If spill files exist, stream-merge them.
             self.update_merged_stream()?;
@@ -1038,8 +1128,12 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<()> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
-                let batch = self.emit(EmitTo::All, false)?;
-                self.exec_state = ExecutionState::ProducingOutput(batch);
+                if !self.enable_blocked_group_states {
+                    let batch = self.emit(EmitTo::All, false)?;
+                    self.exec_state = ExecutionState::ProducingOutput(batch);
+                } else {
+                    self.exec_state = ExecutionState::ProducingBlocks(None);
+                }
             }
         }
 

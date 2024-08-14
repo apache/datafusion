@@ -19,10 +19,10 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{downcast_primitive, ArrayRef};
 use arrow_schema::{DataType, SchemaRef};
 use bytes_view::GroupValuesBytesView;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 
 pub(crate) mod primitive;
-use datafusion_expr::EmitTo;
+use datafusion_expr::{groups_accumulator::GroupStatesMode, EmitTo};
 use primitive::GroupValuesPrimitive;
 
 mod row;
@@ -36,7 +36,11 @@ use datafusion_physical_expr::binary_map::OutputType;
 /// An interning store for group keys
 pub trait GroupValues: Send {
     /// Calculates the `groups` for each input row of `cols`
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+    ) -> Result<()>;
 
     /// Returns the number of bytes used by this [`GroupValues`]
     fn size(&self) -> usize;
@@ -52,6 +56,20 @@ pub trait GroupValues: Send {
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, batch: &RecordBatch);
+
+    fn supports_blocked_mode(&self) -> bool {
+        false
+    }
+
+    fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
+        if matches!(&mode, GroupStatesMode::Blocked(_)) {
+            return Err(DataFusionError::NotImplemented(
+                "only flat mode is not supported yet".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {

@@ -115,7 +115,7 @@ where
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let values = emit_to.take_needed(&mut self.values);
-        let nulls = self.null_state.build(emit_to);
+        let nulls = self.null_state.build(emit_to)?;
         let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
             .with_data_type(self.data_type.clone());
         Ok(Arc::new(values))

@@ -25,7 +25,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray};
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::DataType;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
@@ -205,6 +205,11 @@ where
                 let mut split = self.values.split_off(n);
                 std::mem::swap(&mut self.values, &mut split);
                 build_primitive(split, null_group)
+            }
+            EmitTo::CurrentBlock(_) => {
+                return Err(DataFusionError::NotImplemented(
+                    "blocked group values is not supported yet".to_string(),
+                ))
             }
         };
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])

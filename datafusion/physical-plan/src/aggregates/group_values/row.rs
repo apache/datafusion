@@ -216,6 +216,11 @@ impl GroupValues for GroupValuesRows {
                 }
                 output
             }
+            EmitTo::CurrentBlock(_) => {
+                return Err(DataFusionError::NotImplemented(
+                    "blocked group values management is not supported".to_string(),
+                ));
+            }
         };
 
         // TODO: Materialize dictionaries in group keys (#7647)

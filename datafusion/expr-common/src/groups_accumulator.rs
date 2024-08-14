@@ -18,7 +18,7 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy)]
@@ -31,6 +31,8 @@ pub enum EmitTo {
     /// For example, if `n=10`, group_index `0, 1, ... 9` are emitted
     /// and group indexes '`10, 11, 12, ...` become `0, 1, 2, ...`.
     First(usize),
+    /// Emit all groups managed by blocks
+    CurrentBlock(bool),
 }
 
 impl EmitTo {
@@ -52,8 +54,15 @@ impl EmitTo {
                 std::mem::swap(v, &mut t);
                 t
             }
+            EmitTo::CurrentBlock(_) => unimplemented!(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum GroupStatesMode {
+    Flat,
+    Blocked(usize),
 }
 
 /// `GroupAccumulator` implements a single aggregate (e.g. AVG) and
@@ -142,6 +151,26 @@ pub trait GroupsAccumulator: Send {
     ///
     /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
+
+    /// Returns `true` if blocked emission is supported
+    /// The blocked emission is possible to avoid result splitting in aggregation.
+    fn supports_blocked_emission(&self) -> bool {
+        false
+    }
+
+    fn supports_blocked_mode(&self) -> bool {
+        false
+    }
+
+    fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
+        if matches!(&mode, GroupStatesMode::Blocked(_)) {
+            return Err(DataFusionError::NotImplemented(
+                "only flat mode is not supported yet".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 
     /// Merges intermediate state (the output from [`Self::state`])
     /// into this accumulator's current state.

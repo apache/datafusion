@@ -467,7 +467,7 @@ where
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let counts = emit_to.take_needed(&mut self.counts);
         let sums = emit_to.take_needed(&mut self.sums);
-        let nulls = self.null_state.build(emit_to);
+        let nulls = self.null_state.build(emit_to)?;
 
         assert_eq!(nulls.len(), sums.len());
         assert_eq!(counts.len(), sums.len());
@@ -502,7 +502,7 @@ where
 
     // return arrays for sums and counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let nulls = self.null_state.build(emit_to);
+        let nulls = self.null_state.build(emit_to)?;
         let nulls = Some(nulls);
 
         let counts = emit_to.take_needed(&mut self.counts);
