@@ -33,30 +33,31 @@
 //! `RowFilter`, the optimal ordering depends on the exact filters. The best
 //! filters to execute first have two properties:
 //!
-//!     1. They are relatively inexpensive to evaluate (e.g. they read
-//!        column chunks which are relatively small)
+//! 1. They are relatively inexpensive to evaluate (e.g. they read
+//!    column chunks which are relatively small)
 //!
-//!     2. They filter many (contiguous) rows, reducing the amount of decoding
-//!        required for subsequent filters and projected columns
+//! 2. They filter many (contiguous) rows, reducing the amount of decoding
+//!    required for subsequent filters and projected columns
 //!
 //! If requested, this code will reorder the filters based on heuristics try and
 //! reduce the evaluation cost.
 //!
 //! The basic algorithm for constructing the `RowFilter` is as follows
-//!     1. Break conjunctions into separate predicates. An expression
-//!        like `a = 1 AND (b = 2 AND c = 3)` would be
-//!        separated into the expressions `a = 1`, `b = 2`, and `c = 3`.
-//!     2. Determine whether each predicate can be evaluated as an `ArrowPredicate`.
-//!     3. Determine, for each predicate, the total compressed size of all
-//!        columns required to evaluate the predicate.
-//!     4. Determine, for each predicate, whether all columns required to
-//!        evaluate the expression are sorted.
-//!     5. Re-order the predicate by total size (from step 3).
-//!     6. Partition the predicates according to whether they are sorted (from step 4)
-//!     7. "Compile" each predicate `Expr` to a `DatafusionArrowPredicate`.
-//!     8. Build the `RowFilter` with the sorted predicates followed by
-//!        the unsorted predicates. Within each partition, predicates are
-//!        still be sorted by size.
+//!
+//! 1. Break conjunctions into separate predicates. An expression
+//!    like `a = 1 AND (b = 2 AND c = 3)` would be
+//!    separated into the expressions `a = 1`, `b = 2`, and `c = 3`.
+//! 2. Determine whether each predicate can be evaluated as an `ArrowPredicate`.
+//! 3. Determine, for each predicate, the total compressed size of all
+//!    columns required to evaluate the predicate.
+//! 4. Determine, for each predicate, whether all columns required to
+//!    evaluate the expression are sorted.
+//! 5. Re-order the predicate by total size (from step 3).
+//! 6. Partition the predicates according to whether they are sorted (from step 4)
+//! 7. "Compile" each predicate `Expr` to a `DatafusionArrowPredicate`.
+//! 8. Build the `RowFilter` with the sorted predicates followed by
+//!    the unsorted predicates. Within each partition, predicates are
+//!    still be sorted by size.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
