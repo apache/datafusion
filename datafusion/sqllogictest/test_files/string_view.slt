@@ -969,6 +969,28 @@ logical_plan
 02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1
 03)----TableScan: test projection=[column1_utf8view]
 
+## Ensure no casts for SUBSTRINDEX
+query TT
+EXPLAIN SELECT
+  SUBSTR_INDEX(column1_utf8view, 'a', 1) as c,
+  SUBSTR_INDEX(column1_utf8view, 'a', 2) as c2
+FROM test;
+----
+logical_plan
+01)Projection: substr_index(test.column1_utf8view, Utf8View("a"), Int64(1)) AS c, substr_index(test.column1_utf8view, Utf8View("a"), Int64(2)) AS c2
+02)--TableScan: test projection=[column1_utf8view]
+
+query TT
+SELECT
+  SUBSTR_INDEX(column1_utf8view, 'a', 1) as c,
+  SUBSTR_INDEX(column1_utf8view, 'a', 2) as c2
+FROM test;
+----
+Andrew Andrew
+Xi Xiangpeng
+R Raph
+NULL NULL
+
 ## Ensure no casts on columns for STARTS_WITH
 query TT
 EXPLAIN SELECT
