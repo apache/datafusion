@@ -809,7 +809,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 }
 
 /// Get a common schema that is compatible with all inputs of UNION.
-fn coerce_union_schema(inputs: &Vec<Arc<LogicalPlan>>) -> Result<DFSchema> {
+fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
     let base_schema = inputs[0].schema();
     let mut union_datatypes = base_schema
         .fields()
