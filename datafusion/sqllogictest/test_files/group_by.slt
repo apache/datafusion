@@ -4502,28 +4502,28 @@ CREATE TABLE src_table (
 ('2020-12-19T00:00:00.00Z', 9);
 
 # Use src_table to create a partitioned file
-query PI
+query I
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/0.csv'
 STORED AS CSV;
 ----
 10
 
-query PI
+query I
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/1.csv'
 STORED AS CSV;
 ----
 10
 
-query PI
+query I
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/2.csv'
 STORED AS CSV;
 ----
 10
 
-query PI
+query I
 COPY (SELECT * FROM src_table)
 TO 'test_files/scratch/group_by/timestamp_table/3.csv'
 STORED AS CSV;

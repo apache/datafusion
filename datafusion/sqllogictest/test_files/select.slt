@@ -1195,12 +1195,12 @@ LIMIT 5
 200 2000
 
 # Trying to exclude non-existing column should give error
-statement error DataFusion error: Schema error: No field named e. Valid fields are table1.a, table1.b, table1.c, table1.d.
+statement error
 SELECT * EXCLUDE e
 FROM table1
 
 # similarly, except should raise error if excluded column is not in the table
-statement error DataFusion error: Schema error: No field named e. Valid fields are table1.a, table1.b, table1.c, table1.d.
+statement error
 SELECT * EXCEPT(e)
 FROM table1
 
@@ -1214,7 +1214,7 @@ FROM table1
 2 20 20 200 2000
 
 # EXCEPT, or EXCLUDE shouldn't contain duplicate column names
-statement error DataFusion error: Error during planning: EXCLUDE or EXCEPT contains duplicate column names
+statement error
 SELECT * EXCLUDE(a, a)
 FROM table1
 

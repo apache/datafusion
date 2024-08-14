@@ -44,12 +44,12 @@ fn criterion_benchmark(c: &mut Criterion) {
         if i % 7 == 0 {
             c2.append_null();
         } else {
-            c2.append_value(&format!("string {i}"));
+            c2.append_value(format!("string {i}"));
         }
         if i % 9 == 0 {
             c3.append_null();
         } else {
-            c3.append_value(&format!("other string {i}"));
+            c3.append_value(format!("other string {i}"));
         }
     }
     let c1 = Arc::new(c1.finish());
