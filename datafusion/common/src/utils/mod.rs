@@ -758,13 +758,7 @@ pub fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
         DataType::Map(field, _) => {
             let field_data_type = field.data_type();
             match field_data_type {
-                DataType::Struct(fields) if fields.len() == 2 => Ok(fields),
-                DataType::Struct(fields) => {
-                    _internal_err!(
-                        "Expected a Struct type with 2 fields in Map, got {} fields",
-                        fields.len()
-                    )
-                }
+                DataType::Struct(fields) => Ok(fields),
                 _ => {
                     _internal_err!("Expected a Struct type, got {:?}", field_data_type)
                 }
