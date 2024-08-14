@@ -44,6 +44,7 @@ pub struct LimitPushdown {}
 /// For example: If the plan is satisfied with current fetch info, we decide to not add a LocalLimit
 ///
 /// [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
+/// [`LimitExec`]: crate::limit_pushdown::LimitExec
 #[derive(Default, Clone, Debug)]
 pub struct GlobalRequirements {
     fetch: Option<usize>,
