@@ -18,19 +18,98 @@
 //! dynamic_file_schema contains a SchemaProvider that creates tables from file paths
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
 #[cfg(feature = "dirs")]
 use dirs::home_dir;
-
+use parking_lot::RwLock;
+use datafusion_catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 use datafusion_common::plan_datafusion_err;
 
-use crate::catalog::schema::SchemaProvider;
 use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
 use crate::datasource::TableProvider;
 use crate::error::Result;
+use crate::execution::session_state::SessionState;
 use crate::execution::session_state::StateStore;
+
+pub struct DynamicFileCatalog {
+    inner: Arc<dyn CatalogProviderList>,
+    state_store: Arc<StateStore>,
+}
+
+impl DynamicFileCatalog {
+    pub fn new(
+        inner: Arc<dyn CatalogProviderList>,
+        state_store: Arc<StateStore>,
+    ) -> Self {
+        Self { inner, state_store }
+    }
+}
+
+impl CatalogProviderList for DynamicFileCatalog {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn register_catalog(
+        &self,
+        name: String,
+        catalog: Arc<dyn CatalogProvider>,
+    ) -> Option<Arc<dyn CatalogProvider>> {
+        self.inner.register_catalog(name, catalog)
+    }
+
+    fn catalog_names(&self) -> Vec<String> {
+        self.inner.catalog_names()
+    }
+
+    fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+        self.inner
+            .catalog(name)
+            .map(|catalog|
+            Arc::new(DynamicFileCatalogProvider::new(self.state_store.get_state())) as _)
+    }
+}
+
+
+/// Wraps another catalog provider
+struct DynamicFileCatalogProvider {
+    state: Weak<RwLock<SessionState>>,
+}
+
+impl DynamicFileCatalogProvider {
+    pub fn new(state: Weak<RwLock<SessionState>>) -> Self {
+        Self {
+            state: state.clone(),
+        }
+    }
+}
+
+impl CatalogProvider for DynamicFileCatalogProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema_names(&self) -> Vec<String> {
+        vec![]
+    }
+
+    fn schema(&self, _: &str) -> Option<Arc<dyn SchemaProvider>> {
+        Some(Arc::new(DynamicFileSchemaProvider::new(
+            self.state.clone(),
+            Arc::new(DynamicListTableFactory::default()),
+        )))
+    }
+
+    fn register_schema(
+        &self,
+        _name: &str,
+        _schema: Arc<dyn SchemaProvider>,
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        unimplemented!("register_schema is not supported for DynamicFileCatalogProvider")
+    }
+}
 
 /// Implements the [DynamicFileSchemaProvider] that can create tables provider from the file path.
 ///

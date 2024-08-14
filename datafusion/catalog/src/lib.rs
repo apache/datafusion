@@ -19,6 +19,7 @@ mod catalog;
 mod schema;
 mod session;
 mod table;
+mod dynamic_file;
 
 pub use catalog::*;
 pub use schema::*;

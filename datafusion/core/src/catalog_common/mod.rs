@@ -25,6 +25,7 @@
 pub mod information_schema;
 pub mod listing_schema;
 pub mod memory;
+pub mod dynamic_file;
 
 pub use crate::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 pub use memory::{

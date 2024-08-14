@@ -306,6 +306,8 @@ impl SessionContext {
         Self::new_with_state(state)
     }
 
+    pub fn new_
+
     /// Creates a new `SessionContext` using the provided
     /// [`SessionConfig`] and a [`RuntimeEnv`].
     #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt")]
@@ -378,6 +380,14 @@ impl SessionContext {
         } else {
             config_err!("default catalog and schema are required for url table")
         }
+    }
+
+    pub fn enable_url_table_1(&self) -> Result<Self> {
+        let state_ref = self.state();
+        let builder = SessionStateBuilder::new_from_existing(self.state());
+        let inner = state_ref.catalog_list();
+        let state_store = Arc::new(StateStore::new());
+
     }
 
     /// Creates a new `SessionContext` using the provided [`SessionState`]
