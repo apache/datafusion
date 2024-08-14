@@ -22,8 +22,11 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Float64Type, Int64Type, UInt32Type};
 use arrow_array::{
     new_null_array, Array, ArrowPrimitiveType, MapArray, PrimitiveArray, StringArray,
+    StringViewArray,
 };
-use datafusion_common::cast::{as_primitive_array, as_string_array};
+use datafusion_common::cast::{
+    as_primitive_array, as_string_array, as_string_view_array,
+};
 use datafusion_common::utils::get_map_entry_field;
 use datafusion_common::{cast::as_map_array, exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -117,32 +120,42 @@ fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         );
     }
 
-    if key_type.is_integer() {
-        generic_map_extract_inner::<Int64Type>(
+    match key_type {
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+            generic_map_extract_inner::<Int64Type>(
+                map_array,
+                as_primitive_array::<Int64Type>(map_array.keys())?,
+                as_primitive_array::<Int64Type>(&args[1])?,
+            )
+        }
+        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
+            generic_map_extract_inner::<UInt32Type>(
+                map_array,
+                as_primitive_array::<UInt32Type>(map_array.keys())?,
+                as_primitive_array::<UInt32Type>(&args[1])?,
+            )
+        }
+        DataType::Float32 | DataType::Float64 => {
+            generic_map_extract_inner::<Float64Type>(
+                map_array,
+                as_primitive_array::<Float64Type>(map_array.keys())?,
+                as_primitive_array::<Float64Type>(&args[1])?,
+            )
+        }
+        DataType::Utf8 => string_map_extract_inner(
             map_array,
-            as_primitive_array::<Int64Type>(map_array.keys())?,
-            as_primitive_array::<Int64Type>(&args[1])?,
-        )
-    } else if key_type.is_floating() {
-        generic_map_extract_inner::<Float64Type>(
-            map_array,
-            as_primitive_array::<Float64Type>(map_array.keys())?,
-            as_primitive_array::<Float64Type>(&args[1])?,
-        )
-    } else if key_type.is_unsigned_integer() {
-        generic_map_extract_inner::<UInt32Type>(
-            map_array,
-            as_primitive_array::<UInt32Type>(map_array.keys())?,
-            as_primitive_array::<UInt32Type>(&args[1])?,
-        )
-    } else if key_type == &DataType::Utf8 {
-        string_map_extract_inner(
-            map_array,
-            as_string_array(map_array.keys())?,
+            as_string_array(&map_array.keys())?,
             as_string_array(&args[1])?,
-        )
-    } else {
-        exec_err!("Unsupported key type: {:?}", args[1].data_type())
+        ),
+        DataType::Utf8View => string_view_map_extract_inner(
+            map_array,
+            as_string_view_array(&map_array.keys())?,
+            as_string_view_array(&args[1])?,
+        ),
+
+        _ => {
+            return exec_err!("Unsupported key type for map_extract");
+        }
     }
 }
 
@@ -165,6 +178,21 @@ fn string_map_extract_inner(
     map_array: &MapArray,
     keys_array: &StringArray,
     query_keys_array: &StringArray,
+) -> Result<ArrayRef> {
+    let query_key = query_keys_array.value(0);
+    // key cannot be NULL, so we can unwrap
+    let index = keys_array.iter().position(|key| key.unwrap() == query_key);
+
+    match index {
+        Some(idx) => Ok(map_array.values().slice(idx, 1)),
+        None => Ok(new_null_array(map_array.value_type(), 1)),
+    }
+}
+
+fn string_view_map_extract_inner(
+    map_array: &MapArray,
+    keys_array: &StringViewArray,
+    query_keys_array: &StringViewArray,
 ) -> Result<ArrayRef> {
     let query_key = query_keys_array.value(0);
     // key cannot be NULL, so we can unwrap
