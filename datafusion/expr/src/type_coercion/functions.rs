@@ -23,7 +23,7 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::utils::{
-    coerced_fixed_size_list_to_list, get_map_entry_field, list_ndims,
+    coerced_fixed_size_list_to_list, list_ndims,
 };
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err, Result,
@@ -389,17 +389,6 @@ fn get_valid_types(
                     DataType::Map(_, _) => vec![vec![current_types[0].clone()]],
                     _ => vec![vec![]],
                 }
-            }
-            ArrayFunctionSignature::MapArrayAndKey => {
-                if current_types.len() != 2 {
-                    return Ok(vec![vec![]]);
-                }
-
-                let field = get_map_entry_field(&current_types[0])?;
-                vec![vec![
-                    current_types[0].clone(),
-                    field.get(0).unwrap().data_type().clone(),
-                ]]
             }
         },
         TypeSignature::Any(number) => {

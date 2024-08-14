@@ -49,7 +49,6 @@ pub(super) struct MapExtract {
 impl MapExtract {
     pub fn new() -> Self {
         Self {
-            // signature: Signature::map_array_and_key(Volatility::Immutable),
             signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![String::from("element_at")],
         }
@@ -80,6 +79,18 @@ impl ScalarUDFImpl for MapExtract {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return exec_err!("map_extract expects two arguments");
+        }
+
+        let field = get_map_entry_field(&arg_types[0])?;
+        Ok(vec![
+            arg_types[0].clone(),
+            field.get(0).unwrap().data_type().clone(),
+        ])
     }
 }
 
