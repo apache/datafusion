@@ -15,17 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
 use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
 use datafusion_common::config::ConfigOptions;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::Partitioning;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_expr::expressions::{col, lit};
+use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::empty::EmptyExec;
@@ -33,10 +32,11 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion_physical_plan::{get_plan_string, ExecutionPlan, ExecutionPlanProperties};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use datafusion_physical_plan::{get_plan_string, ExecutionPlan, ExecutionPlanProperties};
+use std::sync::Arc;
 
 struct DummyStreamPartition {
     schema: SchemaRef,
@@ -218,8 +218,7 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> datafusion_common::Result<
         }],
         repartition,
     );
-    let spm =
-        sort_preserving_merge_exec(sort.output_ordering().unwrap().to_vec(), sort);
+    let spm = sort_preserving_merge_exec(sort.output_ordering().unwrap().to_vec(), sort);
     let global_limit = global_limit_exec(spm, 0, Some(5));
 
     let initial = get_plan_string(&global_limit);

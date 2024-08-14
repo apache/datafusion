@@ -144,7 +144,7 @@ pub fn pushdown_limit_helper(
         // We will decide later if we should add it again or not
         return Ok((
             Transformed {
-                data: limit_exec.input().clone(),
+                data: Arc::<dyn ExecutionPlan>::clone(limit_exec.input()),
                 transformed: true,
                 tnr: TreeNodeRecursion::Stop,
             },
@@ -273,7 +273,9 @@ pub(crate) fn pushdown_limits(
     let children = new_node.data.children();
     let new_children = children
         .into_iter()
-        .map(|child| pushdown_limits(child.clone(), global_state.clone()))
+        .map(|child| {
+            pushdown_limits(Arc::<dyn ExecutionPlan>::clone(child), global_state.clone())
+        })
         .collect::<Result<_>>()?;
 
     new_node.data.with_new_children(new_children)
@@ -284,7 +286,7 @@ pub(crate) fn pushdown_limits(
 fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
     if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
         Some(LimitExec::Global(GlobalLimitExec::new(
-            global_limit.input().clone(),
+            Arc::<dyn ExecutionPlan>::clone(global_limit.input()),
             global_limit.skip(),
             global_limit.fetch(),
         )))
@@ -293,7 +295,7 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
             .downcast_ref::<LocalLimitExec>()
             .map(|local_limit| {
                 LimitExec::Local(LocalLimitExec::new(
-                    local_limit.input().clone(),
+                    Arc::<dyn ExecutionPlan>::clone(local_limit.input()),
                     local_limit.fetch(),
                 ))
             })
