@@ -89,7 +89,7 @@ impl ScalarUDFImpl for MapExtract {
         let field = get_map_entry_field(&arg_types[0])?;
         Ok(vec![
             arg_types[0].clone(),
-            field.get(0).unwrap().data_type().clone(),
+            field.first().unwrap().data_type().clone(),
         ])
     }
 }
@@ -112,25 +112,25 @@ fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let key_type = map_array.key_type();
     if key_type.is_integer() {
         generic_map_extract_inner::<Int64Type>(
-            &map_array,
+            map_array,
             as_primitive_array::<Int64Type>(map_array.keys())?,
             as_primitive_array::<Int64Type>(&args[1])?,
         )
     } else if key_type.is_floating() {
         generic_map_extract_inner::<Float64Type>(
-            &map_array,
+            map_array,
             as_primitive_array::<Float64Type>(map_array.keys())?,
             as_primitive_array::<Float64Type>(&args[1])?,
         )
     } else if key_type.is_unsigned_integer() {
         generic_map_extract_inner::<UInt32Type>(
-            &map_array,
+            map_array,
             as_primitive_array::<UInt32Type>(map_array.keys())?,
             as_primitive_array::<UInt32Type>(&args[1])?,
         )
     } else if key_type == &DataType::Utf8 {
         string_map_extract_inner(
-            &map_array,
+            map_array,
             as_string_array(map_array.keys())?,
             as_string_array(&args[1])?,
         )
