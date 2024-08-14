@@ -3703,7 +3703,7 @@ SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', null);
 
 ### `map_extract`
 
-Return a corresponding value from a map for a given key, or NULL if the key is not found.
+Return corresponding values from a map for a given key, or NULL if the key is not found.
 
 ```
 SELECT map_extract(map, key);

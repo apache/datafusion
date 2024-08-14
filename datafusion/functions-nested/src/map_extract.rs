@@ -39,7 +39,7 @@ make_udf_expr_and_func!(
     MapExtract,
     map_extract,
     map key,
-    "Return a corresponding value from a map for a given key,  or NULL if the key is not found.",
+    "Return corresponding values from a map for a given key,  or NULL if the key is not found.",
     map_extract_udf
 );
 
