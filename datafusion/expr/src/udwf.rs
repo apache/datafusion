@@ -328,6 +328,11 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         hasher.finish()
     }
 
+    /// Allows customizing nullable of column for this window UDF.
+    ///
+    /// By default, the final result of evaluating the window UDF is
+    /// allowed to have null values. But if that is not the case then
+    /// it can be customized in the window UDF implementation.
     fn nullable(&self) -> bool {
         true
     }
