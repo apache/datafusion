@@ -1042,6 +1042,65 @@ arrow.apache.org 100 arrow.apache.org
 . 3 .
 . 100 .
 
+query I
+SELECT levenshtein(NULL, NULL)
+----
+NULL
+
+# Test substring_index using '.' as delimiter with utf8view
+query TIT
+SELECT str, n, substring_index(arrow_cast(str, 'Utf8View'), '.', n) AS c FROM
+  (VALUES
+    ROW('arrow.apache.org'),
+    ROW('.'),
+    ROW('...'),
+    ROW(NULL)
+  ) AS strings(str),
+  (VALUES
+    ROW(1),
+    ROW(2),
+    ROW(3),
+    ROW(100),
+    ROW(-1),
+    ROW(-2),
+    ROW(-3),
+    ROW(-100)
+  ) AS occurrences(n)
+ORDER BY str DESC, n;
+----
+NULL -100 NULL
+NULL -3 NULL
+NULL -2 NULL
+NULL -1 NULL
+NULL 1 NULL
+NULL 2 NULL
+NULL 3 NULL
+NULL 100 NULL
+arrow.apache.org -100 arrow.apache.org
+arrow.apache.org -3 arrow.apache.org
+arrow.apache.org -2 apache.org
+arrow.apache.org -1 org
+arrow.apache.org 1 arrow
+arrow.apache.org 2 arrow.apache
+arrow.apache.org 3 arrow.apache.org
+arrow.apache.org 100 arrow.apache.org
+... -100 ...
+... -3 ..
+... -2 .
+... -1 (empty)
+... 1 (empty)
+... 2 .
+... 3 ..
+... 100 ...
+. -100 .
+. -3 .
+. -2 .
+. -1 (empty)
+. 1 (empty)
+. 2 .
+. 3 .
+. 100 .
+
 # Test substring_index using 'ac' as delimiter
 query TIT
 SELECT str, n, substring_index(str, 'ac', n) AS c FROM
