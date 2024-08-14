@@ -37,9 +37,8 @@ use crate::logical_plan::{
 };
 use crate::type_coercion::binary::values_coercion;
 use crate::utils::{
-    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
-    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
-    group_window_expr_by_sort_keys,
+    can_hash, columnize_expr, compare_sort_expr, expr_to_columns,
+    find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
     and, binary_expr, logical_plan::tree_node::unwrap_arc, DmlStatement, Expr,
@@ -1315,7 +1314,7 @@ fn add_group_by_exprs_from_dependencies(
     Ok(group_expr)
 }
 /// Errors if one or more expressions have equal names.
-pub(crate) fn validate_unique_names<'a>(
+pub fn validate_unique_names<'a>(
     node_name: &str,
     expressions: impl IntoIterator<Item = &'a Expr>,
 ) -> Result<()> {
@@ -1358,22 +1357,11 @@ pub fn project(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = impl Into<Expr>>,
 ) -> Result<LogicalPlan> {
-    // TODO: move it into analyzer
-    let input_schema = plan.schema();
     let mut projected_expr = vec![];
     for e in expr {
         let e = e.into();
         match e {
-            Expr::Wildcard { qualifier: None } => {
-                projected_expr.extend(expand_wildcard(input_schema, &plan, None)?)
-            }
-            Expr::Wildcard {
-                qualifier: Some(qualifier),
-            } => projected_expr.extend(expand_qualified_wildcard(
-                &qualifier,
-                input_schema,
-                None,
-            )?),
+            Expr::Wildcard { .. } => projected_expr.push(e),
             _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
         }
     }
@@ -1719,26 +1707,6 @@ mod tests {
 
         let expected = "Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST\
         \n  TableScan: employee_csv projection=[state, salary]";
-
-        assert_eq!(expected, format!("{plan}"));
-
-        Ok(())
-    }
-
-    #[test]
-    fn plan_using_join_wildcard_projection() -> Result<()> {
-        let t2 = table_scan(Some("t2"), &employee_schema(), None)?.build()?;
-
-        let plan = table_scan(Some("t1"), &employee_schema(), None)?
-            .join_using(t2, JoinType::Inner, vec!["id"])?
-            .project(vec![Expr::Wildcard { qualifier: None }])?
-            .build()?;
-
-        // id column should only show up once in projection
-        let expected = "Projection: t1.id, t1.first_name, t1.last_name, t1.state, t1.salary, t2.first_name, t2.last_name, t2.state, t2.salary\
-        \n  Inner Join: Using t1.id = t2.id\
-        \n    TableScan: t1\
-        \n    TableScan: t2";
 
         assert_eq!(expected, format!("{plan}"));
 

@@ -24,6 +24,8 @@ use itertools::izip;
 
 use arrow::datatypes::{DataType, Field, IntervalUnit};
 
+use crate::analyzer::AnalyzerRule;
+use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
@@ -54,9 +56,6 @@ use datafusion_expr::{
     AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, LogicalPlan, Operator,
     Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
-
-use crate::analyzer::AnalyzerRule;
-use crate::utils::NamePreserver;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -841,7 +840,8 @@ fn coerce_union_schema(inputs: Vec<Arc<LogicalPlan>>) -> Result<DFSchema> {
     DFSchema::new_with_metadata(union_qualified_fields, HashMap::new())
 }
 
-/// Coerce the union's inputs to a common schema
+/// Coerce the union’s inputs to a common schema. This occurs after
+/// wildcard expansion and the coercion of the input expressions.
 fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
     let union_schema = coerce_union_schema(union_plan.inputs.clone())?;
     let new_inputs = union_plan
@@ -1405,7 +1405,6 @@ mod test {
         .eq(cast(lit("1998-03-18"), DataType::Date32));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        dbg!(&plan);
         let expected =
             "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8(\"1998-03-18\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1592,7 +1591,6 @@ mod test {
         ));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        dbg!(&plan);
         let expected =
             "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) - CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;

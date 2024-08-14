@@ -1146,7 +1146,7 @@ mod tests {
             if i % 7 == 0 {
                 c2.append_null();
             } else {
-                c2.append_value(&format!("string {i}"));
+                c2.append_value(format!("string {i}"));
             }
         }
         let c1 = Arc::new(c1.finish());
