@@ -673,7 +673,7 @@ impl DefaultPhysicalPlanner {
                 let physical_input_schema_from_logical: Arc<Schema> =
                     logical_input_schema.as_ref().clone().into();
 
-                debug_assert_eq!(physical_input_schema_from_logical, physical_input_schema, "physical input schema should be the same as the one converted from logical input schema");
+                debug_assert_eq!(physical_input_schema_from_logical, physical_input_schema, "Physical input schema should be the same as the one converted from logical input schema. Please file an issue or send the PR");
 
                 let groups = self.create_grouping_physical_expr(
                     group_expr,
