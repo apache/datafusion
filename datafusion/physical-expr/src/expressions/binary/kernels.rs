@@ -27,7 +27,33 @@ use arrow::datatypes::DataType;
 use datafusion_common::internal_err;
 use datafusion_common::{Result, ScalarValue};
 
+use arrow_schema::ArrowError;
 use std::sync::Arc;
+
+/// Returns the elementwise concatenation of a [`StringViewArary`].
+///
+/// An index of the resulting [`StringViewArray`] is null if any of
+/// `StringViewArary` are null at that location.
+///
+/// ```text
+/// e.g:
+///
+///   ["Hello"] + ["World"] = ["HelloWorld"]
+///
+///   ["a", "b"] + [None, "c"] = [None, "bc"]
+/// ```
+///
+/// An error will be returned if `left` and `right` have different lengths
+///
+/// TODO: port this upstream to arrow-rs (TODO FILE TICKET AND REFERENCE HERE)
+pub fn concat_elements_utf8view(
+    _left: &StringViewArray,
+    _right: &StringViewArray,
+) -> std::result::Result<StringViewArray, ArrowError> {
+    Err(ArrowError::NotYetImplemented(
+        "concat_elements_utf8view".into(),
+    ))
+}
 
 /// Downcasts $LEFT and $RIGHT to $ARRAY_TYPE and then calls $KERNEL($LEFT, $RIGHT)
 macro_rules! call_bitwise_kernel {

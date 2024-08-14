@@ -41,6 +41,7 @@ use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 
+use crate::expressions::binary::kernels::concat_elements_utf8view;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -131,32 +132,27 @@ impl std::fmt::Display for BinaryExpr {
     }
 }
 
-/// Invoke a compute kernel on a pair of binary data arrays
-macro_rules! compute_utf8_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast left side array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast right side array");
-        Ok(Arc::new(paste::expr! {[<$OP _utf8>]}(&ll, &rr)?))
-    }};
-}
-
-macro_rules! binary_string_array_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        match $LEFT.data_type() {
-            DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
-            DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
-            other => internal_err!(
-                "Data type {:?} not supported for binary operation '{}' on string arrays",
-                other, stringify!($OP)
-            ),
+/// invoke the appropriate concat kernel for string arrays
+fn concat_elements(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<ArrayRef> {
+    Ok(match left.data_type() {
+        DataType::Utf8 => Arc::new(concat_elements_utf8(
+            left.as_string::<i32>(),
+            right.as_string::<i32>(),
+        )?),
+        DataType::LargeUtf8 => Arc::new(concat_elements_utf8(
+            left.as_string::<i64>(),
+            right.as_string::<i64>(),
+        )?),
+        DataType::Utf8View => Arc::new(concat_elements_utf8view(
+            left.as_string_view(),
+            right.as_string_view(),
+        )?),
+        other => {
+            return internal_err!(
+                "Data type {other:?} not supported for binary operation 'concat_elements' on string arrays"
+            );
         }
-    }};
+    })
 }
 
 /// Invoke a boolean kernel on a pair of arrays
@@ -658,7 +654,7 @@ impl BinaryExpr {
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            StringConcat => binary_string_array_op!(left, right, concat_elements),
+            StringConcat => concat_elements(left, right),
             AtArrow | ArrowAt => {
                 unreachable!("ArrowAt and AtArrow should be rewritten to function")
             }
