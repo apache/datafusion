@@ -36,7 +36,7 @@ make_udf_expr_and_func!(
     MapExtract,
     map_extract,
     map key,
-    "Return a list containing the value for a given key or an empty list if the key is not contained in the map.",
+    "Return a corresponding value from a map for a given key,  or NULL if the key is not found.",
     map_extract_udf
 );
 
