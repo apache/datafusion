@@ -29,15 +29,17 @@ use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
+use arrow_array::cast::AsArray;
 use arrow_array::{
-    Array, FixedSizeListArray, LargeListArray, ListArray, RecordBatchOptions,
+    Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
+    RecordBatchOptions,
 };
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
-use std::cmp::Ordering;
+use std::cmp::{min, Ordering};
 use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
@@ -440,6 +442,11 @@ pub fn arrays_into_list_array(
     ))
 }
 
+/// Helper function to convert a ListArray into a vector of ArrayRefs.
+pub fn list_to_arrays<O: OffsetSizeTrait>(a: ArrayRef) -> Vec<ArrayRef> {
+    a.as_list::<O>().iter().flatten().collect::<Vec<_>>()
+}
+
 /// Get the base type of a data type.
 ///
 /// Example
@@ -681,6 +688,69 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
             result
         }
     }
+}
+
+/// Computes the `skip` and `fetch` parameters of a single limit that would be
+/// equivalent to two consecutive limits with the given `skip`/`fetch` parameters.
+///
+/// There are multiple cases to consider:
+///
+/// # Case 0: Parent and child are disjoint (`child_fetch <= skip`).
+///
+/// ```text
+///   Before merging:
+///                     |........skip........|---fetch-->|     Parent limit
+///    |...child_skip...|---child_fetch-->|                    Child limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |.........(child_skip + skip).........|
+/// ```
+///
+/// # Case 1: Parent is beyond child's range (`skip < child_fetch <= skip + fetch`).
+///
+///   Before merging:
+/// ```text
+///                     |...skip...|------------fetch------------>|   Parent limit
+///    |...child_skip...|-------------child_fetch------------>|       Child limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |....(child_skip + skip)....|---(child_fetch - skip)-->|
+/// ```
+///
+///  # Case 2: Parent is within child's range (`skip + fetch < child_fetch`).
+///
+///   Before merging:
+/// ```text
+///                     |...skip...|---fetch-->|                   Parent limit
+///    |...child_skip...|-------------child_fetch------------>|    Child limit
+/// ```
+///
+///   After merging:
+/// ```text
+///    |....(child_skip + skip)....|---fetch-->|
+/// ```
+pub fn combine_limit(
+    parent_skip: usize,
+    parent_fetch: Option<usize>,
+    child_skip: usize,
+    child_fetch: Option<usize>,
+) -> (usize, Option<usize>) {
+    let combined_skip = child_skip.saturating_add(parent_skip);
+
+    let combined_fetch = match (parent_fetch, child_fetch) {
+        (Some(parent_fetch), Some(child_fetch)) => {
+            Some(min(parent_fetch, child_fetch.saturating_sub(parent_skip)))
+        }
+        (Some(parent_fetch), None) => Some(parent_fetch),
+        (None, Some(child_fetch)) => Some(child_fetch.saturating_sub(parent_skip)),
+        (None, None) => None,
+    };
+
+    (combined_skip, combined_fetch)
 }
 
 #[cfg(test)]

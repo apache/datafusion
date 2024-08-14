@@ -24,19 +24,18 @@ use std::{any::Any, sync::Arc};
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
 
-use crate::catalog::TableProvider;
-use crate::datasource::{create_ordering, get_statistics_with_limit, TableType};
+use super::ListingTableUrl;
+use crate::datasource::{create_ordering, get_statistics_with_limit};
 use crate::datasource::{
     file_format::{file_compression_type::FileCompressionType, FileFormat},
-    listing::ListingTableUrl,
     physical_plan::{FileScanConfig, FileSinkConfig},
 };
-use crate::{
-    error::{DataFusionError, Result},
-    execution::context::SessionState,
-    logical_expr::{utils::conjunction, Expr, TableProviderFilterPushDown},
-    physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
-};
+use crate::execution::context::SessionState;
+use datafusion_catalog::TableProvider;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::TableType;
+use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
+use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
@@ -973,15 +972,16 @@ impl ListingTable {
         // collect the statistics if required by the config
         let files = file_list
             .map(|part_file| async {
-                let mut part_file = part_file?;
+                let part_file = part_file?;
                 if self.options.collect_stat {
                     let statistics =
                         self.do_collect_statistics(ctx, &store, &part_file).await?;
-                    part_file.statistics = Some(statistics.clone());
-                    Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
+                    Ok((part_file, statistics))
                 } else {
-                    Ok((part_file, Statistics::new_unknown(&self.file_schema)))
-                        as Result<(PartitionedFile, Statistics)>
+                    Ok((
+                        part_file,
+                        Arc::new(Statistics::new_unknown(&self.file_schema)),
+                    ))
                 }
             })
             .boxed()
@@ -1011,12 +1011,12 @@ impl ListingTable {
         ctx: &SessionState,
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
-    ) -> Result<Statistics> {
-        let statistics_cache = self.collected_statistics.clone();
-        return match statistics_cache
+    ) -> Result<Arc<Statistics>> {
+        match self
+            .collected_statistics
             .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
         {
-            Some(statistics) => Ok(statistics.as_ref().clone()),
+            Some(statistics) => Ok(statistics.clone()),
             None => {
                 let statistics = self
                     .options
@@ -1028,14 +1028,15 @@ impl ListingTable {
                         &part_file.object_meta,
                     )
                     .await?;
-                statistics_cache.put_with_extra(
+                let statistics = Arc::new(statistics);
+                self.collected_statistics.put_with_extra(
                     &part_file.object_meta.location,
-                    statistics.clone().into(),
+                    statistics.clone(),
                     &part_file.object_meta,
                 );
                 Ok(statistics)
             }
-        };
+        }
     }
 }
 
@@ -1049,12 +1050,12 @@ mod tests {
     use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
-    use crate::physical_plan::collect;
     use crate::prelude::*;
     use crate::{
         assert_batches_eq,
         test::{columns, object_store::register_test_store},
     };
+    use datafusion_physical_plan::collect;
 
     use arrow::record_batch::RecordBatch;
     use arrow_schema::SortOptions;
@@ -1152,10 +1153,8 @@ mod tests {
         let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let schema = options.infer_schema(&state, &table_path).await.unwrap();
 
-        use crate::{
-            datasource::file_format::parquet::ParquetFormat,
-            physical_plan::expressions::col as physical_col,
-        };
+        use crate::datasource::file_format::parquet::ParquetFormat;
+        use datafusion_physical_plan::expressions::col as physical_col;
         use std::ops::Add;
 
         // (file_sort_order, expected_result)

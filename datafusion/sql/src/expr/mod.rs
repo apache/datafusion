@@ -17,20 +17,20 @@
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use datafusion_expr::planner::PlannerResult;
-use datafusion_expr::planner::RawDictionaryExpr;
-use datafusion_expr::planner::RawFieldAccessExpr;
+use datafusion_expr::planner::{
+    PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
+};
 use sqlparser::ast::{
-    CastKind, DictionaryField, Expr as SQLExpr, MapEntry, StructField, Subscript,
-    TrimWhereField, Value,
+    BinaryOperator, CastKind, DictionaryField, Expr as SQLExpr, MapEntry, StructField,
+    Subscript, TrimWhereField, Value,
 };
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
-    ScalarValue,
+    ScalarValue, TableReference,
 };
-use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
     lit, Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
     Operator, TryCast,
@@ -104,13 +104,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn build_logical_expr(
         &self,
-        op: sqlparser::ast::BinaryOperator,
+        op: BinaryOperator,
         left: Expr,
         right: Expr,
         schema: &DFSchema,
     ) -> Result<Expr> {
         // try extension planers
-        let mut binary_expr = datafusion_expr::planner::RawBinaryExpr { op, left, right };
+        let mut binary_expr = RawBinaryExpr { op, left, right };
         for planner in self.context_provider.get_expr_planners() {
             match planner.plan_binary_op(binary_expr, schema)? {
                 PlannerResult::Planned(expr) => {
@@ -122,7 +122,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
 
-        let datafusion_expr::planner::RawBinaryExpr { op, left, right } = binary_expr;
+        let RawBinaryExpr { op, left, right } = binary_expr;
         Ok(Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left),
             self.parse_sql_binary_op(op)?,
@@ -631,6 +631,45 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Map(map) => {
                 self.try_plan_map_literal(map.entries, schema, planner_context)
             }
+            SQLExpr::AnyOp {
+                left,
+                compare_op,
+                right,
+            } => {
+                let mut binary_expr = RawBinaryExpr {
+                    op: compare_op,
+                    left: self.sql_expr_to_logical_expr(
+                        *left,
+                        schema,
+                        planner_context,
+                    )?,
+                    right: self.sql_expr_to_logical_expr(
+                        *right,
+                        schema,
+                        planner_context,
+                    )?,
+                };
+                for planner in self.context_provider.get_expr_planners() {
+                    match planner.plan_any(binary_expr)? {
+                        PlannerResult::Planned(expr) => {
+                            return Ok(expr);
+                        }
+                        PlannerResult::Original(expr) => {
+                            binary_expr = expr;
+                        }
+                    }
+                }
+                not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
+            }
+            SQLExpr::Wildcard => Ok(Expr::Wildcard {
+                qualifier: None,
+                options: WildcardOptions::default(),
+            }),
+            SQLExpr::QualifiedWildcard(object_name) => Ok(Expr::Wildcard {
+                qualifier: Some(TableReference::from(object_name.to_string())),
+                options: WildcardOptions::default(),
+            }),
+            SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
     }
@@ -640,7 +679,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-        values: Vec<sqlparser::ast::Expr>,
+        values: Vec<SQLExpr>,
         fields: Vec<StructField>,
     ) -> Result<Expr> {
         if !fields.is_empty() {
@@ -663,6 +702,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
         not_impl_err!("Struct not supported by ExprPlanner: {create_struct_args:?}")
+    }
+
+    fn parse_tuple(
+        &self,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+        values: Vec<SQLExpr>,
+    ) -> Result<Expr> {
+        match values.first() {
+            Some(SQLExpr::Identifier(_)) | Some(SQLExpr::Value(_)) => {
+                self.parse_struct(schema, planner_context, values, vec![])
+            }
+            None => not_impl_err!("Empty tuple not supported yet"),
+            _ => {
+                not_impl_err!("Only identifiers and literals are supported in tuples")
+            }
+        }
     }
 
     fn sql_position_to_expr(

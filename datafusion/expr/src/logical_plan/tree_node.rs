@@ -303,6 +303,7 @@ impl TreeNode for LogicalPlan {
                     DdlStatement::CreateExternalTable(_)
                     | DdlStatement::CreateCatalogSchema(_)
                     | DdlStatement::CreateCatalog(_)
+                    | DdlStatement::CreateIndex(_)
                     | DdlStatement::DropTable(_)
                     | DdlStatement::DropView(_)
                     | DdlStatement::DropCatalogSchema(_)

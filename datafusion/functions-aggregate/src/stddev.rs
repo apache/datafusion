@@ -27,7 +27,7 @@ use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
-use datafusion_physical_expr_common::aggregate::stats::StatsType;
+use datafusion_functions_aggregate_common::stats::StatsType;
 
 use crate::variance::VarianceAccumulator;
 
@@ -269,16 +269,12 @@ impl Accumulator for StddevAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use arrow::{array::*, datatypes::*};
-
-    use datafusion_common::DFSchema;
-    use datafusion_expr::AggregateUDF;
-    use datafusion_physical_expr_common::aggregate::utils::get_accum_scalar_values_as_arrays;
-    use datafusion_physical_expr_common::expressions::column::col;
-
     use super::*;
+    use arrow::{array::*, datatypes::*};
+    use datafusion_expr::AggregateUDF;
+    use datafusion_functions_aggregate_common::utils::get_accum_scalar_values_as_arrays;
+    use datafusion_physical_expr::expressions::col;
+    use std::sync::Arc;
 
     #[test]
     fn stddev_f64_merge_1() -> Result<()> {
@@ -325,31 +321,26 @@ mod tests {
         agg2: Arc<AggregateUDF>,
         schema: &Schema,
     ) -> Result<ScalarValue> {
-        let dfschema = DFSchema::empty();
         let args1 = AccumulatorArgs {
-            data_type: &DataType::Float64,
+            return_type: &DataType::Float64,
             schema,
-            dfschema: &dfschema,
             ignore_nulls: false,
-            sort_exprs: &[],
+            ordering_req: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            input_types: &[DataType::Float64],
-            input_exprs: &[datafusion_expr::col("a")],
+            exprs: &[col("a", schema)?],
         };
 
         let args2 = AccumulatorArgs {
-            data_type: &DataType::Float64,
+            return_type: &DataType::Float64,
             schema,
-            dfschema: &dfschema,
             ignore_nulls: false,
-            sort_exprs: &[],
+            ordering_req: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            input_types: &[DataType::Float64],
-            input_exprs: &[datafusion_expr::col("a")],
+            exprs: &[col("a", schema)?],
         };
 
         let mut accum1 = agg1.accumulator(args1)?;

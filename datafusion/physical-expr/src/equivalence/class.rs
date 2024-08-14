@@ -47,7 +47,7 @@ use datafusion_common::JoinType;
 ///
 /// ```rust
 /// # use datafusion_physical_expr::ConstExpr;
-/// # use datafusion_physical_expr_common::expressions::lit;
+/// # use datafusion_physical_expr::expressions::lit;
 /// let col = lit(5);
 /// // Create a constant expression from a physical expression ref
 /// let const_expr = ConstExpr::from(&col);

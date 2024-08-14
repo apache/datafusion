@@ -58,7 +58,7 @@ use datafusion_common::{
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Sort, Unnest,
+    Sort, Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -592,7 +592,9 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
     // Set specific Parquet format options
     let mut key_value_metadata = HashMap::new();
     key_value_metadata.insert("test".to_string(), Some("test".to_string()));
-    parquet_format.key_value_metadata = key_value_metadata.clone();
+    parquet_format
+        .key_value_metadata
+        .clone_from(&key_value_metadata);
 
     parquet_format.global.allow_single_file_parallelism = false;
     parquet_format.global.created_by = "test".to_string();
@@ -885,7 +887,8 @@ async fn roundtrip_expr_api() -> Result<()> {
         stddev_pop(lit(2.2)),
         approx_distinct(lit(2)),
         approx_median(lit(2)),
-        approx_percentile_cont(lit(2), lit(0.5)),
+        approx_percentile_cont(lit(2), lit(0.5), None),
+        approx_percentile_cont(lit(2), lit(0.5), Some(lit(50))),
         approx_percentile_cont_with_weight(lit(2), lit(1), lit(0.5)),
         grouping(lit(1)),
         bit_and(lit(2)),
@@ -1974,7 +1977,10 @@ fn roundtrip_unnest() {
 
 #[test]
 fn roundtrip_wildcard() {
-    let test_expr = Expr::Wildcard { qualifier: None };
+    let test_expr = Expr::Wildcard {
+        qualifier: None,
+        options: WildcardOptions::default(),
+    };
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -1984,6 +1990,7 @@ fn roundtrip_wildcard() {
 fn roundtrip_qualified_wildcard() {
     let test_expr = Expr::Wildcard {
         qualifier: Some("foo".into()),
+        options: WildcardOptions::default(),
     };
 
     let ctx = SessionContext::new();

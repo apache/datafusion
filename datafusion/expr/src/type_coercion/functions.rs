@@ -17,9 +17,6 @@
 
 use std::sync::Arc;
 
-use crate::signature::{
-    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
-};
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
@@ -28,6 +25,9 @@ use arrow::{
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, list_ndims};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err, Result,
+};
+use datafusion_expr_common::signature::{
+    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
 };
 
 use super::binary::{binary_numeric_coercion, comparison_coercion};
@@ -583,6 +583,10 @@ fn coerced_from<'a>(
         (Interval(_), _) if matches!(type_from, Utf8 | LargeUtf8) => {
             Some(type_into.clone())
         }
+        // We can go into a Utf8View from a Utf8 or LargeUtf8
+        (Utf8View, _) if matches!(type_from, Utf8 | LargeUtf8 | Null) => {
+            Some(type_into.clone())
+        }
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
@@ -645,6 +649,18 @@ mod tests {
 
     use super::*;
     use arrow::datatypes::Field;
+
+    #[test]
+    fn test_string_conversion() {
+        let cases = vec![
+            (DataType::Utf8View, DataType::Utf8, true),
+            (DataType::Utf8View, DataType::LargeUtf8, true),
+        ];
+
+        for case in cases {
+            assert_eq!(can_coerce_from(&case.0, &case.1), case.2);
+        }
+    }
 
     #[test]
     fn test_maybe_data_types() {

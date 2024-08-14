@@ -21,12 +21,12 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, WindowFunction};
+use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction};
 use crate::expr_rewriter::strip_outer_reference;
-use crate::signature::{Signature, TypeSignature};
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
 };
+use datafusion_expr_common::signature::{Signature, TypeSignature};
 
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion_common::tree_node::{
@@ -34,11 +34,13 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, Result,
-    TableReference,
+    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef,
+    DataFusionError, Result, TableReference,
 };
 
-use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
+use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
+
+pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
@@ -375,7 +377,7 @@ fn get_exprs_except_skipped(
 pub fn expand_wildcard(
     schema: &DFSchema,
     plan: &LogicalPlan,
-    wildcard_options: Option<&WildcardAdditionalOptions>,
+    wildcard_options: Option<&WildcardOptions>,
 ) -> Result<Vec<Expr>> {
     let using_columns = plan.using_columns()?;
     let mut columns_to_skip = using_columns
@@ -399,9 +401,9 @@ pub fn expand_wildcard(
                 .collect::<Vec<_>>()
         })
         .collect::<HashSet<_>>();
-    let excluded_columns = if let Some(WildcardAdditionalOptions {
-        opt_exclude,
-        opt_except,
+    let excluded_columns = if let Some(WildcardOptions {
+        exclude: opt_exclude,
+        except: opt_except,
         ..
     }) = wildcard_options
     {
@@ -418,7 +420,7 @@ pub fn expand_wildcard(
 pub fn expand_qualified_wildcard(
     qualifier: &TableReference,
     schema: &DFSchema,
-    wildcard_options: Option<&WildcardAdditionalOptions>,
+    wildcard_options: Option<&WildcardOptions>,
 ) -> Result<Vec<Expr>> {
     let qualified_indices = schema.fields_indices_with_qualified(qualifier);
     let projected_func_dependencies = schema
@@ -433,9 +435,9 @@ pub fn expand_qualified_wildcard(
     let qualified_dfschema =
         DFSchema::try_from_qualified_schema(qualifier.clone(), &qualified_schema)?
             .with_functional_dependencies(projected_func_dependencies)?;
-    let excluded_columns = if let Some(WildcardAdditionalOptions {
-        opt_exclude,
-        opt_except,
+    let excluded_columns = if let Some(WildcardOptions {
+        exclude: opt_exclude,
+        except: opt_except,
         ..
     }) = wildcard_options
     {
@@ -729,11 +731,129 @@ pub fn exprlist_to_fields<'a>(
     plan: &LogicalPlan,
 ) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
     // look for exact match in plan's output schema
-    let input_schema = &plan.schema();
-    exprs
+    let wildcard_schema = find_base_plan(plan).schema();
+    let input_schema = plan.schema();
+    let result = exprs
         .into_iter()
-        .map(|e| e.to_field(input_schema))
-        .collect()
+        .map(|e| match e {
+            Expr::Wildcard { qualifier, options } => match qualifier {
+                None => {
+                    let excluded: Vec<String> = get_excluded_columns(
+                        options.exclude.as_ref(),
+                        options.except.as_ref(),
+                        wildcard_schema,
+                        None,
+                    )?
+                    .into_iter()
+                    .map(|c| c.flat_name())
+                    .collect();
+                    Ok::<_, DataFusionError>(
+                        wildcard_schema
+                            .field_names()
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, s)| !excluded.contains(s))
+                            .map(|(i, _)| wildcard_schema.qualified_field(i))
+                            .map(|(qualifier, f)| {
+                                (qualifier.cloned(), Arc::new(f.to_owned()))
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                Some(qualifier) => {
+                    let excluded: Vec<String> = get_excluded_columns(
+                        options.exclude.as_ref(),
+                        options.except.as_ref(),
+                        wildcard_schema,
+                        Some(qualifier),
+                    )?
+                    .into_iter()
+                    .map(|c| c.flat_name())
+                    .collect();
+                    Ok(wildcard_schema
+                        .fields_with_qualified(qualifier)
+                        .into_iter()
+                        .filter_map(|field| {
+                            let flat_name = format!("{}.{}", qualifier, field.name());
+                            if excluded.contains(&flat_name) {
+                                None
+                            } else {
+                                Some((
+                                    Some(qualifier.clone()),
+                                    Arc::new(field.to_owned()),
+                                ))
+                            }
+                        })
+                        .collect::<Vec<_>>())
+                }
+            },
+            _ => Ok(vec![e.to_field(input_schema)?]),
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+    Ok(result)
+}
+
+/// Find the suitable base plan to expand the wildcard expression recursively.
+/// When planning [LogicalPlan::Window] and [LogicalPlan::Aggregate], we will generate
+/// an intermediate plan based on the relation plan (e.g. [LogicalPlan::TableScan], [LogicalPlan::Subquery], ...).
+/// If we expand a wildcard expression basing the intermediate plan, we could get some duplicate fields.
+pub fn find_base_plan(input: &LogicalPlan) -> &LogicalPlan {
+    match input {
+        LogicalPlan::Window(window) => find_base_plan(&window.input),
+        LogicalPlan::Aggregate(agg) => find_base_plan(&agg.input),
+        _ => input,
+    }
+}
+
+/// Count the number of real fields. We should expand the wildcard expression to get the actual number.
+pub fn exprlist_len(
+    exprs: &[Expr],
+    schema: &DFSchemaRef,
+    wildcard_schema: Option<&DFSchemaRef>,
+) -> Result<usize> {
+    exprs
+        .iter()
+        .map(|e| match e {
+            Expr::Wildcard {
+                qualifier: None,
+                options,
+            } => {
+                let excluded = get_excluded_columns(
+                    options.exclude.as_ref(),
+                    options.except.as_ref(),
+                    wildcard_schema.unwrap_or(schema),
+                    None,
+                )?
+                .into_iter()
+                .collect::<HashSet<Column>>();
+                Ok(
+                    get_exprs_except_skipped(wildcard_schema.unwrap_or(schema), excluded)
+                        .len(),
+                )
+            }
+            Expr::Wildcard {
+                qualifier: Some(qualifier),
+                options,
+            } => {
+                let excluded = get_excluded_columns(
+                    options.exclude.as_ref(),
+                    options.except.as_ref(),
+                    wildcard_schema.unwrap_or(schema),
+                    Some(qualifier),
+                )?
+                .into_iter()
+                .collect::<HashSet<Column>>();
+                Ok(
+                    get_exprs_except_skipped(wildcard_schema.unwrap_or(schema), excluded)
+                        .len(),
+                )
+            }
+            _ => Ok(1),
+        })
+        .sum()
 }
 
 /// Convert an expression into Column expression if it's already provided as input plan.
@@ -798,7 +918,9 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
             let (qualifier, field) = plan.schema().qualified_field_from_column(col)?;
             Ok(Expr::from(Column::from((qualifier, field))))
         }
-        _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
+        _ => Ok(Expr::Column(Column::from_name(
+            expr.schema_name().to_string(),
+        ))),
     }
 }
 
@@ -1215,37 +1337,6 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
 /// Build state name. State is the intermediate state of the aggregate function.
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
-}
-
-/// Represents the sensitivity of an aggregate expression to ordering.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum AggregateOrderSensitivity {
-    /// Indicates that the aggregate expression is insensitive to ordering.
-    /// Ordering at the input is not important for the result of the aggregator.
-    Insensitive,
-    /// Indicates that the aggregate expression has a hard requirement on ordering.
-    /// The aggregator can not produce a correct result unless its ordering
-    /// requirement is satisfied.
-    HardRequirement,
-    /// Indicates that ordering is beneficial for the aggregate expression in terms
-    /// of evaluation efficiency. The aggregator can produce its result efficiently
-    /// when its required ordering is satisfied; however, it can still produce the
-    /// correct result (albeit less efficiently) when its required ordering is not met.
-    Beneficial,
-}
-
-impl AggregateOrderSensitivity {
-    pub fn is_insensitive(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::Insensitive)
-    }
-
-    pub fn is_beneficial(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::Beneficial)
-    }
-
-    pub fn hard_requires(&self) -> bool {
-        self.eq(&AggregateOrderSensitivity::HardRequirement)
-    }
 }
 
 #[cfg(test)]

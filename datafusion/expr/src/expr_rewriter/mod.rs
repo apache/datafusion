@@ -173,7 +173,7 @@ pub fn create_col_from_scalar_expr(
             name,
         )),
         _ => {
-            let scalar_column = scalar_expr.display_name()?;
+            let scalar_column = scalar_expr.schema_name().to_string();
             Ok(Column::new(
                 Some::<TableReference>(subqry_alias.into()),
                 scalar_column,
@@ -248,6 +248,7 @@ fn coerce_exprs_for_schema(
                     Expr::Alias(Alias { expr, name, .. }) => {
                         Ok(expr.cast_to(new_type, src_schema)?.alias(name))
                     }
+                    Expr::Wildcard { .. } => Ok(expr),
                     _ => expr.cast_to(new_type, src_schema),
                 }
             } else {
@@ -475,16 +476,14 @@ mod test {
         let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
 
         let original_name = match &expr_from {
-            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
-            expr => expr.display_name(),
-        }
-        .unwrap();
+            Expr::Sort(Sort { expr, .. }) => expr.schema_name().to_string(),
+            expr => expr.schema_name().to_string(),
+        };
 
         let new_name = match &expr {
-            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
-            expr => expr.display_name(),
-        }
-        .unwrap();
+            Expr::Sort(Sort { expr, .. }) => expr.schema_name().to_string(),
+            expr => expr.schema_name().to_string(),
+        };
 
         assert_eq!(
             original_name, new_name,

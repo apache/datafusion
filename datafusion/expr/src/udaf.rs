@@ -422,7 +422,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// See [retract_batch] for more details.
     ///
-    /// [retract_batch]: crate::accumulator::Accumulator::retract_batch
+    /// [retract_batch]: datafusion_expr_common::accumulator::Accumulator::retract_batch
     fn create_sliding_accumulator(
         &self,
         args: AccumulatorArgs,
