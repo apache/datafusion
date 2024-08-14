@@ -76,7 +76,6 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
-use url::Url;
 use uuid::Uuid;
 
 /// `SessionState` contains all the necessary state to plan and execute queries,

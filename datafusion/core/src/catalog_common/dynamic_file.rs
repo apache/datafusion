@@ -18,19 +18,17 @@
 //! dynamic_file_schema contains a SchemaProvider that creates tables from file paths
 
 use std::any::Any;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 #[cfg(feature = "dirs")]
 use dirs::home_dir;
-use parking_lot::RwLock;
 use datafusion_catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 use datafusion_common::plan_datafusion_err;
 
 use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
 use crate::datasource::TableProvider;
 use crate::error::Result;
-use crate::execution::session_state::SessionState;
 use crate::execution::session_state::StateStore;
 
 pub struct DynamicFileCatalog {
@@ -65,23 +63,21 @@ impl CatalogProviderList for DynamicFileCatalog {
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        self.inner
-            .catalog(name)
-            .map(|catalog|
-            Arc::new(DynamicFileCatalogProvider::new(self.state_store.get_state())) as _)
+        Some(self.inner.catalog(name)
+            .unwrap_or(Arc::new(DynamicFileCatalogProvider::new(Arc::clone(&self.state_store))) as _))
     }
 }
 
 
 /// Wraps another catalog provider
 struct DynamicFileCatalogProvider {
-    state: Weak<RwLock<SessionState>>,
+    state_store: Arc<StateStore>,
 }
 
 impl DynamicFileCatalogProvider {
-    pub fn new(state: Weak<RwLock<SessionState>>) -> Self {
+    pub fn new(state_store: Arc<StateStore>) -> Self {
         Self {
-            state: state.clone(),
+            state_store,
         }
     }
 }
@@ -97,8 +93,7 @@ impl CatalogProvider for DynamicFileCatalogProvider {
 
     fn schema(&self, _: &str) -> Option<Arc<dyn SchemaProvider>> {
         Some(Arc::new(DynamicFileSchemaProvider::new(
-            self.state.clone(),
-            Arc::new(DynamicListTableFactory::default()),
+            Arc::new(DynamicListTableFactory::new(Arc::clone(&self.state_store))),
         )))
     }
 
@@ -116,17 +111,15 @@ impl CatalogProvider for DynamicFileCatalogProvider {
 /// The provider will try to create a table provider from the file path if the table provider
 /// isn't exist in the inner schema provider. The required object store must be registered in the session context.
 pub struct DynamicFileSchemaProvider {
-    inner: Arc<dyn SchemaProvider>,
     factory: Arc<dyn UrlTableFactory>,
 }
 
 impl DynamicFileSchemaProvider {
     /// Create a new [DynamicFileSchemaProvider] with the given inner schema provider.
     pub fn new(
-        inner: Arc<dyn SchemaProvider>,
         factory: Arc<dyn UrlTableFactory>,
     ) -> Self {
-        Self { inner, factory }
+        Self { factory }
     }
 }
 
@@ -137,32 +130,28 @@ impl SchemaProvider for DynamicFileSchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        self.inner.table_names()
+        unimplemented!("table_names is not supported for DynamicFileSchemaProvider")
     }
 
     fn register_table(
         &self,
-        name: String,
-        table: Arc<dyn TableProvider>,
+        _name: String,
+        _table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.register_table(name, table)
+        unimplemented!("register_table is not supported for DynamicFileSchemaProvider")
     }
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        if let Ok(Some(inner_table)) = self.inner.table(name).await {
-            return Ok(Some(inner_table));
-        }
-
         let optimized_url = substitute_tilde(name.to_owned());
         self.factory.try_new(optimized_url.as_str()).await
     }
 
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.deregister_table(name)
+    fn deregister_table(&self, _name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        unimplemented!("deregister_table is not supported for DynamicFileSchemaProvider")
     }
 
-    fn table_exist(&self, name: &str) -> bool {
-        self.inner.table_exist(name)
+    fn table_exist(&self, _name: &str) -> bool {
+        unimplemented!("table_exist is not supported for DynamicFileSchemaProvider")
     }
 }
 

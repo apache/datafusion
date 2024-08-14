@@ -54,7 +54,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
-    config_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, SchemaReference, TableReference,
 };
@@ -74,12 +74,12 @@ use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
-use datafusion_catalog::SchemaProvider;
 use crate::execution::session_state::{SessionStateBuilder, StateStore};
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
+use crate::catalog_common::dynamic_file::DynamicFileCatalog;
 
 mod avro;
 mod csv;
@@ -306,8 +306,6 @@ impl SessionContext {
         Self::new_with_state(state)
     }
 
-    pub fn new_
-
     /// Creates a new `SessionContext` using the provided
     /// [`SessionConfig`] and a [`RuntimeEnv`].
     #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt")]
@@ -330,13 +328,12 @@ impl SessionContext {
     /// # Example: query the url table
     ///
     /// ```
-    /// use datafusion::prelude::*;
+    /// # use datafusion::prelude::*;
     /// # use datafusion::{error::Result, assert_batches_eq};
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
-    /// let ctx = SessionContext::new_with_config(cfg);
-    /// ctx.enable_url_table()?;
+    /// let ctx = SessionContext::new_with_config(cfg).enable_url_table()?;
     /// let results = ctx
     ///   .sql("SELECT a, MIN(b) FROM 'tests/data/example.csv' as example GROUP BY a LIMIT 100")
     ///   .await?
@@ -355,39 +352,16 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn enable_url_table(&self) -> Result<Option<Arc<dyn SchemaProvider>>> {
+    pub fn enable_url_table(&self) -> Self {
         let state_ref = self.state();
-        let catalog_name = state_ref.config_options().catalog.default_catalog.as_str();
-        let schema_name = state_ref.config_options().catalog.default_schema.as_str();
-        if let Ok(provider) = state_ref
-            // provide a fake table reference to get the default schema provider.
-            .schema_for_ref(TableReference::full(
-                catalog_name,
-                schema_name,
-                UNNAMED_TABLE,
-            ))
-        {
-            let state_store = Arc::new(StateStore::new());
-            state_store.with_state(self.state_weak_ref());
-            let factory = Arc::new(DynamicListTableFactory::new(state_store));
-            let new_provider =
-                Arc::new(DynamicFileSchemaProvider::new(provider, factory));
-            state_ref
-                .catalog_list()
-                .catalog(catalog_name)
-                .unwrap()
-                .register_schema(schema_name, new_provider)
-        } else {
-            config_err!("default catalog and schema are required for url table")
-        }
-    }
-
-    pub fn enable_url_table_1(&self) -> Result<Self> {
-        let state_ref = self.state();
-        let builder = SessionStateBuilder::new_from_existing(self.state());
-        let inner = state_ref.catalog_list();
         let state_store = Arc::new(StateStore::new());
-
+        let catalog_list = Arc::new(DynamicFileCatalog::new(Arc::clone(state_ref.catalog_list()), Arc::clone(&state_store)));
+        let new_state = SessionStateBuilder::new_from_existing(self.state())
+            .with_catalog_list(catalog_list)
+            .build();
+        let ctx = SessionContext::new_with_state(new_state);
+        state_store.with_state(ctx.state_weak_ref());
+        ctx
     }
 
     /// Creates a new `SessionContext` using the provided [`SessionState`]
@@ -1830,8 +1804,7 @@ mod tests {
         let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
         let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
         let session_state = SessionState::new_with_config_rt(cfg, runtime);
-        let ctx = SessionContext::new_with_state(session_state);
-        ctx.enable_url_table()?;
+        let ctx = SessionContext::new_with_state(session_state).enable_url_table();
 
         let result = plan_and_collect(
             &ctx,
