@@ -818,15 +818,22 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for OVERLAY
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   OVERLAY(column1_utf8view PLACING 'foo' FROM 2 ) as c1
 FROM test;
 ----
 logical_plan
-01)Projection: overlay(CAST(test.column1_utf8view AS Utf8), Utf8("foo"), Int64(2)) AS c1
+01)Projection: overlay(test.column1_utf8view, Utf8View("foo"), Int64(2)) AS c1
 02)--TableScan: test projection=[column1_utf8view]
+
+query T
+SELECT OVERLAY(column1_utf8view PLACING 'foo' FROM 2 ) as c1 FROM test;
+----
+Afooew
+Xfoogpeng
+Rfooael
+NULL
 
 ## Ensure no casts for REGEXP_LIKE
 query TT
@@ -917,6 +924,29 @@ eng  (empty) ngpeng
 ael  (empty) hael
 NULL NULL    NULL
 
+## Ensure no casts for LEFT
+query TT
+EXPLAIN SELECT
+  LEFT(column1_utf8view, 3) as c2
+FROM test;
+----
+logical_plan
+01)Projection: left(test.column1_utf8view, Int64(3)) AS c2
+02)--TableScan: test projection=[column1_utf8view]
+
+# Test outputs of LEFT
+query TTT
+SELECT
+  LEFT(column1_utf8view, 3) as c1,
+  LEFT(column1_utf8view, 0) as c2,
+  LEFT(column1_utf8view, -3) as c3
+FROM test;
+----
+And  (empty) And
+Xia  (empty) Xiangp
+Rap  (empty) Raph
+NULL NULL    NULL
+
 ## Ensure no casts for RPAD
 ## TODO file ticket
 query TT
@@ -926,10 +956,26 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: rpad(__common_expr_1, Int64(1)) AS c1, rpad(__common_expr_1, Int64(2), CAST(test.column2_utf8view AS Utf8)) AS c2
-02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
-03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+01)Projection: rpad(test.column1_utf8view, Int64(1)) AS c1, rpad(test.column1_utf8view, Int64(2), test.column2_utf8view) AS c2
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
+query TT
+EXPLAIN SELECT
+  RPAD(column1_utf8view, 12, column2_large_utf8) as c1
+FROM test;
+----
+logical_plan
+01)Projection: rpad(test.column1_utf8view, Int64(12), test.column2_large_utf8) AS c1
+02)--TableScan: test projection=[column2_large_utf8, column1_utf8view]
+
+query TT
+EXPLAIN SELECT
+  RPAD(column1_utf8view, 12, column2_utf8view) as c1
+FROM test;
+----
+logical_plan
+01)Projection: rpad(test.column1_utf8view, Int64(12), test.column2_utf8view) AS c1
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for SPLIT_PART
 ## TODO file ticket
@@ -967,6 +1013,28 @@ logical_plan
 01)Projection: substr(__common_expr_1, Int64(1)) AS c, substr(__common_expr_1, Int64(1), Int64(2)) AS c2
 02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1
 03)----TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for SUBSTRINDEX
+query TT
+EXPLAIN SELECT
+  SUBSTR_INDEX(column1_utf8view, 'a', 1) as c,
+  SUBSTR_INDEX(column1_utf8view, 'a', 2) as c2
+FROM test;
+----
+logical_plan
+01)Projection: substr_index(test.column1_utf8view, Utf8View("a"), Int64(1)) AS c, substr_index(test.column1_utf8view, Utf8View("a"), Int64(2)) AS c2
+02)--TableScan: test projection=[column1_utf8view]
+
+query TT
+SELECT
+  SUBSTR_INDEX(column1_utf8view, 'a', 1) as c,
+  SUBSTR_INDEX(column1_utf8view, 'a', 2) as c2
+FROM test;
+----
+Andrew Andrew
+Xi Xiangpeng
+R Raph
+NULL NULL
 
 ## Ensure no casts on columns for STARTS_WITH
 query TT

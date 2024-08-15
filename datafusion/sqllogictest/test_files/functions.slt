@@ -294,6 +294,7 @@ SELECT right(NULL, CAST(NULL AS INT))
 ----
 NULL
 
+
 query T
 SELECT rpad('hi', -1, 'xy')
 ----
@@ -353,6 +354,33 @@ query T
 SELECT rpad('xyxhi', 3)
 ----
 xyx
+
+# test for rpad with largeutf8 and utf8View
+
+query T
+SELECT rpad(arrow_cast('hi', 'LargeUtf8'), 5, 'xy')
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast('hi', 'Utf8View'), 5, 'xy')
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast('hi', 'LargeUtf8'), 5, arrow_cast('xy', 'LargeUtf8'))
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast('hi', 'Utf8View'), 5, arrow_cast('xy', 'Utf8View'))
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast(NULL, 'Utf8View'), 5, 'xy')
+----
+NULL
 
 query I
 SELECT strpos('abc', 'c')
@@ -897,7 +925,7 @@ SELECT products.* REPLACE (price*2 AS price, product_id+1000 AS product_id) FROM
 1003 OldBrand Product 3 79.98
 1004 OldBrand Product 4 99.98
 
-#overlay tests
+# overlay tests
 statement ok
 CREATE TABLE over_test(
   str TEXT,
@@ -939,6 +967,31 @@ NULL
 Thomxas
 NULL
 
+# overlay tests with utf8view
+query T
+SELECT overlay(arrow_cast(str, 'Utf8View') placing arrow_cast(characters, 'Utf8View') from pos for len) from over_test
+----
+abc
+qwertyasdfg
+ijkz
+Thomas
+NULL
+NULL
+NULL
+NULL
+
+query T
+SELECT overlay(arrow_cast(str, 'Utf8View') placing arrow_cast(characters, 'Utf8View') from pos) from over_test
+----
+abc
+qwertyasdfg
+ijk
+Thomxas
+NULL
+NULL
+Thomxas
+NULL
+
 query I
 SELECT levenshtein('kitten', 'sitting')
 ----
@@ -963,6 +1016,65 @@ NULL
 # This query is compatible with MySQL(8.0.19 or later), convenient for comparing results
 query TIT
 SELECT str, n, substring_index(str, '.', n) AS c FROM
+  (VALUES
+    ROW('arrow.apache.org'),
+    ROW('.'),
+    ROW('...'),
+    ROW(NULL)
+  ) AS strings(str),
+  (VALUES
+    ROW(1),
+    ROW(2),
+    ROW(3),
+    ROW(100),
+    ROW(-1),
+    ROW(-2),
+    ROW(-3),
+    ROW(-100)
+  ) AS occurrences(n)
+ORDER BY str DESC, n;
+----
+NULL -100 NULL
+NULL -3 NULL
+NULL -2 NULL
+NULL -1 NULL
+NULL 1 NULL
+NULL 2 NULL
+NULL 3 NULL
+NULL 100 NULL
+arrow.apache.org -100 arrow.apache.org
+arrow.apache.org -3 arrow.apache.org
+arrow.apache.org -2 apache.org
+arrow.apache.org -1 org
+arrow.apache.org 1 arrow
+arrow.apache.org 2 arrow.apache
+arrow.apache.org 3 arrow.apache.org
+arrow.apache.org 100 arrow.apache.org
+... -100 ...
+... -3 ..
+... -2 .
+... -1 (empty)
+... 1 (empty)
+... 2 .
+... 3 ..
+... 100 ...
+. -100 .
+. -3 .
+. -2 .
+. -1 (empty)
+. 1 (empty)
+. 2 .
+. 3 .
+. 100 .
+
+query I
+SELECT levenshtein(NULL, NULL)
+----
+NULL
+
+# Test substring_index using '.' as delimiter with utf8view
+query TIT
+SELECT str, n, substring_index(arrow_cast(str, 'Utf8View'), '.', n) AS c FROM
   (VALUES
     ROW('arrow.apache.org'),
     ROW('.'),
