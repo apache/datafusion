@@ -27,6 +27,7 @@ use datafusion_common::utils::get_map_entry_field;
 use datafusion_common::{cast::as_map_array, exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
+use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
 
@@ -116,8 +117,8 @@ fn general_map_extract_inner(
 
         let query_key = query_keys_array.slice(row_index, 1);
 
-        let value_index =
-            (0..len).find(|&i| keys.slice(start + i, 1) == query_key.clone());
+        let value_index = (0..len)
+            .find(|&i| keys.slice(start + i, 1) == Arc::<dyn Array>::clone(&query_key));
 
         match value_index {
             Some(index) => {
