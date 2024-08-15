@@ -4264,7 +4264,8 @@ CREATE EXTERNAL TABLE csv_with_timestamps (
 )
 STORED AS CSV
 WITH ORDER (ts DESC)
-LOCATION '../core/tests/data/timestamps.csv';
+LOCATION '../core/tests/data/timestamps.csv'
+OPTIONS('format.has_header' 'false');
 
 # below query should run since it operates on a bounded source and have a sort
 # at the top of its plan.

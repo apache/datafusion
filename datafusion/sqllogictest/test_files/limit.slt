@@ -521,7 +521,7 @@ drop table aggregate_test_100;
 query I
 COPY (select * from (values
    (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')
-)) TO 'test_files/scratch/limit/data.csv' STORED AS CSV;
+)) TO 'test_files/scratch/limit/data.csv' STORED AS CSV OPTIONS ('format.has_header' 'false');
 ----
 5
 
