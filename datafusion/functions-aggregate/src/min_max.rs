@@ -48,7 +48,7 @@ use arrow::datatypes::{
     Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::IntervalUnit;
-use datafusion_common::{downcast_value, internal_err, DataFusionError, Result};
+use datafusion_common::{downcast_value, exec_err, internal_err, DataFusionError, Result};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use std::fmt::Debug;
 
@@ -68,7 +68,12 @@ use std::ops::Deref;
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
-    assert_eq!(input_types.len(), 1);
+    if input_types.len() != 1 {
+        return exec_err!(
+            "min/max was called with {} arguments. It requires only 1.",
+            input_types.len()
+        )
+    }
     // min and max support the dictionary data type
     // unpack the dictionary to get the value
     match &input_types[0] {
