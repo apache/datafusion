@@ -218,7 +218,7 @@ impl GroupValues for GroupValuesRows {
             }
             EmitTo::CurrentBlock(_) => {
                 return Err(DataFusionError::NotImplemented(
-                    "blocked group values management is not supported".to_string(),
+                    "blocked group values is not supported yet".to_string(),
                 ));
             }
         };
