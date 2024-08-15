@@ -5936,12 +5936,12 @@ select generate_series(start, '1993-03-01'::date, INTERVAL '1 year') from date_t
 
 
 # https://github.com/apache/datafusion/issues/11922
-query error
-select generate_series(start, '1993-03-01', INTERVAL '1 year') from date_table;
+query ?
+select generate_series(start, DATE '1993-03-01', INTERVAL '1 year') from date_table;
 ----
-DataFusion error: Internal error: could not cast value to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::Date32Type>.
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
-
+[1992-01-01, 1993-01-01]
+[1993-02-01]
+[1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
 
 ## array_except
 
