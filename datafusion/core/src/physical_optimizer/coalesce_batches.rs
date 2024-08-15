@@ -123,8 +123,8 @@ fn wrap_in_coalesce_rewrite_inner(
     let (target_batch_size, fetch) = match limit {
         Some(limit) => (
             default_batch_size,
-            // Take the smaller of `limit/partition` and `default_batch_size` as  CoalesceBatchesExec's fetch
-            Some(std::cmp::min(ceil(limit, partition), default_batch_size)),
+            // Take the `limit/partition` as  CoalesceBatchesExec's fetch,it will limit maximum number of rows to fetch
+            Some(ceil(limit, partition)),
         ),
         None => (default_batch_size, None),
     };
