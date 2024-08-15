@@ -425,6 +425,43 @@ logical_plan
 01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
 02)--TableScan: test projection=[column1_utf8view]
 
+### Test TRANSLATE
+
+# Should run TRANSLATE using utf8view column successfully
+query T
+SELECT
+  TRANSLATE(column1_utf8view, 'foo', 'bar') as c
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+# Should run TRANSLATE using utf8 column successfully
+query T
+SELECT
+  TRANSLATE(column1_utf8, 'foo', 'bar') as c
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+# Should run TRANSLATE using large_utf8 column successfully
+query T
+SELECT
+  TRANSLATE(column1_large_utf8, 'foo', 'bar') as c
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+
+
 ### Initcap
 
 query TT
@@ -1047,14 +1084,13 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for TRANSLATE
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   TRANSLATE(column1_utf8view, 'foo', 'bar') as c
 FROM test;
 ----
 logical_plan
-01)Projection: translate(CAST(test.column1_utf8view AS Utf8), Utf8("foo"), Utf8("bar")) AS c
+01)Projection: translate(test.column1_utf8view, Utf8("foo"), Utf8("bar")) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for FIND_IN_SET
