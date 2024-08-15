@@ -36,11 +36,7 @@ use datafusion_physical_expr::binary_map::OutputType;
 /// An interning store for group keys
 pub trait GroupValues: Send {
     /// Calculates the `groups` for each input row of `cols`
-    fn intern(
-        &mut self,
-        cols: &[ArrayRef],
-        groups: &mut Vec<usize>,
-    ) -> Result<()>;
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
     /// Returns the number of bytes used by this [`GroupValues`]
     fn size(&self) -> usize;

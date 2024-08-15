@@ -613,12 +613,12 @@ fn maybe_enable_blocked_group_states(
     match (group_supports_blocked, accumulators_support_blocked) {
         (true, true) => {
             group_values.switch_to_mode(GroupStatesMode::Blocked(block_size))?;
-            accumulators
-                .iter_mut()
-                .try_for_each(|acc| acc.switch_to_mode(GroupStatesMode::Blocked(block_size)))?;
+            accumulators.iter_mut().try_for_each(|acc| {
+                acc.switch_to_mode(GroupStatesMode::Blocked(block_size))
+            })?;
             Ok(true)
         }
-        _ => Ok(false)
+        _ => Ok(false),
     }
 }
 
@@ -1076,14 +1076,16 @@ impl GroupedHashAggregateStream {
         )?;
 
         // We should disable the blocked optimization for `GroupValues` and `GroupAccumulator`s here,
-        // because the blocked mode can't support `Emit::First(exact n)` which is needed in 
+        // because the blocked mode can't support `Emit::First(exact n)` which is needed in
         // streaming aggregation.
         if self.enable_blocked_group_states {
             self.group_values.switch_to_mode(GroupStatesMode::Flat)?;
-            self.accumulators.iter_mut().try_for_each(|acc| acc.switch_to_mode(GroupStatesMode::Flat))?;
+            self.accumulators
+                .iter_mut()
+                .try_for_each(|acc| acc.switch_to_mode(GroupStatesMode::Flat))?;
             self.enable_blocked_group_states = false;
         }
-        
+
         self.input_done = false;
         self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
         Ok(())
