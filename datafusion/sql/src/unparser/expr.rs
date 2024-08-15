@@ -592,6 +592,7 @@ impl Unparser<'_> {
                 return Some(ast::Expr::Extract {
                     field,
                     expr: Box::new(date_expr),
+                    syntax: ast::ExtractSyntax::From,
                 });
             }
         }

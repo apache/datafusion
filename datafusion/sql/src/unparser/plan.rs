@@ -403,6 +403,7 @@ impl Unparser<'_> {
 
                 let ast_join = ast::Join {
                     relation,
+                    global: false,
                     join_operator: self
                         .join_operator_to_sql(join.join_type, join_constraint),
                 };
@@ -435,6 +436,7 @@ impl Unparser<'_> {
 
                 let ast_join = ast::Join {
                     relation,
+                    global: false,
                     join_operator: self.join_operator_to_sql(
                         JoinType::Inner,
                         ast::JoinConstraint::On(ast::Expr::Value(ast::Value::Boolean(

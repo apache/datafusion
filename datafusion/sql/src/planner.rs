@@ -513,6 +513,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Union(_)
             | SQLDataType::Nullable(_)
             | SQLDataType::LowCardinality(_)
+            | SQLDataType::Trigger
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),
