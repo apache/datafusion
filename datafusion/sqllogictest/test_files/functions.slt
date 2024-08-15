@@ -925,7 +925,7 @@ SELECT products.* REPLACE (price*2 AS price, product_id+1000 AS product_id) FROM
 1003 OldBrand Product 3 79.98
 1004 OldBrand Product 4 99.98
 
-#overlay tests
+# overlay tests
 statement ok
 CREATE TABLE over_test(
   str TEXT,
@@ -957,6 +957,31 @@ NULL
 
 query T
 SELECT overlay(str placing characters from pos) from over_test
+----
+abc
+qwertyasdfg
+ijk
+Thomxas
+NULL
+NULL
+Thomxas
+NULL
+
+# overlay tests with utf8view
+query T
+SELECT overlay(arrow_cast(str, 'Utf8View') placing arrow_cast(characters, 'Utf8View') from pos for len) from over_test
+----
+abc
+qwertyasdfg
+ijkz
+Thomas
+NULL
+NULL
+NULL
+NULL
+
+query T
+SELECT overlay(arrow_cast(str, 'Utf8View') placing arrow_cast(characters, 'Utf8View') from pos) from over_test
 ----
 abc
 qwertyasdfg
