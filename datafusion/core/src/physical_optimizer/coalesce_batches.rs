@@ -61,8 +61,9 @@ fn get_limit(plan: &dyn Any) -> Option<usize> {
     }
 }
 
+/// If you have a new operator that needs to scan the whole table, add it here
 #[inline]
-fn need_scan_all(plan: &dyn Any) -> bool {
+fn is_scan_all_node(plan: &dyn Any) -> bool {
     plan.downcast_ref::<SortMergeJoinExec>().is_some()
         || plan.downcast_ref::<AggregateExec>().is_some()
         || plan.downcast_ref::<SortExec>().is_some()
@@ -91,15 +92,12 @@ fn need_wrap_in_coalesce(plan: &dyn Any) -> bool {
 }
 
 fn wrap_in_coalesce_rewrite_inner(
-    mut limit: Option<usize>,
+    limit: Option<usize>,
+    has_scan_all_node: bool,
     partition: usize,
     default_batch_size: usize,
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
 ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
-    // If the entire table needs to be scanned, the limit at the upper level does not take effect
-    if need_scan_all(plan.as_any()) {
-        limit = None
-    }
     let children = plan
         .children()
         .iter()
@@ -111,6 +109,7 @@ fn wrap_in_coalesce_rewrite_inner(
             };
             wrap_in_coalesce_rewrite_inner(
                 limit,
+                has_scan_all_node || is_scan_all_node(child.as_any()),
                 partition,
                 default_batch_size,
                 child.clone(),
@@ -121,13 +120,18 @@ fn wrap_in_coalesce_rewrite_inner(
     let mut wrap_in_coalesce = need_wrap_in_coalesce(plan.as_any());
 
     // Take the `limit/partition` as  CoalesceBatchesExec's fetch,it will limit maximum number of rows to fetch
-    let fetch = limit.map(|limit| {
-        // If limit is small enough, then this optimization is not performed
-        if limit < partition * 16 {
-            wrap_in_coalesce = false;
-        }
-        ceil(limit, partition)
-    });
+    // If the entire table needs to be scanned, the limit does not take effect
+    let fetch = if has_scan_all_node {
+        None
+    } else {
+        limit.map(|limit| {
+            // If limit is small enough, then this optimization is not performed
+            if limit < partition * 16 {
+                wrap_in_coalesce = false;
+            }
+            ceil(limit, partition)
+        })
+    };
 
     let plan = if children.is_empty() {
         plan
@@ -153,6 +157,7 @@ fn wrap_in_coalesce_rewrite(
     }
     wrap_in_coalesce_rewrite_inner(
         get_limit(plan.as_any()),
+        is_scan_all_node(plan.as_any()),
         partition,
         default_batch_size,
         plan,
