@@ -2393,7 +2393,7 @@ mod tests {
                 vec![col("c3")],
             );
 
-            let func = Expr::WindowFunction(w)
+            Expr::WindowFunction(w)
                 .null_treatment(NullTreatment::IgnoreNulls)
                 .order_by(vec![col("c2").sort(true, true), col("c3").sort(true, true)])
                 .window_frame(WindowFrame::new_bounds(
@@ -2403,9 +2403,7 @@ mod tests {
                 ))
                 .build()
                 .unwrap()
-                .alias(name);
-
-            func
+                .alias(name)
         })
         .collect::<Vec<_>>();
         aggr_expr.extend_from_slice(&[col("c2"), col("c3")]);
