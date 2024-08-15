@@ -120,10 +120,13 @@ fn wrap_in_coalesce_rewrite_inner(
 
     let wrap_in_coalesce = need_wrap_in_coalesce(plan.as_any());
 
-    // Take the smaller of `limit/partition` and `default_batch_size` as target_batch_size
-    let target_batch_size = match limit {
-        Some(limit) => std::cmp::min(ceil(limit, partition), default_batch_size),
-        None => default_batch_size,
+    let (target_batch_size, fetch) = match limit {
+        Some(limit) => (
+            default_batch_size,
+            // Take the smaller of `limit/partition` and `default_batch_size` as  CoalesceBatchesExec's fetch
+            Some(std::cmp::min(ceil(limit, partition), default_batch_size)),
+        ),
+        None => (default_batch_size, None),
     };
 
     let plan = if children.is_empty() {
@@ -133,7 +136,7 @@ fn wrap_in_coalesce_rewrite_inner(
     };
 
     Ok(if wrap_in_coalesce {
-        Arc::new(CoalesceBatchesExec::new(plan, target_batch_size))
+        Arc::new(CoalesceBatchesExec::new(plan, target_batch_size).with_fetch(fetch))
     } else {
         plan
     })
