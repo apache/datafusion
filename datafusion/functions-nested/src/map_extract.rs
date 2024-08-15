@@ -163,7 +163,7 @@ macro_rules! impl_map_extract_inner {
     };
 }
 
-// Implement for different types
+// Implementations for different key types
 impl_map_extract_inner!(
     generic_map_extract_inner_int,
     i64,
