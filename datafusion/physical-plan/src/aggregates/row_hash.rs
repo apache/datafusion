@@ -563,7 +563,6 @@ impl GroupedHashAggregateStream {
             batch_size,
             &group_ordering,
         )?;
-        dbg!(enable_blocked_group_states);
 
         Ok(GroupedHashAggregateStream {
             schema: agg_schema,
@@ -602,7 +601,7 @@ fn maybe_enable_blocked_group_states(
     block_size: usize,
     group_ordering: &GroupOrdering,
 ) -> Result<bool> {
-    if matches!(group_ordering, GroupOrdering::None) || accumulators.is_empty() {
+    if !matches!(group_ordering, GroupOrdering::None) || accumulators.is_empty() {
         return Ok(false);
     }
 

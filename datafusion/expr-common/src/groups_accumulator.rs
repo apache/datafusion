@@ -17,6 +17,8 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
+use std::cmp::min;
+
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 
@@ -48,16 +50,20 @@ impl EmitTo {
                 std::mem::take(v)
             }
             Self::First(n) => {
+                let split_at = min(v.len(), *n);
+                
                 // get end n+1,.. values into t
-                let mut t = v.split_off(*n);
+                let mut t = v.split_off(split_at);
                 // leave n+1,.. in v
                 std::mem::swap(v, &mut t);
                 t
             }
             EmitTo::CurrentBlock(_) => {
                 let block_size = block_size.unwrap();
+                let split_at = min(v.len(), block_size);
+
                 // get end n+1,.. values into t
-                let mut t = v.split_off(block_size);
+                let mut t = v.split_off(split_at);
                 // leave n+1,.. in v
                 std::mem::swap(v, &mut t);
                 t

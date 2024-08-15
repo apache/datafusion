@@ -277,6 +277,10 @@ impl GroupValues for GroupValuesRows {
                 }
             },
             EmitTo::First(n) => {
+                if matches!(self.mode, GroupStatesMode::Blocked(_)) {
+                    panic!("kamille debug");
+                }
+
                 let blk = group_values.back_mut().unwrap();
                 let groups_rows = blk.iter().take(n);
                 let output = self.row_converter.convert_rows(groups_rows)?;
