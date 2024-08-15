@@ -33,6 +33,7 @@ use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 static STATIC_RowNumber: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
     std::sync::OnceLock::new();
 
+/// Window function that returns a [`WindowUDF`](datafusion_expr::WindowUDF) for [`RowNumber`]
 pub fn row_number_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
     STATIC_RowNumber
         .get_or_init(|| {
