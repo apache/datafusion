@@ -120,6 +120,11 @@ impl RunOpt {
             .config()
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
+        config
+            .options_mut()
+            .execution
+            .parquet
+            .schema_force_string_view = self.common.string_view;
         let ctx = SessionContext::new_with_config(config);
 
         // register tables
@@ -200,12 +205,12 @@ impl RunOpt {
         let (state, plan) = plan.into_parts();
 
         if debug {
-            println!("=== Logical plan ===\n{plan:?}\n");
+            println!("=== Logical plan ===\n{plan}\n");
         }
 
         let plan = state.optimize(&plan)?;
         if debug {
-            println!("=== Optimized logical plan ===\n{plan:?}\n");
+            println!("=== Optimized logical plan ===\n{plan}\n");
         }
         let physical_plan = state.create_physical_plan(&plan).await?;
         if debug {
@@ -339,6 +344,7 @@ mod tests {
             partitions: Some(2),
             batch_size: 8192,
             debug: false,
+            string_view: false,
         };
         let opt = RunOpt {
             query: Some(query),
@@ -372,6 +378,7 @@ mod tests {
             partitions: Some(2),
             batch_size: 8192,
             debug: false,
+            string_view: false,
         };
         let opt = RunOpt {
             query: Some(query),

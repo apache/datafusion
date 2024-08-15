@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_err, not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_err, not_impl_err, plan_err, Column, DataFusionError, Result,
+};
 use datafusion_expr::{
     expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
@@ -28,8 +30,10 @@ use super::{
         BuilderError, DerivedRelationBuilder, QueryBuilder, RelationBuilder,
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
-    rewrite::normalize_union_schema,
-    rewrite::rewrite_plan_for_sort_on_non_projected_fields,
+    rewrite::{
+        normalize_union_schema, rewrite_plan_for_sort_on_non_projected_fields,
+        subquery_alias_inner_query_and_columns,
+    },
     utils::{find_agg_node_within_select, unproject_window_exprs, AggVariant},
     Unparser,
 };
@@ -138,6 +142,14 @@ impl Unparser<'_> {
         // If we were able to construct a full body (i.e. UNION ALL), return it
         if let Some(body) = query.as_mut().and_then(|q| q.take_body()) {
             return Ok(*body);
+        }
+
+        // If no projection is set, add a wildcard projection to the select
+        // which will be translated to `SELECT *` in the SQL statement
+        if !select_builder.already_projected() {
+            select_builder.projection(vec![ast::SelectItem::Wildcard(
+                ast::WildcardAdditionalOptions::default(),
+            )]);
         }
 
         let mut twj = select_builder.pop_from().unwrap();
@@ -347,18 +359,14 @@ impl Unparser<'_> {
                             .iter()
                             .map(|e| self.select_item_to_sql(e))
                             .collect::<Result<Vec<_>>>()?;
-                        match &on.sort_expr {
-                            Some(sort_expr) => {
-                                if let Some(query_ref) = query {
-                                    query_ref
-                                        .order_by(self.sort_to_sql(sort_expr.clone())?);
-                                } else {
-                                    return internal_err!(
-                                "Sort operator only valid in a statement context."
-                            );
-                                }
+                        if let Some(sort_expr) = &on.sort_expr {
+                            if let Some(query_ref) = query {
+                                query_ref.order_by(self.sort_to_sql(sort_expr.clone())?);
+                            } else {
+                                return internal_err!(
+                                    "Sort operator only valid in a statement context."
+                                );
                             }
-                            None => {}
                         }
                         select.projection(items);
                         (ast::Distinct::On(exprs), on.input.as_ref())
@@ -368,37 +376,11 @@ impl Unparser<'_> {
                 self.select_to_sql_recursively(input, query, select, relation)
             }
             LogicalPlan::Join(join) => {
-                match join.join_constraint {
-                    JoinConstraint::On => {}
-                    JoinConstraint::Using => {
-                        return not_impl_err!(
-                            "Unsupported join constraint: {:?}",
-                            join.join_constraint
-                        )
-                    }
-                }
-
-                // parse filter if exists
-                let join_filter = match &join.filter {
-                    Some(filter) => Some(self.expr_to_sql(filter)?),
-                    None => None,
-                };
-
-                // map join.on to `l.a = r.a AND l.b = r.b AND ...`
-                let eq_op = ast::BinaryOperator::Eq;
-                let join_on = self.join_conditions_to_sql(&join.on, eq_op)?;
-
-                // Merge `join_on` and `join_filter`
-                let join_expr = match (join_filter, join_on) {
-                    (Some(filter), Some(on)) => Some(self.and_op_to_sql(filter, on)),
-                    (Some(filter), None) => Some(filter),
-                    (None, Some(on)) => Some(on),
-                    (None, None) => None,
-                };
-                let join_constraint = match join_expr {
-                    Some(expr) => ast::JoinConstraint::On(expr),
-                    None => ast::JoinConstraint::None,
-                };
+                let join_constraint = self.join_constraint_to_sql(
+                    join.join_constraint,
+                    &join.on,
+                    join.filter.as_ref(),
+                )?;
 
                 let mut right_relation = RelationBuilder::default();
 
@@ -558,6 +540,7 @@ impl Unparser<'_> {
                         asc: Some(sort_expr.asc),
                         expr: col,
                         nulls_first,
+                        with_fill: None,
                     })
                 }
                 _ => plan_err!("Expecting Sort expr"),
@@ -582,24 +565,108 @@ impl Unparser<'_> {
         }
     }
 
-    fn join_conditions_to_sql(
+    /// Convert the components of a USING clause to the USING AST. Returns
+    /// 'None' if the conditions are not compatible with a USING expression,
+    /// e.g. non-column expressions or non-matching names.
+    fn join_using_to_sql(
         &self,
-        join_conditions: &Vec<(Expr, Expr)>,
-        eq_op: ast::BinaryOperator,
-    ) -> Result<Option<ast::Expr>> {
-        // Only support AND conjunction for each binary expression in join conditions
-        let mut exprs: Vec<ast::Expr> = vec![];
+        join_conditions: &[(Expr, Expr)],
+    ) -> Option<ast::JoinConstraint> {
+        let mut idents = Vec::with_capacity(join_conditions.len());
         for (left, right) in join_conditions {
-            // Parse left
-            let l = self.expr_to_sql(left)?;
-            // Parse right
-            let r = self.expr_to_sql(right)?;
-            // AND with existing expression
-            exprs.push(self.binary_op_to_sql(l, r, eq_op.clone()));
+            match (left, right) {
+                (
+                    Expr::Column(Column {
+                        relation: _,
+                        name: left_name,
+                    }),
+                    Expr::Column(Column {
+                        relation: _,
+                        name: right_name,
+                    }),
+                ) if left_name == right_name => {
+                    idents.push(self.new_ident_quoted_if_needs(left_name.to_string()));
+                }
+                // USING is only valid with matching column names; arbitrary expressions
+                // are not allowed
+                _ => return None,
+            }
         }
-        let join_expr: Option<ast::Expr> =
-            exprs.into_iter().reduce(|r, l| self.and_op_to_sql(r, l));
-        Ok(join_expr)
+        Some(ast::JoinConstraint::Using(idents))
+    }
+
+    /// Convert a join constraint and associated conditions and filter to a SQL AST node
+    fn join_constraint_to_sql(
+        &self,
+        constraint: JoinConstraint,
+        conditions: &[(Expr, Expr)],
+        filter: Option<&Expr>,
+    ) -> Result<ast::JoinConstraint> {
+        match (constraint, conditions, filter) {
+            // No constraints
+            (JoinConstraint::On | JoinConstraint::Using, [], None) => {
+                Ok(ast::JoinConstraint::None)
+            }
+
+            (JoinConstraint::Using, conditions, None) => {
+                match self.join_using_to_sql(conditions) {
+                    Some(using) => Ok(using),
+                    // As above, this should not be reachable from parsed SQL,
+                    // but a user could create this; we "downgrade" to ON.
+                    None => self.join_conditions_to_sql_on(conditions, None),
+                }
+            }
+
+            // Two cases here:
+            // 1. Straightforward ON case, with possible equi-join conditions
+            //    and additional filters
+            // 2. USING with additional filters; we "downgrade" to ON, because
+            //    you can't use USING with arbitrary filters. (This should not
+            //    be accessible from parsed SQL, but may have been a
+            //    custom-built JOIN by a user.)
+            (JoinConstraint::On | JoinConstraint::Using, conditions, filter) => {
+                self.join_conditions_to_sql_on(conditions, filter)
+            }
+        }
+    }
+
+    // Convert a list of equi0join conditions and an optional filter to a SQL ON
+    // AST node, with the equi-join conditions and the filter merged into a
+    // single conditional expression
+    fn join_conditions_to_sql_on(
+        &self,
+        join_conditions: &[(Expr, Expr)],
+        filter: Option<&Expr>,
+    ) -> Result<ast::JoinConstraint> {
+        let mut condition = None;
+        // AND the join conditions together to create the overall condition
+        for (left, right) in join_conditions {
+            // Parse left and right
+            let l = self.expr_to_sql(left)?;
+            let r = self.expr_to_sql(right)?;
+            let e = self.binary_op_to_sql(l, r, ast::BinaryOperator::Eq);
+            condition = match condition {
+                Some(expr) => Some(self.and_op_to_sql(expr, e)),
+                None => Some(e),
+            };
+        }
+
+        // Then AND the non-equijoin filter condition as well
+        condition = match (condition, filter) {
+            (Some(expr), Some(filter)) => {
+                Some(self.and_op_to_sql(expr, self.expr_to_sql(filter)?))
+            }
+            (Some(expr), None) => Some(expr),
+            (None, Some(filter)) => Some(self.expr_to_sql(filter)?),
+            (None, None) => None,
+        };
+
+        let constraint = match condition {
+            Some(filter) => ast::JoinConstraint::On(filter),
+            None => ast::JoinConstraint::None,
+        };
+
+        Ok(constraint)
     }
 
     fn and_op_to_sql(&self, lhs: ast::Expr, rhs: ast::Expr) -> ast::Expr {
@@ -616,67 +683,6 @@ impl Unparser<'_> {
     fn dml_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
         not_impl_err!("Unsupported plan: {plan:?}")
     }
-}
-
-// This logic is to work out the columns and inner query for SubqueryAlias plan for both types of
-// subquery
-// - `(SELECT column_a as a from table) AS A`
-// - `(SELECT column_a from table) AS A (a)`
-//
-// A roundtrip example for table alias with columns
-//
-// query: SELECT id FROM (SELECT j1_id from j1) AS c (id)
-//
-// LogicPlan:
-// Projection: c.id
-//   SubqueryAlias: c
-//     Projection: j1.j1_id AS id
-//       Projection: j1.j1_id
-//         TableScan: j1
-//
-// Before introducing this logic, the unparsed query would be `SELECT c.id FROM (SELECT j1.j1_id AS
-// id FROM (SELECT j1.j1_id FROM j1)) AS c`.
-// The query is invalid as `j1.j1_id` is not a valid identifier in the derived table
-// `(SELECT j1.j1_id FROM j1)`
-//
-// With this logic, the unparsed query will be:
-// `SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)`
-//
-// Caveat: this won't handle the case like `select * from (select 1, 2) AS a (b, c)`
-// as the parser gives a wrong plan which has mismatch `Int(1)` types: Literal and
-// Column in the Projections. Once the parser side is fixed, this logic should work
-fn subquery_alias_inner_query_and_columns(
-    subquery_alias: &datafusion_expr::SubqueryAlias,
-) -> (&LogicalPlan, Vec<Ident>) {
-    let plan: &LogicalPlan = subquery_alias.input.as_ref();
-
-    let LogicalPlan::Projection(outer_projections) = plan else {
-        return (plan, vec![]);
-    };
-
-    // check if it's projection inside projection
-    let LogicalPlan::Projection(inner_projection) = outer_projections.input.as_ref()
-    else {
-        return (plan, vec![]);
-    };
-
-    let mut columns: Vec<Ident> = vec![];
-    // check if the inner projection and outer projection have a matching pattern like
-    //     Projection: j1.j1_id AS id
-    //       Projection: j1.j1_id
-    for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
-        let Expr::Alias(ref outer_alias) = &outer_projections.expr[i] else {
-            return (plan, vec![]);
-        };
-
-        if outer_alias.expr.as_ref() != inner_expr {
-            return (plan, vec![]);
-        };
-
-        columns.push(outer_alias.name.as_str().into());
-    }
-
-    (outer_projections.input.as_ref(), columns)
 }
 
 impl From<BuilderError> for DataFusionError {

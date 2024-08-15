@@ -21,21 +21,19 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    aggregates,
     expressions::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
-    udaf, ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
+    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{exec_err, Column, DataFusionError, Result, ScalarValue};
-use datafusion_expr::Expr;
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    BuiltInWindowFunction, PartitionEvaluator, SortExpr, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
+    WindowUDF,
 };
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
@@ -44,6 +42,7 @@ use datafusion_physical_expr::{
     AggregateExpr, ConstExpr, EquivalenceProperties, LexOrdering,
     PhysicalSortRequirement,
 };
+use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use itertools::Itertools;
 
 mod bounded_window_agg_exec;
@@ -95,7 +94,6 @@ pub fn create_window_expr(
     fun: &WindowFunctionDefinition,
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
-    logical_args: &[Expr],
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
@@ -103,23 +101,6 @@ pub fn create_window_expr(
     ignore_nulls: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunctionDefinition::AggregateFunction(fun) => {
-            let aggregate = aggregates::create_aggregate_expr(
-                fun,
-                false,
-                args,
-                &[],
-                input_schema,
-                name,
-                ignore_nulls,
-            )?;
-            window_expr_from_aggregate_expr(
-                partition_by,
-                order_by,
-                window_frame,
-                aggregate,
-            )
-        }
         WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
             Arc::new(BuiltInWindowExpr::new(
                 create_built_in_window_expr(fun, args, input_schema, name, ignore_nulls)?,
@@ -129,35 +110,12 @@ pub fn create_window_expr(
             ))
         }
         WindowFunctionDefinition::AggregateUDF(fun) => {
-            // TODO: Ordering not supported for Window UDFs yet
-            // Convert `Vec<PhysicalSortExpr>` into `Vec<Expr::Sort>`
-            let sort_exprs = order_by
-                .iter()
-                .map(|PhysicalSortExpr { expr, options }| {
-                    let field_name = expr.to_string();
-                    let field_name = field_name.split('@').next().unwrap_or(&field_name);
-                    Expr::Sort(SortExpr {
-                        expr: Box::new(Expr::Column(Column::new(
-                            None::<String>,
-                            field_name,
-                        ))),
-                        asc: !options.descending,
-                        nulls_first: options.nulls_first,
-                    })
-                })
-                .collect::<Vec<_>>();
-
-            let aggregate = udaf::create_aggregate_expr(
-                fun.as_ref(),
-                args,
-                logical_args,
-                &sort_exprs,
-                order_by,
-                input_schema,
-                name,
-                ignore_nulls,
-                false,
-            )?;
+            let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
+                .schema(Arc::new(input_schema.clone()))
+                .alias(name)
+                .order_by(order_by.to_vec())
+                .with_ignore_nulls(ignore_nulls)
+                .build()?;
             window_expr_from_aggregate_expr(
                 partition_by,
                 order_by,
@@ -165,6 +123,7 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
+        // TODO: Ordering not supported for Window UDFs yet
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
             create_udwf_window_expr(fun, args, input_schema, name)?,
             partition_by,
@@ -585,6 +544,7 @@ pub fn get_best_fitting_window(
 ///   (input ordering is not sufficient to run current window executor).
 /// - A `Some((bool, InputOrderMode))` value indicates that the window operator
 ///   can run with existing input ordering, so we can remove `SortExec` before it.
+///
 /// The `bool` field in the return value represents whether we should reverse window
 /// operator to remove `SortExec` before it. The `InputOrderMode` field represents
 /// the mode this window operator should work in to accommodate the existing ordering.
@@ -783,7 +743,6 @@ mod tests {
                 &WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 "count".to_owned(),
                 &[col("a", &schema)?],
-                &[],
                 &[],
                 &[],
                 Arc::new(WindowFrame::new(None)),

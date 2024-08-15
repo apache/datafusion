@@ -23,27 +23,27 @@ use crate::planner::{
 };
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnest,
+    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnests,
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::UnnestOptions;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
-use datafusion_common::{Column, UnnestOptions};
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
 };
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::utils::{
-    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
-    find_aggregate_exprs, find_window_exprs,
+    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
-    Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
+    GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{
     Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
-    ReplaceSelectItem, WildcardAdditionalOptions, WindowType,
+    WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -82,7 +82,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
         match_window_definitions(&mut select.projection, &select.named_window)?;
-        // process the SELECT expressions, with wildcards expanded.
+        // process the SELECT expressions
         let select_exprs = self.prepare_select_exprs(
             &base_plan,
             select.projection,
@@ -101,7 +101,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Order-by expressions prioritize referencing columns from the select list,
         // then from the FROM clause.
         let order_by_rex = self.order_by_to_sort_expr(
-            &order_by,
+            order_by,
             projected_plan.schema().as_ref(),
             planner_context,
             true,
@@ -321,21 +321,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
             // - unnest(array_col) will be transformed into unnest(array_col).element
             // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
-            let outer_projection_exprs: Vec<Expr> = intermediate_select_exprs
-                .iter()
-                .map(|expr| {
-                    transform_bottom_unnest(
-                        &intermediate_plan,
-                        &mut unnest_columns,
-                        &mut inner_projection_exprs,
-                        &mut memo,
-                        expr,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .collect();
+            let outer_projection_exprs = transform_bottom_unnests(
+                &intermediate_plan,
+                &mut unnest_columns,
+                &mut inner_projection_exprs,
+                &mut memo,
+                &intermediate_select_exprs,
+            )?;
 
             // No more unnest is possible
             if unnest_columns.is_empty() {
@@ -441,21 +433,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let mut unnest_columns = vec![];
             let mut inner_projection_exprs = vec![];
 
-            let outer_projection_exprs: Vec<Expr> = intermediate_select_exprs
-                .iter()
-                .map(|expr| {
-                    transform_bottom_unnest(
-                        &intermediate_plan,
-                        &mut unnest_columns,
-                        &mut inner_projection_exprs,
-                        &mut memo,
-                        expr,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .collect();
+            let outer_projection_exprs = transform_bottom_unnests(
+                &intermediate_plan,
+                &mut unnest_columns,
+                &mut inner_projection_exprs,
+                &mut memo,
+                &intermediate_select_exprs,
+            )?;
 
             if unnest_columns.is_empty() {
                 break;
@@ -556,8 +540,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Returns the `Expr`'s corresponding to a SQL query's SELECT expressions.
-    ///
-    /// Wildcards are expanded into the concrete list of columns.
     fn prepare_select_exprs(
         &self,
         plan: &LogicalPlan,
@@ -601,7 +583,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let name = self.normalizer.normalize(alias);
+                let name = self.ident_normalizer.normalize(alias);
                 // avoiding adding an alias if the column name is the same.
                 let expr = match &col {
                     Expr::Column(column) if column.name.eq(&name) => col,
@@ -611,49 +593,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             SelectItem::Wildcard(options) => {
                 Self::check_wildcard_options(&options)?;
-
                 if empty_from {
                     return plan_err!("SELECT * with no tables specified is not valid");
                 }
-                // do not expand from outer schema
-                let expanded_exprs =
-                    expand_wildcard(plan.schema().as_ref(), plan, Some(&options))?;
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                if let Some(replace) = options.opt_replace {
-                    self.replace_columns(
-                        plan,
-                        empty_from,
-                        planner_context,
-                        expanded_exprs,
-                        replace,
-                    )
-                } else {
-                    Ok(expanded_exprs)
-                }
+                let planned_options = self.plan_wildcard_options(
+                    plan,
+                    empty_from,
+                    planner_context,
+                    options,
+                )?;
+                Ok(vec![wildcard_with_options(planned_options)])
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
                 let qualifier = idents_to_table_reference(object_name.0, false)?;
-                // do not expand from outer schema
-                let expanded_exprs = expand_qualified_wildcard(
-                    &qualifier,
-                    plan.schema().as_ref(),
-                    Some(&options),
+                let planned_options = self.plan_wildcard_options(
+                    plan,
+                    empty_from,
+                    planner_context,
+                    options,
                 )?;
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                if let Some(replace) = options.opt_replace {
-                    self.replace_columns(
-                        plan,
-                        empty_from,
-                        planner_context,
-                        expanded_exprs,
-                        replace,
-                    )
-                } else {
-                    Ok(expanded_exprs)
-                }
+                Ok(vec![qualified_wildcard_with_options(
+                    qualifier,
+                    planned_options,
+                )])
             }
         }
     }
@@ -678,40 +641,44 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// If there is a REPLACE statement in the projected expression in the form of
-    /// "REPLACE (some_column_within_an_expr AS some_column)", this function replaces
-    /// that column with the given replace expression. Column name remains the same.
-    /// Multiple REPLACEs are also possible with comma separations.
-    fn replace_columns(
+    /// "REPLACE (some_column_within_an_expr AS some_column)", we should plan the
+    /// replace expressions first.
+    fn plan_wildcard_options(
         &self,
         plan: &LogicalPlan,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-        mut exprs: Vec<Expr>,
-        replace: ReplaceSelectItem,
-    ) -> Result<Vec<Expr>> {
-        for expr in exprs.iter_mut() {
-            if let Expr::Column(Column { name, .. }) = expr {
-                if let Some(item) = replace
-                    .items
-                    .iter()
-                    .find(|item| item.column_name.value == *name)
-                {
-                    let new_expr = self.sql_select_to_rex(
+        options: WildcardAdditionalOptions,
+    ) -> Result<WildcardOptions> {
+        let planned_option = WildcardOptions {
+            ilike: options.opt_ilike,
+            exclude: options.opt_exclude,
+            except: options.opt_except,
+            replace: None,
+            rename: options.opt_rename,
+        };
+        if let Some(replace) = options.opt_replace {
+            let replace_expr = replace
+                .items
+                .iter()
+                .map(|item| {
+                    Ok(self.sql_select_to_rex(
                         SelectItem::UnnamedExpr(item.expr.clone()),
                         plan,
                         empty_from,
                         planner_context,
                     )?[0]
-                        .clone();
-                    *expr = Expr::Alias(Alias {
-                        expr: Box::new(new_expr),
-                        relation: None,
-                        name: name.clone(),
-                    });
-                }
-            }
+                        .clone())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let planned_replace = PlannedReplaceSelectItem {
+                items: replace.items.into_iter().map(|i| *i).collect(),
+                planned_expressions: replace_expr,
+            };
+            Ok(planned_option.with_replace(planned_replace))
+        } else {
+            Ok(planned_option)
         }
-        Ok(exprs)
     }
 
     /// Wrap a plan in a projection
@@ -756,7 +723,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
             .build()?;
-
         let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {
             &agg.group_expr
         } else {

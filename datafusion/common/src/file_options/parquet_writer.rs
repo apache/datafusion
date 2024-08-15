@@ -175,6 +175,7 @@ impl ParquetOptions {
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
             bloom_filter_on_read: _, // reads not used for writer props
+            schema_force_string_view: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -379,7 +380,7 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    use crate::config::{ColumnOptions, ParquetOptions};
+    use crate::config::{ParquetColumnOptions, ParquetOptions};
 
     use super::*;
 
@@ -388,11 +389,11 @@ mod tests {
     /// Take the column defaults provided in [`ParquetOptions`], and generate a non-default col config.
     fn column_options_with_non_defaults(
         src_col_defaults: &ParquetOptions,
-    ) -> ColumnOptions {
-        ColumnOptions {
+    ) -> ParquetColumnOptions {
+        ParquetColumnOptions {
             compression: Some("zstd(22)".into()),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
-            statistics_enabled: Some("page".into()),
+            statistics_enabled: Some("none".into()),
             max_statistics_size: Some(72),
             encoding: Some("RLE".into()),
             bloom_filter_enabled: Some(true),
@@ -440,16 +441,17 @@ mod tests {
             maximum_buffered_record_batches_per_stream: defaults
                 .maximum_buffered_record_batches_per_stream,
             bloom_filter_on_read: defaults.bloom_filter_on_read,
+            schema_force_string_view: defaults.schema_force_string_view,
         }
     }
 
     fn extract_column_options(
         props: &WriterProperties,
         col: ColumnPath,
-    ) -> ColumnOptions {
+    ) -> ParquetColumnOptions {
         let bloom_filter_default_props = props.bloom_filter_properties(&col);
 
-        ColumnOptions {
+        ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
             encoding: props.encoding(&col).map(|s| s.to_string()),
             dictionary_enabled: Some(props.dictionary_enabled(&col)),
@@ -540,6 +542,8 @@ mod tests {
                 maximum_buffered_record_batches_per_stream: global_options_defaults
                     .maximum_buffered_record_batches_per_stream,
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
+                schema_force_string_view: global_options_defaults
+                    .schema_force_string_view,
             },
             column_specific_options,
             key_value_metadata,
@@ -614,23 +618,7 @@ mod tests {
             "should indicate that table_parquet_opts defaults came from datafusion",
         );
 
-        // Expected: the remaining should match
-        let same_created_by = default_table_writer_opts.global.created_by.clone();
-        let mut from_extern_parquet =
-            session_config_from_writer_props(&default_writer_props);
-        from_extern_parquet.global.created_by = same_created_by;
-        // TODO: the remaining defaults do not match!
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert_ne!(
-            default_table_writer_opts,
-            from_extern_parquet,
-            "the default writer_props should have the same configuration as the session's default TableParquetOptions",
-        );
-
-        // Below here itemizes how the defaults **should** match, but do not.
-
-        // TODO: compression defaults do not match
-        // refer to https://github.com/apache/datafusion/issues/11367
+        // Expected: the datafusion default compression is different from arrow-rs's parquet
         assert_eq!(
             default_writer_props.compression(&"default".into()),
             Compression::UNCOMPRESSED,
@@ -644,107 +632,13 @@ mod tests {
             "datafusion's default is zstd"
         );
 
-        // TODO: data_page_row_count_limit defaults do not match
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert_eq!(
-            default_writer_props.data_page_row_count_limit(),
-            20_000,
-            "extern parquet's default data_page_row_count_limit is 20_000"
-        );
-        assert_eq!(
-            from_datafusion_defaults.data_page_row_count_limit(),
-            usize::MAX,
-            "datafusion's default is usize::MAX"
-        );
-
-        // TODO: column_index_truncate_length do not match
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert_eq!(
-            default_writer_props.column_index_truncate_length(),
-            Some(64),
-            "extern parquet's default is 64"
-        );
-        assert_eq!(
-            from_datafusion_defaults.column_index_truncate_length(),
-            None,
-            "datafusion's default is None"
-        );
-
-        // The next few examples are where datafusion's default is None.
-        // But once datafusion's TableParquetOptions are converted to a WriterProperties,
-        // then we get the extern parquet's defaults.
-        //
-        // In other words, we do not get indeterminate behavior in the output writer props.
-        // But this is only because we use the extern parquet's defaults when we leave
-        // the datafusion setting as None.
-
-        // datafusion's `None` for Option<bool> => becomes parquet's true
-        // TODO: should this be changed?
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert!(
-            default_writer_props.dictionary_enabled(&"default".into()),
-            "extern parquet's default is true"
-        );
-        assert_eq!(
-            default_table_writer_opts.global.dictionary_enabled, None,
-            "datafusion's has no default"
-        );
-        assert!(
-            from_datafusion_defaults.dictionary_enabled(&"default".into()),
-            "should see the extern parquet's default over-riding datafusion's None",
-        );
-
-        // datafusion's `None` for Option<String> => becomes parquet's EnabledStatistics::Page
-        // TODO: should this be changed?
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert_eq!(
-            default_writer_props.statistics_enabled(&"default".into()),
-            EnabledStatistics::Page,
-            "extern parquet's default is page"
-        );
-        assert_eq!(
-            default_table_writer_opts.global.statistics_enabled, None,
-            "datafusion's has no default"
-        );
-        assert_eq!(
-            from_datafusion_defaults.statistics_enabled(&"default".into()),
-            EnabledStatistics::Page,
-            "should see the extern parquet's default over-riding datafusion's None",
-        );
-
-        // datafusion's `None` for Option<usize> => becomes parquet's 4096
-        // TODO: should this be changed?
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert_eq!(
-            default_writer_props.max_statistics_size(&"default".into()),
-            4096,
-            "extern parquet's default is 4096"
-        );
-        assert_eq!(
-            default_table_writer_opts.global.max_statistics_size, None,
-            "datafusion's has no default"
-        );
-        assert_eq!(
-            default_writer_props.max_statistics_size(&"default".into()),
-            4096,
-            "should see the extern parquet's default over-riding datafusion's None",
-        );
-
-        // Confirm all other settings are equal.
-        // First resolve the known discrepancies, (set as the same).
-        // TODO: once we fix the above mis-matches, we should be able to remove this.
+        // Expected: the remaining should match
+        let same_created_by = default_table_writer_opts.global.created_by.clone();
         let mut from_extern_parquet =
             session_config_from_writer_props(&default_writer_props);
+        from_extern_parquet.global.created_by = same_created_by;
         from_extern_parquet.global.compression = Some("zstd(3)".into());
-        from_extern_parquet.global.data_page_row_count_limit = usize::MAX;
-        from_extern_parquet.global.column_index_truncate_length = None;
-        from_extern_parquet.global.dictionary_enabled = None;
-        from_extern_parquet.global.statistics_enabled = None;
-        from_extern_parquet.global.max_statistics_size = None;
 
-        // Expected: the remaining should match
-        let same_created_by = default_table_writer_opts.global.created_by.clone(); // we expect these to be different
-        from_extern_parquet.global.created_by = same_created_by; // we expect these to be different
         assert_eq!(
             default_table_writer_opts,
             from_extern_parquet,
@@ -757,31 +651,25 @@ mod tests {
         // the TableParquetOptions::default, with only the bloom filter turned on
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
-
-        // the WriterProperties::default, with only the bloom filter turned on
-        let default_writer_props = WriterProperties::new();
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
-                .set_bloom_filter_enabled(true)
                 .build();
 
-        // TODO: should have same behavior in either.
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert_ne!(
+        // the WriterProperties::default, with only the bloom filter turned on
+        let default_writer_props = WriterProperties::builder()
+            .set_bloom_filter_enabled(true)
+            .build();
+
+        assert_eq!(
             default_writer_props.bloom_filter_properties(&"default".into()),
             from_datafusion_defaults.bloom_filter_properties(&"default".into()),
-            "parquet and datafusion props, will not have the same bloom filter props",
+            "parquet and datafusion props, should have the same bloom filter props",
         );
         assert_eq!(
             default_writer_props.bloom_filter_properties(&"default".into()),
-            None,
-            "extern parquet's default remains None"
-        );
-        assert_eq!(
-            from_datafusion_defaults.bloom_filter_properties(&"default".into()),
             Some(&BloomFilterProperties::default()),
-            "datafusion's has BloomFilterProperties::default",
+            "should use the default bloom filter props"
         );
     }
 
@@ -791,35 +679,29 @@ mod tests {
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
         default_table_writer_opts.global.bloom_filter_fpp = Some(0.42);
-
-        // the WriterProperties::default, with only fpp set
-        let default_writer_props = WriterProperties::new();
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
-                .set_bloom_filter_enabled(true)
-                .set_bloom_filter_fpp(0.42)
                 .build();
 
-        // TODO: should have same behavior in either.
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert_ne!(
+        // the WriterProperties::default, with only fpp set
+        let default_writer_props = WriterProperties::builder()
+            .set_bloom_filter_enabled(true)
+            .set_bloom_filter_fpp(0.42)
+            .build();
+
+        assert_eq!(
             default_writer_props.bloom_filter_properties(&"default".into()),
             from_datafusion_defaults.bloom_filter_properties(&"default".into()),
-            "parquet and datafusion props, will not have the same bloom filter props",
+            "parquet and datafusion props, should have the same bloom filter props",
         );
         assert_eq!(
             default_writer_props.bloom_filter_properties(&"default".into()),
-            None,
-            "extern parquet's default remains None"
-        );
-        assert_eq!(
-            from_datafusion_defaults.bloom_filter_properties(&"default".into()),
             Some(&BloomFilterProperties {
                 fpp: 0.42,
                 ndv: DEFAULT_BLOOM_FILTER_NDV
             }),
-            "datafusion's has BloomFilterProperties",
+            "should have only the fpp set, and the ndv at default",
         );
     }
 
@@ -829,35 +711,29 @@ mod tests {
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
         default_table_writer_opts.global.bloom_filter_ndv = Some(42);
-
-        // the WriterProperties::default, with only ndv set
-        let default_writer_props = WriterProperties::new();
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
-                .set_bloom_filter_enabled(true)
-                .set_bloom_filter_ndv(42)
                 .build();
 
-        // TODO: should have same behavior in either.
-        // refer to https://github.com/apache/datafusion/issues/11367
-        assert_ne!(
+        // the WriterProperties::default, with only ndv set
+        let default_writer_props = WriterProperties::builder()
+            .set_bloom_filter_enabled(true)
+            .set_bloom_filter_ndv(42)
+            .build();
+
+        assert_eq!(
             default_writer_props.bloom_filter_properties(&"default".into()),
             from_datafusion_defaults.bloom_filter_properties(&"default".into()),
-            "parquet and datafusion props, will not have the same bloom filter props",
+            "parquet and datafusion props, should have the same bloom filter props",
         );
         assert_eq!(
             default_writer_props.bloom_filter_properties(&"default".into()),
-            None,
-            "extern parquet's default remains None"
-        );
-        assert_eq!(
-            from_datafusion_defaults.bloom_filter_properties(&"default".into()),
             Some(&BloomFilterProperties {
                 fpp: DEFAULT_BLOOM_FILTER_FPP,
                 ndv: 42
             }),
-            "datafusion's has BloomFilterProperties",
+            "should have only the ndv set, and the fpp at default",
         );
     }
 }

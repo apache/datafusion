@@ -84,9 +84,9 @@ use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
 ///                                                        └──────────┐│┌──────────┘
 ///                                                                   │││
 ///                                                                   │││
-/// RepartitionExec with one input
-/// that has 3 partitions, but                        3 (async) streams, that internally
-/// itself has only 1 output partition                  pull from the same input stream
+/// RepartitionExec with 1 input
+/// partition and 3 output partitions                 3 (async) streams, that internally
+///                                                    pull from the same input stream
 ///                                                                  ...
 /// ```
 ///

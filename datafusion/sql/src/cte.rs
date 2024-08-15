@@ -38,7 +38,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Process CTEs from top to bottom
         for cte in with.cte_tables {
             // A `WITH` block can't use the same name more than once
-            let cte_name = self.normalizer.normalize(cte.alias.name.clone());
+            let cte_name = self.ident_normalizer.normalize(cte.alias.name.clone());
             if planner_context.contains_cte(&cte_name) {
                 return plan_err!(
                     "WITH query name {cte_name:?} specified more than once"

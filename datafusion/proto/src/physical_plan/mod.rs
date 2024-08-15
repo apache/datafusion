@@ -18,6 +18,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -34,7 +35,7 @@ use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
-use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
+use datafusion::physical_plan::aggregates::AggregateMode;
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -58,7 +59,7 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
-    udaf, AggregateExpr, ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
+    AggregateExpr, ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
@@ -186,34 +187,39 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     )),
                 }
             }
-            PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
-                parse_protobuf_file_scan_config(
+            PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(
+                CsvExec::builder(parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
                     extension_codec,
-                )?,
-                scan.has_header,
-                str_to_byte(&scan.delimiter, "delimiter")?,
-                str_to_byte(&scan.quote, "quote")?,
-                if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
-                    escape,
-                )) = &scan.optional_escape
-                {
-                    Some(str_to_byte(escape, "escape")?)
-                } else {
-                    None
-                },
-                if let Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
-                    comment,
-                )) = &scan.optional_comment
-                {
-                    Some(str_to_byte(comment, "comment")?)
-                } else {
-                    None
-                },
-                scan.newlines_in_values,
-                FileCompressionType::UNCOMPRESSED,
-            ))),
+                )?)
+                .with_has_header(scan.has_header)
+                .with_delimeter(str_to_byte(&scan.delimiter, "delimiter")?)
+                .with_quote(str_to_byte(&scan.quote, "quote")?)
+                .with_escape(
+                    if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
+                        escape,
+                    )) = &scan.optional_escape
+                    {
+                        Some(str_to_byte(escape, "escape")?)
+                    } else {
+                        None
+                    },
+                )
+                .with_comment(
+                    if let Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
+                        comment,
+                    )) = &scan.optional_comment
+                    {
+                        Some(str_to_byte(comment, "comment")?)
+                    } else {
+                        None
+                    },
+                )
+                .with_newlines_in_values(scan.newlines_in_values)
+                .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+                .build(),
+            )),
             #[cfg(feature = "parquet")]
             PhysicalPlanType::ParquetScan(scan) => {
                 let base_config = parse_protobuf_file_scan_config(
@@ -475,39 +481,19 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                     .map(|e| parse_physical_sort_expr(e, registry, &physical_schema, extension_codec)).collect::<Result<Vec<_>>>()?;
                                 agg_node.aggregate_function.as_ref().map(|func| {
                                     match func {
-                                        AggregateFunction::AggrFunction(i) => {
-                                            let aggr_function = protobuf::AggregateFunction::try_from(*i)
-                                                .map_err(
-                                                    |_| {
-                                                        proto_error(format!(
-                                                            "Received an unknown aggregate function: {i}"
-                                                        ))
-                                                    },
-                                                )?;
-
-                                            create_aggregate_expr(
-                                                &aggr_function.into(),
-                                                agg_node.distinct,
-                                                input_phy_expr.as_slice(),
-                                                &ordering_req,
-                                                &physical_schema,
-                                                name.to_string(),
-                                                agg_node.ignore_nulls,
-                                            )
-                                        }
                                         AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
                                             let agg_udf = match &agg_node.fun_definition {
                                                 Some(buf) => extension_codec.try_decode_udaf(udaf_name, buf)?,
                                                 None => registry.udaf(udaf_name)?
                                             };
 
-                                            // TODO: 'logical_exprs' is not supported for UDAF yet.
-                                            // approx_percentile_cont and approx_percentile_cont_weight are not supported for UDAF from protobuf yet.
-                                            let logical_exprs = &[];
-                                            // TODO: `order by` is not supported for UDAF yet
-                                            let sort_exprs = &[];
-                                            let ordering_req = &[];
-                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, logical_exprs, sort_exprs, ordering_req, &physical_schema, name, agg_node.ignore_nulls, agg_node.distinct)
+                                            AggregateExprBuilder::new(agg_udf, input_phy_expr)
+                                                .schema(Arc::clone(&physical_schema))
+                                                .alias(name)
+                                                .with_ignore_nulls(agg_node.ignore_nulls)
+                                                .with_distinct(agg_node.distinct)
+                                                .order_by(ordering_req)
+                                                .build()
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {

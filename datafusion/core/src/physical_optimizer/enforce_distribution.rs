@@ -44,6 +44,7 @@ use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use arrow::compute::SortOptions;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
@@ -856,6 +857,7 @@ fn add_roundrobin_on_top(
 /// Adds a hash repartition operator:
 /// - to increase parallelism, and/or
 /// - to satisfy requirements of the subsequent operators.
+///
 /// Repartition(Hash) is added on top of operator `input`.
 ///
 /// # Arguments
@@ -1030,6 +1032,105 @@ fn replace_order_preserving_variants(
     context.update_plan_from_children()
 }
 
+/// A struct to keep track of repartition requirements for each child node.
+struct RepartitionRequirementStatus {
+    /// The distribution requirement for the node.
+    requirement: Distribution,
+    /// Designates whether round robin partitioning is theoretically beneficial;
+    /// i.e. the operator can actually utilize parallelism.
+    roundrobin_beneficial: bool,
+    /// Designates whether round robin partitioning is beneficial according to
+    /// the statistical information we have on the number of rows.
+    roundrobin_beneficial_stats: bool,
+    /// Designates whether hash partitioning is necessary.
+    hash_necessary: bool,
+}
+
+/// Calculates the `RepartitionRequirementStatus` for each children to generate
+/// consistent and sensible (in terms of performance) distribution requirements.
+/// As an example, a hash join's left (build) child might produce
+///
+/// ```text
+/// RepartitionRequirementStatus {
+///     ..,
+///     hash_necessary: true
+/// }
+/// ```
+///
+/// while its right (probe) child might have very few rows and produce:
+///
+/// ```text
+/// RepartitionRequirementStatus {
+///     ..,
+///     hash_necessary: false
+/// }
+/// ```
+///
+/// These statuses are not consistent as all children should agree on hash
+/// partitioning. This function aligns the statuses to generate consistent
+/// hash partitions for each children. After alignment, the right child's
+/// status would turn into:
+///
+/// ```text
+/// RepartitionRequirementStatus {
+///     ..,
+///     hash_necessary: true
+/// }
+/// ```
+fn get_repartition_requirement_status(
+    plan: &Arc<dyn ExecutionPlan>,
+    batch_size: usize,
+    should_use_estimates: bool,
+) -> Result<Vec<RepartitionRequirementStatus>> {
+    let mut needs_alignment = false;
+    let children = plan.children();
+    let rr_beneficial = plan.benefits_from_input_partitioning();
+    let requirements = plan.required_input_distribution();
+    let mut repartition_status_flags = vec![];
+    for (child, requirement, roundrobin_beneficial) in
+        izip!(children.into_iter(), requirements, rr_beneficial)
+    {
+        // Decide whether adding a round robin is beneficial depending on
+        // the statistical information we have on the number of rows:
+        let roundrobin_beneficial_stats = match child.statistics()?.num_rows {
+            Precision::Exact(n_rows) => n_rows > batch_size,
+            Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
+            Precision::Absent => true,
+        };
+        let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
+        // Hash re-partitioning is necessary when the input has more than one
+        // partitions:
+        let multi_partitions = child.output_partitioning().partition_count() > 1;
+        let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
+        needs_alignment |= is_hash && (multi_partitions || roundrobin_sensible);
+        repartition_status_flags.push((
+            is_hash,
+            RepartitionRequirementStatus {
+                requirement,
+                roundrobin_beneficial,
+                roundrobin_beneficial_stats,
+                hash_necessary: is_hash && multi_partitions,
+            },
+        ));
+    }
+    // Align hash necessary flags for hash partitions to generate consistent
+    // hash partitions at each children:
+    if needs_alignment {
+        // When there is at least one hash requirement that is necessary or
+        // beneficial according to statistics, make all children require hash
+        // repartitioning:
+        for (is_hash, status) in &mut repartition_status_flags {
+            if *is_hash {
+                status.hash_necessary = true;
+            }
+        }
+    }
+    Ok(repartition_status_flags
+        .into_iter()
+        .map(|(_, status)| status)
+        .collect())
+}
+
 /// This function checks whether we need to add additional data exchange
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
@@ -1049,6 +1150,9 @@ fn ensure_distribution(
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
     let batch_size = config.execution.batch_size;
+    let should_use_estimates = config
+        .execution
+        .use_row_number_estimates_to_optimize_partitioning;
     let is_unbounded = dist_context.plan.execution_mode().is_unbounded();
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
@@ -1081,6 +1185,8 @@ fn ensure_distribution(
         }
     };
 
+    let repartition_status_flags =
+        get_repartition_requirement_status(&plan, batch_size, should_use_estimates)?;
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
     // - Satisfy the distribution requirements of every child, if it is not
@@ -1088,33 +1194,32 @@ fn ensure_distribution(
     // We store the updated children in `new_children`.
     let children = izip!(
         children.into_iter(),
-        plan.required_input_distribution().iter(),
         plan.required_input_ordering().iter(),
-        plan.benefits_from_input_partitioning(),
-        plan.maintains_input_order()
+        plan.maintains_input_order(),
+        repartition_status_flags.into_iter()
     )
     .map(
-        |(mut child, requirement, required_input_ordering, would_benefit, maintains)| {
-            // Don't need to apply when the returned row count is not greater than batch size
-            let num_rows = child.plan.statistics()?.num_rows;
-            let repartition_beneficial_stats = if num_rows.is_exact().unwrap_or(false) {
-                num_rows
-                    .get_value()
-                    .map(|value| value > &batch_size)
-                    .unwrap() // safe to unwrap since is_exact() is true
-            } else {
-                true
-            };
-
+        |(
+            mut child,
+            required_input_ordering,
+            maintains,
+            RepartitionRequirementStatus {
+                requirement,
+                roundrobin_beneficial,
+                roundrobin_beneficial_stats,
+                hash_necessary,
+            },
+        )| {
             let add_roundrobin = enable_round_robin
                 // Operator benefits from partitioning (e.g. filter):
-                && (would_benefit && repartition_beneficial_stats)
+                && roundrobin_beneficial
+                && roundrobin_beneficial_stats
                 // Unless partitioning increases the partition count, it is not beneficial:
                 && child.plan.output_partitioning().partition_count() < target_partitions;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
-            if repartition_file_scans && repartition_beneficial_stats {
+            if repartition_file_scans && roundrobin_beneficial_stats {
                 if let Some(new_child) =
                     child.plan.repartitioned(target_partitions, config)?
                 {
@@ -1123,7 +1228,7 @@ fn ensure_distribution(
             }
 
             // Satisfy the distribution requirement if it is unmet.
-            match requirement {
+            match &requirement {
                 Distribution::SinglePartition => {
                     child = add_spm_on_top(child);
                 }
@@ -1133,7 +1238,11 @@ fn ensure_distribution(
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
                     }
-                    child = add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
+                    // When inserting hash is necessary to satisy hash requirement, insert hash repartition.
+                    if hash_necessary {
+                        child =
+                            add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
+                    }
                 }
                 Distribution::UnspecifiedDistribution => {
                     if add_roundrobin {
@@ -1463,18 +1572,21 @@ pub(crate) mod tests {
     }
 
     fn csv_exec_with_sort(output_ordering: Vec<Vec<PhysicalSortExpr>>) -> Arc<CsvExec> {
-        Arc::new(CsvExec::new(
-            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
-                .with_file(PartitionedFile::new("x".to_string(), 100))
-                .with_output_ordering(output_ordering),
-            false,
-            b',',
-            b'"',
-            None,
-            None,
-            false,
-            FileCompressionType::UNCOMPRESSED,
-        ))
+        Arc::new(
+            CsvExec::builder(
+                FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
+                    .with_file(PartitionedFile::new("x".to_string(), 100))
+                    .with_output_ordering(output_ordering),
+            )
+            .with_has_header(false)
+            .with_delimeter(b',')
+            .with_quote(b'"')
+            .with_escape(None)
+            .with_comment(None)
+            .with_newlines_in_values(false)
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .build(),
+        )
     }
 
     fn csv_exec_multiple() -> Arc<CsvExec> {
@@ -1485,21 +1597,24 @@ pub(crate) mod tests {
     fn csv_exec_multiple_sorted(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<CsvExec> {
-        Arc::new(CsvExec::new(
-            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
-                .with_file_groups(vec![
-                    vec![PartitionedFile::new("x".to_string(), 100)],
-                    vec![PartitionedFile::new("y".to_string(), 100)],
-                ])
-                .with_output_ordering(output_ordering),
-            false,
-            b',',
-            b'"',
-            None,
-            None,
-            false,
-            FileCompressionType::UNCOMPRESSED,
-        ))
+        Arc::new(
+            CsvExec::builder(
+                FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
+                    .with_file_groups(vec![
+                        vec![PartitionedFile::new("x".to_string(), 100)],
+                        vec![PartitionedFile::new("y".to_string(), 100)],
+                    ])
+                    .with_output_ordering(output_ordering),
+            )
+            .with_has_header(false)
+            .with_delimeter(b',')
+            .with_quote(b'"')
+            .with_escape(None)
+            .with_comment(None)
+            .with_newlines_in_values(false)
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .build(),
+        )
     }
 
     fn projection_exec_with_alias(
@@ -1724,6 +1839,8 @@ pub(crate) mod tests {
             config.optimizer.repartition_file_min_size = $REPARTITION_FILE_MIN_SIZE;
             config.optimizer.prefer_existing_sort = $PREFER_EXISTING_SORT;
             config.optimizer.prefer_existing_union = $PREFER_EXISTING_UNION;
+            // Use a small batch size, to trigger RoundRobin in tests
+            config.execution.batch_size = 1;
 
             // NOTE: These tests verify the joint `EnforceDistribution` + `EnforceSorting` cascade
             //       because they were written prior to the separation of `BasicEnforcement` into
@@ -3761,20 +3878,23 @@ pub(crate) mod tests {
             };
 
             let plan = aggregate_exec_with_alias(
-                Arc::new(CsvExec::new(
-                    FileScanConfig::new(
-                        ObjectStoreUrl::parse("test:///").unwrap(),
-                        schema(),
+                Arc::new(
+                    CsvExec::builder(
+                        FileScanConfig::new(
+                            ObjectStoreUrl::parse("test:///").unwrap(),
+                            schema(),
+                        )
+                        .with_file(PartitionedFile::new("x".to_string(), 100)),
                     )
-                    .with_file(PartitionedFile::new("x".to_string(), 100)),
-                    false,
-                    b',',
-                    b'"',
-                    None,
-                    None,
-                    false,
-                    compression_type,
-                )),
+                    .with_has_header(false)
+                    .with_delimeter(b',')
+                    .with_quote(b'"')
+                    .with_escape(None)
+                    .with_comment(None)
+                    .with_newlines_in_values(false)
+                    .with_file_compression_type(compression_type)
+                    .build(),
+                ),
                 vec![("a".to_string(), "a".to_string())],
             );
             assert_optimized!(expected, plan, true, false, 2, true, 10, false);

@@ -52,7 +52,6 @@ mod page_filter;
 mod reader;
 mod row_filter;
 mod row_group_filter;
-mod statistics;
 mod writer;
 
 use crate::datasource::schema_adapter::{
@@ -62,7 +61,6 @@ pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
-pub use statistics::StatisticsConverter;
 pub use writer::plan_to_parquet;
 
 /// Execution plan for reading one or more Parquet files.
@@ -119,32 +117,32 @@ pub use writer::plan_to_parquet;
 /// Supports the following optimizations:
 ///
 /// * Concurrent reads: Can read from one or more files in parallel as multiple
-/// partitions, including concurrently reading multiple row groups from a single
-/// file.
+///   partitions, including concurrently reading multiple row groups from a single
+///   file.
 ///
 /// * Predicate push down: skips row groups and pages based on
-/// min/max/null_counts in the row group metadata, the page index and bloom
-/// filters.
+///   min/max/null_counts in the row group metadata, the page index and bloom
+///   filters.
 ///
 /// * Projection pushdown: reads and decodes only the columns required.
 ///
 /// * Limit pushdown: stop execution early after some number of rows are read.
 ///
 /// * Custom readers: customize reading  parquet files, e.g. to cache metadata,
-/// coalesce I/O operations, etc. See [`ParquetFileReaderFactory`] for more
-/// details.
+///   coalesce I/O operations, etc. See [`ParquetFileReaderFactory`] for more
+///   details.
 ///
 /// * Schema adapters: read parquet files with different schemas into a unified
-/// table schema. This can be used to implement "schema evolution". See
-/// [`SchemaAdapterFactory`] for more details.
+///   table schema. This can be used to implement "schema evolution". See
+///   [`SchemaAdapterFactory`] for more details.
 ///
 /// * metadata_size_hint: controls the number of bytes read from the end of the
-/// file in the initial I/O when the default [`ParquetFileReaderFactory`]. If a
-/// custom reader is used, it supplies the metadata directly and this parameter
-/// is ignored. [`ParquetExecBuilder::with_metadata_size_hint`] for more details.
+///   file in the initial I/O when the default [`ParquetFileReaderFactory`]. If a
+///   custom reader is used, it supplies the metadata directly and this parameter
+///   is ignored. [`ParquetExecBuilder::with_metadata_size_hint`] for more details.
 ///
 /// * User provided  [`ParquetAccessPlan`]s to skip row groups and/or pages
-/// based on external information. See "Implementing External Indexes" below
+///   based on external information. See "Implementing External Indexes" below
 ///
 /// # Implementing External Indexes
 ///
@@ -191,22 +189,22 @@ pub use writer::plan_to_parquet;
 /// # Execution Overview
 ///
 /// * Step 1: [`ParquetExec::execute`] is called, returning a [`FileStream`]
-/// configured to open parquet files with a [`ParquetOpener`].
+///   configured to open parquet files with a `ParquetOpener`.
 ///
-/// * Step 2: When the stream is polled, the [`ParquetOpener`] is called to open
-/// the file.
+/// * Step 2: When the stream is polled, the `ParquetOpener` is called to open
+///   the file.
 ///
 /// * Step 3: The `ParquetOpener` gets the [`ParquetMetaData`] (file metadata)
-/// via [`ParquetFileReaderFactory`], creating a [`ParquetAccessPlan`] by
-/// applying predicates to metadata. The plan and projections are used to
-/// determine what pages must be read.
+///   via [`ParquetFileReaderFactory`], creating a [`ParquetAccessPlan`] by
+///   applying predicates to metadata. The plan and projections are used to
+///   determine what pages must be read.
 ///
 /// * Step 4: The stream begins reading data, fetching the required pages
-/// and incrementally decoding them.
+///   and incrementally decoding them.
 ///
 /// * Step 5: As each [`RecordBatch]` is read, it may be adapted by a
-/// [`SchemaAdapter`] to match the table schema. By default missing columns are
-/// filled with nulls, but this can be customized via [`SchemaAdapterFactory`].
+///   [`SchemaAdapter`] to match the table schema. By default missing columns are
+///   filled with nulls, but this can be customized via [`SchemaAdapterFactory`].
 ///
 /// [`RecordBatch`]: arrow::record_batch::RecordBatch
 /// [`SchemaAdapter`]: crate::datasource::schema_adapter::SchemaAdapter
@@ -711,6 +709,10 @@ impl ExecutionPlan for ParquetExec {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             schema_adapter_factory,
+            schema_force_string_view: self
+                .table_parquet_options
+                .global
+                .schema_force_string_view,
         };
 
         let stream =
@@ -725,6 +727,24 @@ impl ExecutionPlan for ParquetExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.projected_statistics.clone())
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let new_config = self.base_config.clone().with_limit(limit);
+
+        Some(Arc::new(Self {
+            base_config: new_config,
+            projected_statistics: self.projected_statistics.clone(),
+            metrics: self.metrics.clone(),
+            predicate: self.predicate.clone(),
+            pruning_predicate: self.pruning_predicate.clone(),
+            page_pruning_predicate: self.page_pruning_predicate.clone(),
+            metadata_size_hint: self.metadata_size_hint,
+            parquet_file_reader_factory: self.parquet_file_reader_factory.clone(),
+            cache: self.cache.clone(),
+            table_parquet_options: self.table_parquet_options.clone(),
+            schema_adapter_factory: self.schema_adapter_factory.clone(),
+        }))
     }
 }
 

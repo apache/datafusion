@@ -66,7 +66,7 @@ use parking_lot::Mutex;
 /// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
 /// As the key is a hash value, we need to check possible hash collisions in the probe stage
 /// During this stage it might be the case that a row is contained the same hashmap value,
-/// but the values don't match. Those are checked in the [`equal_rows_arr`](crate::joins::hash_join::equal_rows_arr) method.
+/// but the values don't match. Those are checked in the `equal_rows_arr` method.
 ///
 /// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
 ///
@@ -827,12 +827,12 @@ fn estimate_join_cardinality(
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
             let ij_cardinality = estimate_inner_join_cardinality(
                 Statistics {
-                    num_rows: left_stats.num_rows.clone(),
+                    num_rows: left_stats.num_rows,
                     total_byte_size: Precision::Absent,
                     column_statistics: left_col_stats,
                 },
                 Statistics {
-                    num_rows: right_stats.num_rows.clone(),
+                    num_rows: right_stats.num_rows,
                     total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,
                 },
@@ -1024,7 +1024,7 @@ fn max_distinct_count(
     stats: &ColumnStatistics,
 ) -> Precision<usize> {
     match &stats.distinct_count {
-        dc @ (Precision::Exact(_) | Precision::Inexact(_)) => dc.clone(),
+        &dc @ (Precision::Exact(_) | Precision::Inexact(_)) => dc,
         _ => {
             // The number can never be greater than the number of rows we have
             // minus the nulls (since they don't count as distinct values).
@@ -2054,9 +2054,7 @@ mod tests {
             );
             assert_eq!(
                 partial_join_stats.map(|s| s.column_statistics),
-                expected_cardinality
-                    .clone()
-                    .map(|_| [left_col_stats, right_col_stats].concat())
+                expected_cardinality.map(|_| [left_col_stats, right_col_stats].concat())
             );
         }
         Ok(())

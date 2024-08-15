@@ -17,7 +17,7 @@
 
 [package]
 name = "datafusion-functions-aggregate"
-description = "Aggregate function packages for the DataFusion query engine"
+description = "Traits and types for logical plans and expressions for DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
@@ -44,7 +44,22 @@ arrow-schema = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions-aggregate-common = { workspace = true }
+datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 log = { workspace = true }
 paste = "1.0.14"
 sqlparser = { workspace = true }
+
+[dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
+criterion = "0.5"
+rand = { workspace = true }
+
+[[bench]]
+name = "count"
+harness = false
+
+[[bench]]
+name = "sum"
+harness = false

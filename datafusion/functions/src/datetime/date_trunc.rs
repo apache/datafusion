@@ -29,7 +29,7 @@ use arrow::array::types::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::array::{Array, PrimitiveArray};
-use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8};
+use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8, Utf8View};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
@@ -61,23 +61,43 @@ impl DateTruncFunc {
             signature: Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![Utf8View, Timestamp(Nanosecond, None)]),
                     Exact(vec![
                         Utf8,
                         Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
+                    Exact(vec![
+                        Utf8View,
+                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
+                    Exact(vec![Utf8View, Timestamp(Microsecond, None)]),
                     Exact(vec![
                         Utf8,
                         Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
+                    Exact(vec![
+                        Utf8View,
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
+                    Exact(vec![Utf8View, Timestamp(Millisecond, None)]),
                     Exact(vec![
                         Utf8,
                         Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
+                    Exact(vec![
+                        Utf8View,
+                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![Utf8View, Timestamp(Second, None)]),
                     Exact(vec![
                         Utf8,
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
+                    Exact(vec![
+                        Utf8View,
                         Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                 ],
@@ -119,6 +139,9 @@ impl ScalarUDFImpl for DateTruncFunc {
 
         let granularity = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) =
             granularity
+        {
+            v.to_lowercase()
+        } else if let ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v))) = granularity
         {
             v.to_lowercase()
         } else {

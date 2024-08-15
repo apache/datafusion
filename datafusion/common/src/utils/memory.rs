@@ -24,7 +24,7 @@ use crate::{DataFusionError, Result};
 /// # Parameters
 /// - `num_elements`: The number of elements expected in the hash table.
 /// - `fixed_size`: A fixed overhead size associated with the collection
-/// (e.g., HashSet or HashTable).
+///    (e.g., HashSet or HashTable).
 /// - `T`: The type of elements stored in the hash table.
 ///
 /// # Details

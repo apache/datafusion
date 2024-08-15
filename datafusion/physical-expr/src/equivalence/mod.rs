@@ -30,7 +30,9 @@ mod properties;
 pub use class::{ConstExpr, EquivalenceClass, EquivalenceGroup};
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
-pub use properties::{join_equivalence_properties, EquivalenceProperties};
+pub use properties::{
+    calculate_union, join_equivalence_properties, EquivalenceProperties,
+};
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out
 /// duplicate entries that have same physical expression inside. For example,

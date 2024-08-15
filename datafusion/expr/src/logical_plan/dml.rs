@@ -16,7 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::fmt::{self, Display};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -41,6 +41,18 @@ pub struct CopyTo {
     pub options: HashMap<String, String>,
 }
 
+impl Debug for CopyTo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CopyTo")
+            .field("input", &self.input)
+            .field("output_url", &self.output_url)
+            .field("partition_by", &self.partition_by)
+            .field("file_type", &"...")
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
+}
+
 // Implement PartialEq manually
 impl PartialEq for CopyTo {
     fn eq(&self, other: &Self) -> bool {
@@ -61,7 +73,7 @@ impl Hash for CopyTo {
 
 /// The operator that modifies the content of a database (adapted from
 /// substrait WriteRel)
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DmlStatement {
     /// The table name
     pub table_name: TableReference,
@@ -100,7 +112,7 @@ impl DmlStatement {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WriteOp {
     InsertOverwrite,
     InsertInto,

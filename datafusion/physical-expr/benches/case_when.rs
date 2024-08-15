@@ -22,9 +22,7 @@ use arrow_schema::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, CaseExpr};
-use datafusion_physical_expr_common::expressions::column::Column;
-use datafusion_physical_expr_common::expressions::Literal;
+use datafusion_physical_expr::expressions::{BinaryExpr, CaseExpr, Column, Literal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 
@@ -46,12 +44,12 @@ fn criterion_benchmark(c: &mut Criterion) {
         if i % 7 == 0 {
             c2.append_null();
         } else {
-            c2.append_value(&format!("string {i}"));
+            c2.append_value(format!("string {i}"));
         }
         if i % 9 == 0 {
             c3.append_null();
         } else {
-            c3.append_value(&format!("other string {i}"));
+            c3.append_value(format!("other string {i}"));
         }
     }
     let c1 = Arc::new(c1.finish());

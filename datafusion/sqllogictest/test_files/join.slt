@@ -1023,7 +1023,6 @@ statement ok
 DROP TABLE t3;
 
 
-# Test issue: https://github.com/apache/datafusion/issues/11275
 statement ok
 CREATE TABLE t0 (v1 BOOLEAN) AS VALUES (false), (null);
 
@@ -1033,6 +1032,7 @@ CREATE TABLE t1 (v1 BOOLEAN) AS VALUES (false), (null), (false);
 statement ok
 CREATE TABLE t2 (v1 BOOLEAN) AS VALUES (false), (true);
 
+# Test issue: https://github.com/apache/datafusion/issues/11275
 query BB
 SELECT t2.v1, t1.v1 FROM t0, t1, t2 WHERE t2.v1 IS DISTINCT FROM t0.v1 ORDER BY 1,2;
 ----
@@ -1046,6 +1046,19 @@ true false
 true NULL
 true NULL
 
+# Test issue: https://github.com/apache/datafusion/issues/11621
+query BB
+SELECT * FROM t1 JOIN t2 ON t1.v1 = t2.v1 WHERE (t1.v1 == t2.v1) OR t1.v1;
+----
+false false
+false false
+
+query BB
+SELECT * FROM t1 JOIN t2 ON t1.v1 = t2.v1 WHERE t1.v1 OR (t1.v1 == t2.v1);
+----
+false false
+false false
+
 statement ok
 DROP TABLE t0;
 
@@ -1054,3 +1067,114 @@ DROP TABLE t1;
 
 statement ok
 DROP TABLE t2;
+
+# Join Using Issue with Cast Expr
+# Found issue: https://github.com/apache/datafusion/issues/11412
+
+statement ok
+/*DML*/CREATE TABLE t60(v0 BIGINT, v1 BIGINT, v2 BOOLEAN, v3 BOOLEAN);
+
+statement ok
+/*DML*/CREATE TABLE t0(v0 DOUBLE, v1 BIGINT);
+
+statement ok
+/*DML*/CREATE TABLE t1(v0 DOUBLE);
+
+query I
+SELECT COUNT(*)
+FROM t1
+NATURAL JOIN t60
+INNER JOIN t0
+ON t60.v1 = t0.v0
+AND t0.v1 > t60.v1;
+----
+0
+
+query I
+SELECT COUNT(*)
+FROM t1
+JOIN t60
+USING (v0)
+INNER JOIN t0
+ON t60.v1 = t0.v0
+AND t0.v1 > t60.v1;
+----
+0
+
+statement ok
+DROP TABLE t60;
+
+statement ok
+DROP TABLE t0;
+
+statement ok
+DROP TABLE t1;
+
+# Test SQLancer issue: https://github.com/apache/datafusion/issues/11704
+query II
+WITH
+    t1 AS (SELECT NULL::int AS a),
+    t2 AS (SELECT NULL::int AS a)
+SELECT * FROM
+  (SELECT * FROM t1 CROSS JOIN t2)
+WHERE t1.a == t2.a
+  AND t1.a + t2.a IS NULL;
+----
+
+# Similar to above test case, but without the equality predicate
+query II
+WITH
+    t1 AS (SELECT NULL::int AS a),
+    t2 AS (SELECT NULL::int AS a)
+SELECT * FROM
+  (SELECT * FROM t1 CROSS JOIN t2)
+WHERE t1.a + t2.a IS NULL;
+----
+NULL NULL
+
+statement ok
+CREATE TABLE t5(v0 BIGINT, v1 STRING, v2 BIGINT, v3 STRING, v4 BOOLEAN);
+
+statement ok
+CREATE TABLE t1(v0 BIGINT, v1 STRING);
+
+statement ok
+CREATE TABLE t0(v0 BIGINT, v1 DOUBLE);
+
+query TT
+explain SELECT *
+FROM t1
+NATURAL JOIN t5
+INNER JOIN t0 ON (t0.v1 + t5.v0) > 0
+WHERE t0.v1 = t1.v0;
+----
+logical_plan
+01)Projection: t1.v0, t1.v1, t5.v2, t5.v3, t5.v4, t0.v0, t0.v1
+02)--Inner Join: CAST(t1.v0 AS Float64) = t0.v1 Filter: t0.v1 + CAST(t5.v0 AS Float64) > Float64(0)
+03)----Projection: t1.v0, t1.v1, t5.v0, t5.v2, t5.v3, t5.v4
+04)------Inner Join: Using t1.v0 = t5.v0, t1.v1 = t5.v1
+05)--------TableScan: t1 projection=[v0, v1]
+06)--------TableScan: t5 projection=[v0, v1, v2, v3, v4]
+07)----TableScan: t0 projection=[v0, v1]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(t1.v0 AS Float64)@6, v1@1)], filter=v1@1 + CAST(v0@0 AS Float64) > 0, projection=[v0@0, v1@1, v2@3, v3@4, v4@5, v0@7, v1@8]
+03)----CoalescePartitionsExec
+04)------ProjectionExec: expr=[v0@0 as v0, v1@1 as v1, v0@2 as v0, v2@3 as v2, v3@4 as v3, v4@5 as v4, CAST(v0@0 AS Float64) as CAST(t1.v0 AS Float64)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(v0@0, v0@0), (v1@1, v1@1)], projection=[v0@0, v1@1, v0@2, v2@4, v3@5, v4@6]
+08)--------------MemoryExec: partitions=1, partition_sizes=[0]
+09)--------------MemoryExec: partitions=1, partition_sizes=[0]
+10)----MemoryExec: partitions=1, partition_sizes=[0]
+
+
+
+statement ok
+drop table t5;
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t0;

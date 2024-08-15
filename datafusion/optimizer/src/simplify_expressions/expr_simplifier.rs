@@ -32,9 +32,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{
-    AggregateFunctionDefinition, InList, InSubquery, WindowFunction,
-};
+use datafusion_expr::expr::{InList, InSubquery, WindowFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
@@ -289,7 +287,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         self
     }
 
-    /// Should [`Canonicalizer`] be applied before simplification?
+    /// Should `Canonicalizer` be applied before simplification?
     ///
     /// If true (the default), the expression will be rewritten to canonical
     /// form before simplification. This is useful to ensure that the simplifier
@@ -819,7 +817,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if is_not_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::Boolean(Some(true))))
+                Transformed::yes(lit(true))
             }
             // !A OR A ---> true (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
@@ -827,7 +825,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if is_not_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::Boolean(Some(true))))
+                Transformed::yes(lit(true))
             }
             // (..A..) OR A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
@@ -892,7 +890,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: And,
                 right,
             }) if is_not_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::Boolean(Some(false))))
+                Transformed::yes(lit(false))
             }
             // !A AND A ---> false (if A not nullable)
             Expr::BinaryExpr(BinaryExpr {
@@ -900,7 +898,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: And,
                 right,
             }) if is_not_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::Boolean(Some(false))))
+                Transformed::yes(lit(false))
             }
             // (..A..) AND A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
@@ -1408,9 +1406,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }
 
             Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                func_def: AggregateFunctionDefinition::UDF(ref udaf),
+                ref func,
                 ..
-            }) => match (udaf.simplify(), expr) {
+            }) => match (func.simplify(), expr) {
                 (Some(simplify_function), Expr::AggregateFunction(af)) => {
                     Transformed::yes(simplify_function(af, info)?)
                 }
@@ -3855,15 +3853,9 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_with_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::WindowFunction(datafusion_expr::expr::WindowFunction::new(
-                udwf,
-                vec![],
-                vec![],
-                vec![],
-                WindowFrame::new(None),
-                None,
-            ));
+        let window_function_expr = Expr::WindowFunction(
+            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
+        );
 
         let expected = col("result_column");
         assert_eq!(simplify(window_function_expr), expected);
@@ -3871,15 +3863,9 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_without_simplify()).into(),
         );
-        let window_function_expr =
-            Expr::WindowFunction(datafusion_expr::expr::WindowFunction::new(
-                udwf,
-                vec![],
-                vec![],
-                vec![],
-                WindowFrame::new(None),
-                None,
-            ));
+        let window_function_expr = Expr::WindowFunction(
+            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
+        );
 
         let expected = window_function_expr.clone();
         assert_eq!(simplify(window_function_expr), expected);

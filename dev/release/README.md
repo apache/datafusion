@@ -124,20 +124,31 @@ Here are the commands that could be used to prepare the `38.0.0` release:
 
 Checkout the main commit to be released
 
-```
+```shell
 git fetch apache
 git checkout apache/main
 ```
 
-Update datafusion version in `datafusion/Cargo.toml` to `38.0.0`:
+Manually update the datafusion version in the root `Cargo.toml` to `38.0.0`.
 
+Run `cargo update` in the root directory and also in `datafusion-cli`:
+
+```shell
+cargo update
+cd datafustion-cli
+cargo update
+cd ..
 ```
-./dev/update_datafusion_versions.py 38.0.0
+
+Run `cargo test` to re-generate some example files:
+
+```shell
+cargo test
 ```
 
 Lastly commit the version change:
 
-```
+```shell
 git commit -a -m 'Update version'
 ```
 
@@ -193,7 +204,7 @@ For the release to become "official" it needs at least three PMC members to vote
 
 The `dev/release/verify-release-candidate.sh` is a script in this repository that can assist in the verification process. Run it like:
 
-```
+```shell
 ./dev/release/verify-release-candidate.sh 38.0.0 0
 ```
 
@@ -222,7 +233,7 @@ Congratulations! The release is now official!
 
 Tag the same release candidate commit with the final release tag
 
-```
+```shell
 git co apache/38.0.0-rc0
 git tag 38.0.0
 git push apache 38.0.0
@@ -245,20 +256,7 @@ to all of the DataFusion crates.
 Download and unpack the official release tarball
 
 Verify that the Cargo.toml in the tarball contains the correct version
-(e.g. `version = "38.0.0"`) and then publish the crates by running the script `release-crates.sh`
-in a directory extracted from the source tarball that was voted on. Note that this script doesn't
-work if run in a Git repo.
-
-Alternatively the crates can be published one at a time with the following commands. Crates need to be
-published in the correct order as shown in this diagram.
-
-![](crate-deps.svg)
-
-_To update this diagram, manually edit the dependencies in [crate-deps.dot](crate-deps.dot) and then run:_
-
-```shell
-dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
-```
+(e.g. `version = "38.0.0"`) and then publish the crates by running the following commands
 
 ```shell
 (cd datafusion/common && cargo publish)
@@ -268,11 +266,13 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/functions-aggregate && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
 (cd datafusion/functions && cargo publish)
-(cd datafusion/functions-array && cargo publish)
+(cd datafusion/functions-nested && cargo publish)
 (cd datafusion/sql && cargo publish)
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/common-runtime && cargo publish)
+(cd datafusion/catalog && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
+(cd datafusion/physical-optimizer && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto-common && cargo publish)
 (cd datafusion/proto && cargo publish)

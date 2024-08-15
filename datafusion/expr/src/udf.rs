@@ -17,22 +17,19 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
-use std::any::Any;
-use std::fmt::{self, Debug, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
-
-use arrow::datatypes::DataType;
-
-use datafusion_common::{not_impl_err, ExprSchema, Result};
-
-use crate::expr::create_name;
-use crate::interval_arithmetic::Interval;
+use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
     ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
 };
+use arrow::datatypes::DataType;
+use datafusion_common::{not_impl_err, ExprSchema, Result};
+use datafusion_expr_common::interval_arithmetic::Interval;
+use std::any::Any;
+use std::fmt::{self, Debug, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 
 /// Logical representation of a Scalar User Defined Function.
 ///
@@ -44,7 +41,9 @@ use crate::{
 /// 1. For simple use cases, use [`create_udf`] (examples in [`simple_udf.rs`]).
 ///
 /// 2. For advanced use cases, use [`ScalarUDFImpl`] which provides full API
-/// access (examples in  [`advanced_udf.rs`]).
+///    access (examples in  [`advanced_udf.rs`]).
+///
+/// See [`Self::call`] to invoke a `ScalarUDF` with arguments.
 ///
 /// # API Note
 ///
@@ -121,7 +120,16 @@ impl ScalarUDF {
     /// Returns a [`Expr`] logical expression to call this UDF with specified
     /// arguments.
     ///
-    /// This utility allows using the UDF without requiring access to the registry.
+    /// This utility allows easily calling UDFs
+    ///
+    /// # Example
+    /// ```no_run
+    /// use datafusion_expr::{col, lit, ScalarUDF};
+    /// # fn my_udf() -> ScalarUDF { unimplemented!() }
+    /// let my_func: ScalarUDF = my_udf();
+    /// // Create an expr for `my_func(a, 12.3)`
+    /// let expr = my_func.call(vec![col("a"), lit(12.3)]);
+    /// ```
     pub fn call(&self, args: Vec<Expr>) -> Expr {
         Expr::ScalarFunction(crate::expr::ScalarFunction::new_udf(
             Arc::new(self.clone()),
@@ -141,6 +149,13 @@ impl ScalarUDF {
     /// See [`ScalarUDFImpl::display_name`] for more details
     pub fn display_name(&self, args: &[Expr]) -> Result<String> {
         self.inner.display_name(args)
+    }
+
+    /// Returns this function's schema_name.
+    ///
+    /// See [`ScalarUDFImpl::schema_name`] for more details
+    pub fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        self.inner.schema_name(args)
     }
 
     /// Returns the aliases for this function.
@@ -334,10 +349,21 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     fn name(&self) -> &str;
 
     /// Returns the user-defined display name of the UDF given the arguments
-    ///
     fn display_name(&self, args: &[Expr]) -> Result<String> {
-        let names: Vec<String> = args.iter().map(create_name).collect::<Result<_>>()?;
+        let names: Vec<String> = args.iter().map(ToString::to_string).collect();
+        // TODO: join with ", " to standardize the formatting of Vec<Expr>, <https://github.com/apache/datafusion/issues/10364>
         Ok(format!("{}({})", self.name(), names.join(",")))
+    }
+
+    /// Returns the name of the column this expression would create
+    ///
+    /// See [`Expr::schema_name`] for details
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        Ok(format!(
+            "{}({})",
+            self.name(),
+            schema_name_from_exprs_comma_seperated_without_space(args)?
+        ))
     }
 
     /// Returns the function's [`Signature`] for information about what input

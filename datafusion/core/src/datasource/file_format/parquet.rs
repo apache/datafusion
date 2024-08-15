@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
-use super::{FileFormat, FileFormatFactory, FileScanConfig};
+use super::{transform_schema_to_view, FileFormat, FileFormatFactory, FileScanConfig};
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -50,7 +50,7 @@ use datafusion_common::{
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::{MaxAccumulator, MinAccumulator};
+use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
 
@@ -75,12 +75,11 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 
-use crate::datasource::physical_plan::parquet::{
-    ParquetExecBuilder, StatisticsConverter,
-};
+use crate::datasource::physical_plan::parquet::ParquetExecBuilder;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
+use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -93,7 +92,8 @@ const BUFFER_FLUSH_BYTES: usize = 1024000;
 #[derive(Default)]
 /// Factory struct used to create [ParquetFormat]
 pub struct ParquetFormatFactory {
-    options: Option<TableParquetOptions>,
+    /// inner options for parquet
+    pub options: Option<TableParquetOptions>,
 }
 
 impl ParquetFormatFactory {
@@ -140,6 +140,10 @@ impl FileFormatFactory for ParquetFormatFactory {
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ParquetFormat::default())
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl GetExt for ParquetFormatFactory {
@@ -149,6 +153,13 @@ impl GetExt for ParquetFormatFactory {
     }
 }
 
+impl fmt::Debug for ParquetFormatFactory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParquetFormatFactory")
+            .field("ParquetFormatFactory", &self.options)
+            .finish()
+    }
+}
 /// The Apache Parquet `FileFormat` implementation
 #[derive(Debug, Default)]
 pub struct ParquetFormat {
@@ -304,6 +315,17 @@ impl FileFormat for ParquetFormat {
         } else {
             Schema::try_merge(schemas)
         }?;
+
+        let schema = if state
+            .config_options()
+            .execution
+            .parquet
+            .schema_force_string_view
+        {
+            transform_schema_to_view(&schema)
+        } else {
+            schema
+        };
 
         Ok(Arc::new(schema))
     }
@@ -1310,7 +1332,7 @@ mod tests {
             .map(|i| i.to_string())
             .collect();
         let coll: Vec<_> = schema
-            .all_fields()
+            .flattened_fields()
             .into_iter()
             .map(|i| i.name().to_string())
             .collect();

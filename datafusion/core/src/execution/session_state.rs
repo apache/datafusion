@@ -17,13 +17,14 @@
 
 //! [`SessionState`]: information required to run queries in a session
 
-use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
-use crate::catalog::schema::SchemaProvider;
-use crate::catalog::{CatalogProviderList, MemoryCatalogProviderList};
+use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
+use crate::catalog_common::information_schema::{
+    InformationSchemaProvider, INFORMATION_SCHEMA,
+};
+use crate::catalog_common::MemoryCatalogProviderList;
 use crate::datasource::cte_worktable::CteWorkTable;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use crate::datasource::function::{TableFunction, TableFunctionImpl};
-use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
@@ -32,6 +33,7 @@ use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::{DataType, SchemaRef};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_catalog::Session;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -68,16 +70,30 @@ use itertools::Itertools;
 use log::{debug, info};
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::dialect::dialect_from_str;
+use std::any::Any;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Execution context for registering data sources and executing queries.
-/// See [`SessionContext`] for a higher level API.
+/// `SessionState` contains all the necessary state to plan and execute queries,
+/// such as configuration, functions, and runtime environment. Please see the
+/// documentation on [`SessionContext`] for more information.
 ///
-/// Use the [`SessionStateBuilder`] to build a SessionState object.
+///
+/// # Example: `SessionState` from a [`SessionContext`]
+///
+/// ```
+/// use datafusion::prelude::*;
+/// let ctx = SessionContext::new();
+/// let state = ctx.state();
+/// ```
+///
+/// # Example: `SessionState` via [`SessionStateBuilder`]
+///
+/// You can also use [`SessionStateBuilder`] to build a `SessionState` object
+/// directly:
 ///
 /// ```
 /// use datafusion::prelude::*;
@@ -144,7 +160,7 @@ pub struct SessionState {
     /// `CREATE EXTERNAL TABLE ... STORED AS <FORMAT>` for custom file
     /// formats other than those built into DataFusion
     ///
-    /// [`TableProvider`]: crate::datasource::provider::TableProvider
+    /// [`TableProvider`]: crate::catalog::TableProvider
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
@@ -180,10 +196,60 @@ impl Debug for SessionState {
     }
 }
 
+#[async_trait]
+impl Session for SessionState {
+    fn session_id(&self) -> &str {
+        self.session_id()
+    }
+
+    fn config(&self) -> &SessionConfig {
+        self.config()
+    }
+
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        self.create_physical_plan(logical_plan).await
+    }
+
+    fn create_physical_expr(
+        &self,
+        expr: Expr,
+        df_schema: &DFSchema,
+    ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+        self.create_physical_expr(expr, df_schema)
+    }
+
+    fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        self.scalar_functions()
+    }
+
+    fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        self.aggregate_functions()
+    }
+
+    fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        self.window_functions()
+    }
+
+    fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+        self.runtime_env()
+    }
+
+    fn execution_props(&self) -> &ExecutionProps {
+        self.execution_props()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 impl SessionState {
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
+    #[deprecated(since = "41.0.0", note = "Use SessionStateBuilder")]
     pub fn new_with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         SessionStateBuilder::new()
             .with_config(config)
@@ -465,14 +531,14 @@ impl SessionState {
     ///
     /// See [`catalog::resolve_table_references`] for more information.
     ///
-    /// [`catalog::resolve_table_references`]: crate::catalog::resolve_table_references
+    /// [`catalog::resolve_table_references`]: crate::catalog_common::resolve_table_references
     pub fn resolve_table_references(
         &self,
         statement: &datafusion_sql::parser::Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
-        let (table_refs, _) = crate::catalog::resolve_table_references(
+        let (table_refs, _) = crate::catalog_common::resolve_table_references(
             statement,
             enable_ident_normalization,
         )?;
@@ -512,6 +578,8 @@ impl SessionState {
         ParserOptions {
             parse_float_as_decimal: sql_parser_options.parse_float_as_decimal,
             enable_ident_normalization: sql_parser_options.enable_ident_normalization,
+            enable_options_value_normalization: sql_parser_options
+                .enable_options_value_normalization,
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
         }
     }
@@ -557,6 +625,21 @@ impl SessionState {
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
+    }
+
+    /// Returns the [`Analyzer`] for this session
+    pub fn analyzer(&self) -> &Analyzer {
+        &self.analyzer
+    }
+
+    /// Returns the [`Optimizer`] for this session
+    pub fn optimizer(&self) -> &Optimizer {
+        &self.optimizer
+    }
+
+    /// Returns the [`QueryPlanner`] for this session
+    pub fn query_planner(&self) -> &Arc<dyn QueryPlanner + Send + Sync> {
+        &self.query_planner
     }
 
     /// Optimizes the logical plan by applying optimizer rules.
@@ -657,8 +740,8 @@ impl SessionState {
     /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type
     /// coercion, and function rewrites.
     ///
-    /// Note: The expression is not [simplified] or otherwise optimized:  `a = 1
-    /// + 2` will not be simplified to `a = 3` as this is a more involved process.
+    /// Note: The expression is not [simplified] or otherwise optimized:
+    /// `a = 1 + 2` will not be simplified to `a = 3` as this is a more involved process.
     /// See the [expr_api] example for how to simplify expressions.
     ///
     /// # See Also:
@@ -904,8 +987,24 @@ impl SessionStateBuilder {
 
     /// Returns a new [SessionStateBuilder] based on an existing [SessionState]
     /// The session id for the new builder will be unset; all other fields will
-    /// be cloned from what is set in the provided session state
+    /// be cloned from what is set in the provided session state. If the default
+    /// catalog exists in existing session state, the new session state will not
+    /// create default catalog and schema.
     pub fn new_from_existing(existing: SessionState) -> Self {
+        let default_catalog_exist = existing
+            .catalog_list()
+            .catalog(&existing.config.options().catalog.default_catalog)
+            .is_some();
+        // The new `with_create_default_catalog_and_schema` should be false if the default catalog exists
+        let create_default_catalog_and_schema = existing
+            .config
+            .options()
+            .catalog
+            .create_default_catalog_and_schema
+            && !default_catalog_exist;
+        let new_config = existing
+            .config
+            .with_create_default_catalog_and_schema(create_default_catalog_and_schema);
         Self {
             session_id: None,
             analyzer: Some(existing.analyzer),
@@ -922,7 +1021,7 @@ impl SessionStateBuilder {
             window_functions: Some(existing.window_functions.into_values().collect_vec()),
             serializer_registry: Some(existing.serializer_registry),
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
-            config: Some(existing.config),
+            config: Some(new_config),
             table_options: Some(existing.table_options),
             execution_props: Some(existing.execution_props),
             table_factories: Some(existing.table_factories),
@@ -1718,17 +1817,19 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
+    use super::{SessionContextProvider, SessionStateBuilder};
+    use crate::catalog_common::MemoryCatalogProviderList;
+    use crate::datasource::MemTable;
+    use crate::execution::context::SessionState;
+    use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
-
-    use crate::execution::context::SessionState;
-
-    use super::{SessionContextProvider, SessionStateBuilder};
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn test_session_state_with_default_features() {
@@ -1757,5 +1858,69 @@ mod tests {
         let state = SessionStateBuilder::new().build();
 
         assert!(sql_to_expr(&state).is_err())
+    }
+
+    #[test]
+    fn test_from_existing() -> Result<()> {
+        fn employee_batch() -> RecordBatch {
+            let name: ArrayRef =
+                Arc::new(StringArray::from_iter_values(["Andy", "Andrew"]));
+            let age: ArrayRef = Arc::new(Int32Array::from(vec![11, 22]));
+            RecordBatch::try_from_iter(vec![("name", name), ("age", age)]).unwrap()
+        }
+        let batch = employee_batch();
+        let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+
+        let session_state = SessionStateBuilder::new()
+            .with_catalog_list(Arc::new(MemoryCatalogProviderList::new()))
+            .build();
+        let table_ref = session_state.resolve_table_ref("employee").to_string();
+        session_state
+            .schema_for_ref(&table_ref)?
+            .register_table("employee".to_string(), Arc::new(table))?;
+
+        let default_catalog = session_state
+            .config
+            .options()
+            .catalog
+            .default_catalog
+            .clone();
+        let default_schema = session_state
+            .config
+            .options()
+            .catalog
+            .default_schema
+            .clone();
+        let is_exist = session_state
+            .catalog_list()
+            .catalog(default_catalog.as_str())
+            .unwrap()
+            .schema(default_schema.as_str())
+            .unwrap()
+            .table_exist("employee");
+        assert!(is_exist);
+        let new_state = SessionStateBuilder::new_from_existing(session_state).build();
+        assert!(new_state
+            .catalog_list()
+            .catalog(default_catalog.as_str())
+            .unwrap()
+            .schema(default_schema.as_str())
+            .unwrap()
+            .table_exist("employee"));
+
+        // if `with_create_default_catalog_and_schema` is disabled, the new one shouldn't create default catalog and schema
+        let disable_create_default =
+            SessionConfig::default().with_create_default_catalog_and_schema(false);
+        let without_default_state = SessionStateBuilder::new()
+            .with_config(disable_create_default)
+            .build();
+        assert!(without_default_state
+            .catalog_list()
+            .catalog(&default_catalog)
+            .is_none());
+        let new_state =
+            SessionStateBuilder::new_from_existing(without_default_state).build();
+        assert!(new_state.catalog_list().catalog(&default_catalog).is_none());
+        Ok(())
     }
 }

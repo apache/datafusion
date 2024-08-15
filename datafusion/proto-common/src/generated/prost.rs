@@ -49,6 +49,12 @@ pub struct ParquetFormat {
 pub struct AvroFormat {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NdJsonFormat {
+    #[prost(message, optional, tag = "1")]
+    pub options: ::core::option::Option<JsonOptions>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrimaryKeyConstraint {
     #[prost(uint64, repeated, tag = "1")]
     pub indices: ::prost::alloc::vec::Vec<u64>,
@@ -133,6 +139,14 @@ pub struct Timestamp {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Decimal {
+    #[prost(uint32, tag = "3")]
+    pub precision: u32,
+    #[prost(int32, tag = "4")]
+    pub scale: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Decimal256Type {
     #[prost(uint32, tag = "3")]
     pub precision: u32,
     #[prost(int32, tag = "4")]
@@ -446,7 +460,7 @@ pub struct Decimal256 {
 pub struct ArrowType {
     #[prost(
         oneof = "arrow_type::ArrowTypeEnum",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 35, 32, 15, 34, 16, 31, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 35, 32, 15, 34, 16, 31, 17, 18, 19, 20, 21, 22, 23, 24, 36, 25, 26, 27, 28, 29, 30, 33"
     )]
     pub arrow_type_enum: ::core::option::Option<arrow_type::ArrowTypeEnum>,
 }
@@ -516,6 +530,8 @@ pub mod arrow_type {
         Interval(i32),
         #[prost(message, tag = "24")]
         Decimal(super::Decimal),
+        #[prost(message, tag = "36")]
+        Decimal256(super::Decimal256Type),
         #[prost(message, tag = "25")]
         List(::prost::alloc::boxed::Box<super::List>),
         #[prost(message, tag = "26")]
@@ -654,46 +670,55 @@ pub struct TableParquetOptions {
     #[prost(message, optional, tag = "1")]
     pub global: ::core::option::Option<ParquetOptions>,
     #[prost(message, repeated, tag = "2")]
-    pub column_specific_options: ::prost::alloc::vec::Vec<ColumnSpecificOptions>,
+    pub column_specific_options: ::prost::alloc::vec::Vec<ParquetColumnSpecificOptions>,
+    #[prost(map = "string, string", tag = "3")]
+    pub key_value_metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ColumnSpecificOptions {
+pub struct ParquetColumnSpecificOptions {
     #[prost(string, tag = "1")]
     pub column_name: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
-    pub options: ::core::option::Option<ColumnOptions>,
+    pub options: ::core::option::Option<ParquetColumnOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ColumnOptions {
-    #[prost(oneof = "column_options::BloomFilterEnabledOpt", tags = "1")]
+pub struct ParquetColumnOptions {
+    #[prost(oneof = "parquet_column_options::BloomFilterEnabledOpt", tags = "1")]
     pub bloom_filter_enabled_opt: ::core::option::Option<
-        column_options::BloomFilterEnabledOpt,
+        parquet_column_options::BloomFilterEnabledOpt,
     >,
-    #[prost(oneof = "column_options::EncodingOpt", tags = "2")]
-    pub encoding_opt: ::core::option::Option<column_options::EncodingOpt>,
-    #[prost(oneof = "column_options::DictionaryEnabledOpt", tags = "3")]
+    #[prost(oneof = "parquet_column_options::EncodingOpt", tags = "2")]
+    pub encoding_opt: ::core::option::Option<parquet_column_options::EncodingOpt>,
+    #[prost(oneof = "parquet_column_options::DictionaryEnabledOpt", tags = "3")]
     pub dictionary_enabled_opt: ::core::option::Option<
-        column_options::DictionaryEnabledOpt,
+        parquet_column_options::DictionaryEnabledOpt,
     >,
-    #[prost(oneof = "column_options::CompressionOpt", tags = "4")]
-    pub compression_opt: ::core::option::Option<column_options::CompressionOpt>,
-    #[prost(oneof = "column_options::StatisticsEnabledOpt", tags = "5")]
+    #[prost(oneof = "parquet_column_options::CompressionOpt", tags = "4")]
+    pub compression_opt: ::core::option::Option<parquet_column_options::CompressionOpt>,
+    #[prost(oneof = "parquet_column_options::StatisticsEnabledOpt", tags = "5")]
     pub statistics_enabled_opt: ::core::option::Option<
-        column_options::StatisticsEnabledOpt,
+        parquet_column_options::StatisticsEnabledOpt,
     >,
-    #[prost(oneof = "column_options::BloomFilterFppOpt", tags = "6")]
-    pub bloom_filter_fpp_opt: ::core::option::Option<column_options::BloomFilterFppOpt>,
-    #[prost(oneof = "column_options::BloomFilterNdvOpt", tags = "7")]
-    pub bloom_filter_ndv_opt: ::core::option::Option<column_options::BloomFilterNdvOpt>,
-    #[prost(oneof = "column_options::MaxStatisticsSizeOpt", tags = "8")]
+    #[prost(oneof = "parquet_column_options::BloomFilterFppOpt", tags = "6")]
+    pub bloom_filter_fpp_opt: ::core::option::Option<
+        parquet_column_options::BloomFilterFppOpt,
+    >,
+    #[prost(oneof = "parquet_column_options::BloomFilterNdvOpt", tags = "7")]
+    pub bloom_filter_ndv_opt: ::core::option::Option<
+        parquet_column_options::BloomFilterNdvOpt,
+    >,
+    #[prost(oneof = "parquet_column_options::MaxStatisticsSizeOpt", tags = "8")]
     pub max_statistics_size_opt: ::core::option::Option<
-        column_options::MaxStatisticsSizeOpt,
+        parquet_column_options::MaxStatisticsSizeOpt,
     >,
 }
-/// Nested message and enum types in `ColumnOptions`.
-pub mod column_options {
+/// Nested message and enum types in `ParquetColumnOptions`.
+pub mod parquet_column_options {
     #[allow(clippy::derive_partial_eq_without_eq)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum BloomFilterEnabledOpt {
@@ -789,6 +814,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "27")]
     pub bloom_filter_on_write: bool,
+    /// default = false
+    #[prost(bool, tag = "28")]
+    pub schema_force_string_view: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]

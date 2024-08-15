@@ -94,7 +94,7 @@ SELECT regexp_like('aa', '.*-(\d)');
 ----
 false
 
-query ?
+query B
 SELECT regexp_like(NULL, '.*-(\d)');
 ----
 NULL
@@ -104,7 +104,7 @@ SELECT regexp_like('aaa-0', NULL);
 ----
 NULL
 
-query ?
+query B
 SELECT regexp_like(null, '.*-(\d)');
 ----
 NULL
@@ -294,7 +294,7 @@ SELECT regexp_replace('Thomas', '.[mN]a.', 'M');
 ----
 ThM
 
-query ?
+query T
 SELECT regexp_replace(NULL, 'b(..)', 'X\\1Y', 'g');
 ----
 NULL
@@ -324,6 +324,11 @@ query B
 SELECT 'foo\nbar\nbaz' ~ 'bar';
 ----
 true
+
+statement error
+Error during planning: Cannot infer common argument type for regex operation List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata
+: {} }) ~ List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+select [1,2] ~ [3];
 
 query B
 SELECT 'foo\nbar\nbaz' LIKE '%bar%';

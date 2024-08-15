@@ -210,6 +210,9 @@ config_namespace! {
         /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
 
+        /// When set to true, SQL parser will normalize options value (convert value to lowercase)
+        pub enable_options_value_normalization: bool, default = true
+
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
         pub dialect: String, default = "generic".to_string()
@@ -321,6 +324,23 @@ config_namespace! {
 
         /// Should DataFusion keep the columns used for partition_by in the output RecordBatches
         pub keep_partition_by_columns: bool, default = false
+
+        /// Aggregation ratio (number of distinct groups / number of input rows)
+        /// threshold for skipping partial aggregation. If the value is greater
+        /// then partial aggregation will skip aggregation for further input
+        pub skip_partial_aggregation_probe_ratio_threshold: f64, default = 0.8
+
+        /// Number of input rows partial aggregation partition should process, before
+        /// aggregation ratio check and trying to switch to skipping aggregation mode
+        pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
+
+        /// Should DataFusion use row number estimates at the input to decide
+        /// whether increasing parallelism is beneficial or not. By default,
+        /// only exact row numbers (not estimates) are used for this decision.
+        /// Setting this flag to `true` will likely produce better plans.
+        /// if the source of statistics is accurate.
+        /// We plan to make this the default in the future.
+        pub use_row_number_estimates_to_optimize_partitioning: bool, default = false
     }
 }
 
@@ -374,18 +394,21 @@ config_namespace! {
 
         /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
-        pub writer_version: String, default = "1.0".into()
+        pub writer_version: String, default = "1.0".to_string()
 
         /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
+        ///
+        /// Note that this default setting is not the same as
+        /// the default parquet writer setting.
         pub compression: Option<String>, default = Some("zstd(3)".into())
 
         /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
-        pub dictionary_enabled: Option<bool>, default = None
+        pub dictionary_enabled: Option<bool>, default = Some(true)
 
         /// (writing) Sets best effort maximum dictionary page size, in bytes
         pub dictionary_page_size_limit: usize, default = 1024 * 1024
@@ -394,25 +417,25 @@ config_namespace! {
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub statistics_enabled: Option<String>, default = None
+        pub statistics_enabled: Option<String>, default = Some("page".into())
 
         /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
-        pub max_statistics_size: Option<usize>, default = None
+        pub max_statistics_size: Option<usize>, default = Some(4096)
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
         /// can get better compression and be faster to read.
-        pub max_row_group_size: usize, default = 1024 * 1024
+        pub max_row_group_size: usize, default =  1024 * 1024
 
         /// (writing) Sets "created by" property
         pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
 
         /// (writing) Sets column index truncate length
-        pub column_index_truncate_length: Option<usize>, default = None
+        pub column_index_truncate_length: Option<usize>, default = Some(64)
 
         /// (writing) Sets best effort maximum number of rows in data page
-        pub data_page_row_count_limit: usize, default = usize::MAX
+        pub data_page_row_count_limit: usize, default = 20_000
 
         /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,
@@ -463,6 +486,10 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
+
+        /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
+        /// and `Binary/BinaryLarge` with `BinaryView`.
+        pub schema_force_string_view: bool, default = false
     }
 }
 
@@ -1204,7 +1231,7 @@ impl ConfigField for TableOptions {
     /// # Parameters
     ///
     /// * `key`: The configuration key specifying which setting to adjust, prefixed with the format (e.g., "format.delimiter")
-    /// for CSV format.
+    ///   for CSV format.
     /// * `value`: The value to set for the specified configuration key.
     ///
     /// # Returns
@@ -1408,7 +1435,7 @@ pub struct TableParquetOptions {
     /// Global Parquet options that propagates to all columns.
     pub global: ParquetOptions,
     /// Column specific options. Default usage is parquet.XX::column.
-    pub column_specific_options: HashMap<String, ColumnOptions>,
+    pub column_specific_options: HashMap<String, ParquetColumnOptions>,
     /// Additional file-level metadata to include. Inserted into the key_value_metadata
     /// for the written [`FileMetaData`](https://docs.rs/parquet/latest/parquet/file/metadata/struct.FileMetaData.html).
     ///
@@ -1549,7 +1576,7 @@ config_namespace_with_hashmap! {
     /// Options controlling parquet format for individual columns.
     ///
     /// See [`ParquetOptions`] for more details
-    pub struct ColumnOptions {
+    pub struct ParquetColumnOptions {
         /// Sets if bloom filter is enabled for the column path.
         pub bloom_filter_enabled: Option<bool>, default = None
 

@@ -30,6 +30,7 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{Expr, LogicalPlan};
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
+use crate::analyzer::expand_wildcard_rule::ExpandWildcardRule;
 use crate::analyzer::inline_table_scan::InlineTableScan;
 use crate::analyzer::subquery::check_subquery_expr;
 use crate::analyzer::type_coercion::TypeCoercion;
@@ -38,6 +39,7 @@ use crate::utils::log_plan;
 use self::function_rewrite::ApplyFunctionRewrites;
 
 pub mod count_wildcard_rule;
+pub mod expand_wildcard_rule;
 pub mod function_rewrite;
 pub mod inline_table_scan;
 pub mod subquery;
@@ -89,6 +91,9 @@ impl Analyzer {
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
             Arc::new(InlineTableScan::new()),
+            // Every rule that will generate [Expr::Wildcard] should be placed in front of [ExpandWildcardRule].
+            Arc::new(ExpandWildcardRule::new()),
+            // [Expr::Wildcard] should be expanded before [TypeCoercion]
             Arc::new(TypeCoercion::new()),
             Arc::new(CountWildcardRule::new()),
         ];
@@ -136,9 +141,15 @@ impl Analyzer {
         // Note this is run before all other rules since it rewrites based on
         // the argument types (List or Scalar), and TypeCoercion may cast the
         // argument types from Scalar to List.
-        let expr_to_function: Arc<dyn AnalyzerRule + Send + Sync> =
-            Arc::new(ApplyFunctionRewrites::new(self.function_rewrites.clone()));
-        let rules = std::iter::once(&expr_to_function).chain(self.rules.iter());
+        let expr_to_function: Option<Arc<dyn AnalyzerRule + Send + Sync>> =
+            if self.function_rewrites.is_empty() {
+                None
+            } else {
+                Some(Arc::new(ApplyFunctionRewrites::new(
+                    self.function_rewrites.clone(),
+                )))
+            };
+        let rules = expr_to_function.iter().chain(self.rules.iter());
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in rules {

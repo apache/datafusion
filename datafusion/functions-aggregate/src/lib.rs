@@ -52,7 +52,7 @@
 //! 3. Add a new feature to `Cargo.toml`, with any optional dependencies
 //!
 //! 4. Use the `make_package!` macro to expose the module when the
-//! feature is enabled.
+//!    feature is enabled.
 
 #[macro_use]
 pub mod macros;
@@ -65,6 +65,7 @@ pub mod covariance;
 pub mod first_last;
 pub mod hyperloglog;
 pub mod median;
+pub mod min_max;
 pub mod regr;
 pub mod stddev;
 pub mod sum;
@@ -90,7 +91,7 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
-    pub use super::approx_distinct;
+    pub use super::approx_distinct::approx_distinct;
     pub use super::approx_median::approx_median;
     pub use super::approx_percentile_cont::approx_percentile_cont;
     pub use super::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight;
@@ -110,7 +111,8 @@ pub mod expr_fn {
     pub use super::first_last::last_value;
     pub use super::grouping::grouping;
     pub use super::median::median;
-    pub use super::nth_value::nth_value;
+    pub use super::min_max::max;
+    pub use super::min_max::min;
     pub use super::regr::regr_avgx;
     pub use super::regr::regr_avgy;
     pub use super::regr::regr_count;
@@ -137,6 +139,8 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         covariance::covar_pop_udaf(),
         correlation::corr_udaf(),
         sum::sum_udaf(),
+        min_max::max_udaf(),
+        min_max::min_udaf(),
         median::median_udaf(),
         count::count_udaf(),
         regr::regr_slope_udaf(),
@@ -192,11 +196,11 @@ mod tests {
     #[test]
     fn test_no_duplicate_name() -> Result<()> {
         let mut names = HashSet::new();
+        let migrated_functions = ["array_agg", "count", "max", "min"];
         for func in all_default_aggregate_functions() {
             // TODO: remove this
-            // These functions are in intermidiate migration state, skip them
-            let name_lower_case = func.name().to_lowercase();
-            if name_lower_case == "count" || name_lower_case == "array_agg" {
+            // These functions are in intermediate migration state, skip them
+            if migrated_functions.contains(&func.name().to_lowercase().as_str()) {
                 continue;
             }
             assert!(

@@ -40,8 +40,12 @@ use std::sync::Arc;
 pub enum OutputType {
     /// `StringArray` or `LargeStringArray`
     Utf8,
+    /// `StringViewArray`
+    Utf8View,
     /// `BinaryArray` or `LargeBinaryArray`
     Binary,
+    /// `BinaryViewArray`
+    BinaryView,
 }
 
 /// HashSet optimized for storing string or binary values that can produce that
@@ -56,7 +60,7 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
 
     /// Return the contents of this set and replace it with a new empty
     /// set with the same output type
-    pub(super) fn take(&mut self) -> Self {
+    pub fn take(&mut self) -> Self {
         Self(self.0.take())
     }
 
@@ -113,13 +117,13 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
 /// This is a specialized HashMap with the following properties:
 ///
 /// 1. Optimized for storing and emitting Arrow byte types  (e.g.
-/// `StringArray` / `BinaryArray`) very efficiently by minimizing copying of
-/// the string values themselves, both when inserting and when emitting the
-/// final array.
+///    `StringArray` / `BinaryArray`) very efficiently by minimizing copying of
+///    the string values themselves, both when inserting and when emitting the
+///    final array.
 ///
 ///
 /// 2. Retains the insertion order of entries in the final array. The values are
-/// in the same order as they were inserted.
+///    in the same order as they were inserted.
 ///
 /// Note this structure can be used as a `HashSet` by specifying the value type
 /// as `()`, as is done by [`ArrowBytesSet`].
@@ -134,18 +138,18 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
 /// "Foo", NULL, "Bar", "TheQuickBrownFox":
 ///
 /// * `hashtable` stores entries for each distinct string that has been
-/// inserted. The entries contain the payload as well as information about the
-/// value (either an offset or the actual bytes, see `Entry` docs for more
-/// details)
+///   inserted. The entries contain the payload as well as information about the
+///   value (either an offset or the actual bytes, see `Entry` docs for more
+///   details)
 ///
 /// * `offsets` stores offsets into `buffer` for each distinct string value,
-/// following the same convention as the offsets in a `StringArray` or
-/// `LargeStringArray`.
+///   following the same convention as the offsets in a `StringArray` or
+///   `LargeStringArray`.
 ///
 /// * `buffer` stores the actual byte data
 ///
 /// * `null`: stores the index and payload of the null value, in this case the
-/// second value (index 1)
+///   second value (index 1)
 ///
 /// ```text
 /// ┌───────────────────────────────────┐    ┌─────┐    ┌────┐
@@ -318,6 +322,7 @@ where
                     observe_payload_fn,
                 )
             }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         };
     }
 
@@ -516,6 +521,7 @@ where
                     GenericStringArray::new_unchecked(offsets, values, nulls)
                 })
             }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
     }
 

@@ -131,7 +131,7 @@ impl FileFormat for TSVFileFormat {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 /// Factory for creating TSV file formats
 ///
 /// This factory is a wrapper around the CSV file format factory
@@ -165,6 +165,10 @@ impl FileFormatFactory for TSVFileFactory {
 
     fn default(&self) -> std::sync::Arc<dyn FileFormat> {
         todo!()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

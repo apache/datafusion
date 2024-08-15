@@ -19,10 +19,7 @@
 use async_trait::async_trait;
 use datafusion::{
     arrow::util::pretty,
-    catalog::{
-        schema::SchemaProvider,
-        {CatalogProvider, CatalogProviderList},
-    },
+    catalog::{CatalogProvider, CatalogProviderList, SchemaProvider},
     datasource::{
         file_format::{csv::CsvFormat, FileFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
@@ -47,7 +44,7 @@ async fn main() -> Result<()> {
     let dir_a = prepare_example_data()?;
     let dir_b = prepare_example_data()?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let state = ctx.state();
     let catlist = Arc::new(CustomCatalogProviderList::new());
 

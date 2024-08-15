@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
 use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
@@ -59,6 +59,7 @@ pub struct FilterExec {
     metrics: ExecutionPlanMetricsSet,
     /// Selectivity for statistics. 0 = no rows, 100 = all rows
     default_selectivity: u8,
+    /// Properties equivalence properties, partitioning, etc.
     cache: PlanProperties,
 }
 
@@ -125,7 +126,7 @@ impl FilterExec {
         let schema = input.schema();
         if !check_support(predicate, &schema) {
             let selectivity = default_selectivity as f64 / 100.0;
-            let mut stats = input_stats.into_inexact();
+            let mut stats = input_stats.to_inexact();
             stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
             stats.total_byte_size = stats
                 .total_byte_size
@@ -323,7 +324,7 @@ fn collect_new_statistics(
                     (Precision::Inexact(lower), Precision::Inexact(upper))
                 };
                 ColumnStatistics {
-                    null_count: input_column_stats[idx].null_count.clone().to_inexact(),
+                    null_count: input_column_stats[idx].null_count.to_inexact(),
                     max_value,
                     min_value,
                     distinct_count: distinct_count.to_inexact(),
@@ -375,26 +376,20 @@ impl Stream for FilterExecStream {
     ) -> Poll<Option<Self::Item>> {
         let poll;
         loop {
-            match self.input.poll_next_unpin(cx) {
-                Poll::Ready(value) => match value {
-                    Some(Ok(batch)) => {
-                        let timer = self.baseline_metrics.elapsed_compute().timer();
-                        let filtered_batch = batch_filter(&batch, &self.predicate)?;
-                        // skip entirely filtered batches
-                        if filtered_batch.num_rows() == 0 {
-                            continue;
-                        }
-                        timer.done();
-                        poll = Poll::Ready(Some(Ok(filtered_batch)));
-                        break;
+            match ready!(self.input.poll_next_unpin(cx)) {
+                Some(Ok(batch)) => {
+                    let timer = self.baseline_metrics.elapsed_compute().timer();
+                    let filtered_batch = batch_filter(&batch, &self.predicate)?;
+                    timer.done();
+                    // skip entirely filtered batches
+                    if filtered_batch.num_rows() == 0 {
+                        continue;
                     }
-                    _ => {
-                        poll = Poll::Ready(value);
-                        break;
-                    }
-                },
-                Poll::Pending => {
-                    poll = Poll::Pending;
+                    poll = Poll::Ready(Some(Ok(filtered_batch)));
+                    break;
+                }
+                value => {
+                    poll = Poll::Ready(value);
                     break;
                 }
             }

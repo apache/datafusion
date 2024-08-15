@@ -189,14 +189,14 @@ mod tests {
     async fn write_parquet_with_small_rg_size() -> Result<()> {
         // This test verifies writing a parquet file with small rg size
         // relative to datafusion.execution.batch_size does not panic
-        let mut ctx = SessionContext::new_with_config(
-            SessionConfig::from_string_hash_map(HashMap::from_iter(
+        let ctx = SessionContext::new_with_config(SessionConfig::from_string_hash_map(
+            HashMap::from_iter(
                 [("datafusion.execution.batch_size", "10")]
                     .iter()
                     .map(|(s1, s2)| (s1.to_string(), s2.to_string())),
-            ))?,
-        );
-        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
+            ),
+        )?);
+        register_aggregate_csv(&ctx, "aggregate_test_100").await?;
         let test_df = ctx.table("aggregate_test_100").await?;
 
         let output_path = "file://local/test.parquet";

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Float64Array};
 use arrow::compute::{binary, cast, date_part, DatePart};
 use arrow::datatypes::DataType::{
-    Date32, Date64, Float64, Time32, Time64, Timestamp, Utf8,
+    Date32, Date64, Float64, Time32, Time64, Timestamp, Utf8, Utf8View,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
@@ -56,31 +56,57 @@ impl DatePartFunc {
             signature: Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![Utf8View, Timestamp(Nanosecond, None)]),
                     Exact(vec![
                         Utf8,
                         Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
+                    Exact(vec![
+                        Utf8View,
+                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
+                    Exact(vec![Utf8View, Timestamp(Millisecond, None)]),
                     Exact(vec![
                         Utf8,
                         Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
+                    Exact(vec![
+                        Utf8View,
+                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
+                    Exact(vec![Utf8View, Timestamp(Microsecond, None)]),
                     Exact(vec![
                         Utf8,
                         Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
+                    Exact(vec![
+                        Utf8View,
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![Utf8View, Timestamp(Second, None)]),
                     Exact(vec![
                         Utf8,
                         Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
                     ]),
+                    Exact(vec![
+                        Utf8View,
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Date64]),
+                    Exact(vec![Utf8View, Date64]),
                     Exact(vec![Utf8, Date32]),
+                    Exact(vec![Utf8View, Date32]),
                     Exact(vec![Utf8, Time32(Second)]),
+                    Exact(vec![Utf8View, Time32(Second)]),
                     Exact(vec![Utf8, Time32(Millisecond)]),
+                    Exact(vec![Utf8View, Time32(Millisecond)]),
                     Exact(vec![Utf8, Time64(Microsecond)]),
+                    Exact(vec![Utf8View, Time64(Microsecond)]),
                     Exact(vec![Utf8, Time64(Nanosecond)]),
+                    Exact(vec![Utf8View, Time64(Nanosecond)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -113,6 +139,8 @@ impl ScalarUDFImpl for DatePartFunc {
         let (part, array) = (&args[0], &args[1]);
 
         let part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = part {
+            v
+        } else if let ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v))) = part {
             v
         } else {
             return exec_err!(

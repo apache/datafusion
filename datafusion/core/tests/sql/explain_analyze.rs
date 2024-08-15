@@ -253,7 +253,7 @@ async fn csv_explain_plans() {
 
     // Optimized logical plan
     let state = ctx.state();
-    let msg = format!("Optimizing logical plan for '{sql}': {plan:?}");
+    let msg = format!("Optimizing logical plan for '{sql}': {plan}");
     let plan = state.optimize(plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
@@ -327,7 +327,7 @@ async fn csv_explain_plans() {
 
     // Physical plan
     // Create plan
-    let msg = format!("Creating physical plan for '{sql}': {plan:?}");
+    let msg = format!("Creating physical plan for '{sql}': {plan}");
     let plan = state.create_physical_plan(&plan).await.expect(&msg);
     //
     // Execute plan
@@ -548,7 +548,7 @@ async fn csv_explain_verbose_plans() {
 
     // Physical plan
     // Create plan
-    let msg = format!("Creating physical plan for '{sql}': {plan:?}");
+    let msg = format!("Creating physical plan for '{sql}': {plan}");
     let plan = state.create_physical_plan(&plan).await.expect(&msg);
     //
     // Execute plan
@@ -615,11 +615,11 @@ async fn test_physical_plan_display_indent() {
         "GlobalLimitExec: skip=0, fetch=10",
         "  SortPreservingMergeExec: [the_min@2 DESC], fetch=10",
         "    SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]",
-        "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
-        "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
+        "      ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]",
+        "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",
         "            RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
-        "              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
+        "              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]",
         "                CoalesceBatchesExec: target_batch_size=4096",
         "                  FilterExec: c12@1 < 10",
         "                    RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",

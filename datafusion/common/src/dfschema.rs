@@ -521,34 +521,8 @@ impl DFSchema {
 
     /// Find the field with the given name
     pub fn field_with_unqualified_name(&self, name: &str) -> Result<&Field> {
-        let matches = self.qualified_fields_with_unqualified_name(name);
-        match matches.len() {
-            0 => Err(unqualified_field_not_found(name, self)),
-            1 => Ok(matches[0].1),
-            _ => {
-                // When `matches` size > 1, it doesn't necessarily mean an `ambiguous name` problem.
-                // Because name may generate from Alias/... . It means that it don't own qualifier.
-                // For example:
-                //             Join on id = b.id
-                // Project a.id as id   TableScan b id
-                // In this case, there isn't `ambiguous name` problem. When `matches` just contains
-                // one field without qualifier, we should return it.
-                let fields_without_qualifier = matches
-                    .iter()
-                    .filter(|(q, _)| q.is_none())
-                    .collect::<Vec<_>>();
-                if fields_without_qualifier.len() == 1 {
-                    Ok(fields_without_qualifier[0].1)
-                } else {
-                    _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column {
-                            relation: None,
-                            name: name.to_string(),
-                        },
-                    })
-                }
-            }
-        }
+        self.qualified_field_with_unqualified_name(name)
+            .map(|(_, field)| field)
     }
 
     /// Find the field with the given qualified name

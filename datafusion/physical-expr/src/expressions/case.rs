@@ -32,8 +32,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-use datafusion_physical_expr_common::expressions::column::Column;
-use datafusion_physical_expr_common::expressions::Literal;
+use super::{Column, Literal};
 use itertools::Itertools;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
@@ -548,8 +547,8 @@ pub fn case(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{binary, cast, col, lit, BinaryExpr};
 
+    use crate::expressions::{binary, cast, col, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
@@ -558,7 +557,6 @@ mod tests {
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr_common::expressions::Literal;
 
     #[test]
     fn case_with_expr() -> Result<()> {
@@ -1148,7 +1146,7 @@ mod tests {
             if i % 7 == 0 {
                 c2.append_null();
             } else {
-                c2.append_value(&format!("string {i}"));
+                c2.append_value(format!("string {i}"));
             }
         }
         let c1 = Arc::new(c1.finish());

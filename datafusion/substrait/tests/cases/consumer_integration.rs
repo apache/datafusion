@@ -55,7 +55,7 @@ mod tests {
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
 
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(
             plan_str,
             "Projection: FILENAME_PLACEHOLDER_0.l_returnflag AS L_RETURNFLAG, FILENAME_PLACEHOLDER_0.l_linestatus AS L_LINESTATUS, sum(FILENAME_PLACEHOLDER_0.l_quantity) AS SUM_QTY, sum(FILENAME_PLACEHOLDER_0.l_extendedprice) AS SUM_BASE_PRICE, sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount) AS SUM_DISC_PRICE, sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount * Int32(1) + FILENAME_PLACEHOLDER_0.l_tax) AS SUM_CHARGE, avg(FILENAME_PLACEHOLDER_0.l_quantity) AS AVG_QTY, avg(FILENAME_PLACEHOLDER_0.l_extendedprice) AS AVG_PRICE, avg(FILENAME_PLACEHOLDER_0.l_discount) AS AVG_DISC, count(Int64(1)) AS COUNT_ORDER\
@@ -89,7 +89,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(
             plan_str,
             "Projection: FILENAME_PLACEHOLDER_1.s_acctbal AS S_ACCTBAL, FILENAME_PLACEHOLDER_1.s_name AS S_NAME, FILENAME_PLACEHOLDER_3.n_name AS N_NAME, FILENAME_PLACEHOLDER_0.p_partkey AS P_PARTKEY, FILENAME_PLACEHOLDER_0.p_mfgr AS P_MFGR, FILENAME_PLACEHOLDER_1.s_address AS S_ADDRESS, FILENAME_PLACEHOLDER_1.s_phone AS S_PHONE, FILENAME_PLACEHOLDER_1.s_comment AS S_COMMENT\
@@ -98,7 +98,7 @@ mod tests {
             \n      Projection: FILENAME_PLACEHOLDER_1.s_acctbal, FILENAME_PLACEHOLDER_1.s_name, FILENAME_PLACEHOLDER_3.n_name, FILENAME_PLACEHOLDER_0.p_partkey, FILENAME_PLACEHOLDER_0.p_mfgr, FILENAME_PLACEHOLDER_1.s_address, FILENAME_PLACEHOLDER_1.s_phone, FILENAME_PLACEHOLDER_1.s_comment\
             \n        Filter: FILENAME_PLACEHOLDER_0.p_partkey = FILENAME_PLACEHOLDER_2.ps_partkey AND FILENAME_PLACEHOLDER_1.s_suppkey = FILENAME_PLACEHOLDER_2.ps_suppkey AND FILENAME_PLACEHOLDER_0.p_size = Int32(15) AND FILENAME_PLACEHOLDER_0.p_type LIKE CAST(Utf8(\"%BRASS\") AS Utf8) AND FILENAME_PLACEHOLDER_1.s_nationkey = FILENAME_PLACEHOLDER_3.n_nationkey AND FILENAME_PLACEHOLDER_3.n_regionkey = FILENAME_PLACEHOLDER_4.r_regionkey AND FILENAME_PLACEHOLDER_4.r_name = CAST(Utf8(\"EUROPE\") AS Utf8) AND FILENAME_PLACEHOLDER_2.ps_supplycost = (<subquery>)\
             \n          Subquery:\
-            \n            Aggregate: groupBy=[[]], aggr=[[MIN(FILENAME_PLACEHOLDER_5.ps_supplycost)]]\
+            \n            Aggregate: groupBy=[[]], aggr=[[min(FILENAME_PLACEHOLDER_5.ps_supplycost)]]\
             \n              Projection: FILENAME_PLACEHOLDER_5.ps_supplycost\
             \n                Filter: FILENAME_PLACEHOLDER_5.ps_partkey = FILENAME_PLACEHOLDER_5.ps_partkey AND FILENAME_PLACEHOLDER_6.s_suppkey = FILENAME_PLACEHOLDER_5.ps_suppkey AND FILENAME_PLACEHOLDER_6.s_nationkey = FILENAME_PLACEHOLDER_7.n_nationkey AND FILENAME_PLACEHOLDER_7.n_regionkey = FILENAME_PLACEHOLDER_8.r_regionkey AND FILENAME_PLACEHOLDER_8.r_name = CAST(Utf8(\"EUROPE\") AS Utf8)\
             \n                  Inner Join:  Filter: Boolean(true)\
@@ -136,7 +136,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: FILENAME_PLACEHOLDER_2.l_orderkey AS L_ORDERKEY, sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount) AS REVENUE, FILENAME_PLACEHOLDER_1.o_orderdate AS O_ORDERDATE, FILENAME_PLACEHOLDER_1.o_shippriority AS O_SHIPPRIORITY\
         \n  Limit: skip=0, fetch=10\
         \n    Sort: sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount) DESC NULLS FIRST, FILENAME_PLACEHOLDER_1.o_orderdate ASC NULLS LAST\
@@ -164,7 +164,7 @@ mod tests {
         ))
         .expect("failed to parse json");
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: FILENAME_PLACEHOLDER_0.o_orderpriority AS O_ORDERPRIORITY, count(Int64(1)) AS ORDER_COUNT\
         \n  Sort: FILENAME_PLACEHOLDER_0.o_orderpriority ASC NULLS LAST\
         \n    Aggregate: groupBy=[[FILENAME_PLACEHOLDER_0.o_orderpriority]], aggr=[[count(Int64(1))]]\
@@ -195,7 +195,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: NATION.n_name AS N_NAME, sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount) AS REVENUE\
         \n  Sort: sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount) DESC NULLS FIRST\
         \n    Aggregate: groupBy=[[NATION.n_name]], aggr=[[sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount)]]\
@@ -229,7 +229,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Aggregate: groupBy=[[]], aggr=[[sum(FILENAME_PLACEHOLDER_0.l_extendedprice * FILENAME_PLACEHOLDER_0.l_discount) AS REVENUE]]\
         \n  Projection: FILENAME_PLACEHOLDER_0.l_extendedprice * FILENAME_PLACEHOLDER_0.l_discount\
         \n    Filter: FILENAME_PLACEHOLDER_0.l_shipdate >= CAST(Utf8(\"1994-01-01\") AS Date32) AND FILENAME_PLACEHOLDER_0.l_shipdate < CAST(Utf8(\"1995-01-01\") AS Date32) AND FILENAME_PLACEHOLDER_0.l_discount >= Decimal128(Some(5),3,2) AND FILENAME_PLACEHOLDER_0.l_discount <= Decimal128(Some(7),3,2) AND FILENAME_PLACEHOLDER_0.l_quantity < CAST(Int32(24) AS Decimal128(19, 0))\
@@ -254,7 +254,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: FILENAME_PLACEHOLDER_0.c_custkey AS C_CUSTKEY, FILENAME_PLACEHOLDER_0.c_name AS C_NAME, sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount) AS REVENUE, FILENAME_PLACEHOLDER_0.c_acctbal AS C_ACCTBAL, FILENAME_PLACEHOLDER_3.n_name AS N_NAME, FILENAME_PLACEHOLDER_0.c_address AS C_ADDRESS, FILENAME_PLACEHOLDER_0.c_phone AS C_PHONE, FILENAME_PLACEHOLDER_0.c_comment AS C_COMMENT\
         \n  Limit: skip=0, fetch=20\
         \n    Sort: sum(FILENAME_PLACEHOLDER_2.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_2.l_discount) DESC NULLS FIRST\
@@ -289,7 +289,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: FILENAME_PLACEHOLDER_0.ps_partkey AS PS_PARTKEY, sum(FILENAME_PLACEHOLDER_0.ps_supplycost * FILENAME_PLACEHOLDER_0.ps_availqty) AS value\
         \n  Sort: sum(FILENAME_PLACEHOLDER_0.ps_supplycost * FILENAME_PLACEHOLDER_0.ps_availqty) DESC NULLS FIRST\
         \n    Filter: sum(FILENAME_PLACEHOLDER_0.ps_supplycost * FILENAME_PLACEHOLDER_0.ps_availqty) > (<subquery>)\
@@ -329,7 +329,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: count(FILENAME_PLACEHOLDER_1.o_orderkey) AS C_COUNT, count(Int64(1)) AS CUSTDIST\
         \n  Sort: count(Int64(1)) DESC NULLS FIRST, count(FILENAME_PLACEHOLDER_1.o_orderkey) DESC NULLS FIRST\
         \n    Projection: count(FILENAME_PLACEHOLDER_1.o_orderkey), count(Int64(1))\
@@ -357,9 +357,9 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
-        assert_eq!(plan_str, "Projection: Decimal128(Some(10000),5,2) * sum(CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE CAST(Utf8(\"PROMO%\") AS Utf8) THEN FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount ELSE Decimal128(Some(0),19,0) END) / sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount) AS PROMO_REVENUE\
-        \n  Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE CAST(Utf8(\"PROMO%\") AS Utf8) THEN FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount ELSE Decimal128(Some(0),19,0) END), sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount)]]\
+        let plan_str = format!("{}", plan);
+        assert_eq!(plan_str, "Projection: Decimal128(Some(10000),5,2) * sum(CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE Utf8(\"PROMO%\") THEN FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount ELSE Decimal128(Some(0),19,0) END) / sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount) AS PROMO_REVENUE\
+        \n  Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE Utf8(\"PROMO%\") THEN FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount ELSE Decimal128(Some(0),19,0) END), sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount)]]\
         \n    Projection: CASE WHEN FILENAME_PLACEHOLDER_1.p_type LIKE CAST(Utf8(\"PROMO%\") AS Utf8) THEN FILENAME_PLACEHOLDER_0.l_extendedprice * (CAST(Int32(1) AS Decimal128(19, 0)) - FILENAME_PLACEHOLDER_0.l_discount) ELSE Decimal128(Some(0),19,0) END, FILENAME_PLACEHOLDER_0.l_extendedprice * (CAST(Int32(1) AS Decimal128(19, 0)) - FILENAME_PLACEHOLDER_0.l_discount)\
         \n      Filter: FILENAME_PLACEHOLDER_0.l_partkey = FILENAME_PLACEHOLDER_1.p_partkey AND FILENAME_PLACEHOLDER_0.l_shipdate >= Date32(\"1995-09-01\") AND FILENAME_PLACEHOLDER_0.l_shipdate < CAST(Utf8(\"1995-10-01\") AS Date32)\
         \n        Inner Join:  Filter: Boolean(true)\
@@ -383,7 +383,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: FILENAME_PLACEHOLDER_1.p_brand AS P_BRAND, FILENAME_PLACEHOLDER_1.p_type AS P_TYPE, FILENAME_PLACEHOLDER_1.p_size AS P_SIZE, count(DISTINCT FILENAME_PLACEHOLDER_0.ps_suppkey) AS SUPPLIER_CNT\
         \n  Sort: count(DISTINCT FILENAME_PLACEHOLDER_0.ps_suppkey) DESC NULLS FIRST, FILENAME_PLACEHOLDER_1.p_brand ASC NULLS LAST, FILENAME_PLACEHOLDER_1.p_type ASC NULLS LAST, FILENAME_PLACEHOLDER_1.p_size ASC NULLS LAST\
         \n    Aggregate: groupBy=[[FILENAME_PLACEHOLDER_1.p_brand, FILENAME_PLACEHOLDER_1.p_type, FILENAME_PLACEHOLDER_1.p_size]], aggr=[[count(DISTINCT FILENAME_PLACEHOLDER_0.ps_suppkey)]]\
@@ -434,7 +434,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: FILENAME_PLACEHOLDER_0.c_name AS C_NAME, FILENAME_PLACEHOLDER_0.c_custkey AS C_CUSTKEY, FILENAME_PLACEHOLDER_1.o_orderkey AS O_ORDERKEY, FILENAME_PLACEHOLDER_1.o_orderdate AS O_ORDERDATE, FILENAME_PLACEHOLDER_1.o_totalprice AS O_TOTALPRICE, sum(FILENAME_PLACEHOLDER_2.l_quantity) AS EXPR$5\
         \n  Limit: skip=0, fetch=100\
         \n    Sort: FILENAME_PLACEHOLDER_1.o_totalprice DESC NULLS FIRST, FILENAME_PLACEHOLDER_1.o_orderdate ASC NULLS LAST\
@@ -468,7 +468,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Aggregate: groupBy=[[]], aggr=[[sum(FILENAME_PLACEHOLDER_0.l_extendedprice * Int32(1) - FILENAME_PLACEHOLDER_0.l_discount) AS REVENUE]]\n  Projection: FILENAME_PLACEHOLDER_0.l_extendedprice * (CAST(Int32(1) AS Decimal128(19, 0)) - FILENAME_PLACEHOLDER_0.l_discount)\
         \n    Filter: FILENAME_PLACEHOLDER_1.p_partkey = FILENAME_PLACEHOLDER_0.l_partkey AND FILENAME_PLACEHOLDER_1.p_brand = CAST(Utf8(\"Brand#12\") AS Utf8) AND (FILENAME_PLACEHOLDER_1.p_container = Utf8(\"SM CASE\") OR FILENAME_PLACEHOLDER_1.p_container = Utf8(\"SM BOX\") OR FILENAME_PLACEHOLDER_1.p_container = Utf8(\"SM PACK\") OR FILENAME_PLACEHOLDER_1.p_container = Utf8(\"SM PKG\")) AND FILENAME_PLACEHOLDER_0.l_quantity >= CAST(Int32(1) AS Decimal128(19, 0)) AND FILENAME_PLACEHOLDER_0.l_quantity <= CAST(Int32(1) + Int32(10) AS Decimal128(19, 0)) AND FILENAME_PLACEHOLDER_1.p_size >= Int32(1) AND FILENAME_PLACEHOLDER_1.p_size <= Int32(5) AND (FILENAME_PLACEHOLDER_0.l_shipmode = Utf8(\"AIR\") OR FILENAME_PLACEHOLDER_0.l_shipmode = Utf8(\"AIR REG\")) AND FILENAME_PLACEHOLDER_0.l_shipinstruct = CAST(Utf8(\"DELIVER IN PERSON\") AS Utf8) OR FILENAME_PLACEHOLDER_1.p_partkey = FILENAME_PLACEHOLDER_0.l_partkey AND FILENAME_PLACEHOLDER_1.p_brand = CAST(Utf8(\"Brand#23\") AS Utf8) AND (FILENAME_PLACEHOLDER_1.p_container = Utf8(\"MED BAG\") OR FILENAME_PLACEHOLDER_1.p_container = Utf8(\"MED BOX\") OR FILENAME_PLACEHOLDER_1.p_container = Utf8(\"MED PKG\") OR FILENAME_PLACEHOLDER_1.p_container = Utf8(\"MED PACK\")) AND FILENAME_PLACEHOLDER_0.l_quantity >= CAST(Int32(10) AS Decimal128(19, 0)) AND FILENAME_PLACEHOLDER_0.l_quantity <= CAST(Int32(10) + Int32(10) AS Decimal128(19, 0)) AND FILENAME_PLACEHOLDER_1.p_size >= Int32(1) AND FILENAME_PLACEHOLDER_1.p_size <= Int32(10) AND (FILENAME_PLACEHOLDER_0.l_shipmode = Utf8(\"AIR\") OR FILENAME_PLACEHOLDER_0.l_shipmode = Utf8(\"AIR REG\")) AND FILENAME_PLACEHOLDER_0.l_shipinstruct = CAST(Utf8(\"DELIVER IN PERSON\") AS Utf8) OR FILENAME_PLACEHOLDER_1.p_partkey = FILENAME_PLACEHOLDER_0.l_partkey AND FILENAME_PLACEHOLDER_1.p_brand = CAST(Utf8(\"Brand#34\") AS Utf8) AND (FILENAME_PLACEHOLDER_1.p_container = Utf8(\"LG CASE\") OR FILENAME_PLACEHOLDER_1.p_container = Utf8(\"LG BOX\") OR FILENAME_PLACEHOLDER_1.p_container = Utf8(\"LG PACK\") OR FILENAME_PLACEHOLDER_1.p_container = Utf8(\"LG PKG\")) AND FILENAME_PLACEHOLDER_0.l_quantity >= CAST(Int32(20) AS Decimal128(19, 0)) AND FILENAME_PLACEHOLDER_0.l_quantity <= CAST(Int32(20) + Int32(10) AS Decimal128(19, 0)) AND FILENAME_PLACEHOLDER_1.p_size >= Int32(1) AND FILENAME_PLACEHOLDER_1.p_size <= Int32(15) AND (FILENAME_PLACEHOLDER_0.l_shipmode = Utf8(\"AIR\") OR FILENAME_PLACEHOLDER_0.l_shipmode = Utf8(\"AIR REG\")) AND FILENAME_PLACEHOLDER_0.l_shipinstruct = CAST(Utf8(\"DELIVER IN PERSON\") AS Utf8)\
         \n      Inner Join:  Filter: Boolean(true)\
@@ -494,7 +494,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: FILENAME_PLACEHOLDER_0.s_name AS S_NAME, FILENAME_PLACEHOLDER_0.s_address AS S_ADDRESS\
         \n  Sort: FILENAME_PLACEHOLDER_0.s_name ASC NULLS LAST\
         \n    Projection: FILENAME_PLACEHOLDER_0.s_name, FILENAME_PLACEHOLDER_0.s_address\
@@ -537,7 +537,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: FILENAME_PLACEHOLDER_0.s_name AS S_NAME, count(Int64(1)) AS NUMWAIT\
         \n  Limit: skip=0, fetch=100\
         \n    Sort: count(Int64(1)) DESC NULLS FIRST, FILENAME_PLACEHOLDER_0.s_name ASC NULLS LAST\
@@ -574,7 +574,7 @@ mod tests {
         .expect("failed to parse json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
-        let plan_str = format!("{:?}", plan);
+        let plan_str = format!("{}", plan);
         assert_eq!(plan_str, "Projection: substr(FILENAME_PLACEHOLDER_0.c_phone,Int32(1),Int32(2)) AS CNTRYCODE, count(Int64(1)) AS NUMCUST, sum(FILENAME_PLACEHOLDER_0.c_acctbal) AS TOTACCTBAL\n  Sort: substr(FILENAME_PLACEHOLDER_0.c_phone,Int32(1),Int32(2)) ASC NULLS LAST\
         \n    Aggregate: groupBy=[[substr(FILENAME_PLACEHOLDER_0.c_phone,Int32(1),Int32(2))]], aggr=[[count(Int64(1)), sum(FILENAME_PLACEHOLDER_0.c_acctbal)]]\
         \n      Projection: substr(FILENAME_PLACEHOLDER_0.c_phone, Int32(1), Int32(2)), FILENAME_PLACEHOLDER_0.c_acctbal\

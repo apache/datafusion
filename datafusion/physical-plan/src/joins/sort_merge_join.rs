@@ -1681,22 +1681,25 @@ fn get_filtered_join_mask(
         JoinType::LeftAnti => {
             // have we seen a filter match for a streaming index before
             for i in 0..streamed_indices_length {
-                if mask.value(i) && !seen_as_true {
+                let streamed_idx = streamed_indices.value(i);
+                if mask.value(i)
+                    && !seen_as_true
+                    && !matched_indices.contains(&streamed_idx)
+                {
                     seen_as_true = true;
-                    filter_matched_indices.push(streamed_indices.value(i));
+                    filter_matched_indices.push(streamed_idx);
                 }
 
                 // Reset `seen_as_true` flag and calculate mask for the current streaming index
                 // - if within the batch it switched to next streaming index(e.g. from 0 to 1, or from 1 to 2)
                 // - if it is at the end of the all buffered batches for the given streaming index, 0 index comes last
                 if (i < streamed_indices_length - 1
-                    && streamed_indices.value(i) != streamed_indices.value(i + 1))
+                    && streamed_idx != streamed_indices.value(i + 1))
                     || (i == streamed_indices_length - 1
                         && *scanning_buffered_offset == 0)
                 {
                     corrected_mask.append_value(
-                        !matched_indices.contains(&streamed_indices.value(i))
-                            && !seen_as_true,
+                        !matched_indices.contains(&streamed_idx) && !seen_as_true,
                     );
                     seen_as_true = false;
                 } else {

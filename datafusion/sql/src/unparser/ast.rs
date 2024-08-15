@@ -80,13 +80,22 @@ impl QueryBuilder {
         self
     }
     pub fn build(&self) -> Result<ast::Query, BuilderError> {
+        let order_by = if self.order_by.is_empty() {
+            None
+        } else {
+            Some(ast::OrderBy {
+                exprs: self.order_by.clone(),
+                interpolate: None,
+            })
+        };
+
         Ok(ast::Query {
             with: self.with.clone(),
             body: match self.body {
                 Some(ref value) => value.clone(),
                 None => return Err(Into::into(UninitializedFieldError::from("body"))),
             },
-            order_by: self.order_by.clone(),
+            order_by,
             limit: self.limit.clone(),
             limit_by: self.limit_by.clone(),
             offset: self.offset.clone(),
@@ -423,6 +432,7 @@ impl TableRelationBuilder {
             with_hints: self.with_hints.clone(),
             version: self.version.clone(),
             partitions: self.partitions.clone(),
+            with_ordinality: false,
         })
     }
     fn create_empty() -> Self {

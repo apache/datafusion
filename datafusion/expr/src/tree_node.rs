@@ -18,11 +18,10 @@
 //! Tree node implementation for logical expr
 
 use crate::expr::{
-    AggregateFunction, AggregateFunctionDefinition, Alias, Between, BinaryExpr, Case,
-    Cast, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, Sort,
-    TryCast, Unnest, WindowFunction,
+    AggregateFunction, Alias, Between, BinaryExpr, Case, Cast, GroupingSet, InList,
+    InSubquery, Like, Placeholder, ScalarFunction, Sort, TryCast, Unnest, WindowFunction,
 };
-use crate::Expr;
+use crate::{Expr, ExprFunctionExt};
 
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
@@ -294,18 +293,17 @@ impl TreeNode for Expr {
                 transform_vec(order_by, &mut f)
             )?
             .update_data(|(new_args, new_partition_by, new_order_by)| {
-                Expr::WindowFunction(WindowFunction::new(
-                    fun,
-                    new_args,
-                    new_partition_by,
-                    new_order_by,
-                    window_frame,
-                    null_treatment,
-                ))
+                Expr::WindowFunction(WindowFunction::new(fun, new_args))
+                    .partition_by(new_partition_by)
+                    .order_by(new_order_by)
+                    .window_frame(window_frame)
+                    .null_treatment(null_treatment)
+                    .build()
+                    .unwrap()
             }),
             Expr::AggregateFunction(AggregateFunction {
                 args,
-                func_def,
+                func,
                 distinct,
                 filter,
                 order_by,
@@ -317,30 +315,16 @@ impl TreeNode for Expr {
                 order_by,
                 transform_option_vec(order_by, &mut f)
             )?
-            .map_data(
-                |(new_args, new_filter, new_order_by)| match func_def {
-                    AggregateFunctionDefinition::BuiltIn(fun) => {
-                        Ok(Expr::AggregateFunction(AggregateFunction::new(
-                            fun,
-                            new_args,
-                            distinct,
-                            new_filter,
-                            new_order_by,
-                            null_treatment,
-                        )))
-                    }
-                    AggregateFunctionDefinition::UDF(fun) => {
-                        Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                            fun,
-                            new_args,
-                            distinct,
-                            new_filter,
-                            new_order_by,
-                            null_treatment,
-                        )))
-                    }
-                },
-            )?,
+            .map_data(|(new_args, new_filter, new_order_by)| {
+                Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                    func,
+                    new_args,
+                    distinct,
+                    new_filter,
+                    new_order_by,
+                    null_treatment,
+                )))
+            })?,
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => transform_vec(exprs, &mut f)?
                     .update_data(|ve| Expr::GroupingSet(GroupingSet::Rollup(ve))),

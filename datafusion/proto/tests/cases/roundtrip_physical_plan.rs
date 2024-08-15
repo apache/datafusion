@@ -24,8 +24,13 @@ use std::vec;
 
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
+use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
+use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
+use datafusion_functions_aggregate::array_agg::array_agg_udaf;
+use datafusion_functions_aggregate::min_max::max_udaf;
 use prost::Message;
 
+use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
@@ -42,7 +47,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::aggregate::utils::down_cast_any_ref;
-use datafusion::physical_expr::expressions::{Literal, Max};
+use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
 use datafusion::physical_plan::aggregates::{
@@ -64,7 +69,6 @@ use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::udaf::create_aggregate_expr;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
@@ -86,13 +90,11 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
-use datafusion_functions_aggregate::string_agg::StringAgg;
+use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use datafusion_proto::protobuf;
-
-use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -291,17 +293,13 @@ fn roundtrip_window() -> Result<()> {
     ));
 
     let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
-        create_aggregate_expr(
-            &avg_udaf(),
-            &[cast(col("b", &schema)?, &schema, DataType::Float64)?],
-            &[],
-            &[],
-            &[],
-            &schema,
-            "avg(b)",
-            false,
-            false,
-        )?,
+        AggregateExprBuilder::new(
+            avg_udaf(),
+            vec![cast(col("b", &schema)?, &schema, DataType::Float64)?],
+        )
+        .schema(Arc::clone(&schema))
+        .alias("avg(b)")
+        .build()?,
         &[],
         &[],
         Arc::new(WindowFrame::new(None)),
@@ -314,17 +312,10 @@ fn roundtrip_window() -> Result<()> {
     );
 
     let args = vec![cast(col("a", &schema)?, &schema, DataType::Float64)?];
-    let sum_expr = create_aggregate_expr(
-        &sum_udaf(),
-        &args,
-        &[],
-        &[],
-        &[],
-        &schema,
-        "SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING",
-        false,
-        false,
-    )?;
+    let sum_expr = AggregateExprBuilder::new(sum_udaf(), args)
+        .schema(Arc::clone(&schema))
+        .alias("SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING")
+        .build()?;
 
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
         sum_expr,
@@ -355,46 +346,28 @@ fn rountrip_aggregate() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
+    let avg_expr = AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+        .schema(Arc::clone(&schema))
+        .alias("AVG(b)")
+        .build()?;
+    let nth_expr =
+        AggregateExprBuilder::new(nth_value_udaf(), vec![col("b", &schema)?, lit(1u64)])
+            .schema(Arc::clone(&schema))
+            .alias("NTH_VALUE(b, 1)")
+            .build()?;
+    let str_agg_expr =
+        AggregateExprBuilder::new(string_agg_udaf(), vec![col("b", &schema)?, lit(1u64)])
+            .schema(Arc::clone(&schema))
+            .alias("NTH_VALUE(b, 1)")
+            .build()?;
+
     let test_cases: Vec<Vec<Arc<dyn AggregateExpr>>> = vec![
         // AVG
-        vec![create_aggregate_expr(
-            &avg_udaf(),
-            &[col("b", &schema)?],
-            &[],
-            &[],
-            &[],
-            &schema,
-            "AVG(b)",
-            false,
-            false,
-        )?],
+        vec![avg_expr],
         // NTH_VALUE
-        vec![create_aggregate_expr(
-            &nth_value_udaf(),
-            &[col("b", &schema)?, lit(1u64)],
-            &[],
-            &[],
-            &[],
-            &schema,
-            "NTH_VALUE(b, 1)",
-            false,
-            false,
-        )?],
+        vec![nth_expr],
         // STRING_AGG
-        vec![create_aggregate_expr(
-            &AggregateUDF::new_from_impl(StringAgg::new()),
-            &[
-                cast(col("b", &schema)?, &schema, DataType::Utf8)?,
-                lit(ScalarValue::Utf8(Some(",".to_string()))),
-            ],
-            &[],
-            &[],
-            &[],
-            &schema,
-            "STRING_AGG(name, ',')",
-            false,
-            false,
-        )?],
+        vec![str_agg_expr],
     ];
 
     for aggregates in test_cases {
@@ -421,17 +394,13 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
-        &avg_udaf(),
-        &[col("b", &schema)?],
-        &[],
-        &[],
-        &[],
-        &schema,
-        "AVG(b)",
-        false,
-        false,
-    )?];
+    let aggregates: Vec<Arc<dyn AggregateExpr>> =
+        vec![
+            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("AVG(b)")
+                .build()?,
+        ];
 
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
@@ -442,6 +411,70 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
         schema,
     )?;
     let agg = agg.with_limit(Some(12));
+    roundtrip_test(Arc::new(agg))
+}
+
+#[test]
+fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        vec![(col("a", &schema)?, "unused".to_string())];
+
+    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![AggregateExprBuilder::new(
+        approx_percentile_cont_udaf(),
+        vec![col("b", &schema)?, lit(0.5)],
+    )
+    .schema(Arc::clone(&schema))
+    .alias("APPROX_PERCENTILE_CONT(b, 0.5)")
+    .build()?];
+
+    let agg = AggregateExec::try_new(
+        AggregateMode::Final,
+        PhysicalGroupBy::new_single(groups.clone()),
+        aggregates.clone(),
+        vec![None],
+        Arc::new(EmptyExec::new(schema.clone())),
+        schema,
+    )?;
+    roundtrip_test(Arc::new(agg))
+}
+
+#[test]
+fn rountrip_aggregate_with_sort() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+        vec![(col("a", &schema)?, "unused".to_string())];
+    let sort_exprs = vec![PhysicalSortExpr {
+        expr: col("b", &schema)?,
+        options: SortOptions {
+            descending: false,
+            nulls_first: true,
+        },
+    }];
+
+    let aggregates: Vec<Arc<dyn AggregateExpr>> =
+        vec![
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("ARRAY_AGG(b)")
+                .order_by(sort_exprs)
+                .build()?,
+        ];
+
+    let agg = AggregateExec::try_new(
+        AggregateMode::Final,
+        PhysicalGroupBy::new_single(groups.clone()),
+        aggregates.clone(),
+        vec![None],
+        Arc::new(EmptyExec::new(schema.clone())),
+        schema,
+    )?;
     roundtrip_test(Arc::new(agg))
 }
 
@@ -492,17 +525,13 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![create_aggregate_expr(
-        &udaf,
-        &[col("b", &schema)?],
-        &[],
-        &[],
-        &[],
-        &schema,
-        "example_agg",
-        false,
-        false,
-    )?];
+    let aggregates: Vec<Arc<dyn AggregateExpr>> =
+        vec![
+            AggregateExprBuilder::new(Arc::new(udaf), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("example_agg")
+                .build()?,
+        ];
 
     roundtrip_test_with_context(
         Arc::new(AggregateExec::try_new(
@@ -946,11 +975,18 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         )),
         input,
     )?);
+    let aggr_expr = AggregateExprBuilder::new(
+        max_udaf(),
+        vec![udf_expr.clone() as Arc<dyn PhysicalExpr>],
+    )
+    .schema(schema.clone())
+    .alias("max")
+    .build()?;
 
     let window = Arc::new(WindowAggExec::try_new(
         vec![Arc::new(PlainAggregateWindowExpr::new(
-            Arc::new(Max::new(udf_expr.clone(), "max", DataType::Int64)),
-            &[col("author", &schema)?],
+            aggr_expr.clone(),
+            &[col("author", &schema.clone())?],
             &[],
             Arc::new(WindowFrame::new(None)),
         ))],
@@ -961,7 +997,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     let aggregate = Arc::new(AggregateExec::try_new(
         AggregateMode::Final,
         PhysicalGroupBy::new(vec![], vec![], vec![]),
-        vec![Arc::new(Max::new(udf_expr, "max", DataType::Int64))],
+        vec![aggr_expr.clone()],
         vec![None],
         window,
         schema.clone(),
@@ -987,20 +1023,16 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         DataType::Int64,
     ));
 
-    let udaf = AggregateUDF::from(MyAggregateUDF::new("result".to_string()));
-    let aggr_args: [Arc<dyn PhysicalExpr>; 1] =
-        [Arc::new(Literal::new(ScalarValue::from(42)))];
-    let aggr_expr = create_aggregate_expr(
-        &udaf,
-        &aggr_args,
-        &[],
-        &[],
-        &[],
-        &schema,
-        "aggregate_udf",
-        false,
-        false,
-    )?;
+    let udaf = Arc::new(AggregateUDF::from(MyAggregateUDF::new(
+        "result".to_string(),
+    )));
+    let aggr_args: Vec<Arc<dyn PhysicalExpr>> =
+        vec![Arc::new(Literal::new(ScalarValue::from(42)))];
+
+    let aggr_expr = AggregateExprBuilder::new(Arc::clone(&udaf), aggr_args.clone())
+        .schema(Arc::clone(&schema))
+        .alias("aggregate_udf")
+        .build()?;
 
     let filter = Arc::new(FilterExec::try_new(
         Arc::new(BinaryExpr::new(
@@ -1022,17 +1054,12 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         vec![col("author", &schema)?],
     )?);
 
-    let aggr_expr = create_aggregate_expr(
-        &udaf,
-        &aggr_args,
-        &[],
-        &[],
-        &[],
-        &schema,
-        "aggregate_udf",
-        true,
-        true,
-    )?;
+    let aggr_expr = AggregateExprBuilder::new(udaf, aggr_args.clone())
+        .schema(Arc::clone(&schema))
+        .alias("aggregate_udf")
+        .distinct()
+        .ignore_nulls()
+        .build()?;
 
     let aggregate = Arc::new(AggregateExec::try_new(
         AggregateMode::Final,

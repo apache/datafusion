@@ -17,7 +17,9 @@
 
 //! [`ScalarValue`]: stores single  values
 
+mod consts;
 mod struct_builder;
+
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
@@ -799,9 +801,13 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     let values_array = value.to_array_of_size(1)?;
 
     // Create a key array with `size` elements, each of 0
-    let key_array: PrimitiveArray<K> = std::iter::repeat(Some(K::default_value()))
-        .take(size)
-        .collect();
+    let key_array: PrimitiveArray<K> = std::iter::repeat(if value.is_null() {
+        None
+    } else {
+        Some(K::default_value())
+    })
+    .take(size)
+    .collect();
 
     // create a new DictionaryArray
     //
@@ -1004,6 +1010,123 @@ impl ScalarValue {
             TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(value, tz_opt),
             TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(value, tz_opt),
             TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(value, tz_opt),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing PI
+    pub fn new_pi(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::PI)),
+            DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::PI)),
+            _ => _internal_err!("PI is not supported for data type: {:?}", datatype),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing PI's upper bound
+    pub fn new_pi_upper(datatype: &DataType) -> Result<ScalarValue> {
+        // TODO: replace the constants with next_up/next_down when
+        // they are stabilized: https://doc.rust-lang.org/std/primitive.f64.html#method.next_up
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(consts::PI_UPPER_F32)),
+            DataType::Float64 => Ok(ScalarValue::from(consts::PI_UPPER_F64)),
+            _ => {
+                _internal_err!("PI_UPPER is not supported for data type: {:?}", datatype)
+            }
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing -PI's lower bound
+    pub fn new_negative_pi_lower(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F32)),
+            DataType::Float64 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F64)),
+            _ => {
+                _internal_err!("-PI_LOWER is not supported for data type: {:?}", datatype)
+            }
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing FRAC_PI_2's upper bound
+    pub fn new_frac_pi_2_upper(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F32)),
+            DataType::Float64 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F64)),
+            _ => {
+                _internal_err!(
+                    "PI_UPPER/2 is not supported for data type: {:?}",
+                    datatype
+                )
+            }
+        }
+    }
+
+    // Returns a [`ScalarValue`] representing FRAC_PI_2's lower bound
+    pub fn new_neg_frac_pi_2_lower(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => {
+                Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F32))
+            }
+            DataType::Float64 => {
+                Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F64))
+            }
+            _ => {
+                _internal_err!(
+                    "-PI/2_LOWER is not supported for data type: {:?}",
+                    datatype
+                )
+            }
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing -PI
+    pub fn new_negative_pi(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::PI)),
+            DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::PI)),
+            _ => _internal_err!("-PI is not supported for data type: {:?}", datatype),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing PI/2
+    pub fn new_frac_pi_2(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::FRAC_PI_2)),
+            DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::FRAC_PI_2)),
+            _ => _internal_err!("PI/2 is not supported for data type: {:?}", datatype),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing -PI/2
+    pub fn new_neg_frac_pi_2(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::FRAC_PI_2)),
+            DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::FRAC_PI_2)),
+            _ => _internal_err!("-PI/2 is not supported for data type: {:?}", datatype),
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing infinity
+    pub fn new_infinity(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(f32::INFINITY)),
+            DataType::Float64 => Ok(ScalarValue::from(f64::INFINITY)),
+            _ => {
+                _internal_err!("Infinity is not supported for data type: {:?}", datatype)
+            }
+        }
+    }
+
+    /// Returns a [`ScalarValue`] representing negative infinity
+    pub fn new_neg_infinity(datatype: &DataType) -> Result<ScalarValue> {
+        match datatype {
+            DataType::Float32 => Ok(ScalarValue::from(f32::NEG_INFINITY)),
+            DataType::Float64 => Ok(ScalarValue::from(f64::NEG_INFINITY)),
+            _ => {
+                _internal_err!(
+                    "Negative Infinity is not supported for data type: {:?}",
+                    datatype
+                )
+            }
         }
     }
 
@@ -1770,6 +1893,7 @@ impl ScalarValue {
             }
             DataType::List(_)
             | DataType::LargeList(_)
+            | DataType::Map(_, _)
             | DataType::Struct(_)
             | DataType::Union(_, _) => {
                 let arrays = scalars.map(|s| s.to_array()).collect::<Result<Vec<_>>>()?;
@@ -1838,7 +1962,6 @@ impl ScalarValue {
             | DataType::Time32(TimeUnit::Nanosecond)
             | DataType::Time64(TimeUnit::Second)
             | DataType::Time64(TimeUnit::Millisecond)
-            | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _)
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {
@@ -6554,5 +6677,16 @@ mod tests {
             UnionMode::Dense,
         );
         assert!(dense_scalar.is_null());
+    }
+
+    #[test]
+    fn null_dictionary_scalar_produces_null_dictionary_array() {
+        let dictionary_scalar = ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Null),
+        );
+        assert!(dictionary_scalar.is_null());
+        let dictionary_array = dictionary_scalar.to_array().unwrap();
+        assert!(dictionary_array.is_null(0));
     }
 }

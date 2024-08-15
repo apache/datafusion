@@ -3021,3 +3021,161 @@ drop view t_utc;
 
 statement ok
 drop view t_timezone;
+
+# test comparisons across timestamps
+statement ok
+create table t AS
+VALUES
+  ('2024-01-01T00:00:01Z'),
+  ('2024-02-01T00:00:01Z'),
+  ('2024-03-01T00:00:01Z')
+;
+
+statement ok
+create view t_utc as
+select column1::timestamp AT TIME ZONE 'UTC' as "column1"
+from t;
+
+statement ok
+create view t_europe as
+select column1::timestamp AT TIME ZONE 'Europe/Brussels' as "column1"
+from t;
+
+query P
+SELECT column1 FROM t_utc WHERE column1 < '2024-02-01T00:00:00' AT TIME ZONE 'America/Los_Angeles';
+----
+2024-01-01T00:00:01Z
+2024-02-01T00:00:01Z
+
+query P
+SELECT column1 FROM t_europe WHERE column1 = '2024-01-31T16:00:01' AT TIME ZONE 'America/Los_Angeles';
+----
+2024-02-01T00:00:01+01:00
+
+query P
+SELECT column1 FROM t_europe WHERE column1 BETWEEN '2020-01-01T00:00:00' AT TIME ZONE 'Australia/Brisbane' AND '2024-02-01T00:00:00' AT TIME ZONE 'America/Los_Angeles';
+----
+2024-01-01T00:00:01+01:00
+2024-02-01T00:00:01+01:00
+
+query P
+SELECT column1 FROM t_utc WHERE column1 IN ('2024-01-31T16:00:01' AT TIME ZONE 'America/Los_Angeles');
+----
+2024-02-01T00:00:01Z
+
+query P
+SELECT column1 as u from t_utc UNION SELECT column1 from t_europe ORDER BY u;
+----
+2023-12-31T23:00:01Z
+2024-01-01T00:00:01Z
+2024-01-31T23:00:01Z
+2024-02-01T00:00:01Z
+2024-02-29T23:00:01Z
+2024-03-01T00:00:01Z
+
+query P
+SELECT column1 as e from t_europe UNION SELECT column1 from t_utc ORDER BY e;
+----
+2024-01-01T00:00:01+01:00
+2024-01-01T01:00:01+01:00
+2024-02-01T00:00:01+01:00
+2024-02-01T01:00:01+01:00
+2024-03-01T00:00:01+01:00
+2024-03-01T01:00:01+01:00
+
+query P
+SELECT nvl2(null, '2020-01-01T00:00:00-04:00'::timestamp, '2021-02-03T04:05:06Z'::timestamp)
+----
+2021-02-03T04:05:06
+
+query ?
+SELECT make_array('2020-01-01T00:00:00-04:00'::timestamp, '2021-01-01T01:02:03Z'::timestamp);
+----
+[2020-01-01T04:00:00, 2021-01-01T01:02:03]
+
+query P
+SELECT * FROM VALUES
+ ('2023-12-31T23:00:00Z' AT TIME ZONE 'UTC'),
+ ('2024-02-01T00:00:00' AT TIME ZONE 'America/Los_Angeles');
+----
+2023-12-31T15:00:00-08:00
+2024-02-01T00:00:00-08:00
+
+query P
+SELECT * FROM VALUES
+ ('2024-02-01T00:00:00' AT TIME ZONE 'America/Los_Angeles'),
+ ('2023-12-31T23:00:00' AT TIME ZONE 'UTC');
+----
+2024-02-01T08:00:00Z
+2023-12-31T23:00:00Z
+
+# interval vs. duration comparison
+query B
+select (now() - now()) < interval '1 seconds';
+----
+true
+
+query B
+select (now() - now()) <= interval '1 seconds';
+----
+true
+
+query B
+select (now() - now()) = interval '0 seconds';
+----
+true
+
+query B
+select (now() - now()) != interval '1 seconds';
+----
+true
+
+query B
+select (now() - now()) > interval '-1 seconds';
+----
+true
+
+query B
+select (now() - now()) >= interval '-1 seconds';
+----
+true
+
+query B
+select arrow_cast(123, 'Duration(Nanosecond)') < interval '200 nanoseconds';
+----
+true
+
+query B
+select arrow_cast(123, 'Duration(Nanosecond)') < interval '100 nanoseconds';
+----
+false
+
+query B
+select arrow_cast(123, 'Duration(Nanosecond)') < interval '1 seconds';
+----
+true
+
+query B
+select interval '1 seconds' < arrow_cast(123, 'Duration(Nanosecond)')
+----
+false
+
+# interval as LHS
+query B
+select interval '2 seconds' = interval '2 seconds';
+----
+true
+
+query B
+select interval '1 seconds' < interval '2 seconds';
+----
+true
+
+statement ok
+drop table t;
+
+statement ok
+drop view t_utc;
+
+statement ok
+drop view t_europe;

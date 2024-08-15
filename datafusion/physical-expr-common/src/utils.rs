@@ -19,15 +19,10 @@ use std::sync::Arc;
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
-use arrow::datatypes::Schema;
 
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::expr::Alias;
-use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::Expr;
+use datafusion_common::Result;
+use datafusion_expr_common::sort_properties::ExprProperties;
 
-use crate::expressions::literal::Literal;
-use crate::expressions::{self, CastExpr};
 use crate::physical_expr::PhysicalExpr;
 use crate::sort_expr::PhysicalSortExpr;
 use crate::tree_node::ExprContext;
@@ -106,32 +101,6 @@ pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr
         .iter()
         .map(|e| PhysicalSortExpr::new(e.expr.clone(), !e.options))
         .collect()
-}
-
-/// Converts `datafusion_expr::Expr` into corresponding `Arc<dyn PhysicalExpr>`.
-/// If conversion is not supported yet, returns Error.
-pub fn limited_convert_logical_expr_to_physical_expr(
-    expr: &Expr,
-    schema: &Schema,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    match expr {
-        Expr::Alias(Alias { expr, .. }) => {
-            Ok(limited_convert_logical_expr_to_physical_expr(expr, schema)?)
-        }
-        Expr::Column(col) => expressions::column::col(&col.name, schema),
-        Expr::Cast(cast_expr) => Ok(Arc::new(CastExpr::new(
-            limited_convert_logical_expr_to_physical_expr(
-                cast_expr.expr.as_ref(),
-                schema,
-            )?,
-            cast_expr.data_type.clone(),
-            None,
-        ))),
-        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
-        _ => exec_err!(
-            "Unsupported expression: {expr} for conversion to Arc<dyn PhysicalExpr>"
-        ),
-    }
 }
 
 #[cfg(test)]

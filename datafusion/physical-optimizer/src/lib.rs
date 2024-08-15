@@ -17,6 +17,8 @@
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
+pub mod aggregate_statistics;
+pub mod limit_pushdown;
 mod optimizer;
 pub mod output_requirements;
 

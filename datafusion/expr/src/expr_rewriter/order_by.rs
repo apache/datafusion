@@ -25,7 +25,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
-/// For example, `max(x)` is written to `col("MAX(x)")`
+/// For example, `max(x)` is written to `col("max(x)")`
 pub fn rewrite_sort_cols_by_aggs(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
@@ -109,7 +109,7 @@ fn rewrite_in_terms_of_projection(
 
         // expr is an actual expr like min(t.c2), but we are looking
         // for a column with the same "MIN(C2)", so translate there
-        let name = normalized_expr.display_name()?;
+        let name = normalized_expr.schema_name().to_string();
 
         let search_col = Expr::Column(Column {
             relation: None,
@@ -156,11 +156,13 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use crate::{
-        cast, col, lit, logical_plan::builder::LogicalTableSource, min,
-        test::function_stub::avg, try_cast, LogicalPlanBuilder,
+        cast, col, lit, logical_plan::builder::LogicalTableSource, try_cast,
+        LogicalPlanBuilder,
     };
 
     use super::*;
+    use crate::test::function_stub::avg;
+    use crate::test::function_stub::min;
 
     #[test]
     fn rewrite_sort_cols_by_agg() {
@@ -235,15 +237,15 @@ mod test {
                 expected: sort(col("c1")),
             },
             TestCase {
-                desc: r#"min(c2) --> "MIN(c2)" -- (column *named* "min(t.c2)"!)"#,
+                desc: r#"min(c2) --> "min(c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(min(col("c2"))),
-                expected: sort(col("MIN(t.c2)")),
+                expected: sort(col("min(t.c2)")),
             },
             TestCase {
-                desc: r#"c1 + min(c2) --> "c1 + MIN(c2)" -- (column *named* "min(t.c2)"!)"#,
+                desc: r#"c1 + min(c2) --> "c1 + min(c2)" -- (column *named* "min(t.c2)"!)"#,
                 input: sort(col("c1") + min(col("c2"))),
                 // should be "c1" not t.c1
-                expected: sort(col("c1") + col("MIN(t.c2)")),
+                expected: sort(col("c1") + col("min(t.c2)")),
             },
             TestCase {
                 desc: r#"avg(c3) --> "avg(t.c3)" as average (column *named* "avg(t.c3)", aliased)"#,

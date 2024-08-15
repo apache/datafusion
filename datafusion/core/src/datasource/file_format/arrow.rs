@@ -66,7 +66,7 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 /// If the buffered Arrow data exceeds this size, it is flushed to object store
 const BUFFER_FLUSH_BYTES: usize = 1024000;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 /// Factory struct used to create [ArrowFormat]
 pub struct ArrowFormatFactory;
 
@@ -88,6 +88,10 @@ impl FileFormatFactory for ArrowFormatFactory {
 
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(ArrowFormat)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

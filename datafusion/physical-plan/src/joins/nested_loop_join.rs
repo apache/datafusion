@@ -26,7 +26,6 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::utils::{asymmetric_join_output_partitioning, need_produce_result_in_final};
-use crate::coalesce_batches::concat_batches;
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
@@ -44,10 +43,11 @@ use crate::{
 use arrow::array::{
     BooleanBufferBuilder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder,
 };
+use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use datafusion_common::{exec_err, JoinSide, Result, Statistics};
+use datafusion_common::{exec_datafusion_err, JoinSide, Result, Statistics};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
@@ -364,19 +364,17 @@ async fn collect_left_input(
     let stream = merge.execute(0, context)?;
 
     // Load all batches and count the rows
-    let (batches, num_rows, metrics, mut reservation) = stream
+    let (batches, metrics, mut reservation) = stream
         .try_fold(
-            (Vec::new(), 0usize, join_metrics, reservation),
+            (Vec::new(), join_metrics, reservation),
             |mut acc, batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
-                acc.3.try_grow(batch_size)?;
+                acc.2.try_grow(batch_size)?;
                 // Update metrics
-                acc.2.build_mem_used.add(batch_size);
-                acc.2.build_input_batches.add(1);
-                acc.2.build_input_rows.add(batch.num_rows());
-                // Update rowcount
-                acc.1 += batch.num_rows();
+                acc.1.build_mem_used.add(batch_size);
+                acc.1.build_input_batches.add(1);
+                acc.1.build_input_rows.add(batch.num_rows());
                 // Push batch to output
                 acc.0.push(batch);
                 Ok(acc)
@@ -384,7 +382,7 @@ async fn collect_left_input(
         )
         .await?;
 
-    let merged_batch = concat_batches(&schema, &batches, num_rows)?;
+    let merged_batch = concat_batches(&schema, &batches)?;
 
     // Reserve memory for visited_left_side bitmap if required by join type
     let visited_left_side = if with_visited_left_side {
@@ -564,62 +562,54 @@ fn join_left_and_right_batch(
     schema: &Schema,
     visited_left_side: &SharedBitmapBuilder,
 ) -> Result<RecordBatch> {
-    let indices_result = (0..left_batch.num_rows())
+    let indices = (0..left_batch.num_rows())
         .map(|left_row_index| {
             build_join_indices(left_row_index, right_batch, left_batch, filter)
         })
-        .collect::<Result<Vec<(UInt64Array, UInt32Array)>>>();
+        .collect::<Result<Vec<(UInt64Array, UInt32Array)>>>()
+        .map_err(|e| {
+            exec_datafusion_err!(
+                "Fail to build join indices in NestedLoopJoinExec, error:{e}"
+            )
+        })?;
 
     let mut left_indices_builder = UInt64Builder::new();
     let mut right_indices_builder = UInt32Builder::new();
-    let left_right_indices = match indices_result {
-        Err(err) => {
-            exec_err!("Fail to build join indices in NestedLoopJoinExec, error:{err}")
-        }
-        Ok(indices) => {
-            for (left_side, right_side) in indices {
-                left_indices_builder
-                    .append_values(left_side.values(), &vec![true; left_side.len()]);
-                right_indices_builder
-                    .append_values(right_side.values(), &vec![true; right_side.len()]);
-            }
-            Ok((
-                left_indices_builder.finish(),
-                right_indices_builder.finish(),
-            ))
-        }
-    };
-    match left_right_indices {
-        Ok((left_side, right_side)) => {
-            // set the left bitmap
-            // and only full join need the left bitmap
-            if need_produce_result_in_final(join_type) {
-                let mut bitmap = visited_left_side.lock();
-                left_side.iter().flatten().for_each(|x| {
-                    bitmap.set_bit(x as usize, true);
-                });
-            }
-            // adjust the two side indices base on the join type
-            let (left_side, right_side) = adjust_indices_by_join_type(
-                left_side,
-                right_side,
-                0..right_batch.num_rows(),
-                join_type,
-                false,
-            );
-
-            build_batch_from_indices(
-                schema,
-                left_batch,
-                right_batch,
-                &left_side,
-                &right_side,
-                column_indices,
-                JoinSide::Left,
-            )
-        }
-        Err(e) => Err(e),
+    for (left_side, right_side) in indices {
+        left_indices_builder
+            .append_values(left_side.values(), &vec![true; left_side.len()]);
+        right_indices_builder
+            .append_values(right_side.values(), &vec![true; right_side.len()]);
     }
+
+    let left_side = left_indices_builder.finish();
+    let right_side = right_indices_builder.finish();
+    // set the left bitmap
+    // and only full join need the left bitmap
+    if need_produce_result_in_final(join_type) {
+        let mut bitmap = visited_left_side.lock();
+        left_side.iter().flatten().for_each(|x| {
+            bitmap.set_bit(x as usize, true);
+        });
+    }
+    // adjust the two side indices base on the join type
+    let (left_side, right_side) = adjust_indices_by_join_type(
+        left_side,
+        right_side,
+        0..right_batch.num_rows(),
+        join_type,
+        false,
+    );
+
+    build_batch_from_indices(
+        schema,
+        left_batch,
+        right_batch,
+        &left_side,
+        &right_side,
+        column_indices,
+        JoinSide::Left,
+    )
 }
 
 fn get_final_indices_from_shared_bitmap(
@@ -1049,9 +1039,8 @@ mod tests {
 
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Failed to allocate additional"
+                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]"
             );
-            assert_contains!(err.to_string(), "NestedLoopJoinLoad[0]");
         }
 
         Ok(())

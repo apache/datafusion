@@ -58,7 +58,8 @@ use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore}
 #[derive(Default)]
 /// Factory struct used to create [CsvFormatFactory]
 pub struct CsvFormatFactory {
-    options: Option<CsvOptions>,
+    /// the options for csv file read
+    pub options: Option<CsvOptions>,
 }
 
 impl CsvFormatFactory {
@@ -72,6 +73,14 @@ impl CsvFormatFactory {
         Self {
             options: Some(options),
         }
+    }
+}
+
+impl fmt::Debug for CsvFormatFactory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CsvFormatFactory")
+            .field("options", &self.options)
+            .finish()
     }
 }
 
@@ -102,6 +111,10 @@ impl FileFormatFactory for CsvFormatFactory {
 
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(CsvFormat::default())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -331,22 +344,25 @@ impl FileFormat for CsvFormat {
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = CsvExec::new(
-            conf,
-            // If format options does not specify whether there is a header,
-            // we consult configuration options.
-            self.options
-                .has_header
-                .unwrap_or(state.config_options().catalog.has_header),
-            self.options.delimiter,
-            self.options.quote,
-            self.options.escape,
-            self.options.comment,
-            self.options
-                .newlines_in_values
-                .unwrap_or(state.config_options().catalog.newlines_in_values),
-            self.options.compression.into(),
-        );
+        // Consult configuration options for default values
+        let has_header = self
+            .options
+            .has_header
+            .unwrap_or(state.config_options().catalog.has_header);
+        let newlines_in_values = self
+            .options
+            .newlines_in_values
+            .unwrap_or(state.config_options().catalog.newlines_in_values);
+
+        let exec = CsvExec::builder(conf)
+            .with_has_header(has_header)
+            .with_delimeter(self.options.delimiter)
+            .with_quote(self.options.quote)
+            .with_escape(self.options.escape)
+            .with_comment(self.options.comment)
+            .with_newlines_in_values(newlines_in_values)
+            .with_file_compression_type(self.options.compression.into())
+            .build();
         Ok(Arc::new(exec))
     }
 
@@ -1301,11 +1317,8 @@ mod tests {
             "+-----------------------+",
             "| 50                    |",
             "+-----------------------+"];
-        let file_size = if cfg!(target_os = "windows") {
-            30 // new line on Win is '\r\n'
-        } else {
-            20
-        };
+
+        let file_size = std::fs::metadata("tests/data/one_col.csv")?.len() as usize;
         // A 20-Byte file at most get partitioned into 20 chunks
         let expected_partitions = if n_partitions <= file_size {
             n_partitions

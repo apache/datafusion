@@ -57,7 +57,8 @@ use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 #[derive(Default)]
 /// Factory struct used to create [JsonFormat]
 pub struct JsonFormatFactory {
-    options: Option<JsonOptions>,
+    /// the options carried by format factory
+    pub options: Option<JsonOptions>,
 }
 
 impl JsonFormatFactory {
@@ -102,12 +103,24 @@ impl FileFormatFactory for JsonFormatFactory {
     fn default(&self) -> Arc<dyn FileFormat> {
         Arc::new(JsonFormat::default())
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl GetExt for JsonFormatFactory {
     fn get_ext(&self) -> String {
         // Removes the dot, i.e. ".parquet" -> "parquet"
         DEFAULT_JSON_EXTENSION[1..].to_string()
+    }
+}
+
+impl fmt::Debug for JsonFormatFactory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsonFormatFactory")
+            .field("options", &self.options)
+            .finish()
     }
 }
 

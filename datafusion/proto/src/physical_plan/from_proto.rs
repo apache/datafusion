@@ -145,15 +145,6 @@ pub fn parse_physical_window_expr(
 
     let fun = if let Some(window_func) = proto.window_function.as_ref() {
         match window_func {
-            protobuf::physical_window_expr_node::WindowFunction::AggrFunction(n) => {
-                let f = protobuf::AggregateFunction::try_from(*n).map_err(|_| {
-                    proto_error(format!(
-                        "Received an unknown window aggregate function: {n}"
-                    ))
-                })?;
-
-                WindowFunctionDefinition::AggregateFunction(f.into())
-            }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
                 let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
                     proto_error(format!(
@@ -178,13 +169,10 @@ pub fn parse_physical_window_expr(
     // TODO: Remove extended_schema if functions are all UDAF
     let extended_schema =
         schema_add_window_field(&window_node_expr, input_schema, &fun, &name)?;
-    // approx_percentile_cont and approx_percentile_cont_weight are not supported for UDAF from protobuf yet.
-    let logical_exprs = &[];
     create_window_expr(
         &fun,
         name,
         &window_node_expr,
-        logical_exprs,
         &partition_by,
         &order_by,
         Arc::new(window_frame),

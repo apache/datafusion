@@ -135,8 +135,8 @@ fn optimize_projections(
             let group_by_expr_existing = aggregate
                 .group_expr
                 .iter()
-                .map(|group_by_expr| group_by_expr.display_name())
-                .collect::<Result<Vec<_>>>()?;
+                .map(|group_by_expr| group_by_expr.schema_name().to_string())
+                .collect::<Vec<_>>();
 
             let new_group_bys = if let Some(simplest_groupby_indices) =
                 get_required_group_by_exprs_indices(
@@ -806,7 +806,7 @@ mod tests {
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
     };
-    use datafusion_expr::AggregateExt;
+    use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
         binary_expr, build_join_schema,
         builder::table_scan_with_filters,
@@ -814,13 +814,13 @@ mod tests {
         expr::{self, Cast},
         lit,
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
-        max, min, not, try_cast, when, AggregateFunction, BinaryExpr, Expr, Extension,
-        Like, LogicalPlan, Operator, Projection, UserDefinedLogicalNodeCore, WindowFrame,
-        WindowFunctionDefinition,
+        not, try_cast, when, BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator,
+        Projection, UserDefinedLogicalNodeCore, WindowFunctionDefinition,
     };
 
     use datafusion_functions_aggregate::count::count_udaf;
-    use datafusion_functions_aggregate::expr_fn::count;
+    use datafusion_functions_aggregate::expr_fn::{count, max, min};
+    use datafusion_functions_aggregate::min_max::max_udaf;
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(OptimizeProjections::new()), plan, expected)
@@ -1361,7 +1361,7 @@ mod tests {
             .aggregate(Vec::<Expr>::new(), vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(test.b)]]\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[max(test.b)]]\
         \n  TableScan: test projection=[b]";
 
         assert_optimized_plan_equal(plan, expected)
@@ -1375,7 +1375,7 @@ mod tests {
             .aggregate(vec![col("c")], vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[MAX(test.b)]]\
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[max(test.b)]]\
         \n  TableScan: test projection=[b, c]";
 
         assert_optimized_plan_equal(plan, expected)
@@ -1390,7 +1390,7 @@ mod tests {
             .aggregate(vec![col("c")], vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[a.c]], aggr=[[MAX(a.b)]]\
+        let expected = "Aggregate: groupBy=[[a.c]], aggr=[[max(a.b)]]\
         \n  SubqueryAlias: a\
         \n    TableScan: test projection=[b, c]";
 
@@ -1406,7 +1406,7 @@ mod tests {
             .aggregate(Vec::<Expr>::new(), vec![max(col("b"))])?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(test.b)]]\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[max(test.b)]]\
         \n  Projection: test.b\
         \n    Filter: test.c > Int32(1)\
         \n      TableScan: test projection=[b, c]";
@@ -1422,7 +1422,7 @@ mod tests {
         // "tag.one", not a column named "one" in a table named "tag"):
         //
         // Projection: tag.one
-        //   Aggregate: groupBy=[], aggr=[MAX("tag.one") AS "tag.one"]
+        //   Aggregate: groupBy=[], aggr=[max("tag.one") AS "tag.one"]
         //    TableScan
         let plan = table_scan(Some("m4"), &schema, None)?
             .aggregate(
@@ -1433,7 +1433,7 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Aggregate: groupBy=[[]], aggr=[[MAX(m4.tag.one) AS tag.one]]\
+        Aggregate: groupBy=[[]], aggr=[[max(m4.tag.one) AS tag.one]]\
         \n  TableScan: m4 projection=[tag.one]";
 
         assert_optimized_plan_equal(plan, expected)
@@ -1529,7 +1529,7 @@ mod tests {
         \n  TableScan: test2 projection=[c1]";
 
         let optimized_plan = optimize(plan)?;
-        let formatted_plan = format!("{optimized_plan:?}");
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(formatted_plan, expected);
 
         // make sure schema for join node include both join columns
@@ -1581,7 +1581,7 @@ mod tests {
         \n    TableScan: test2 projection=[c1]";
 
         let optimized_plan = optimize(plan)?;
-        let formatted_plan = format!("{optimized_plan:?}");
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(formatted_plan, expected);
 
         // make sure schema for join node include both join columns
@@ -1631,7 +1631,7 @@ mod tests {
         \n    TableScan: test2 projection=[a]";
 
         let optimized_plan = optimize(plan)?;
-        let formatted_plan = format!("{optimized_plan:?}");
+        let formatted_plan = format!("{optimized_plan}");
         assert_eq!(formatted_plan, expected);
 
         // make sure schema for join node include both join columns
@@ -1768,11 +1768,11 @@ mod tests {
             .aggregate(vec![col("c")], vec![max(col("a"))])?
             .build()?;
 
-        assert_fields_eq(&plan, vec!["c", "MAX(test.a)"]);
+        assert_fields_eq(&plan, vec!["c", "max(test.a)"]);
 
         let plan = optimize(plan).expect("failed to optimize plan");
         let expected = "\
-        Aggregate: groupBy=[[test.c]], aggr=[[MAX(test.a)]]\
+        Aggregate: groupBy=[[test.c]], aggr=[[max(test.a)]]\
         \n  Filter: test.c > Int32(1)\
         \n    Projection: test.c, test.a\
         \n      TableScan: test projection=[a, c]";
@@ -1862,14 +1862,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a"), col("c")], vec![max(col("b")), min(col("b"))])?
             .filter(col("c").gt(lit(1)))?
-            .project(vec![col("c"), col("a"), col("MAX(test.b)")])?
+            .project(vec![col("c"), col("a"), col("max(test.b)")])?
             .build()?;
 
-        assert_fields_eq(&plan, vec!["c", "a", "MAX(test.b)"]);
+        assert_fields_eq(&plan, vec!["c", "a", "max(test.b)"]);
 
-        let expected = "Projection: test.c, test.a, MAX(test.b)\
+        let expected = "Projection: test.c, test.a, max(test.b)\
         \n  Filter: test.c > Int32(1)\
-        \n    Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b)]]\
+        \n    Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b)]]\
         \n      TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_equal(plan, expected)
@@ -1917,24 +1917,19 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.a")],
-            vec![col("test.b")],
-            vec![],
-            WindowFrame::new(None),
-            None,
-        ));
+        ))
+        .partition_by(vec![col("test.b")])
+        .build()
+        .unwrap();
 
         let max2 = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunctionDefinition::AggregateFunction(AggregateFunction::Max),
+            WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.b")],
-            vec![],
-            vec![],
-            WindowFrame::new(None),
-            None,
         ));
-        let col1 = col(max1.display_name()?);
-        let col2 = col(max2.display_name()?);
+        let col1 = col(max1.schema_name().to_string());
+        let col2 = col(max2.schema_name().to_string());
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![max1])?
@@ -1942,10 +1937,10 @@ mod tests {
             .project(vec![col1, col2])?
             .build()?;
 
-        let expected = "Projection: MAX(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MAX(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
-        \n  WindowAggr: windowExpr=[[MAX(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
-        \n    Projection: test.b, MAX(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
-        \n      WindowAggr: windowExpr=[[MAX(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        let expected = "Projection: max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, max(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n  WindowAggr: windowExpr=[[max(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n    Projection: test.b, max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n      WindowAggr: windowExpr=[[max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n        TableScan: test projection=[a, b]";
 
         assert_optimized_plan_equal(plan, expected)

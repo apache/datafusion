@@ -86,6 +86,7 @@ pub mod expr_fn {
     }
 }
 
+/// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         nullif(),
@@ -94,6 +95,14 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         nvl2(),
         arrow_typeof(),
         named_struct(),
+        // Note: most users invoke `get_field` indirectly via field access
+        // syntax like `my_struct_col['field_name']`, which results in a call to
+        // `get_field(my_struct_col, "field_name")`.
+        //
+        // However, it is also exposed directly for use cases such as
+        // serializing / deserializing plans with the field access  desugared to
+        // calls to `get_field`
+        get_field(),
         coalesce(),
     ]
 }

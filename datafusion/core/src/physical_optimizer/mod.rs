@@ -21,7 +21,6 @@
 //! "Repartition" or "Sortedness"
 //!
 //! [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
-pub mod aggregate_statistics;
 pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
 pub mod enforce_distribution;
@@ -33,12 +32,12 @@ pub mod projection_pushdown;
 pub mod pruning;
 pub mod replace_with_order_preserving_variants;
 pub mod sanity_checker;
-mod sort_pushdown;
-pub mod topk_aggregation;
-pub mod update_aggr_exprs;
-mod utils;
-
 #[cfg(test)]
 pub mod test_utils;
+pub mod topk_aggregation;
+pub mod update_aggr_exprs;
+
+mod sort_pushdown;
+mod utils;
 
 pub use datafusion_physical_optimizer::*;
