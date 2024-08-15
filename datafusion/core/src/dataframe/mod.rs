@@ -1452,12 +1452,14 @@ impl DataFrame {
         let mut fields: Vec<Expr> = plan
             .schema()
             .iter()
-            .map(|(qualifier, field)| {
+            .filter_map(|(qualifier, field)| {
+                qualifier?;
+
                 if field.name() == name {
                     col_exists = true;
-                    new_column.clone()
+                    Some(new_column.clone())
                 } else {
-                    col(Column::from((qualifier, field)))
+                    Some(col(Column::from((qualifier, field))))
                 }
             })
             .collect();
@@ -1703,6 +1705,7 @@ mod tests {
     use arrow::array::{self, Int32Array};
     use datafusion_common::{Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
+    use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::{
         cast, create_udf, expr, lit, BuiltInWindowFunction, ExprFunctionExt,
         ScalarFunctionImplementation, Volatility, WindowFunctionDefinition,
@@ -2370,6 +2373,37 @@ mod tests {
         // Select should return the column from the output of the aggregate, which is a list.
         assert!(matches!(field.data_type(), DataType::List(_)));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_window_function_with_column() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![5, 4, 3, 2, 1]))],
+        )?;
+
+        let ctx = SessionContext::new();
+
+        let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
+        ctx.register_table("t", Arc::new(provider))?;
+
+        let df = ctx.table("t").await?;
+
+        let func = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::RowNumber,
+            ),
+            vec![],
+        ))
+        .alias("row_num");
+
+        let out = df.with_column("r", func)?;
+
+        // Should only output 'a' and 'r'
+        assert_eq!(2, out.schema().fields().len());
         Ok(())
     }
 

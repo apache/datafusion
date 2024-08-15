@@ -2195,6 +2195,7 @@ impl Window {
             .iter()
             .map(|(q, f)| (q.cloned(), Arc::clone(f)))
             .collect();
+
         let input_len = fields.len();
         let mut window_fields = fields;
         let expr_fields = exprlist_to_fields(window_expr.as_slice(), &input)?;

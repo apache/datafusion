@@ -353,6 +353,7 @@ impl LogicalPlanBuilder {
                 .window(window_exprs)?
                 .build()?;
         }
+
         Ok(plan)
     }
     /// Apply a projection without alias.
