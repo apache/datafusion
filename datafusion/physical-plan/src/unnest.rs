@@ -35,9 +35,9 @@ use arrow::array::{
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{cast, is_not_null, kernels, sum};
-use arrow::datatypes::{DataType, Int32Type, Int64Type, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Int32Array, Int64Array, Scalar, StructArray};
+use arrow_array::{Int64Array, Scalar, StructArray};
 use arrow_ord::cmp::lt;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, Result, UnnestOptions,
@@ -267,7 +267,7 @@ impl UnnestStream {
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(batch)) => {
                     let timer = self.metrics.elapsed_compute.timer();
-                    let result = build_batch_v2(
+                    let result = build_batch(
                         &batch,
                         &self.schema,
                         &self.list_type_columns,
@@ -481,33 +481,27 @@ fn unnest_at_level(
     // Unnest all the list arrays
     let unnested_temp_arrays =
         unnest_list_arrays(temp_unnest_cols.as_ref(), unnested_length, total_length)?;
-    unnested_temp_arrays.iter().for_each(|arr| {
-        println!("ret {}", arr.len());
-    });
 
     // Create the take indices array for other columns
     let take_indices = create_take_indicies(unnested_length, total_length);
-    println!("take indices {}", take_indices.len());
 
     // vertical expansion because of list unnest
     let ret = flatten_batch_from_indices(batch, &take_indices)?;
-    ret.iter().for_each(|arr| {
-        println!("ret {}", arr.len());
-    });
     unnested_temp_arrays
         .into_iter()
         .zip(unnested_locations.iter())
         .for_each(|(flatten_arr, (index_in_input_schema, depth))| {
-            println!(
-                "inserting into temp value {} {}",
-                index_in_input_schema, depth
-            );
             temp_batch.insert((*index_in_input_schema, *depth), flatten_arr);
         });
     Ok(ret)
 }
 
-fn build_batch_v2(
+/// For each row in a `RecordBatch`, some list/struct columns need to be unnested.
+/// - For list columns: We will expand the values in each list into multiple rows,
+/// taking the longest length among these lists, and shorter lists are padded with NULLs.
+/// - For struct columns: We will expand the struct columns into multiple subfield columns.
+/// For columns that don't need to be unnested, repeat their values until reaching the longest length.
+fn build_batch(
     batch: &RecordBatch,
     schema: &SchemaRef,
     list_type_columns: &[ListUnnest],
@@ -529,7 +523,6 @@ fn build_batch_v2(
                     true => batch.columns(),
                     false => &unnested_original_columns,
                 };
-                println!("unnesting at level {}", depth);
                 let temp = unnest_at_level(
                     input,
                     list_type_columns,
@@ -539,8 +532,6 @@ fn build_batch_v2(
                 )?;
                 unnested_original_columns = temp;
             }
-            println!("{} temp batch", temp_batch.len());
-            // TODO: combine temp with the batch
             let unnested_array_map: HashMap<usize, Vec<(Arc<dyn Array>, usize)>> =
                 temp_batch.into_iter().fold(
                     HashMap::new(),
@@ -563,7 +554,6 @@ fn build_batch_v2(
                 })
                 .collect();
 
-            println!("unnested array map {}", unnested_array_map.len());
             let mut ordered_unnested_array_map = unnested_array_map
                 .into_iter()
                 .map(
@@ -586,12 +576,7 @@ fn build_batch_v2(
                     },
                 )
                 .collect::<HashMap<_, _>>();
-            // let highest_depth = list_type_columns
-            //     .iter()
-            //     .fold(0, |highest_depth, ListUnnest { depth, .. }| {
-            //         cmp::max(highest_depth, *depth)
-            //     });
-            println!("len of map {}", ordered_unnested_array_map.len());
+
             let ret = unnested_original_columns
                 .into_iter()
                 .enumerate()
@@ -607,157 +592,6 @@ fn build_batch_v2(
         }
     };
     transformed
-}
-
-/// For each row in a `RecordBatch`, some list/struct columns need to be unnested.
-/// - For list columns: We will expand the values in each list into multiple rows,
-/// taking the longest length among these lists, and shorter lists are padded with NULLs.
-/// - For struct columns: We will expand the struct columns into multiple subfield columns.
-/// For columns that don't need to be unnested, repeat their values until reaching the longest length.
-// fn build_batch(
-//     batch: &RecordBatch,
-//     schema: &SchemaRef,
-//     list_type_columns: &[ListUnnest],
-//     struct_column_indices: &HashSet<usize>,
-//     options: &UnnestOptions,
-// ) -> Result<RecordBatch> {
-//     let transformed = match list_type_columns.len() {
-//         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
-//         _ => {
-//             // maintain a map of temp result
-//             // <usize,Vec<Result>>
-//             // given a map of unnesting
-//             // col1: <depth=2,depth=1>
-//             // col2: <depth=1>
-//             // 1.run for each to unnest all the top level
-//             // col1: <depth=1> => to temp
-//             // 2.run unnest on remaining level
-//             // col1: <depth=2> => to temp
-//             // col2: <depth=1> => to temp
-//             let list_arrays: Vec<(ArrayRef, usize)> = list_type_columns
-//                 .iter()
-//                 .map(
-//                     |ListUnnest {
-//                          depth,
-//                          index_in_input_schema,
-//                      }| {
-//                         Ok((
-//                             ColumnarValue::Array(Arc::clone(
-//                                 batch.column(*index_in_input_schema),
-//                             ))
-//                             .into_array(batch.num_rows())?,
-//                             *depth,
-//                         ))
-//                     },
-//                 )
-//                 .collect::<Result<_>>()?;
-
-//             let longest_length = find_longest_length(&list_arrays, options)?;
-//             let unnested_length = longest_length.as_primitive::<Int64Type>();
-//             let total_length = if unnested_length.is_empty() {
-//                 0
-//             } else {
-//                 sum(unnested_length).ok_or_else(|| {
-//                     exec_datafusion_err!("Failed to calculate the total unnested length")
-//                 })? as usize
-//             };
-//             if total_length == 0 {
-//                 return Ok(RecordBatch::new_empty(Arc::clone(schema)));
-//             }
-
-//             // Unnest all the list arrays
-//             let unnested_arrays =
-//                 unnest_list_arrays(&list_arrays, unnested_length, total_length)?;
-//             let unnested_array_map: HashMap<usize, Vec<Arc<dyn Array>>> = unnested_arrays
-//                 .into_iter()
-//                 .zip(list_type_columns.iter())
-//                 .fold(
-//                     HashMap::new(),
-//                     |mut acc,
-//                      (
-//                         flattened_array,
-//                         ListUnnest {
-//                             index_in_input_schema,
-//                             depth,
-//                         },
-//                     )| {
-//                         acc.entry(*index_in_input_schema)
-//                             .or_insert(vec![])
-//                             .push(flattened_array);
-//                         acc
-//                     },
-//                 );
-
-//             // Create the take indices array for other columns
-//             let take_indicies = create_take_indicies(unnested_length, total_length);
-
-//             // vertical expansion because of list unnest
-//             let ret = flatten_list_cols_from_indices(
-//                 batch,
-//                 unnested_array_map,
-//                 &take_indicies,
-//             )?;
-//             flatten_struct_cols(&ret, schema, struct_column_indices)
-//         }
-//     };
-//     transformed
-// }
-
-/// TODO: only prototype
-/// This function does not handle NULL yet
-pub fn length_recursive(
-    array: &dyn Array,
-    depth: usize,
-    preserve_nulls: bool,
-    is_top_level: bool, // null values at top level recursion is ignored, regardless of preserve_null
-) -> Result<ArrayRef> {
-    let list = array.as_list::<i32>();
-    let null_length = if preserve_nulls {
-        Scalar::new(Int32Array::from_value(1, 1))
-    } else {
-        Scalar::new(Int32Array::from_value(0, 1))
-    };
-    // preserve null only concern nullability of the element in array, not the value of the array itself
-    // e.g unnest(null) => 0 rows
-    // while unnest([null]) => 1 row with null value
-    let null_length_for_value = match preserve_nulls && !is_top_level {
-        true => 1,
-        false => 0,
-    };
-    if depth == 1 {
-        if array.is_empty() {
-            return Ok(Arc::new(PrimitiveArray::<Int32Type>::from(vec![
-                null_length_for_value,
-            ])));
-        }
-
-        // null elements will have null length
-        // respect preserve_nulls here
-        let mut ret = length(array)?;
-        ret = cast(&ret, &DataType::Int32)?;
-        return Ok(zip(&is_not_null(&ret)?, &ret, &null_length)?);
-    }
-    let a: Vec<i32> = list
-        .iter()
-        .map(|x| {
-            if x.is_none() {
-                return null_length_for_value;
-            }
-            // [[1,2,3],null,[4,5]]
-            // [[7,8,9,10],]
-            // length([1,2]) + length(null) + length([4,5])
-            let ret =
-                length_recursive(&x.unwrap(), depth - 1, preserve_nulls, false).unwrap();
-            let a = ret.as_primitive::<Int32Type>();
-            if a.is_empty() {
-                // TODO respect is_preserve_nulls
-                1
-            } else {
-                sum(a).unwrap()
-            }
-        })
-        .collect();
-    Ok(Arc::new(PrimitiveArray::<Int32Type>::from(a)))
 }
 
 /// Find the longest list length among the given list arrays for each row.
@@ -801,9 +635,6 @@ fn find_longest_length(
     let list_lengths: Vec<ArrayRef> = list_arrays
         .iter()
         .map(|list_array| {
-            // Perhaps we don't need recursive here
-            // let mut length_array =
-            //     length_recursive(list_array, *depth, options.preserve_nulls, true)?;
             let mut length_array = length(list_array)?;
             // Make sure length arrays have the same type. Int64 is the most general one.
             // Respect the depth of unnest( current func only get the length of 1 level of unnest)
@@ -1065,7 +896,10 @@ fn flatten_list_cols_from_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::{datatypes::Field, util::pretty::pretty_format_batches};
+    use arrow::{
+        datatypes::{Field, Int32Type},
+        util::pretty::pretty_format_batches,
+    };
     use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 
@@ -1150,6 +984,7 @@ mod tests {
         assert_eq!(strs, expected);
         Ok(())
     }
+
     #[test]
     fn test_build_batch() -> datafusion_common::Result<()> {
         // col1                             | col2
@@ -1241,7 +1076,7 @@ mod tests {
                 depth: 1,
             },
         ];
-        let ret = build_batch_v2(
+        let ret = build_batch(
             &batch,
             &out_schema,
             list_type_columns.as_ref(),
@@ -1252,26 +1087,34 @@ mod tests {
         )?;
         let actual =
             format!("{}", pretty_format_batches(vec![ret].as_ref())?).to_lowercase();
-        let expected_asc = r#"
-+----------------------------------+--------------------------+
-| trace_id                         | max(traces.timestamp_ms) |
-+----------------------------------+--------------------------+
-| 5868861a23ed31355efc5200eb80fe74 | 16909009999999           |
-| 4040e64656804c3d77320d7a0e7eb1f0 | 16909009999998           |
-| 02801bbe533190a9f8713d75222f445d | 16909009999997           |
-| 9e31b3b5a620de32b68fefa5aeea57f1 | 16909009999996           |
-| 2d88a860e9bd1cfaa632d8e7caeaa934 | 16909009999995           |
-| a47edcef8364ab6f191dd9103e51c171 | 16909009999994           |
-| 36a3fa2ccfbf8e00337f0b1254384db6 | 16909009999993           |
-| 0756be84f57369012e10de18b57d8a2f | 16909009999992           |
-| d4d6bf9845fa5897710e3a8db81d5907 | 16909009999991           |
-| 3c2cc1abe728a66b61e14880b53482a0 | 16909009999990           |
-+----------------------------------+--------------------------+
+        let expected = r#"
++---------------------------------+---------------------------------+---------------------------------+
+| col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
++---------------------------------+---------------------------------+---------------------------------+
+| [1, 2, 3]                       | 1                               | a                               |
+|                                 | 2                               | b                               |
+| [4, 5]                          | 3                               |                                 |
+| [1, 2, 3]                       |                                 | a                               |
+|                                 |                                 | b                               |
+| [4, 5]                          |                                 |                                 |
+| [1, 2, 3]                       | 4                               | a                               |
+|                                 | 5                               | b                               |
+| [4, 5]                          |                                 |                                 |
+| [7, 8, 9, 10]                   | 7                               | c                               |
+|                                 | 8                               | d                               |
+| [11, 12, 13]                    | 9                               |                                 |
+|                                 | 10                              |                                 |
+| [7, 8, 9, 10]                   |                                 | c                               |
+|                                 |                                 | d                               |
+| [11, 12, 13]                    |                                 |                                 |
+| [7, 8, 9, 10]                   | 11                              | c                               |
+|                                 | 12                              | d                               |
+| [11, 12, 13]                    | 13                              |                                 |
+|                                 |                                 | e                               |
++---------------------------------+---------------------------------+---------------------------------+
         "#
         .trim();
-
-        println!("{}", actual);
-        // format pretty record batch
+        assert_eq!(actual, expected);
         Ok(())
     }
 
