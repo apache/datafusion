@@ -31,7 +31,7 @@ use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDF
 
 /// Create a [`WindowFunction`](Expr::WindowFunction) expression for
 /// `row_number` user-defined window function.
-pub fn row_number(args: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
+pub fn row_number(args: Vec<Expr>) -> Expr {
     Expr::WindowFunction(WindowFunction::new(row_number_udwf(), args))
 }
 /// Singleton instance of `row_number`, ensures the UDWF is only created once.
