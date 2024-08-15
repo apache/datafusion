@@ -1017,11 +1017,12 @@ logical_plan
 ## TODO file ticket
 query TT
 EXPLAIN SELECT
-  SPLIT_PART(column1_utf8view, 'f', 1) as c
+  SPLIT_PART(column1_utf8view, 'f', 1) as c1,
+  SPLIT_PART('testtesttest',column1_utf8view, 1) as c2
 FROM test;
 ----
 logical_plan
-01)Projection: split_part(CAST(test.column1_utf8view AS Utf8), Utf8("f"), Int64(1)) AS c
+01)Projection: split_part(test.column1_utf8view, Utf8("f"), Int64(1)) AS c1, split_part(Utf8("testtesttest"), test.column1_utf8view, Int64(1)) AS c2
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for STRPOS
