@@ -235,6 +235,16 @@ SELECT reverse('abcde')
 edcba
 
 query T
+SELECT reverse(arrow_cast('abcde', 'LargeUtf8'))
+----
+edcba
+
+query T
+SELECT reverse(arrow_cast('abcde', 'Utf8View'))
+----
+edcba
+
+query T
 SELECT reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'))
 ----
 edcba
@@ -245,7 +255,27 @@ SELECT reverse('loẅks')
 sk̈wol
 
 query T
+SELECT reverse(arrow_cast('loẅks', 'LargeUtf8'))
+----
+sk̈wol
+
+query T
+SELECT reverse(arrow_cast('loẅks', 'Utf8View'))
+----
+sk̈wol
+
+query T
 SELECT reverse(NULL)
+----
+NULL
+
+query T
+SELECT reverse(arrow_cast(NULL, 'LargeUtf8'))
+----
+NULL
+
+query T
+SELECT reverse(arrow_cast(NULL, 'Utf8View'))
 ----
 NULL
 
