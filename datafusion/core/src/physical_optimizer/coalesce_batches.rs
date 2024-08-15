@@ -118,16 +118,16 @@ fn wrap_in_coalesce_rewrite_inner(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let wrap_in_coalesce = need_wrap_in_coalesce(plan.as_any());
+    let mut wrap_in_coalesce = need_wrap_in_coalesce(plan.as_any());
 
-    let (target_batch_size, fetch) = match limit {
-        Some(limit) => (
-            default_batch_size,
-            // Take the `limit/partition` as  CoalesceBatchesExec's fetch,it will limit maximum number of rows to fetch
-            Some(ceil(limit, partition)),
-        ),
-        None => (default_batch_size, None),
-    };
+    // Take the `limit/partition` as  CoalesceBatchesExec's fetch,it will limit maximum number of rows to fetch
+    let fetch = limit.map(|limit| {
+        // If limit is small enough, then this optimization is not performed
+        if limit < partition * 16 {
+            wrap_in_coalesce = false;
+        }
+        ceil(limit, partition)
+    });
 
     let plan = if children.is_empty() {
         plan
@@ -136,7 +136,7 @@ fn wrap_in_coalesce_rewrite_inner(
     };
 
     Ok(if wrap_in_coalesce {
-        Arc::new(CoalesceBatchesExec::new(plan, target_batch_size).with_fetch(fetch))
+        Arc::new(CoalesceBatchesExec::new(plan, default_batch_size).with_fetch(fetch))
     } else {
         plan
     })
