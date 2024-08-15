@@ -142,3 +142,9 @@ impl GroupOrderingFull {
         std::mem::size_of::<Self>()
     }
 }
+
+impl Default for GroupOrderingFull {
+    fn default() -> Self {
+        Self::new()
+    }
+}
