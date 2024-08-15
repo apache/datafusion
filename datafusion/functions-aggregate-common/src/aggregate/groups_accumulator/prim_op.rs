@@ -23,7 +23,9 @@ use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
-use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{
+    EmitTo, GroupStatesMode, GroupsAccumulator,
+};
 
 use super::accumulate::NullState;
 
@@ -56,6 +58,10 @@ where
 
     /// Function that computes the primitive result
     prim_fn: F,
+
+    mode: GroupStatesMode,
+
+    group_idx_convert_buffer: Vec<usize>,
 }
 
 impl<T, F> PrimitiveGroupsAccumulator<T, F>
@@ -70,6 +76,8 @@ where
             null_state: NullState::new(),
             starting_value: T::default_value(),
             prim_fn,
+            mode: GroupStatesMode::Flat,
+            group_idx_convert_buffer: Vec::new(),
         }
     }
 
@@ -98,6 +106,25 @@ where
         // update values
         self.values.resize(total_num_groups, self.starting_value);
 
+        // Maybe we should convert the `group_indices`
+        let group_indices = match self.mode {
+            GroupStatesMode::Flat => group_indices,
+            GroupStatesMode::Blocked(blk_size) => {
+                self.group_idx_convert_buffer.clear();
+
+                let converted_group_indices = group_indices.iter().map(|group_idx| {
+                    let blk_id =
+                        ((*group_idx as u64 >> 32) & 0x00000000ffffffff) as usize;
+                    let blk_offset = ((*group_idx as u64) & 0x00000000ffffffff) as usize;
+                    blk_id * blk_size + blk_offset
+                });
+                self.group_idx_convert_buffer
+                    .extend(converted_group_indices);
+
+                &self.group_idx_convert_buffer
+            }
+        };
+
         // NullState dispatches / handles tracking nulls and groups that saw no values
         self.null_state.accumulate(
             group_indices,
@@ -114,10 +141,16 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let values = emit_to.take_needed(&mut self.values);
-        let nulls = self.null_state.build(emit_to)?;
+        let block_size = match self.mode {
+            GroupStatesMode::Flat => None,
+            GroupStatesMode::Blocked(blk_size) => Some(blk_size),
+        };
+
+        let values = emit_to.take_needed(&mut self.values, block_size);
+        let nulls = self.null_state.build(emit_to, block_size)?;
         let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
             .with_data_type(self.data_type.clone());
+
         Ok(Arc::new(values))
     }
 
@@ -196,5 +229,18 @@ where
 
     fn size(&self) -> usize {
         self.values.capacity() * std::mem::size_of::<T::Native>() + self.null_state.size()
+    }
+
+    fn supports_blocked_mode(&self) -> bool {
+        true
+    }
+
+    fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
+        self.values.clear();
+        self.null_state = NullState::new();
+
+        self.mode = mode;
+
+        Ok(())
     }
 }

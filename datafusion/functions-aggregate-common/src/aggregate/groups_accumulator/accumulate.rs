@@ -23,7 +23,7 @@ use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowPrimitiveType;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
 /// Track the accumulator null state per row: if any values for that
@@ -331,7 +331,12 @@ impl NullState {
     /// for the `emit_to` rows.
     ///
     /// resets the internal state appropriately
-    pub fn build(&mut self, emit_to: EmitTo) -> Result<NullBuffer> {
+    // TODO: add unit tests for the `EmitTo::CurrentBlock` branch
+    pub fn build(
+        &mut self,
+        emit_to: EmitTo,
+        block_size: Option<usize>,
+    ) -> Result<NullBuffer> {
         let nulls: BooleanBuffer = self.seen_values.finish();
 
         let nulls = match emit_to {
@@ -349,9 +354,18 @@ impl NullState {
                 first_n_null
             }
             EmitTo::CurrentBlock(_) => {
-                return Err(DataFusionError::NotImplemented(
-                    "blocked group values management is not supported".to_string(),
-                ))
+                let block_size = block_size.unwrap();
+
+                // split off the first N values in seen_values
+                //
+                // TODO make this more efficient rather than two
+                // copies and bitwise manipulation
+                let first_n_null: BooleanBuffer = nulls.iter().take(block_size).collect();
+                // reset the existing seen buffer
+                for seen in nulls.iter().skip(block_size) {
+                    self.seen_values.append(seen);
+                }
+                first_n_null
             }
         };
         Ok(NullBuffer::new(nulls))
@@ -719,7 +733,7 @@ mod test {
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
 
-            let null_buffer = null_state.build(EmitTo::All).unwrap();
+            let null_buffer = null_state.build(EmitTo::All, None).unwrap();
 
             assert_eq!(null_buffer, expected_null_buffer);
         }
@@ -836,7 +850,7 @@ mod test {
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
 
-            let null_buffer = null_state.build(EmitTo::All).unwrap();
+            let null_buffer = null_state.build(EmitTo::All, None).unwrap();
 
             assert_eq!(null_buffer, expected_null_buffer);
         }

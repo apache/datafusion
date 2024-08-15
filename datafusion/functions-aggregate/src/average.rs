@@ -29,6 +29,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::groups_accumulator::GroupStatesMode;
 use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
@@ -406,6 +407,8 @@ where
 
     /// Function that computes the final average (value / count)
     avg_fn: F,
+
+    mode: GroupStatesMode,
 }
 
 impl<T, F> AvgGroupsAccumulator<T, F>
@@ -426,6 +429,7 @@ where
             sums: vec![],
             null_state: NullState::new(),
             avg_fn,
+            mode: GroupStatesMode::Flat,
         }
     }
 }
@@ -465,9 +469,14 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed(&mut self.counts);
-        let sums = emit_to.take_needed(&mut self.sums);
-        let nulls = self.null_state.build(emit_to)?;
+        let block_size = match self.mode {
+            GroupStatesMode::Flat => None,
+            GroupStatesMode::Blocked(blk_size) => Some(blk_size),
+        };
+
+        let counts = emit_to.take_needed(&mut self.counts, block_size);
+        let sums = emit_to.take_needed(&mut self.sums, block_size);
+        let nulls = self.null_state.build(emit_to, block_size)?;
 
         assert_eq!(nulls.len(), sums.len());
         assert_eq!(counts.len(), sums.len());
@@ -502,13 +511,18 @@ where
 
     // return arrays for sums and counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let nulls = self.null_state.build(emit_to)?;
+        let block_size = match self.mode {
+            GroupStatesMode::Flat => None,
+            GroupStatesMode::Blocked(blk_size) => Some(blk_size),
+        };
+
+        let nulls = self.null_state.build(emit_to, block_size)?;
         let nulls = Some(nulls);
 
-        let counts = emit_to.take_needed(&mut self.counts);
+        let counts = emit_to.take_needed(&mut self.counts, block_size);
         let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
 
-        let sums = emit_to.take_needed(&mut self.sums);
+        let sums = emit_to.take_needed(&mut self.sums, block_size);
         let sums = PrimitiveArray::<T>::new(sums.into(), nulls) // zero copy
             .with_data_type(self.sum_data_type.clone());
 
@@ -584,5 +598,19 @@ where
     fn size(&self) -> usize {
         self.counts.capacity() * std::mem::size_of::<u64>()
             + self.sums.capacity() * std::mem::size_of::<T>()
+    }
+
+    fn supports_blocked_mode(&self) -> bool {
+        true
+    }
+
+    fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
+        self.counts.clear();
+        self.sums.clear();
+        self.null_state = NullState::new();
+
+        self.mode = mode;
+
+        Ok(())
     }
 }

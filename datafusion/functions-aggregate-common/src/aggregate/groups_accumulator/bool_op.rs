@@ -124,7 +124,7 @@ where
             }
         };
 
-        let nulls = self.null_state.build(emit_to)?;
+        let nulls = self.null_state.build(emit_to, None)?;
         let values = BooleanArray::new(values, Some(nulls));
         Ok(Arc::new(values))
     }

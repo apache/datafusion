@@ -361,18 +361,18 @@ impl GroupValues for GroupValuesRows {
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
     }
-    
+
     fn supports_blocked_mode(&self) -> bool {
         true
     }
-    
+
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
         self.map.clear();
         self.group_values.clear();
         self.mode = mode;
-        
+
         Ok(())
-    }    
+    }
 }
 
 #[inline]

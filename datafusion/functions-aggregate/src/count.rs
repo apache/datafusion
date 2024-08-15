@@ -18,7 +18,7 @@
 use ahash::RandomState;
 use datafusion_expr::groups_accumulator::GroupStatesMode;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::ops::BitAnd;
 use std::{fmt::Debug, sync::Arc};
 
@@ -359,7 +359,7 @@ struct CountGroupsAccumulator {
     /// output type of count is `DataType::Int64`. Thus by using `i64`
     /// for the counts, the output [`Int64Array`] can be created
     /// without copy.
-    counts: VecDeque<i64>,
+    counts: Vec<i64>,
 
     mode: GroupStatesMode,
 
@@ -369,7 +369,7 @@ struct CountGroupsAccumulator {
 impl CountGroupsAccumulator {
     pub fn new() -> Self {
         Self {
-            counts: VecDeque::new(),
+            counts: vec![],
             mode: GroupStatesMode::Flat,
             group_idx_convert_buffer: Vec::new(),
         }
@@ -391,6 +391,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         // filtered value
         self.counts.resize(total_num_groups, 0);
 
+        // Maybe we should convert the `group_indices`
         let group_indices = match self.mode {
             GroupStatesMode::Flat => group_indices,
             GroupStatesMode::Blocked(blk_size) => {
@@ -480,7 +481,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         };
         let counts = emit_to.take_needed(&mut self.counts, block_size);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
-        
+
         Ok(vec![Arc::new(counts) as ArrayRef])
     }
 
@@ -560,6 +561,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
         self.counts.clear();
         self.mode = mode;
+
         Ok(())
     }
 }
