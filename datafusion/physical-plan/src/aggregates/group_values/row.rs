@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::VecDeque;
+use std::mem;
+
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::compute::cast;
@@ -25,6 +28,7 @@ use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_expr::groups_accumulator::GroupStatesMode;
 use datafusion_expr::EmitTo;
 use hashbrown::raw::RawTable;
 
@@ -57,7 +61,7 @@ pub struct GroupValuesRows {
     /// important for multi-column group keys.
     ///
     /// [`Row`]: arrow::row::Row
-    group_values: Option<Rows>,
+    group_values: VecDeque<Rows>,
 
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
@@ -67,6 +71,9 @@ pub struct GroupValuesRows {
 
     /// Random state for creating hashes
     random_state: RandomState,
+
+    /// Mode about current GroupValuesRows
+    mode: GroupStatesMode,
 }
 
 impl GroupValuesRows {
@@ -90,10 +97,11 @@ impl GroupValuesRows {
             row_converter,
             map,
             map_size: 0,
-            group_values: None,
+            group_values: VecDeque::new(),
             hashes_buffer: Default::default(),
             rows_buffer,
             random_state: Default::default(),
+            mode: GroupStatesMode::Flat,
         })
     }
 }
@@ -106,10 +114,17 @@ impl GroupValues for GroupValuesRows {
         self.row_converter.append(group_rows, cols)?;
         let n_rows = group_rows.num_rows();
 
-        let mut group_values = match self.group_values.take() {
-            Some(group_values) => group_values,
-            None => self.row_converter.empty_rows(0, 0),
-        };
+        let mut group_values = mem::take(&mut self.group_values);
+        if group_values.is_empty() {
+            let block = match self.mode {
+                GroupStatesMode::Flat => self.row_converter.empty_rows(0, 0),
+                GroupStatesMode::Blocked(blk_size) => {
+                    self.row_converter.empty_rows(blk_size, 0)
+                }
+            };
+
+            group_values.push_back(block);
+        }
 
         // tracks to which group each of the input rows belongs
         groups.clear();
@@ -121,16 +136,32 @@ impl GroupValues for GroupValuesRows {
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
+            let mode = self.mode;
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
                 // Somewhat surprisingly, this closure can be called even if the
                 // hash doesn't match, so check the hash first with an integer
                 // comparison first avoid the more expensive comparison with
                 // group value. https://github.com/apache/datafusion/pull/11718
-                target_hash == *exist_hash
-                    // verify that the group that we are inserting with hash is
-                    // actually the same key value as the group in
-                    // existing_idx  (aka group_values @ row)
-                    && group_rows.row(row) == group_values.row(*group_idx)
+                if target_hash != *exist_hash {
+                    return false;
+                }
+
+                // verify that the group that we are inserting with hash is
+                // actually the same key value as the group in
+                // existing_idx  (aka group_values @ row)
+                match mode {
+                    GroupStatesMode::Flat => {
+                        group_rows.row(row)
+                            == group_values.back().unwrap().row(*group_idx)
+                    }
+                    GroupStatesMode::Blocked(_) => {
+                        let block_id =
+                            ((*group_idx as u64 >> 32) & 0x00000000ffffffff) as usize;
+                        let block_offset =
+                            ((*group_idx as u64) & 0x00000000ffffffff) as usize;
+                        group_rows.row(row) == group_values[block_id].row(block_offset)
+                    }
+                }
             });
 
             let group_idx = match entry {
@@ -139,8 +170,34 @@ impl GroupValues for GroupValuesRows {
                 //  1.2 Need to create new entry for the group
                 None => {
                     // Add new entry to aggr_state and save newly created index
-                    let group_idx = group_values.num_rows();
-                    group_values.push(group_rows.row(row));
+                    let group_idx = match mode {
+                        GroupStatesMode::Flat => {
+                            let blk = group_values.back_mut().unwrap();
+                            let group_idx = blk.num_rows();
+                            blk.push(group_rows.row(row));
+                            group_idx
+                        }
+                        GroupStatesMode::Blocked(blk_size) => {
+                            if group_values.back().unwrap().num_rows() == blk_size {
+                                // Use blk_size as offset cap,
+                                // and old block's buffer size as buffer cap
+                                let new_buf_cap =
+                                    rows_buffer_size(group_values.back().unwrap());
+                                let new_blk =
+                                    self.row_converter.empty_rows(blk_size, new_buf_cap);
+                                group_values.push_back(new_blk);
+                            }
+
+                            let blk_id = (group_values.len() - 1) as u64;
+                            let cur_blk = group_values.back_mut().unwrap();
+                            let blk_offset = cur_blk.num_rows() as u64;
+                            cur_blk.push(group_rows.row(row));
+
+                            (((blk_id << 32) & 0xffffffff00000000)
+                                | (blk_offset & 0x00000000ffffffff))
+                                as usize
+                        }
+                    };
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
@@ -154,13 +211,17 @@ impl GroupValues for GroupValuesRows {
             groups.push(group_idx);
         }
 
-        self.group_values = Some(group_values);
+        self.group_values = group_values;
 
         Ok(())
     }
 
     fn size(&self) -> usize {
-        let group_values_size = self.group_values.as_ref().map(|v| v.size()).unwrap_or(0);
+        let group_values_size = self
+            .group_values
+            .iter()
+            .map(|rows| rows.size())
+            .sum::<usize>();
         self.row_converter.size()
             + group_values_size
             + self.map_size
@@ -174,33 +235,58 @@ impl GroupValues for GroupValuesRows {
 
     fn len(&self) -> usize {
         self.group_values
-            .as_ref()
-            .map(|group_values| group_values.num_rows())
-            .unwrap_or(0)
+            .iter()
+            .map(|rows| rows.num_rows())
+            .sum::<usize>()
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let mut group_values = self
-            .group_values
-            .take()
-            .expect("Can not emit from empty rows");
+        let mut group_values = mem::take(&mut self.group_values);
 
         let mut output = match emit_to {
-            EmitTo::All => {
-                let output = self.row_converter.convert_rows(&group_values)?;
-                group_values.clear();
-                output
-            }
+            EmitTo::All => match self.mode {
+                GroupStatesMode::Flat => {
+                    let blk = group_values.pop_back().unwrap();
+                    let output = self.row_converter.convert_rows(blk.into_iter())?;
+                    output
+                }
+                GroupStatesMode::Blocked(_) => {
+                    let mut total_rows_num = 0;
+                    let mut total_buffer_size = 0;
+                    group_values.iter().for_each(|rows| {
+                        let rows_num = rows.num_rows();
+                        let rows_buffer_size = rows_buffer_size(rows);
+                        total_rows_num += rows_num;
+                        total_buffer_size += rows_buffer_size;
+                    });
+
+                    let mut total_rows = self
+                        .row_converter
+                        .empty_rows(total_rows_num, total_buffer_size);
+                    for rows in &group_values {
+                        for row in rows.into_iter() {
+                            total_rows.push(row);
+                        }
+                    }
+
+                    group_values.clear();
+
+                    let output =
+                        self.row_converter.convert_rows(total_rows.into_iter())?;
+                    output
+                }
+            },
             EmitTo::First(n) => {
-                let groups_rows = group_values.iter().take(n);
+                let blk = group_values.back_mut().unwrap();
+                let groups_rows = blk.iter().take(n);
                 let output = self.row_converter.convert_rows(groups_rows)?;
                 // Clear out first n group keys by copying them to a new Rows.
                 // TODO file some ticket in arrow-rs to make this more efficient?
                 let mut new_group_values = self.row_converter.empty_rows(0, 0);
-                for row in group_values.iter().skip(n) {
+                for row in blk.iter().skip(n) {
                     new_group_values.push(row);
                 }
-                std::mem::swap(&mut new_group_values, &mut group_values);
+                std::mem::swap(&mut new_group_values, blk);
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
@@ -216,10 +302,34 @@ impl GroupValues for GroupValuesRows {
                 }
                 output
             }
-            EmitTo::CurrentBlock(_) => {
-                return Err(DataFusionError::NotImplemented(
-                    "blocked group values is not supported yet".to_string(),
-                ));
+            EmitTo::CurrentBlock(true) => {
+                let cur_blk = group_values.pop_front().unwrap();
+                let output = self.row_converter.convert_rows(cur_blk.iter())?;
+                unsafe {
+                    for bucket in self.map.iter() {
+                        // Decrement group index by n
+                        let group_idx = bucket.as_ref().1 as u64;
+                        let blk_id = (group_idx >> 32) & 0x00000000ffffffff;
+                        let blk_offset = group_idx & 0x00000000ffffffff;
+                        match blk_id.checked_sub(1) {
+                            // Group index was >= n, shift value down
+                            Some(bid) => {
+                                let new_group_idx = (((bid << 32) & 0xffffffff00000000)
+                                    | (blk_offset & 0x00000000ffffffff))
+                                    as usize;
+                                bucket.as_mut().1 = new_group_idx;
+                            }
+                            // Group index was < n, so remove from table
+                            None => self.map.erase(bucket),
+                        }
+                    }
+                }
+                output
+            }
+            EmitTo::CurrentBlock(false) => {
+                let cur_blk = group_values.pop_front().unwrap();
+                let output = self.row_converter.convert_rows(cur_blk.iter())?;
+                output
             }
         };
 
@@ -237,20 +347,37 @@ impl GroupValues for GroupValuesRows {
             }
         }
 
-        self.group_values = Some(group_values);
+        self.group_values = group_values;
+
         Ok(output)
     }
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {
         let count = batch.num_rows();
-        self.group_values = self.group_values.take().map(|mut rows| {
-            rows.clear();
-            rows
-        });
+        self.group_values.clear();
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * std::mem::size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
     }
+    
+    fn supports_blocked_mode(&self) -> bool {
+        true
+    }
+    
+    fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
+        self.map.clear();
+        self.group_values.clear();
+        self.mode = mode;
+        
+        Ok(())
+    }    
+}
+
+#[inline]
+fn rows_buffer_size(rows: &Rows) -> usize {
+    let total_size = rows.size();
+    let offset_size = (rows.num_rows() + 1) * mem::size_of::<usize>();
+    total_size - offset_size - mem::size_of::<Rows>()
 }
