@@ -31,6 +31,11 @@ use datafusion_expr::WindowUDF;
 
 pub mod row_number;
 
+/// Fluent-style API for creating `Expr`s
+pub mod expr_fn {
+    pub use super::row_number::row_number;
+}
+
 /// Returns all default window functions
 pub fn all_default_window_functions() -> Vec<Arc<WindowUDF>> {
     vec![row_number::row_number_udwf()]
