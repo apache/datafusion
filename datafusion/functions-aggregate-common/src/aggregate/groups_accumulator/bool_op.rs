@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use crate::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
 use arrow::buffer::BooleanBuffer;
 use datafusion_common::Result;
@@ -134,5 +135,23 @@ where
     fn size(&self) -> usize {
         // capacity is in bits, so convert to bytes
         self.values.capacity() / 8 + self.null_state.size()
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let values = values[0].as_boolean().clone();
+
+        let values_null_buffer_filtered = filtered_null_mask(opt_filter, &values);
+        let (values_buf, _) = values.into_parts();
+        let values_filtered = BooleanArray::new(values_buf, values_null_buffer_filtered);
+
+        Ok(vec![Arc::new(values_filtered)])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 }
