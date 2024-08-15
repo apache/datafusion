@@ -1707,9 +1707,7 @@ impl ScalarValue {
         // figure out the type based on the first element
         let data_type = match scalars.peek() {
             None => {
-                return _exec_err!(
-                    "Empty iterator passed to ScalarValue::iter_to_array"
-                );
+                return _exec_err!("Empty iterator passed to ScalarValue::iter_to_array");
             }
             Some(sv) => sv.data_type(),
         };
