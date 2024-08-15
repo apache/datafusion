@@ -82,9 +82,6 @@ pub trait Accumulator: Send + Sync + Debug {
     /// Returns the intermediate state of the accumulator, consuming the
     /// intermediate state.
     ///
-    /// After this call, the accumulator's internal state should be
-    /// equivalent to when it was first created.
-    ///
     /// This function gets `&mut self` to allow for the accumulator to build
     /// arrow compatible internal state that can be returned without copying
     /// when possible (for example distinct strings).
