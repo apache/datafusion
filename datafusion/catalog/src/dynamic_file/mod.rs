@@ -1,1 +1,1 @@
-mod catalog;
+pub(crate) mod catalog;

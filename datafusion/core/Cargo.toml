@@ -49,7 +49,6 @@ backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
 crypto_expressions = ["datafusion-functions/crypto_expressions"]
 datetime_expressions = ["datafusion-functions/datetime_expressions"]
-dirs = ["dep:dirs"]
 default = [
     "nested_expressions",
     "crypto_expressions",
@@ -60,7 +59,6 @@ default = [
     "unicode_expressions",
     "compression",
     "parquet",
-    "dirs",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
@@ -79,6 +77,7 @@ unicode_expressions = [
     "datafusion-sql/unicode_expressions",
     "datafusion-functions/unicode_expressions",
 ]
+home_dir = ["datafusion-catalog/home_dir"]
 
 [dependencies]
 ahash = { workspace = true }
@@ -115,7 +114,6 @@ datafusion-physical-expr-functions-aggregate = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
-dirs = { version = "4.0.0", optional = true }
 flate2 = { version = "1.0.24", optional = true }
 futures = { workspace = true }
 glob = "0.3.0"

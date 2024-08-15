@@ -27,6 +27,9 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+home_dir= ["dep:dirs"]
+
 [dependencies]
 arrow-schema = { workspace = true }
 async-trait = "0.1.41"
@@ -34,6 +37,8 @@ datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+dirs = { version = "4.0.0", optional = true }
+parking_lot = { workspace = true }
 
 [lints]
 workspace = true

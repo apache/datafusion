@@ -22,6 +22,7 @@
 pub mod avro_to_arrow;
 pub mod cte_worktable;
 pub mod default_table_source;
+pub mod dynamic_file;
 pub mod empty;
 pub mod file_format;
 pub mod function;

@@ -91,7 +91,7 @@ impl TestContext {
                 {
                     info!("Registering avro tables");
                     register_avro_tables(&mut test_ctx).await;
-                    test_ctx.ctx.enable_url_table().ok();
+                    test_ctx.ctx = test_ctx.ctx.enable_url_table();
                 }
                 #[cfg(not(feature = "avro"))]
                 {
@@ -101,7 +101,8 @@ impl TestContext {
             }
             "describe.slt" | "arrow_files.slt" | "csv_files.slt" | "json.slt"
             | "parquet.slt" => {
-                test_ctx.ctx.enable_url_table().ok();
+                // TODO: duplicate enable url table
+                test_ctx.ctx = test_ctx.ctx.enable_url_table();
             }
             "joins.slt" => {
                 info!("Registering partition table tables");

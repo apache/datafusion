@@ -69,17 +69,18 @@ use datafusion_expr::{
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
 
+use crate::datasource::dynamic_file::DynamicListTableFactory;
+use crate::execution::session_state::SessionStateBuilder;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use object_store::ObjectStore;
-use parking_lot::RwLock;
-use url::Url;
-use crate::execution::session_state::{SessionStateBuilder, StateStore};
+use datafusion_catalog::{DynamicFileCatalog, SessionStore};
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
-use crate::catalog_common::dynamic_file::DynamicFileCatalog;
+use object_store::ObjectStore;
+use parking_lot::RwLock;
+use url::Url;
 
 mod avro;
 mod csv;
@@ -354,13 +355,17 @@ impl SessionContext {
     /// ```
     pub fn enable_url_table(&self) -> Self {
         let state_ref = self.state();
-        let state_store = Arc::new(StateStore::new());
-        let catalog_list = Arc::new(DynamicFileCatalog::new(Arc::clone(state_ref.catalog_list()), Arc::clone(&state_store)));
+        let session_store = Arc::new(SessionStore::new());
+        let factory = DynamicListTableFactory::new(Arc::clone(&session_store));
+        let catalog_list = Arc::new(DynamicFileCatalog::new(
+            Arc::clone(state_ref.catalog_list()),
+            Arc::new(factory),
+        ));
         let new_state = SessionStateBuilder::new_from_existing(self.state())
             .with_catalog_list(catalog_list)
             .build();
         let ctx = SessionContext::new_with_state(new_state);
-        state_store.with_state(ctx.state_weak_ref());
+        session_store.with_state(ctx.state_weak_ref());
         ctx
     }
 
@@ -1800,7 +1805,10 @@ mod tests {
         let path = path.join("tests/tpch-csv/customer.csv");
         let url = format!("file://{}", path.display());
         let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
-        let session_state = SessionStateBuilder::new().with_config(cfg).build();
+        let session_state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_config(cfg)
+            .build();
         let ctx = SessionContext::new_with_state(session_state).enable_url_table();
         let result = plan_and_collect(
             &ctx,
