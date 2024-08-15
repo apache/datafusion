@@ -26,4 +26,5 @@ includes = [
 excludes = [
     # generated code
     "datafusion/proto/src/generated/",
+    "datafusion/proto-common/src/generated/",
 ]
