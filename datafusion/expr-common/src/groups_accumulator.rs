@@ -51,7 +51,7 @@ impl EmitTo {
             }
             Self::First(n) => {
                 let split_at = min(v.len(), *n);
-                
+
                 // get end n+1,.. values into t
                 let mut t = v.split_off(split_at);
                 // leave n+1,.. in v
@@ -171,8 +171,12 @@ pub trait GroupsAccumulator: Send {
 
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
         if matches!(&mode, GroupStatesMode::Blocked(_)) {
+            // if self.supports_blocked_mode() {
+            //     panic!("kamille debug debug");
+            // }
+
             return Err(DataFusionError::NotImplemented(
-                "only flat mode is not supported yet".to_string(),
+                "only flat mode accumulator is supported yet".to_string(),
             ));
         }
 

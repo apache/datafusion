@@ -60,7 +60,7 @@ pub trait GroupValues: Send {
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
         if matches!(&mode, GroupStatesMode::Blocked(_)) {
             return Err(DataFusionError::NotImplemented(
-                "only flat mode is not supported yet".to_string(),
+                "only flat mode group values is supported yet".to_string(),
             ));
         }
 

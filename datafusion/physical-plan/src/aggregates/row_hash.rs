@@ -607,7 +607,7 @@ fn maybe_enable_blocked_group_states(
 
     let group_supports_blocked = group_values.supports_blocked_mode();
     let accumulators_support_blocked =
-        accumulators.iter().any(|acc| acc.supports_blocked_mode());
+        accumulators.iter().all(|acc| acc.supports_blocked_mode());
 
     match (group_supports_blocked, accumulators_support_blocked) {
         (true, true) => {
@@ -767,10 +767,12 @@ impl Stream for GroupedHashAggregateStream {
                 }
 
                 ExecutionState::ProducingBlocks(blocks) => {
-                    if let Some(blk) = blocks {
+                    let emit_to = if let Some(blk) = blocks {
                         if *blk > 0 {
                             self.exec_state =
                                 ExecutionState::ProducingBlocks(Some(*blk - 1));
+
+                            EmitTo::CurrentBlock(true)
                         } else {
                             self.exec_state = if self.input_done {
                                 ExecutionState::Done
@@ -781,9 +783,11 @@ impl Stream for GroupedHashAggregateStream {
                             };
                             continue;
                         }
-                    }
+                    } else {
+                        EmitTo::CurrentBlock(false)
+                    };
 
-                    let emit_result = self.emit(EmitTo::CurrentBlock(true), false);
+                    let emit_result = self.emit(emit_to, false);
                     if emit_result.is_err() {
                         return Poll::Ready(Some(emit_result));
                     }

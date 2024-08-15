@@ -409,6 +409,8 @@ where
     avg_fn: F,
 
     mode: GroupStatesMode,
+
+    group_idx_convert_buffer: Vec<usize>,
 }
 
 impl<T, F> AvgGroupsAccumulator<T, F>
@@ -430,6 +432,7 @@ where
             null_state: NullState::new(),
             avg_fn,
             mode: GroupStatesMode::Flat,
+            group_idx_convert_buffer: Vec::new(),
         }
     }
 }
@@ -449,9 +452,29 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
+        // Maybe we should convert the `group_indices`
+        let group_indices = match self.mode {
+            GroupStatesMode::Flat => group_indices,
+            GroupStatesMode::Blocked(blk_size) => {
+                self.group_idx_convert_buffer.clear();
+
+                let converted_group_indices = group_indices.iter().map(|group_idx| {
+                    let blk_id =
+                        ((*group_idx as u64 >> 32) & 0x00000000ffffffff) as usize;
+                    let blk_offset = ((*group_idx as u64) & 0x00000000ffffffff) as usize;
+                    blk_id * blk_size + blk_offset
+                });
+                self.group_idx_convert_buffer
+                    .extend(converted_group_indices);
+
+                &self.group_idx_convert_buffer
+            }
+        };
+
         // increment counts, update sums
         self.counts.resize(total_num_groups, 0);
         self.sums.resize(total_num_groups, T::default_value());
+
         self.null_state.accumulate(
             group_indices,
             values,
@@ -543,6 +566,26 @@ where
         // first batch is counts, second is partial sums
         let partial_counts = values[0].as_primitive::<UInt64Type>();
         let partial_sums = values[1].as_primitive::<T>();
+
+        // Maybe we should convert the `group_indices`
+        let group_indices = match self.mode {
+            GroupStatesMode::Flat => group_indices,
+            GroupStatesMode::Blocked(blk_size) => {
+                self.group_idx_convert_buffer.clear();
+
+                let converted_group_indices = group_indices.iter().map(|group_idx| {
+                    let blk_id =
+                        ((*group_idx as u64 >> 32) & 0x00000000ffffffff) as usize;
+                    let blk_offset = ((*group_idx as u64) & 0x00000000ffffffff) as usize;
+                    blk_id * blk_size + blk_offset
+                });
+                self.group_idx_convert_buffer
+                    .extend(converted_group_indices);
+
+                &self.group_idx_convert_buffer
+            }
+        };
+
         // update counts with partial counts
         self.counts.resize(total_num_groups, 0);
         self.null_state.accumulate(

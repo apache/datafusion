@@ -387,10 +387,6 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = &values[0];
 
-        // Add one to each group's counter for each non null, non
-        // filtered value
-        self.counts.resize(total_num_groups, 0);
-
         // Maybe we should convert the `group_indices`
         let group_indices = match self.mode {
             GroupStatesMode::Flat => group_indices,
@@ -409,6 +405,10 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                 &self.group_idx_convert_buffer
             }
         };
+
+        // Add one to each group's counter for each non null, non
+        // filtered value
+        self.counts.resize(total_num_groups, 0);
 
         accumulate_indices(
             group_indices,
@@ -437,8 +437,28 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         assert_eq!(partial_counts.null_count(), 0);
         let partial_counts = partial_counts.values();
 
+        // Maybe we should convert the `group_indices`
+        let group_indices = match self.mode {
+            GroupStatesMode::Flat => group_indices,
+            GroupStatesMode::Blocked(blk_size) => {
+                self.group_idx_convert_buffer.clear();
+
+                let converted_group_indices = group_indices.iter().map(|group_idx| {
+                    let blk_id =
+                        ((*group_idx as u64 >> 32) & 0x00000000ffffffff) as usize;
+                    let blk_offset = ((*group_idx as u64) & 0x00000000ffffffff) as usize;
+                    blk_id * blk_size + blk_offset
+                });
+                self.group_idx_convert_buffer
+                    .extend(converted_group_indices);
+
+                &self.group_idx_convert_buffer
+            }
+        };
+
         // Adds the counts with the partial counts
         self.counts.resize(total_num_groups, 0);
+
         match opt_filter {
             Some(filter) => filter
                 .iter()

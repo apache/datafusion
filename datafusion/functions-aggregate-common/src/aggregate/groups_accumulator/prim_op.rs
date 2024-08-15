@@ -103,9 +103,6 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
-        // update values
-        self.values.resize(total_num_groups, self.starting_value);
-
         // Maybe we should convert the `group_indices`
         let group_indices = match self.mode {
             GroupStatesMode::Flat => group_indices,
@@ -124,6 +121,9 @@ where
                 &self.group_idx_convert_buffer
             }
         };
+
+        // update values
+        self.values.resize(total_num_groups, self.starting_value);
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
         self.null_state.accumulate(
