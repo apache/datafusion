@@ -607,7 +607,7 @@ mod tests {
         );
         // memoization only contains 1 transformation
         assert_eq!(memo.len(), 1);
-        assert!(memo.get(&Column::from_name("3d_col")).is_some());
+        assert!(memo.get("3d_col").is_some());
         column_unnests_eq(
             vec!["unnest_placeholder(3d_col)"],
             &unnest_placeholder_columns,
@@ -640,7 +640,7 @@ mod tests {
         // memoization still contains 1 transformation
         // and the previous transformation is reused
         assert_eq!(memo.len(), 1);
-        assert!(memo.get(&Column::from_name("3d_col")).is_some());
+        assert!(memo.get("3d_col").is_some());
         column_unnests_eq(
             vec!["unnest_placeholder(3d_col)"],
             &mut unnest_placeholder_columns,
@@ -678,7 +678,7 @@ mod tests {
         // and the previous transformation is reused
         assert_eq!(memo.len(), 2);
 
-        assert!(memo.get(&Column::from_name("struct_arr_col")).is_some());
+        assert!(memo.get("struct_arr_col").is_some());
         column_unnests_eq(
             vec![
                 "unnest_placeholder(3d_col)",
@@ -750,7 +750,7 @@ mod tests {
         );
         // memoization only contains 1 transformation
         assert_eq!(memo.len(), 1);
-        assert!(memo.get(&Column::from_name("3d_col")).is_some());
+        assert!(memo.get("3d_col").is_some());
         column_unnests_eq(
             vec!["unnest_placeholder(3d_col)|List([unnest_placeholder(3d_col,depth=2)|depth=2])"],
             &unnest_placeholder_columns,
@@ -783,7 +783,7 @@ mod tests {
         // memoization still contains 1 transformation
         // and the for the same column, depth = 1 needs to be performed aside from depth = 2
         assert_eq!(memo.len(), 1);
-        assert!(memo.get(&Column::from_name("3d_col")).is_some());
+        assert!(memo.get("3d_col").is_some());
         column_unnests_eq(
             vec!["unnest_placeholder(3d_col)|List([unnest_placeholder(3d_col,depth=2)|depth=2, unnest_placeholder(3d_col,depth=1)|depth=1])"],
             &unnest_placeholder_columns,

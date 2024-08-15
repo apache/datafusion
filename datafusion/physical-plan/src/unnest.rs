@@ -43,7 +43,6 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, Result, UnnestOptions,
 };
 use datafusion_execution::TaskContext;
-use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
@@ -433,28 +432,36 @@ fn unnest_at_level(
     // temp_batch: [(a,depth=1,unnested(a)),(a,depth=2,unnested(unnested(a))),(b,depth=1,unnested(b))]
     // this is final, now combine the mainbatch and temp_batch
 
-    let temp_unnest_cols = list_type_columns
-        .iter()
-        .filter_map(
-            |ListUnnest {
-                 depth,
-                 index_in_input_schema,
-             }| {
-                if *depth == level_to_unnest {
-                    return Some(Arc::clone(&batch[*index_in_input_schema]));
-                }
-                if *depth > level_to_unnest {
-                    return Some(
-                        temp_batch
-                            .get(&(*index_in_input_schema, *depth))
-                            .unwrap()
-                            .clone(),
-                    );
-                }
-                return None;
-            },
-        )
-        .collect::<Vec<_>>();
+    let (temp_unnest_cols, unnested_locations): (Vec<Arc<dyn Array>>, Vec<_>) =
+        list_type_columns
+            .iter()
+            .filter_map(
+                |ListUnnest {
+                     depth,
+                     index_in_input_schema,
+                 }| {
+                    if *depth == level_to_unnest {
+                        return Some((
+                            Arc::clone(&batch[*index_in_input_schema]),
+                            (*index_in_input_schema, *depth),
+                        ));
+                    }
+                    // this means the depth to unnest is still on going, keep on unnesting
+                    // at current level
+                    if *depth > level_to_unnest {
+                        return Some((
+                            Arc::clone(
+                                temp_batch
+                                    .get(&(*index_in_input_schema, *depth))
+                                    .unwrap(),
+                            ),
+                            (*index_in_input_schema, *depth),
+                        ));
+                    }
+                    None
+                },
+            )
+            .unzip();
 
     // filter out so that list_arrays only contain column with the highest depth
     // at the same time, during iteration remove this depth so next time we don't have to unnest them again
@@ -473,29 +480,31 @@ fn unnest_at_level(
 
     // Unnest all the list arrays
     let unnested_temp_arrays =
-        unnest_list_arrays(&temp_unnest_cols, unnested_length, total_length)?;
-
-    unnested_temp_arrays
-        .into_iter()
-        .zip(list_type_columns.iter())
-        .for_each(
-            |(
-                flatten_arr,
-                ListUnnest {
-                    index_in_input_schema,
-                    depth,
-                },
-            )| {
-                temp_batch.insert((*index_in_input_schema, *depth), flatten_arr);
-            },
-        );
+        unnest_list_arrays(temp_unnest_cols.as_ref(), unnested_length, total_length)?;
+    unnested_temp_arrays.iter().for_each(|arr| {
+        println!("ret {}", arr.len());
+    });
 
     // Create the take indices array for other columns
     let take_indices = create_take_indicies(unnested_length, total_length);
+    println!("take indices {}", take_indices.len());
 
     // vertical expansion because of list unnest
     let ret = flatten_batch_from_indices(batch, &take_indices)?;
-    return Ok(ret);
+    ret.iter().for_each(|arr| {
+        println!("ret {}", arr.len());
+    });
+    unnested_temp_arrays
+        .into_iter()
+        .zip(unnested_locations.iter())
+        .for_each(|(flatten_arr, (index_in_input_schema, depth))| {
+            println!(
+                "inserting into temp value {} {}",
+                index_in_input_schema, depth
+            );
+            temp_batch.insert((*index_in_input_schema, *depth), flatten_arr);
+        });
+    Ok(ret)
 }
 
 fn build_batch_v2(
@@ -516,26 +525,28 @@ fn build_batch_v2(
                 });
             let mut unnested_original_columns = vec![];
             for depth in (1..=highest_depth).rev() {
-                let input = match depth {
-                    highest_depth => batch.columns(),
-                    _ => &unnested_original_columns,
+                let input = match depth == highest_depth {
+                    true => batch.columns(),
+                    false => &unnested_original_columns,
                 };
+                println!("unnesting at level {}", depth);
                 let temp = unnest_at_level(
                     input,
                     list_type_columns,
                     &mut temp_batch,
-                    highest_depth,
+                    depth,
                     options,
                 )?;
                 unnested_original_columns = temp;
             }
+            println!("{} temp batch", temp_batch.len());
             // TODO: combine temp with the batch
             let unnested_array_map: HashMap<usize, Vec<(Arc<dyn Array>, usize)>> =
                 temp_batch.into_iter().fold(
                     HashMap::new(),
                     |mut acc, ((index_in_input_schema, depth), flattened_array)| {
                         acc.entry(index_in_input_schema)
-                            .or_insert(vec![])
+                            .or_default()
                             .push((flattened_array, depth));
                         acc
                     },
@@ -552,6 +563,7 @@ fn build_batch_v2(
                 })
                 .collect();
 
+            println!("unnested array map {}", unnested_array_map.len());
             let mut ordered_unnested_array_map = unnested_array_map
                 .into_iter()
                 .map(
@@ -579,16 +591,16 @@ fn build_batch_v2(
             //     .fold(0, |highest_depth, ListUnnest { depth, .. }| {
             //         cmp::max(highest_depth, *depth)
             //     });
+            println!("len of map {}", ordered_unnested_array_map.len());
             let ret = unnested_original_columns
-                .iter()
+                .into_iter()
                 .enumerate()
-                .map(
-                    |(col_idx, arr)| match ordered_unnested_array_map.remove(&col_idx) {
+                .flat_map(|(col_idx, arr)| {
+                    match ordered_unnested_array_map.remove(&col_idx) {
                         Some(unnested_arrays) => unnested_arrays,
-                        None => vec![arr.clone()],
-                    },
-                )
-                .flatten()
+                        None => vec![arr],
+                    }
+                })
                 .collect::<Vec<_>>();
 
             flatten_struct_cols(&ret, schema, struct_column_indices)
@@ -1053,7 +1065,7 @@ fn flatten_list_cols_from_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
+    use arrow::{datatypes::Field, util::pretty::pretty_format_batches};
     use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 
@@ -1136,6 +1148,130 @@ mod tests {
         let unnested_array = unnest_list_array(list_array, &length_array, 3 * 6)?;
         let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
         assert_eq!(strs, expected);
+        Ok(())
+    }
+    #[test]
+    fn test_build_batch() -> datafusion_common::Result<()> {
+        // col1                             | col2
+        // [[1,2,3],null,[4,5]]             | ['a','b']
+        // [[7,8,9,10], null, [11,12,13]]   | ['c','d']
+        // null                             | ['e']
+        let list_arr1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
+            Some(vec![Some(7), Some(8), Some(9), Some(10)]),
+            None,
+            Some(vec![Some(11), Some(12), Some(13)]),
+        ]);
+
+        let list_arr1_ref = Arc::new(list_arr1) as ArrayRef;
+        let offsets = OffsetBuffer::from_lengths([3, 3, 0]);
+        let mut nulls = BooleanBufferBuilder::new(3);
+        nulls.append(true);
+        nulls.append(true);
+        nulls.append(false);
+        // list<list<int32>>
+        let col1_field = Field::new_list_field(
+            DataType::List(Arc::new(Field::new_list_field(
+                list_arr1_ref.data_type().to_owned(),
+                true,
+            ))),
+            true,
+        );
+        let col1 = ListArray::new(
+            Arc::new(Field::new_list_field(
+                list_arr1_ref.data_type().to_owned(),
+                true,
+            )),
+            offsets,
+            list_arr1_ref,
+            Some(NullBuffer::new(nulls.finish())),
+        );
+
+        let list_arr2 = StringArray::from(vec![
+            Some("a"),
+            Some("b"),
+            Some("c"),
+            Some("d"),
+            Some("e"),
+        ]);
+
+        let offsets = OffsetBuffer::from_lengths([2, 2, 1]);
+        let mut nulls = BooleanBufferBuilder::new(3);
+        nulls.append_n(3, true);
+        let col2_field = Field::new(
+            "col2",
+            DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+            true,
+        );
+        let col2 = GenericListArray::<i32>::new(
+            Arc::new(Field::new_list_field(DataType::Utf8, true)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(list_arr2),
+            Some(NullBuffer::new(nulls.finish())),
+        );
+        // convert col1 and col2 to a record batch
+        let schema = Arc::new(Schema::new(vec![col1_field, col2_field]));
+        let out_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "col1_unnest_placeholder_depth_1",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            ),
+            Field::new("col1_unnest_placeholder_depth_2", DataType::Int32, true),
+            Field::new("col2_unnest_placeholder_depth_1", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(col1) as ArrayRef, Arc::new(col2) as ArrayRef],
+        )
+        .unwrap();
+        let list_type_columns = vec![
+            ListUnnest {
+                index_in_input_schema: 0,
+                depth: 1,
+            },
+            ListUnnest {
+                index_in_input_schema: 0,
+                depth: 2,
+            },
+            ListUnnest {
+                index_in_input_schema: 1,
+                depth: 1,
+            },
+        ];
+        let ret = build_batch_v2(
+            &batch,
+            &out_schema,
+            list_type_columns.as_ref(),
+            &HashSet::default(),
+            &UnnestOptions {
+                preserve_nulls: true,
+            },
+        )?;
+        let actual =
+            format!("{}", pretty_format_batches(vec![ret].as_ref())?).to_lowercase();
+        let expected_asc = r#"
++----------------------------------+--------------------------+
+| trace_id                         | max(traces.timestamp_ms) |
++----------------------------------+--------------------------+
+| 5868861a23ed31355efc5200eb80fe74 | 16909009999999           |
+| 4040e64656804c3d77320d7a0e7eb1f0 | 16909009999998           |
+| 02801bbe533190a9f8713d75222f445d | 16909009999997           |
+| 9e31b3b5a620de32b68fefa5aeea57f1 | 16909009999996           |
+| 2d88a860e9bd1cfaa632d8e7caeaa934 | 16909009999995           |
+| a47edcef8364ab6f191dd9103e51c171 | 16909009999994           |
+| 36a3fa2ccfbf8e00337f0b1254384db6 | 16909009999993           |
+| 0756be84f57369012e10de18b57d8a2f | 16909009999992           |
+| d4d6bf9845fa5897710e3a8db81d5907 | 16909009999991           |
+| 3c2cc1abe728a66b61e14880b53482a0 | 16909009999990           |
++----------------------------------+--------------------------+
+        "#
+        .trim();
+
+        println!("{}", actual);
+        // format pretty record batch
         Ok(())
     }
 
