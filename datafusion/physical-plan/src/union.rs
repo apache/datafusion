@@ -262,9 +262,6 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn supports_limit_pushdown(&self) -> bool {
-        // UnionExec is supporting limit_pushdown because it's only applicable with
-        // SortPreservingMergeExec plan. Since SortExec does not support limit_pushdowm
-        // it's not possible to lose sorting in UnionExec's children.
         true
     }
 }
