@@ -1048,11 +1048,23 @@ pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         .or_else(|| null_coercion(lhs_type, rhs_type))
 }
 
+/// coercion rules for regular expression comparison operations with NULL input.
+fn regex_null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (DataType::Null, Utf8View | Utf8 | LargeUtf8) => Some(rhs_type.clone()),
+        (Utf8View | Utf8 | LargeUtf8, DataType::Null) => Some(lhs_type.clone()),
+        (DataType::Null, DataType::Null) => Some(Utf8),
+        _ => None,
+    }
+}
+
 /// coercion rules for regular expression comparison operations.
 /// This is a union of string coercion rules and dictionary coercion rules
 pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
+        .or_else(|| regex_null_coercion(lhs_type, rhs_type))
 }
 
 /// Checks if the TimeUnit associated with a Time32 or Time64 type is consistent,

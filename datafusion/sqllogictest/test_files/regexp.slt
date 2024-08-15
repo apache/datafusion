@@ -230,6 +230,66 @@ SELECT regexp_match('aaa-555', '.*-(\d*)');
 ----
 [555]
 
+query B
+select 'abc' ~ null;
+----
+NULL
+
+query B
+select null ~ null;
+----
+NULL
+
+query B
+select null ~ 'abc';
+----
+NULL
+
+query B
+select 'abc' ~* null;
+----
+NULL
+
+query B
+select null ~* null;
+----
+NULL
+
+query B
+select null ~* 'abc';
+----
+NULL
+
+query B
+select 'abc' !~ null;
+----
+NULL
+
+query B
+select null !~ null;
+----
+NULL
+
+query B
+select null !~ 'abc';
+----
+NULL
+
+query B
+select 'abc' !~* null;
+----
+NULL
+
+query B
+select null !~* null;
+----
+NULL
+
+query B
+select null !~* 'abc';
+----
+NULL
+
 #
 # regexp_replace tests
 #
