@@ -1799,13 +1799,9 @@ mod tests {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let path = path.join("tests/tpch-csv/customer.csv");
         let url = format!("file://{}", path.display());
-
-        let rt_cfg = RuntimeConfig::new();
-        let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
         let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
-        let session_state = SessionState::new_with_config_rt(cfg, runtime);
+        let session_state = SessionStateBuilder::new().with_config(cfg).build();
         let ctx = SessionContext::new_with_state(session_state).enable_url_table();
-
         let result = plan_and_collect(
             &ctx,
             format!("select c_name from '{}' limit 3;", &url).as_str(),

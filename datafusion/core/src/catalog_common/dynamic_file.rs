@@ -63,20 +63,22 @@ impl CatalogProviderList for DynamicFileCatalog {
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        Some(self.inner.catalog(name)
-            .unwrap_or(Arc::new(DynamicFileCatalogProvider::new(Arc::clone(&self.state_store))) as _))
+        self.inner.catalog(name)
+            .map(|catalog| Arc::new(DynamicFileCatalogProvider::new(catalog, Arc::clone(&self.state_store))) as _)
     }
 }
 
 
 /// Wraps another catalog provider
 struct DynamicFileCatalogProvider {
+    inner: Arc<dyn CatalogProvider>,
     state_store: Arc<StateStore>,
 }
 
 impl DynamicFileCatalogProvider {
-    pub fn new(state_store: Arc<StateStore>) -> Self {
+    pub fn new(inner: Arc<dyn CatalogProvider>, state_store: Arc<StateStore>) -> Self {
         Self {
+            inner,
             state_store,
         }
     }
@@ -88,21 +90,22 @@ impl CatalogProvider for DynamicFileCatalogProvider {
     }
 
     fn schema_names(&self) -> Vec<String> {
-        vec![]
+        self.schema_names()
     }
 
-    fn schema(&self, _: &str) -> Option<Arc<dyn SchemaProvider>> {
-        Some(Arc::new(DynamicFileSchemaProvider::new(
+    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+        self.inner.schema(name).map(|schema| Arc::new(DynamicFileSchemaProvider::new(
+            schema,
             Arc::new(DynamicListTableFactory::new(Arc::clone(&self.state_store))),
-        )))
+        )) as _)
     }
 
     fn register_schema(
         &self,
-        _name: &str,
-        _schema: Arc<dyn SchemaProvider>,
+        name: &str,
+        schema: Arc<dyn SchemaProvider>,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        unimplemented!("register_schema is not supported for DynamicFileCatalogProvider")
+        self.inner.register_schema(name, schema)
     }
 }
 
@@ -111,15 +114,17 @@ impl CatalogProvider for DynamicFileCatalogProvider {
 /// The provider will try to create a table provider from the file path if the table provider
 /// isn't exist in the inner schema provider. The required object store must be registered in the session context.
 pub struct DynamicFileSchemaProvider {
+    inner: Arc<dyn SchemaProvider>,
     factory: Arc<dyn UrlTableFactory>,
 }
 
 impl DynamicFileSchemaProvider {
     /// Create a new [DynamicFileSchemaProvider] with the given inner schema provider.
     pub fn new(
+        inner: Arc<dyn SchemaProvider>,
         factory: Arc<dyn UrlTableFactory>,
     ) -> Self {
-        Self { factory }
+        Self { inner, factory }
     }
 }
 
@@ -130,15 +135,15 @@ impl SchemaProvider for DynamicFileSchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        unimplemented!("table_names is not supported for DynamicFileSchemaProvider")
+        self.inner.table_names()
     }
 
     fn register_table(
         &self,
-        _name: String,
-        _table: Arc<dyn TableProvider>,
+        name: String,
+        table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        unimplemented!("register_table is not supported for DynamicFileSchemaProvider")
+        self.inner.register_table(name, table)
     }
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -146,12 +151,12 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         self.factory.try_new(optimized_url.as_str()).await
     }
 
-    fn deregister_table(&self, _name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        unimplemented!("deregister_table is not supported for DynamicFileSchemaProvider")
+    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        self.deregister_table(name)
     }
 
-    fn table_exist(&self, _name: &str) -> bool {
-        unimplemented!("table_exist is not supported for DynamicFileSchemaProvider")
+    fn table_exist(&self, name: &str) -> bool {
+        self.inner.table_exist(name)
     }
 }
 
