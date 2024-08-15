@@ -54,7 +54,7 @@ impl CoalesceBatches {
 #[inline]
 fn get_limit(plan: &dyn Any) -> Option<usize> {
     if let Some(limit_exec) = plan.downcast_ref::<GlobalLimitExec>() {
-        limit_exec.fetch()
+        limit_exec.fetch().map(|fetch| limit_exec.skip() + fetch)
     } else {
         plan.downcast_ref::<LocalLimitExec>()
             .map(|limit_exec| limit_exec.fetch())
