@@ -1454,7 +1454,6 @@ impl DataFrame {
             .iter()
             .filter_map(|(qualifier, field)| {
                 qualifier?;
-
                 if field.name() == name {
                     col_exists = true;
                     Some(new_column.clone())
@@ -2402,7 +2401,6 @@ mod tests {
 
         let out = df.with_column("r", func)?;
 
-        // Should only output 'a' and 'r'
         assert_eq!(2, out.schema().fields().len());
         Ok(())
     }
