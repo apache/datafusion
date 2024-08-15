@@ -20,10 +20,10 @@
 use arrow::array::{ArrayRef, Capacities, MutableArrayData};
 use arrow_array::make_array;
 
-use arrow::datatypes::{DataType, Float64Type, Int64Type, UInt64Type};
-use arrow_array::{Array, MapArray, PrimitiveArray, StringArray, StringViewArray};
+use arrow::datatypes::DataType;
+use arrow_array::{Array, MapArray};
 use datafusion_common::utils::get_map_entry_field;
-use datafusion_common::DataFusionError;
+
 use datafusion_common::{cast::as_map_array, exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
@@ -96,91 +96,42 @@ impl ScalarUDFImpl for MapExtract {
     }
 }
 
-macro_rules! impl_map_extract_inner {
-    ($func_name:ident, $key_type:ty, $array_type:ty) => {
-        fn $func_name(
-            map_array: &MapArray,
-            query_keys_array: &dyn Array,
-        ) -> Result<ArrayRef> {
-            let keys_array = map_array
-                .keys()
-                .as_any()
-                .downcast_ref::<$array_type>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "Failed to downcast keys array to {}",
-                        stringify!($array_type)
-                    ))
-                })?;
-            let query_keys_array = query_keys_array
-                .as_any()
-                .downcast_ref::<$array_type>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "Failed to downcast query keys array to {}",
-                        stringify!($array_type)
-                    ))
-                })?;
+fn general_map_extract_inner(
+    map_array: &MapArray,
+    query_keys_array: &dyn Array,
+) -> Result<ArrayRef> {
+    let keys = map_array.keys();
 
-            let values = map_array.values();
-            let original_data = values.to_data();
-            let capacity = Capacities::Array(original_data.len());
+    let values = map_array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(original_data.len());
 
-            let mut offsets = vec![0_i32];
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
-            let mut mutable =
-                MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+    for (row_index, offset_window) in map_array.value_offsets().windows(2).enumerate() {
+        let start = offset_window[0] as usize;
+        let end = offset_window[1] as usize;
+        let len = end - start;
 
-            for (row_index, offset_window) in
-                map_array.value_offsets().windows(2).enumerate()
-            {
-                let start = offset_window[0] as usize;
-                let end = offset_window[1] as usize;
-                let len = end - start;
+        let query_key = query_keys_array.slice(row_index, 1);
 
-                let query_key = query_keys_array.value(row_index);
+        let value_index =
+            (0..len).find(|&i| keys.slice(start + i, 1) == query_key.clone());
 
-                let value_index = keys_array
-                    .slice(start, len)
-                    .iter()
-                    .position(|key| key.unwrap() == query_key);
-                match value_index {
-                    Some(index) => {
-                        let new_index = start + index;
-                        mutable.extend(0, new_index, new_index + 1);
-                        offsets.push(offsets.last().unwrap().to_owned() + 1);
-                    }
-                    None => {
-                        offsets.push(offsets.last().unwrap().to_owned());
-                        mutable.extend_nulls(1);
-                    }
-                }
+        match value_index {
+            Some(index) => {
+                mutable.extend(0, start + index, start + index + 1);
             }
-
-            let data = mutable.freeze();
-            Ok(make_array(data))
+            None => {
+                mutable.extend_nulls(1);
+            }
         }
-    };
-}
+    }
 
-// Implementations for different key types
-impl_map_extract_inner!(
-    generic_map_extract_inner_int,
-    i64,
-    PrimitiveArray<Int64Type>
-);
-impl_map_extract_inner!(
-    generic_map_extract_inner_uint,
-    u64,
-    PrimitiveArray<UInt64Type>
-);
-impl_map_extract_inner!(
-    generic_map_extract_inner_float,
-    f64,
-    PrimitiveArray<Float64Type>
-);
-impl_map_extract_inner!(string_map_extract_inner, &str, StringArray);
-impl_map_extract_inner!(string_view_map_extract_inner, &str, StringViewArray);
+    let data = mutable.freeze();
+    Ok(make_array(data))
+}
 
 fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
@@ -202,18 +153,5 @@ fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         );
     }
 
-    match key_type {
-        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-            generic_map_extract_inner_int(map_array, args[1].as_ref())
-        }
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-            generic_map_extract_inner_uint(map_array, args[1].as_ref())
-        }
-        DataType::Float32 | DataType::Float64 => {
-            generic_map_extract_inner_float(map_array, args[1].as_ref())
-        }
-        DataType::Utf8 => string_map_extract_inner(map_array, args[1].as_ref()),
-        DataType::Utf8View => string_view_map_extract_inner(map_array, args[1].as_ref()),
-        _ => exec_err!("Unsupported key type: {}", key_type),
-    }
+    general_map_extract_inner(map_array, &args[1])
 }
