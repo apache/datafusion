@@ -14,9 +14,11 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 //! Verifies [Macro Hygene]
 //!
 //! [Macro Hygene]: https://en.wikipedia.org/wiki/Hygienic_macro
+
 mod plan_err {
     // NO other imports!
     use datafusion_common::plan_err;
