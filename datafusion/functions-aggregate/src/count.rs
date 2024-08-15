@@ -16,8 +16,9 @@
 // under the License.
 
 use ahash::RandomState;
+use datafusion_expr::groups_accumulator::GroupStatesMode;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::ops::BitAnd;
 use std::{fmt::Debug, sync::Arc};
 
@@ -358,12 +359,20 @@ struct CountGroupsAccumulator {
     /// output type of count is `DataType::Int64`. Thus by using `i64`
     /// for the counts, the output [`Int64Array`] can be created
     /// without copy.
-    counts: Vec<i64>,
+    counts: VecDeque<i64>,
+
+    mode: GroupStatesMode,
+
+    group_idx_convert_buffer: Vec<usize>,
 }
 
 impl CountGroupsAccumulator {
     pub fn new() -> Self {
-        Self { counts: vec![] }
+        Self {
+            counts: VecDeque::new(),
+            mode: GroupStatesMode::Flat,
+            group_idx_convert_buffer: Vec::new(),
+        }
     }
 }
 
@@ -381,6 +390,25 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         // Add one to each group's counter for each non null, non
         // filtered value
         self.counts.resize(total_num_groups, 0);
+
+        let group_indices = match self.mode {
+            GroupStatesMode::Flat => group_indices,
+            GroupStatesMode::Blocked(blk_size) => {
+                self.group_idx_convert_buffer.clear();
+
+                let converted_group_indices = group_indices.iter().map(|group_idx| {
+                    let blk_id =
+                        ((*group_idx as u64 >> 32) & 0x00000000ffffffff) as usize;
+                    let blk_offset = ((*group_idx as u64) & 0x00000000ffffffff) as usize;
+                    blk_id * blk_size + blk_offset
+                });
+                self.group_idx_convert_buffer
+                    .extend(converted_group_indices);
+
+                &self.group_idx_convert_buffer
+            }
+        };
+
         accumulate_indices(
             group_indices,
             values.logical_nulls().as_ref(),
@@ -431,7 +459,11 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed(&mut self.counts);
+        let block_size = match self.mode {
+            GroupStatesMode::Flat => None,
+            GroupStatesMode::Blocked(blk_size) => Some(blk_size),
+        };
+        let counts = emit_to.take_needed(&mut self.counts, block_size);
 
         // Count is always non null (null inputs just don't contribute to the overall values)
         let nulls = None;
@@ -442,8 +474,13 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
     // return arrays for counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let counts = emit_to.take_needed(&mut self.counts);
+        let block_size = match self.mode {
+            GroupStatesMode::Flat => None,
+            GroupStatesMode::Blocked(blk_size) => Some(blk_size),
+        };
+        let counts = emit_to.take_needed(&mut self.counts, block_size);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
+        
         Ok(vec![Arc::new(counts) as ArrayRef])
     }
 
@@ -514,6 +551,16 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
     fn size(&self) -> usize {
         self.counts.capacity() * std::mem::size_of::<usize>()
+    }
+
+    fn supports_blocked_mode(&self) -> bool {
+        true
+    }
+
+    fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
+        self.counts.clear();
+        self.mode = mode;
+        Ok(())
     }
 }
 

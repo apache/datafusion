@@ -41,7 +41,7 @@ impl EmitTo {
     /// remaining values in `v`.
     ///
     /// This avoids copying if Self::All
-    pub fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
+    pub fn take_needed<T>(&self, v: &mut Vec<T>, block_size: Option<usize>) -> Vec<T> {
         match self {
             Self::All => {
                 // Take the entire vector, leave new (empty) vector
@@ -54,7 +54,14 @@ impl EmitTo {
                 std::mem::swap(v, &mut t);
                 t
             }
-            EmitTo::CurrentBlock(_) => unimplemented!(),
+            EmitTo::CurrentBlock(_) => {
+                let block_size = block_size.unwrap();
+                // get end n+1,.. values into t
+                let mut t = v.split_off(block_size);
+                // leave n+1,.. in v
+                std::mem::swap(v, &mut t);
+                t
+            }
         }
     }
 }
@@ -151,12 +158,6 @@ pub trait GroupsAccumulator: Send {
     ///
     /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
-
-    /// Returns `true` if blocked emission is supported
-    /// The blocked emission is possible to avoid result splitting in aggregation.
-    fn supports_blocked_emission(&self) -> bool {
-        false
-    }
 
     fn supports_blocked_mode(&self) -> bool {
         false
