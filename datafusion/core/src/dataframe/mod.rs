@@ -1441,24 +1441,29 @@ impl DataFrame {
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
         let window_func_exprs = find_window_exprs(&[expr.clone()]);
-        let plan = if window_func_exprs.is_empty() {
-            self.plan
+
+        let (plan, mut col_exists, window_func) = if window_func_exprs.is_empty() {
+            (self.plan, false, false)
         } else {
-            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
+            (
+                LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?,
+                true,
+                true,
+            )
         };
 
         let new_column = expr.alias(name);
-        let mut col_exists = false;
         let mut fields: Vec<Expr> = plan
             .schema()
             .iter()
-            .filter_map(|(qualifier, field)| {
-                qualifier?;
+            .map(|(qualifier, field)| {
                 if field.name() == name {
                     col_exists = true;
-                    Some(new_column.clone())
+                    new_column.clone()
+                } else if window_func && qualifier.is_none() {
+                    col(Column::from((qualifier, field))).alias(name)
                 } else {
-                    Some(col(Column::from((qualifier, field))))
+                    col(Column::from((qualifier, field)))
                 }
             })
             .collect();
