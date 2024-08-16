@@ -521,7 +521,30 @@ logical_plan
 01)Projection: test.column1_utf8view LIKE Utf8View("foo") AS like, test.column1_utf8view ILIKE Utf8View("foo") AS ilike
 02)--TableScan: test projection=[column1_utf8view]
 
+## Ensure no casts for SUBSTR
 
+query TT
+EXPLAIN SELECT
+  SUBSTR(column1_utf8view, 1, 3) as c1,
+  SUBSTR(column2_utf8, 1, 3) as c2,
+  SUBSTR(column2_large_utf8, 1, 3) as c3
+FROM test;
+----
+logical_plan
+01)Projection: substr(test.column1_utf8view, Int64(1), Int64(3)) AS c1, substr(test.column2_utf8, Int64(1), Int64(3)) AS c2, substr(test.column2_large_utf8, Int64(1), Int64(3)) AS c3
+02)--TableScan: test projection=[column2_utf8, column2_large_utf8, column1_utf8view]
+
+query TTT
+SELECT
+  SUBSTR(column1_utf8view, 1, 3) as c1,
+  SUBSTR(column2_utf8, 1, 3) as c2,
+  SUBSTR(column2_large_utf8, 1, 3) as c3
+FROM test;
+----
+And X X
+Xia Xia Xia
+Rap R R
+NULL R R
 
 ## Ensure no casts for ASCII
 
@@ -1047,9 +1070,8 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: substr(__common_expr_1, Int64(1)) AS c, substr(__common_expr_1, Int64(1), Int64(2)) AS c2
-02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1
-03)----TableScan: test projection=[column1_utf8view]
+01)Projection: substr(test.column1_utf8view, Int64(1)) AS c, substr(test.column1_utf8view, Int64(1), Int64(2)) AS c2
+02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for SUBSTRINDEX
 query TT
