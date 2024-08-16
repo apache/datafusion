@@ -32,7 +32,8 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-use crate::utils::{make_scalar_function, utf8_to_str_type, StringArrayType};
+use crate::string::common::StringArrayType;
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct LPadFunc {

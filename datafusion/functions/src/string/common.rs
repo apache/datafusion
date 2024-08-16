@@ -19,8 +19,9 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, Array, ArrayDataBuilder, ArrayRef, GenericStringArray,
-    GenericStringBuilder, OffsetSizeTrait, StringArray,
+    new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef,
+    GenericStringArray, GenericStringBuilder, OffsetSizeTrait, StringArray,
+    StringViewArray,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
@@ -248,6 +249,22 @@ impl<'a> ColumnarValueRef<'a> {
             Self::Scalar(_) | Self::NonNullableArray(_) => None,
             Self::NullableArray(array) => array.nulls().cloned(),
         }
+    }
+}
+
+pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+    fn iter(&self) -> ArrayIter<Self>;
+}
+
+impl<'a, T: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<T> {
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericStringArray::<T>::iter(self)
+    }
+}
+
+impl<'a> StringArrayType<'a> for &'a StringViewArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        StringViewArray::iter(self)
     }
 }
 

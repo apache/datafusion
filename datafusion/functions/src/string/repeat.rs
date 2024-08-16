@@ -19,8 +19,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, AsArray, GenericStringArray, GenericStringBuilder,
-    Int64Array, OffsetSizeTrait, StringViewArray,
+    ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
+    OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int64, LargeUtf8, Utf8, Utf8View};
@@ -31,7 +31,8 @@ use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
-use crate::utils::{make_scalar_function, utf8_to_str_type, StringArrayType};
+use crate::string::common::StringArrayType;
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct RepeatFunc {
