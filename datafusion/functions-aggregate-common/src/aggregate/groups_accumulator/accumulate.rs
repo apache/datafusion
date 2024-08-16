@@ -19,12 +19,14 @@
 //!
 //! [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 
+use std::collections::VecDeque;
+
 use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowPrimitiveType;
 
 use datafusion_common::Result;
-use datafusion_expr_common::groups_accumulator::EmitTo;
+use datafusion_expr_common::groups_accumulator::{EmitTo, GroupStatesMode};
 
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
@@ -60,26 +62,32 @@ pub struct NullState {
     ///
     /// If `seen_values[i]` is false, have not seen any values that
     /// pass the filter yet for group `i`
-    seen_values: BooleanBufferBuilder,
+    seen_values_blocks: VecDeque<BooleanBufferBuilder>,
+
+    mode: GroupStatesMode,
 }
 
 impl Default for NullState {
     fn default() -> Self {
-        Self::new()
+        Self::new(GroupStatesMode::Flat)
     }
 }
 
 impl NullState {
-    pub fn new() -> Self {
+    pub fn new(mode: GroupStatesMode) -> Self {
         Self {
-            seen_values: BooleanBufferBuilder::new(0),
+            seen_values_blocks: VecDeque::new(),
+            mode,
         }
     }
 
     /// return the size of all buffers allocated by this null state, not including self
     pub fn size(&self) -> usize {
         // capacity is in bits, so convert to bytes
-        self.seen_values.capacity() / 8
+        self.seen_values_blocks
+            .iter()
+            .map(|blk| blk.capacity() / 8)
+            .sum::<usize>()
     }
 
     /// Invokes `value_fn(group_index, value)` for each non null, non
@@ -141,15 +149,32 @@ impl NullState {
 
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
-        let seen_values =
-            initialize_builder(&mut self.seen_values, total_num_groups, false);
+        initialize_builder(
+            &mut self.seen_values_blocks,
+            GroupStatesMode::Flat,
+            total_num_groups,
+            false,
+        );
+        let seen_values_blocks = &mut self.seen_values_blocks;
 
         match (values.null_count() > 0, opt_filter) {
             // no nulls, no filter,
             (false, None) => {
                 let iter = group_indices.iter().zip(data.iter());
                 for (&group_index, &new_value) in iter {
-                    seen_values.set_bit(group_index, true);
+                    match self.mode {
+                        GroupStatesMode::Flat => seen_values_blocks
+                            .back_mut()
+                            .unwrap()
+                            .set_bit(group_index, true),
+                        GroupStatesMode::Blocked(_) => {
+                            let blk_id = ((group_index as u64 >> 32) & 0x00000000ffffffff)
+                                as usize;
+                            let blk_offset =
+                                ((group_index as u64) & 0x00000000ffffffff) as usize;
+                            seen_values_blocks[blk_id].set_bit(blk_offset, true);
+                        }
+                    }
                     value_fn(group_index, new_value);
                 }
             }
@@ -176,7 +201,22 @@ impl NullState {
                                 // valid bit was set, real value
                                 let is_valid = (mask & index_mask) != 0;
                                 if is_valid {
-                                    seen_values.set_bit(group_index, true);
+                                    match self.mode {
+                                        GroupStatesMode::Flat => seen_values_blocks
+                                            .back_mut()
+                                            .unwrap()
+                                            .set_bit(group_index, true),
+                                        GroupStatesMode::Blocked(_) => {
+                                            let blk_id = ((group_index as u64 >> 32)
+                                                & 0x00000000ffffffff)
+                                                as usize;
+                                            let blk_offset = ((group_index as u64)
+                                                & 0x00000000ffffffff)
+                                                as usize;
+                                            seen_values_blocks[blk_id]
+                                                .set_bit(blk_offset, true);
+                                        }
+                                    }
                                     value_fn(group_index, new_value);
                                 }
                                 index_mask <<= 1;
@@ -193,7 +233,21 @@ impl NullState {
                     .for_each(|(i, (&group_index, &new_value))| {
                         let is_valid = remainder_bits & (1 << i) != 0;
                         if is_valid {
-                            seen_values.set_bit(group_index, true);
+                            match self.mode {
+                                GroupStatesMode::Flat => seen_values_blocks
+                                    .back_mut()
+                                    .unwrap()
+                                    .set_bit(group_index, true),
+                                GroupStatesMode::Blocked(_) => {
+                                    let blk_id = ((group_index as u64 >> 32)
+                                        & 0x00000000ffffffff)
+                                        as usize;
+                                    let blk_offset = ((group_index as u64)
+                                        & 0x00000000ffffffff)
+                                        as usize;
+                                    seen_values_blocks[blk_id].set_bit(blk_offset, true);
+                                }
+                            }
                             value_fn(group_index, new_value);
                         }
                     });
@@ -210,7 +264,21 @@ impl NullState {
                     .zip(filter.iter())
                     .for_each(|((&group_index, &new_value), filter_value)| {
                         if let Some(true) = filter_value {
-                            seen_values.set_bit(group_index, true);
+                            match self.mode {
+                                GroupStatesMode::Flat => seen_values_blocks
+                                    .back_mut()
+                                    .unwrap()
+                                    .set_bit(group_index, true),
+                                GroupStatesMode::Blocked(_) => {
+                                    let blk_id = ((group_index as u64 >> 32)
+                                        & 0x00000000ffffffff)
+                                        as usize;
+                                    let blk_offset = ((group_index as u64)
+                                        & 0x00000000ffffffff)
+                                        as usize;
+                                    seen_values_blocks[blk_id].set_bit(blk_offset, true);
+                                }
+                            }
                             value_fn(group_index, new_value);
                         }
                     })
@@ -228,7 +296,22 @@ impl NullState {
                     .for_each(|((filter_value, &group_index), new_value)| {
                         if let Some(true) = filter_value {
                             if let Some(new_value) = new_value {
-                                seen_values.set_bit(group_index, true);
+                                match self.mode {
+                                    GroupStatesMode::Flat => seen_values_blocks
+                                        .back_mut()
+                                        .unwrap()
+                                        .set_bit(group_index, true),
+                                    GroupStatesMode::Blocked(_) => {
+                                        let blk_id = ((group_index as u64 >> 32)
+                                            & 0x00000000ffffffff)
+                                            as usize;
+                                        let blk_offset = ((group_index as u64)
+                                            & 0x00000000ffffffff)
+                                            as usize;
+                                        seen_values_blocks[blk_id]
+                                            .set_bit(blk_offset, true);
+                                    }
+                                }
                                 value_fn(group_index, new_value)
                             }
                         }
@@ -262,8 +345,13 @@ impl NullState {
 
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
-        let seen_values =
-            initialize_builder(&mut self.seen_values, total_num_groups, false);
+        initialize_builder(
+            &mut self.seen_values_blocks,
+            GroupStatesMode::Flat,
+            total_num_groups,
+            false,
+        );
+        let seen_values_blocks = &mut self.seen_values_blocks;
 
         // These could be made more performant by iterating in chunks of 64 bits at a time
         match (values.null_count() > 0, opt_filter) {
@@ -273,7 +361,20 @@ impl NullState {
                 // buffer is big enough (start everything at valid)
                 group_indices.iter().zip(data.iter()).for_each(
                     |(&group_index, new_value)| {
-                        seen_values.set_bit(group_index, true);
+                        match self.mode {
+                            GroupStatesMode::Flat => seen_values_blocks
+                                .back_mut()
+                                .unwrap()
+                                .set_bit(group_index, true),
+                            GroupStatesMode::Blocked(_) => {
+                                let blk_id = ((group_index as u64 >> 32)
+                                    & 0x00000000ffffffff)
+                                    as usize;
+                                let blk_offset =
+                                    ((group_index as u64) & 0x00000000ffffffff) as usize;
+                                seen_values_blocks[blk_id].set_bit(blk_offset, true);
+                            }
+                        }
                         value_fn(group_index, new_value)
                     },
                 )
@@ -287,7 +388,21 @@ impl NullState {
                     .zip(nulls.iter())
                     .for_each(|((&group_index, new_value), is_valid)| {
                         if is_valid {
-                            seen_values.set_bit(group_index, true);
+                            match self.mode {
+                                GroupStatesMode::Flat => seen_values_blocks
+                                    .back_mut()
+                                    .unwrap()
+                                    .set_bit(group_index, true),
+                                GroupStatesMode::Blocked(_) => {
+                                    let blk_id = ((group_index as u64 >> 32)
+                                        & 0x00000000ffffffff)
+                                        as usize;
+                                    let blk_offset = ((group_index as u64)
+                                        & 0x00000000ffffffff)
+                                        as usize;
+                                    seen_values_blocks[blk_id].set_bit(blk_offset, true);
+                                }
+                            }
                             value_fn(group_index, new_value);
                         }
                     })
@@ -302,7 +417,21 @@ impl NullState {
                     .zip(filter.iter())
                     .for_each(|((&group_index, new_value), filter_value)| {
                         if let Some(true) = filter_value {
-                            seen_values.set_bit(group_index, true);
+                            match self.mode {
+                                GroupStatesMode::Flat => seen_values_blocks
+                                    .back_mut()
+                                    .unwrap()
+                                    .set_bit(group_index, true),
+                                GroupStatesMode::Blocked(_) => {
+                                    let blk_id = ((group_index as u64 >> 32)
+                                        & 0x00000000ffffffff)
+                                        as usize;
+                                    let blk_offset = ((group_index as u64)
+                                        & 0x00000000ffffffff)
+                                        as usize;
+                                    seen_values_blocks[blk_id].set_bit(blk_offset, true);
+                                }
+                            }
                             value_fn(group_index, new_value);
                         }
                     })
@@ -317,7 +446,22 @@ impl NullState {
                     .for_each(|((filter_value, &group_index), new_value)| {
                         if let Some(true) = filter_value {
                             if let Some(new_value) = new_value {
-                                seen_values.set_bit(group_index, true);
+                                match self.mode {
+                                    GroupStatesMode::Flat => seen_values_blocks
+                                        .back_mut()
+                                        .unwrap()
+                                        .set_bit(group_index, true),
+                                    GroupStatesMode::Blocked(_) => {
+                                        let blk_id = ((group_index as u64 >> 32)
+                                            & 0x00000000ffffffff)
+                                            as usize;
+                                        let blk_offset = ((group_index as u64)
+                                            & 0x00000000ffffffff)
+                                            as usize;
+                                        seen_values_blocks[blk_id]
+                                            .set_bit(blk_offset, true);
+                                    }
+                                }
                                 value_fn(group_index, new_value)
                             }
                         }
@@ -332,42 +476,51 @@ impl NullState {
     ///
     /// resets the internal state appropriately
     // TODO: add unit tests for the `EmitTo::CurrentBlock` branch
-    pub fn build(
-        &mut self,
-        emit_to: EmitTo,
-        block_size: Option<usize>,
-    ) -> Result<NullBuffer> {
-        let nulls: BooleanBuffer = self.seen_values.finish();
+    pub fn build(&mut self, emit_to: EmitTo) -> Result<NullBuffer> {
+        if self.seen_values_blocks.is_empty() {
+            return Ok(NullBuffer::new(BooleanBufferBuilder::new(0).finish()));
+        }
 
         let nulls = match emit_to {
-            EmitTo::All => nulls,
+            EmitTo::All => match self.mode {
+                GroupStatesMode::Flat => {
+                    self.seen_values_blocks.back_mut().unwrap().finish()
+                }
+                GroupStatesMode::Blocked(blk_size) => {
+                    let total_num = (self.seen_values_blocks.len() - 1) * blk_size
+                        + self.seen_values_blocks.back().unwrap().len();
+                    let mut total_buffer = BooleanBufferBuilder::new(total_num);
+
+                    for blk in self.seen_values_blocks.iter_mut() {
+                        let nulls = blk.finish();
+                        for seen in nulls.iter() {
+                            total_buffer.append(seen);
+                        }
+                    }
+
+                    total_buffer.finish()
+                }
+            }
             EmitTo::First(n) => {
+                let blk = self.seen_values_blocks.back_mut().unwrap();
                 // split off the first N values in seen_values
                 //
                 // TODO make this more efficient rather than two
                 // copies and bitwise manipulation
+                let nulls = blk.finish();
                 let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
                 // reset the existing seen buffer
                 for seen in nulls.iter().skip(n) {
-                    self.seen_values.append(seen);
+                    blk.append(seen);
                 }
                 first_n_null
             }
             EmitTo::CurrentBlock(_) => {
-                let block_size = block_size.unwrap();
-
-                // split off the first N values in seen_values
-                //
-                // TODO make this more efficient rather than two
-                // copies and bitwise manipulation
-                let first_n_null: BooleanBuffer = nulls.iter().take(block_size).collect();
-                // reset the existing seen buffer
-                for seen in nulls.iter().skip(block_size) {
-                    self.seen_values.append(seen);
-                }
-                first_n_null
+                let mut cur_blk = self.seen_values_blocks.pop_front().unwrap();
+                cur_blk.finish()
             }
         };
+
         Ok(NullBuffer::new(nulls))
     }
 }
@@ -468,15 +621,73 @@ pub fn accumulate_indices<F>(
 ///
 /// All new entries are initialized to `default_value`
 fn initialize_builder(
-    builder: &mut BooleanBufferBuilder,
+    builder_blocks: &mut VecDeque<BooleanBufferBuilder>,
+    mode: GroupStatesMode,
     total_num_groups: usize,
     default_value: bool,
-) -> &mut BooleanBufferBuilder {
-    if builder.len() < total_num_groups {
-        let new_groups = total_num_groups - builder.len();
-        builder.append_n(new_groups, default_value);
+) {
+    match mode {
+        // It flat mode, we just a single builder, and grow it constantly.
+        GroupStatesMode::Flat => {
+            if builder_blocks.is_empty() {
+                builder_blocks.push_back(BooleanBufferBuilder::new(0));
+            }
+
+            let builder = builder_blocks.back_mut().unwrap();
+            if builder.len() < total_num_groups {
+                let new_groups = total_num_groups - builder.len();
+                builder.append_n(new_groups, default_value);
+            }
+        }
+        // It blocked mode, we ensure the blks are enough first,
+        // and then ensure slots in blks are enough.
+        GroupStatesMode::Blocked(blk_size) => {
+            let (mut cur_blk_idx, exist_slots) = if !builder_blocks.is_empty() {
+                let cur_blk_idx = builder_blocks.len() - 1;
+                let exist_slots = (builder_blocks.len() - 1) * blk_size
+                    + builder_blocks.back().unwrap().len();
+
+                (cur_blk_idx, exist_slots)
+            } else {
+                (0, 0)
+            };
+            let exist_blks = builder_blocks.len();
+
+            // Ensure blks are enough.
+            let new_blks = (total_num_groups + blk_size - 1) / blk_size - exist_blks;
+            builder_blocks.reserve(new_blks);
+            for _ in 0..new_blks {
+                builder_blocks.push_back(BooleanBufferBuilder::new(blk_size));
+            }
+
+            // Ensure slots are enough.
+            let mut new_slots = total_num_groups - exist_slots;
+            // Expand current blk.
+            let cur_blk_rest_slots = blk_size - builder_blocks[cur_blk_idx].len();
+            if cur_blk_rest_slots >= new_slots {
+                builder_blocks[cur_blk_idx].append_n(new_slots, default_value);
+                return;
+            } else {
+                builder_blocks[cur_blk_idx].append_n(cur_blk_rest_slots, default_value);
+                new_slots -= cur_blk_rest_slots;
+                cur_blk_idx += 1;
+            }
+
+            // Expand blks
+            let expand_blks = new_slots / blk_size;
+            for _ in 0..expand_blks {
+                builder_blocks[cur_blk_idx].append_n(blk_size, default_value);
+                cur_blk_idx += 1;
+            }
+
+            // Expand the last blk.
+            let last_expand_slots = new_slots % blk_size;
+            builder_blocks
+                .back_mut()
+                .unwrap()
+                .append_n(last_expand_slots, default_value);
+        }
     }
-    builder
 }
 
 #[cfg(test)]
