@@ -33,3 +33,4 @@ workspace = true
 
 [dependencies]
 datafusion = { workspace = true }
+tokio = { workspace = true }

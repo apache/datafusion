@@ -131,6 +131,38 @@ Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]
   TableScan: person [id:Int32;N, name:Utf8;N]
 ```
 
+## Translating Logical Plan to Physical Plan
+
+<!-- source for this example is in datafusion_docs::library_logical_plan::translate_logical_to_physical -->
+
+```rust
+// create a default table source
+let schema = Schema::new(vec![
+    Field::new("id", DataType::Int32, true),
+    Field::new("name", DataType::Utf8, true),
+]);
+let table_provider = Arc::new(MemTable::try_new(Arc::new(schema), vec![])?);
+let table_source = Arc::new(DefaultTableSource::new(table_provider));
+
+// create a LogicalPlanBuilder for a table scan without projection or filters
+let logical_plan = LogicalPlanBuilder::scan("person", table_source, None)?.build()?;
+
+// create a physical plan using the default physical planner
+let ctx = SessionContext::new();
+let planner = DefaultPhysicalPlanner::default();
+let physical_plan = planner.create_physical_plan(&logical_plan, &ctx.state()).await?;
+
+// print the plan
+println!("{}", DisplayableExecutionPlan::new(physical_plan.as_ref()).indent(true));
+```
+
+This example produces the following physical plan:
+
+```
+MemoryExec: partitions=0, partition_sizes=[]
+```
+
+
 ## Table Sources
 
 The previous example used a [LogicalTableSource], which is used for tests and documentation in DataFusion, and is also
