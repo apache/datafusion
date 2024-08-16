@@ -20,7 +20,9 @@ use std::sync::{Arc, Weak};
 
 use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
 
-use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
+use datafusion::catalog::{
+    substitute_tilde, CatalogProvider, CatalogProviderList, SchemaProvider,
+};
 
 use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::ListingTableUrl;
@@ -30,19 +32,15 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 
 use async_trait::async_trait;
-use dirs::home_dir;
 use parking_lot::RwLock;
 
-use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
-
-/// Wraps another catalog, automatically creating table providers
-/// for local files if needed
-pub struct DynamicFileCatalog {
+/// Wraps another catalog, automatically register require object stores for the file locations
+pub struct DynamicObjectStoreCatalog {
     inner: Arc<dyn CatalogProviderList>,
     state: Weak<RwLock<SessionState>>,
 }
 
-impl DynamicFileCatalog {
+impl DynamicObjectStoreCatalog {
     pub fn new(
         inner: Arc<dyn CatalogProviderList>,
         state: Weak<RwLock<SessionState>>,
@@ -51,7 +49,7 @@ impl DynamicFileCatalog {
     }
 }
 
-impl CatalogProviderList for DynamicFileCatalog {
+impl CatalogProviderList for DynamicObjectStoreCatalog {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -70,19 +68,19 @@ impl CatalogProviderList for DynamicFileCatalog {
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         let state = self.state.clone();
-        self.inner
-            .catalog(name)
-            .map(|catalog| Arc::new(DynamicFileCatalogProvider::new(catalog, state)) as _)
+        self.inner.catalog(name).map(|catalog| {
+            Arc::new(DynamicObjectStoreCatalogProvider::new(catalog, state)) as _
+        })
     }
 }
 
 /// Wraps another catalog provider
-struct DynamicFileCatalogProvider {
+struct DynamicObjectStoreCatalogProvider {
     inner: Arc<dyn CatalogProvider>,
     state: Weak<RwLock<SessionState>>,
 }
 
-impl DynamicFileCatalogProvider {
+impl DynamicObjectStoreCatalogProvider {
     pub fn new(
         inner: Arc<dyn CatalogProvider>,
         state: Weak<RwLock<SessionState>>,
@@ -91,7 +89,7 @@ impl DynamicFileCatalogProvider {
     }
 }
 
-impl CatalogProvider for DynamicFileCatalogProvider {
+impl CatalogProvider for DynamicObjectStoreCatalogProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -102,9 +100,9 @@ impl CatalogProvider for DynamicFileCatalogProvider {
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         let state = self.state.clone();
-        self.inner
-            .schema(name)
-            .map(|schema| Arc::new(DynamicFileSchemaProvider::new(schema, state)) as _)
+        self.inner.schema(name).map(|schema| {
+            Arc::new(DynamicObjectStoreSchemaProvider::new(schema, state)) as _
+        })
     }
 
     fn register_schema(
@@ -116,14 +114,14 @@ impl CatalogProvider for DynamicFileCatalogProvider {
     }
 }
 
-/// Wraps another schema provider. [DynamicFileSchemaProvider] is responsible for registering the required
+/// Wraps another schema provider. [DynamicObjectStoreSchemaProvider] is responsible for registering the required
 /// object stores for the file locations.
-struct DynamicFileSchemaProvider {
+struct DynamicObjectStoreSchemaProvider {
     inner: Arc<dyn SchemaProvider>,
     state: Weak<RwLock<SessionState>>,
 }
 
-impl DynamicFileSchemaProvider {
+impl DynamicObjectStoreSchemaProvider {
     pub fn new(
         inner: Arc<dyn SchemaProvider>,
         state: Weak<RwLock<SessionState>>,
@@ -133,7 +131,7 @@ impl DynamicFileSchemaProvider {
 }
 
 #[async_trait]
-impl SchemaProvider for DynamicFileSchemaProvider {
+impl SchemaProvider for DynamicObjectStoreSchemaProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -229,12 +227,12 @@ mod tests {
 
     fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {
         let ctx = SessionContext::new();
-        ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
+        ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
             ctx.state().catalog_list().clone(),
             ctx.state_weak_ref(),
         )));
 
-        let provider = &DynamicFileCatalog::new(
+        let provider = &DynamicObjectStoreCatalog::new(
             ctx.state().catalog_list().clone(),
             ctx.state_weak_ref(),
         ) as &dyn CatalogProviderList;
