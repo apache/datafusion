@@ -46,9 +46,9 @@ impl ReplaceFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8View, Utf8View, Utf8View]), 
-                    Exact(vec![Utf8, Utf8, Utf8]), 
-                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8])
+                    Exact(vec![Utf8View, Utf8View, Utf8View]),
+                    Exact(vec![Utf8, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -75,9 +75,13 @@ impl ScalarUDFImpl for ReplaceFunc {
             DataType::LargeUtf8 => return Ok(DataType::LargeUtf8),
             DataType::Utf8View => return Ok(DataType::Utf8View),
             DataType::Dictionary(_, value_type) => match *value_type {
-                DataType::LargeUtf8 | DataType::LargeBinary => return Ok(DataType::LargeUtf8),
+                DataType::LargeUtf8 | DataType::LargeBinary => {
+                    return Ok(DataType::LargeUtf8)
+                }
                 DataType::Utf8 | DataType::Binary => return Ok(DataType::Utf8),
-                DataType::Utf8View | DataType::BinaryView => return Ok(DataType::Utf8View),
+                DataType::Utf8View | DataType::BinaryView => {
+                    return Ok(DataType::Utf8View)
+                }
                 DataType::Null => return Ok(DataType::Null),
                 _ => {
                     return exec_err!(
@@ -106,7 +110,7 @@ impl ScalarUDFImpl for ReplaceFunc {
 }
 
 fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array  = as_string_view_array(&args[0])?;
+    let string_array = as_string_view_array(&args[0])?;
     let from_array = as_string_view_array(&args[1])?;
     let to_array = as_string_view_array(&args[2])?;
 
@@ -121,7 +125,6 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
         .collect::<StringViewArray>();
 
     Ok(Arc::new(result) as ArrayRef)
-
 }
 /// Replaces all occurrences in string of substring from with substring to.
 /// replace('abcdefabcdef', 'cd', 'XX') = 'abXXefabXXef'
@@ -151,9 +154,8 @@ mod tests {
     use arrow::array::LargeStringArray;
     use arrow::array::StringArray;
     use arrow::array::StringViewArray;
-    use arrow::datatypes::DataType::{Utf8, LargeUtf8, Utf8View};
+    use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
     use datafusion_common::ScalarValue;
-    
     #[test]
     fn test_functions() -> Result<()> {
         test_function!(
@@ -172,7 +174,9 @@ mod tests {
         test_function!(
             ReplaceFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("aabbb")))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
+                    "aabbb"
+                )))),
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("bbb")))),
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("cc")))),
             ],
@@ -185,7 +189,9 @@ mod tests {
         test_function!(
             ReplaceFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("aabbbcw")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "aabbbcw"
+                )))),
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("bb")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("cc")))),
             ],
@@ -197,5 +203,4 @@ mod tests {
 
         Ok(())
     }
-
 }
