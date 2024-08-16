@@ -22,28 +22,24 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::{
-    common::{Column, DFSchema},
-    error::{DataFusionError, Result},
-    logical_expr::Operator,
-    physical_plan::{ColumnarValue, PhysicalExpr},
-};
-
+use arrow::array::AsArray;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
-use arrow_array::cast::AsArray;
 use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
-    ScalarValue,
+    Column, DFSchema, ScalarValue,
 };
+use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
-use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
+use datafusion_physical_expr::{expressions as phys_expr, PhysicalExpr, PhysicalExprRef};
 
+use datafusion_expr_common::operator::Operator;
+use datafusion_physical_plan::ColumnarValue;
 use log::trace;
 
 /// A source of runtime statistical information to [`PruningPredicate`]s.
@@ -615,7 +611,8 @@ impl PruningPredicate {
         is_always_true(&self.predicate_expr) && self.literal_guarantees.is_empty()
     }
 
-    pub(crate) fn required_columns(&self) -> &RequiredColumns {
+    /// Return the columns that are required to evaluate the pruning predicate
+    pub fn required_columns(&self) -> &RequiredColumns {
         &self.required_columns
     }
 
@@ -724,7 +721,7 @@ fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// Handles creating references to the min/max statistics
 /// for columns as well as recording which statistics are needed
 #[derive(Debug, Default, Clone)]
-pub(crate) struct RequiredColumns {
+pub struct RequiredColumns {
     /// The statistics required to evaluate this predicate:
     /// * The unqualified column in the input schema
     /// * Statistics type (e.g. Min or Max or Null_Count)
@@ -746,7 +743,7 @@ impl RequiredColumns {
     /// * `a > 5 OR a < 10` returns `Some(a)`
     /// * `a > 5 OR b < 10` returns `None`
     /// * `true` returns None
-    pub(crate) fn single_column(&self) -> Option<&phys_expr::Column> {
+    pub fn single_column(&self) -> Option<&phys_expr::Column> {
         if self.columns.windows(2).all(|w| {
             // check if all columns are the same (ignoring statistics and field)
             let c1 = &w[0].0;

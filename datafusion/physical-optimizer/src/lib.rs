@@ -23,3 +23,5 @@ mod optimizer;
 pub mod output_requirements;
 
 pub use optimizer::PhysicalOptimizerRule;
+
+pub mod pruning;

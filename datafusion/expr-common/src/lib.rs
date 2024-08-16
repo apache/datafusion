@@ -17,9 +17,13 @@
 
 //! Logical Expr types and traits for [DataFusion]
 //!
-//! This crate contains types and traits that are used by both Logical and Physical expressions.
-//! They are kept in their own crate to avoid physical expressions depending on logical expressions.
-//!  
+//! This crate contains types and traits that are used by both Logical and
+//! Physical expressions. They are kept in their own crate to avoid physical
+//! expressions depending on logical expressions.
+//!
+//! Note this crate is not intended to have substantial logic itself, but rather
+//! to provide a common set of types and traits that can be used by both logical
+//! and physical expressions.
 //!
 //! [DataFusion]: <https://crates.io/crates/datafusion>
 
@@ -34,3 +38,5 @@ pub mod operator;
 pub mod signature;
 pub mod sort_properties;
 pub mod type_coercion;
+
+pub use operator::Operator;

@@ -17,7 +17,7 @@
 
 [package]
 name = "datafusion-expr-common"
-description = "Logical plan and expression representation for DataFusion query engine"
+description = "Common types and traits for plan and expression representation for DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }

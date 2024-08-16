@@ -32,7 +32,10 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+arrow = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
+datafusion-expr-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+log = { workspace = true }
