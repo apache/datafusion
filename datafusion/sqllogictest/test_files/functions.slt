@@ -235,6 +235,16 @@ SELECT reverse('abcde')
 edcba
 
 query T
+SELECT reverse(arrow_cast('abcde', 'LargeUtf8'))
+----
+edcba
+
+query T
+SELECT reverse(arrow_cast('abcde', 'Utf8View'))
+----
+edcba
+
+query T
 SELECT reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'))
 ----
 edcba
@@ -245,7 +255,27 @@ SELECT reverse('loẅks')
 sk̈wol
 
 query T
+SELECT reverse(arrow_cast('loẅks', 'LargeUtf8'))
+----
+sk̈wol
+
+query T
+SELECT reverse(arrow_cast('loẅks', 'Utf8View'))
+----
+sk̈wol
+
+query T
 SELECT reverse(NULL)
+----
+NULL
+
+query T
+SELECT reverse(arrow_cast(NULL, 'LargeUtf8'))
+----
+NULL
+
+query T
+SELECT reverse(arrow_cast(NULL, 'Utf8View'))
 ----
 NULL
 
@@ -816,6 +846,38 @@ SELECT split_part(arrow_cast('foo_bar', 'Dictionary(Int32, Utf8)'), '_', 2)
 ----
 bar
 
+# test largeutf8, utf8view for split_part
+query T
+SELECT split_part(arrow_cast('large_apple_large_orange_large_banana', 'LargeUtf8'), '_', 3)
+----
+large
+
+query T
+SELECT split_part(arrow_cast('view_apple_view_orange_view_banana', 'Utf8View'), '_', 3);
+----
+view
+
+query T
+SELECT split_part('test_large_split_large_case', arrow_cast('_large', 'LargeUtf8'), 2)
+----
+_split
+
+query T
+SELECT split_part(arrow_cast('huge_large_apple_large_orange_large_banana', 'LargeUtf8'), arrow_cast('_', 'Utf8View'), 2)
+----
+large
+
+query T
+SELECT split_part(arrow_cast('view_apple_view_large_banana', 'Utf8View'), arrow_cast('_large', 'LargeUtf8'), 2)
+----
+_banana
+
+query T
+SELECT split_part(NULL, '_', 2)
+----
+NULL
+
+
 query B
 SELECT starts_with('foobar', 'foo')
 ----
@@ -925,7 +987,7 @@ SELECT products.* REPLACE (price*2 AS price, product_id+1000 AS product_id) FROM
 1003 OldBrand Product 3 79.98
 1004 OldBrand Product 4 99.98
 
-#overlay tests
+# overlay tests
 statement ok
 CREATE TABLE over_test(
   str TEXT,
@@ -957,6 +1019,31 @@ NULL
 
 query T
 SELECT overlay(str placing characters from pos) from over_test
+----
+abc
+qwertyasdfg
+ijk
+Thomxas
+NULL
+NULL
+Thomxas
+NULL
+
+# overlay tests with utf8view
+query T
+SELECT overlay(arrow_cast(str, 'Utf8View') placing arrow_cast(characters, 'Utf8View') from pos for len) from over_test
+----
+abc
+qwertyasdfg
+ijkz
+Thomas
+NULL
+NULL
+NULL
+NULL
+
+query T
+SELECT overlay(arrow_cast(str, 'Utf8View') placing arrow_cast(characters, 'Utf8View') from pos) from over_test
 ----
 abc
 qwertyasdfg

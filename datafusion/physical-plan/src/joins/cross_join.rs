@@ -693,9 +693,8 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "External error: Resources exhausted: Failed to allocate additional"
+            "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: CrossJoinExec"
         );
-        assert_contains!(err.to_string(), "CrossJoinExec");
 
         Ok(())
     }
