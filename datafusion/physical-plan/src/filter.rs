@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{ready, Context, Poll};
-
 use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -28,13 +23,16 @@ use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
 };
+use arrow::array::MutableArrayData;
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{ready, Context, Poll};
 
-use arrow::compute::{filter_record_batch, take};
+use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_array::builder::Int32Builder;
-use arrow_array::{BooleanArray, RecordBatchOptions};
-use arrow_schema::ArrowError;
+use arrow_array::{make_array, ArrayRef, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
@@ -391,7 +389,33 @@ pub(crate) fn batch_filter(
                 Ok(filter_array) => match filter_kernel {
                     FilterKernel::Default => filter_record_batch(batch, filter_array)?,
                     FilterKernel::AlwaysCreateNewBatches => {
-                        filter_record_batch_with_take(batch, filter_array)?
+                        if filter_array.true_count() == batch.num_rows() {
+                            // special case where we just make an exact copy
+                            let arrays: Vec<ArrayRef> = batch
+                                .columns()
+                                .iter()
+                                .map(|array| {
+                                    let capacity = array.len();
+                                    let data = array.to_data();
+                                    let mut mutable = MutableArrayData::new(
+                                        vec![&data],
+                                        false,
+                                        capacity,
+                                    );
+                                    mutable.extend(0, 0, capacity);
+                                    make_array(mutable.freeze())
+                                })
+                                .collect();
+                            let options = RecordBatchOptions::new()
+                                .with_row_count(Some(batch.num_rows()));
+                            RecordBatch::try_new_with_options(
+                                batch.schema().clone(),
+                                arrays,
+                                &options,
+                            )?
+                        } else {
+                            filter_record_batch(batch, filter_array)?
+                        }
                     }
                 },
                 Err(_) => {
@@ -401,29 +425,6 @@ pub(crate) fn batch_filter(
                 }
             })
         })
-}
-
-fn filter_record_batch_with_take(
-    record_batch: &RecordBatch,
-    predicate: &BooleanArray,
-) -> std::result::Result<RecordBatch, ArrowError> {
-    // turn predicate into selection vector
-    let mut sv = Int32Builder::with_capacity(predicate.true_count());
-    for i in 0..predicate.len() {
-        if predicate.value(i) {
-            sv.append_value(i as i32);
-        }
-    }
-    let sv = sv.finish();
-
-    // use take to ensure that no input batches are passed through
-    let filtered_arrays = record_batch
-        .columns()
-        .iter()
-        .map(|a| take(a, &sv, None))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let options = RecordBatchOptions::default().with_row_count(Some(sv.len()));
-    RecordBatch::try_new_with_options(record_batch.schema(), filtered_arrays, &options)
 }
 
 impl Stream for FilterExecStream {
