@@ -65,7 +65,7 @@ pub mod expr_fn {
     }
 }
 
-#[doc = r" Return a list of all functions in this package"]
+/// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<std::sync::Arc<datafusion_expr::ScalarUDF>> {
     vec![regexp_match(), regexp_like(), regexp_replace()]
 }

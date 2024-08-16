@@ -15,17 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::make_array::make_array;
-use arrow::array::ArrayData;
-use arrow_array::{Array, ArrayRef, MapArray, StructArray};
-use arrow_buffer::{Buffer, ToByteSlice};
-use arrow_schema::{DataType, Field, SchemaBuilder};
-use datafusion_common::{exec_err, ScalarValue};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
+
+use arrow::array::ArrayData;
+use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
+use arrow_buffer::{Buffer, ToByteSlice};
+use arrow_schema::{DataType, Field, SchemaBuilder};
+
+use datafusion_common::{exec_err, ScalarValue};
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+
+use crate::make_array::make_array;
 
 /// Returns a map created from a key list and a value list
 pub fn map(keys: Vec<Expr>, values: Vec<Expr>) -> Expr {
@@ -56,11 +59,11 @@ fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarV
         );
     }
 
+    let data_type = args[0].data_type();
     let can_evaluate_to_const = can_evaluate_to_const(args);
-
     let key = get_first_array_ref(&args[0])?;
     let value = get_first_array_ref(&args[1])?;
-    make_map_batch_internal(key, value, can_evaluate_to_const)
+    make_map_batch_internal(key, value, can_evaluate_to_const, data_type)
 }
 
 fn get_first_array_ref(
@@ -73,7 +76,7 @@ fn get_first_array_ref(
             ScalarValue::FixedSizeList(array) => Ok(array.value(0)),
             _ => exec_err!("Expected array, got {:?}", value),
         },
-        ColumnarValue::Array(array) => exec_err!("Expected scalar, got {:?}", array),
+        ColumnarValue::Array(array) => Ok(array.to_owned()),
     }
 }
 
@@ -81,6 +84,7 @@ fn make_map_batch_internal(
     keys: ArrayRef,
     values: ArrayRef,
     can_evaluate_to_const: bool,
+    data_type: DataType,
 ) -> datafusion_common::Result<ColumnarValue> {
     if keys.null_count() > 0 {
         return exec_err!("map key cannot be null");
@@ -88,6 +92,14 @@ fn make_map_batch_internal(
 
     if keys.len() != values.len() {
         return exec_err!("map requires key and value lists to have the same length");
+    }
+
+    if !can_evaluate_to_const {
+        return if let DataType::LargeList(..) = data_type {
+            make_map_array_internal::<i64>(keys, values)
+        } else {
+            make_map_array_internal::<i32>(keys, values)
+        };
     }
 
     let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
@@ -190,7 +202,6 @@ impl ScalarUDFImpl for MapFunc {
         make_map_batch(args)
     }
 }
-
 fn get_element_type(data_type: &DataType) -> datafusion_common::Result<&DataType> {
     match data_type {
         DataType::List(element) => Ok(element.data_type()),
@@ -201,4 +212,116 @@ fn get_element_type(data_type: &DataType) -> datafusion_common::Result<&DataType
             data_type
         ),
     }
+}
+
+/// Helper function to create MapArray from array of values to support arrays for Map scalar function
+///
+/// ``` text
+/// Format of input KEYS and VALUES column
+///         keys                        values
+/// +---------------------+       +---------------------+
+/// | +-----------------+ |       | +-----------------+ |
+/// | | [k11, k12, k13] | |       | | [v11, v12, v13] | |
+/// | +-----------------+ |       | +-----------------+ |
+/// |                     |       |                     |
+/// | +-----------------+ |       | +-----------------+ |
+/// | | [k21, k22, k23] | |       | | [v21, v22, v23] | |
+/// | +-----------------+ |       | +-----------------+ |
+/// |                     |       |                     |
+/// | +-----------------+ |       | +-----------------+ |
+/// | |[k31, k32, k33]  | |       | |[v31, v32, v33]  | |
+/// | +-----------------+ |       | +-----------------+ |
+/// +---------------------+       +---------------------+
+/// ```
+/// Flattened keys and values array to user create `StructArray`,
+/// which serves as inner child for `MapArray`
+///
+/// ``` text
+/// Flattened           Flattened
+/// Keys                Values
+/// +-----------+      +-----------+
+/// | +-------+ |      | +-------+ |
+/// | |  k11  | |      | |  v11  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k12  | |      | |  v12  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k13  | |      | |  v13  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k21  | |      | |  v21  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k22  | |      | |  v22  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k23  | |      | |  v23  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k31  | |      | |  v31  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k32  | |      | |  v32  | |
+/// | +-------+ |      | +-------+ |
+/// | +-------+ |      | +-------+ |
+/// | |  k33  | |      | |  v33  | |
+/// | +-------+ |      | +-------+ |
+/// +-----------+      +-----------+
+/// ```text
+
+fn make_map_array_internal<O: OffsetSizeTrait>(
+    keys: ArrayRef,
+    values: ArrayRef,
+) -> datafusion_common::Result<ColumnarValue> {
+    let mut offset_buffer = vec![O::zero()];
+    let mut running_offset = O::zero();
+
+    let keys = datafusion_common::utils::list_to_arrays::<O>(keys);
+    let values = datafusion_common::utils::list_to_arrays::<O>(values);
+
+    let mut key_array_vec = vec![];
+    let mut value_array_vec = vec![];
+    for (k, v) in keys.iter().zip(values.iter()) {
+        running_offset = running_offset.add(O::usize_as(k.len()));
+        offset_buffer.push(running_offset);
+        key_array_vec.push(k.as_ref());
+        value_array_vec.push(v.as_ref());
+    }
+
+    // concatenate all the arrays
+    let flattened_keys = arrow::compute::concat(key_array_vec.as_ref())?;
+    if flattened_keys.null_count() > 0 {
+        return exec_err!("keys cannot be null");
+    }
+    let flattened_values = arrow::compute::concat(value_array_vec.as_ref())?;
+
+    let fields = vec![
+        Arc::new(Field::new("key", flattened_keys.data_type().clone(), false)),
+        Arc::new(Field::new(
+            "value",
+            flattened_values.data_type().clone(),
+            true,
+        )),
+    ];
+
+    let struct_data = ArrayData::builder(DataType::Struct(fields.into()))
+        .len(flattened_keys.len())
+        .add_child_data(flattened_keys.to_data())
+        .add_child_data(flattened_values.to_data())
+        .build()?;
+
+    let map_data = ArrayData::builder(DataType::Map(
+        Arc::new(Field::new(
+            "entries",
+            struct_data.data_type().clone(),
+            false,
+        )),
+        false,
+    ))
+    .len(keys.len())
+    .add_child_data(struct_data)
+    .add_buffer(Buffer::from_slice_ref(offset_buffer.as_slice()))
+    .build()?;
+    Ok(ColumnarValue::Array(Arc::new(MapArray::from(map_data))))
 }
