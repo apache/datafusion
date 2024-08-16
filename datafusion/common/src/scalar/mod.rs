@@ -27,7 +27,7 @@ use std::convert::Infallible;
 use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::iter::repeat;
+use std::iter::{repeat, Peekable};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -1632,15 +1632,21 @@ impl ScalarValue {
             Some(sv) => sv.data_type(),
         };
 
-        Self::iter_to_array_of_type(scalars, &data_type)
+        Self::iter_to_array_of_type_internal(&mut scalars, &data_type)
     }
 
-    fn iter_to_array_of_type(
+    pub fn iter_to_array_of_type(
         scalars: impl IntoIterator<Item = ScalarValue>,
         data_type: &DataType,
     ) -> Result<ArrayRef> {
         let mut scalars = scalars.into_iter().peekable();
+        Self::iter_to_array_of_type_internal(&mut scalars, data_type)
+    }
 
+    fn iter_to_array_of_type_internal(
+        scalars: &mut Peekable<impl Iterator<Item = ScalarValue>>,
+        data_type: &DataType,
+    ) -> Result<ArrayRef> {
         /// Creates an array of $ARRAY_TY by unpacking values of
         /// SCALAR_TY for primitive types
         macro_rules! build_array_primitive {
@@ -1729,8 +1735,10 @@ impl ScalarValue {
             DataType::UInt16 => build_array_primitive!(UInt16Array, UInt16),
             DataType::UInt32 => build_array_primitive!(UInt32Array, UInt32),
             DataType::UInt64 => build_array_primitive!(UInt64Array, UInt64),
+            DataType::Utf8View => build_array_string!(StringViewArray, Utf8),
             DataType::Utf8 => build_array_string!(StringArray, Utf8),
             DataType::LargeUtf8 => build_array_string!(LargeStringArray, Utf8),
+            DataType::BinaryView => build_array_string!(BinaryViewArray, Binary),
             DataType::Binary => build_array_string!(BinaryArray, Binary),
             DataType::LargeBinary => build_array_string!(LargeBinaryArray, Binary),
             DataType::Date32 => build_array_primitive!(Date32Array, Date32),
@@ -1815,6 +1823,7 @@ impl ScalarValue {
             }
             DataType::List(_)
             | DataType::LargeList(_)
+            | DataType::Map(_, _)
             | DataType::Struct(_)
             | DataType::Union(_, _) => {
                 let arrays = scalars.map(|s| s.to_array()).collect::<Result<Vec<_>>>()?;
@@ -1822,7 +1831,7 @@ impl ScalarValue {
                 arrow::compute::concat(arrays.as_slice())?
             }
             DataType::Dictionary(key_type, value_type) => {
-                let values = Self::iter_to_array_of_type(scalars, value_type)?;
+                let values = Self::iter_to_array_of_type_internal(scalars, value_type)?;
                 assert_eq!(values.data_type(), value_type.as_ref());
 
                 match key_type.as_ref() {
@@ -1865,10 +1874,7 @@ impl ScalarValue {
             | DataType::Time32(TimeUnit::Nanosecond)
             | DataType::Time64(TimeUnit::Second)
             | DataType::Time64(TimeUnit::Millisecond)
-            | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _)
-            | DataType::Utf8View
-            | DataType::BinaryView
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {
                 return _not_impl_err!(
