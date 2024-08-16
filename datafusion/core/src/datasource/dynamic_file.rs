@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! dynamic_file_schema contains a SchemaProvider that creates tables from file paths
+//! dynamic_file_schema contains an [`UrlTableFactory`] implementation that
+//! can create a [`ListingTable`] from the given url.
 
 use std::sync::Arc;
 
@@ -31,6 +32,7 @@ use crate::execution::context::SessionState;
 /// [DynamicListTableFactory] is a factory that can create a [ListingTable] from the given url.
 #[derive(Default)]
 pub struct DynamicListTableFactory {
+    /// The session store that contains the current session.
     session_store: Arc<SessionStore>,
 }
 

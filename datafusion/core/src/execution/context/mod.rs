@@ -324,7 +324,7 @@ impl SessionContext {
     }
 
     /// Enable the dynamic file query for the current session.
-    /// See [DynamicFileSchemaProvider] for more details
+    /// See [DynamicFileCatalog] for more details
     ///
     /// # Example: query the url table
     ///
@@ -343,7 +343,7 @@ impl SessionContext {
     /// assert_batches_eq!(
     ///  &[
     ///    "+---+----------------+",
-    ///    "| a | MIN(example.b) |",
+    ///    "| a | min(example.b) |",
     ///    "+---+----------------+",
     ///    "| 1 | 2              |",
     ///    "+---+----------------+",

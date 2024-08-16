@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! dynamic_file contains a SchemaProvider that creates tables from file paths
+//! dynamic_file contains [`DynamicFileCatalog`] that creates tables from file paths
+//! if the wrapped [`CatalogProviderList`] doesn't have the table provider.
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use async_trait::async_trait;
@@ -24,8 +25,11 @@ use dirs::home_dir;
 use std::any::Any;
 use std::sync::Arc;
 
+/// Wrap another catalog provider list
 pub struct DynamicFileCatalog {
+    /// The inner catalog provider list
     inner: Arc<dyn CatalogProviderList>,
+    /// The factory that can create a table provider from the file path
     factory: Arc<dyn UrlTableFactory>,
 }
 
@@ -67,7 +71,9 @@ impl CatalogProviderList for DynamicFileCatalog {
 
 /// Wraps another catalog provider
 struct DynamicFileCatalogProvider {
+    /// The inner catalog provider
     inner: Arc<dyn CatalogProvider>,
+    /// The factory that can create a table provider from the file path
     factory: Arc<dyn UrlTableFactory>,
 }
 
@@ -112,7 +118,9 @@ impl CatalogProvider for DynamicFileCatalogProvider {
 /// The provider will try to create a table provider from the file path if the table provider
 /// isn't exist in the inner schema provider. The required object store must be registered in the session context.
 pub struct DynamicFileSchemaProvider {
+    /// The inner schema provider
     inner: Arc<dyn SchemaProvider>,
+    /// The factory that can create a table provider from the file path
     factory: Arc<dyn UrlTableFactory>,
 }
 
