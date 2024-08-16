@@ -4387,7 +4387,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.72",
-checksum = "e9e8aabfac534be767c909e0690571677d49f41bd8465ae876fe043d52ba5292"
 ]
 
 [[package]]
