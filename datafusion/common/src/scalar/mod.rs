@@ -36,7 +36,7 @@ use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
     as_fixed_size_binary_array, as_fixed_size_list_array,
 };
-use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
+use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
 use crate::utils::{
     array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
@@ -1707,9 +1707,7 @@ impl ScalarValue {
         // figure out the type based on the first element
         let data_type = match scalars.peek() {
             None => {
-                return _internal_err!(
-                    "Empty iterator passed to ScalarValue::iter_to_array"
-                );
+                return _exec_err!("Empty iterator passed to ScalarValue::iter_to_array");
             }
             Some(sv) => sv.data_type(),
         };
@@ -1723,7 +1721,7 @@ impl ScalarValue {
                         if let ScalarValue::$SCALAR_TY(v) = sv {
                             Ok(v)
                         } else {
-                            _internal_err!(
+                            _exec_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
                                 data_type, sv
@@ -1743,7 +1741,7 @@ impl ScalarValue {
                         if let ScalarValue::$SCALAR_TY(v, _) = sv {
                             Ok(v)
                         } else {
-                            _internal_err!(
+                            _exec_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
                                 data_type, sv
@@ -1765,7 +1763,7 @@ impl ScalarValue {
                         if let ScalarValue::$SCALAR_TY(v) = sv {
                             Ok(v)
                         } else {
-                            _internal_err!(
+                            _exec_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
                                 data_type, sv
@@ -1908,11 +1906,11 @@ impl ScalarValue {
                             if &inner_key_type == key_type {
                                 Ok(*scalar)
                             } else {
-                                _internal_err!("Expected inner key type of {key_type} but found: {inner_key_type}, value was ({scalar:?})")
+                                _exec_err!("Expected inner key type of {key_type} but found: {inner_key_type}, value was ({scalar:?})")
                             }
                         }
                         _ => {
-                            _internal_err!(
+                            _exec_err!(
                                 "Expected scalar of type {value_type} but found: {scalar} {scalar:?}"
                             )
                         }
@@ -1940,7 +1938,7 @@ impl ScalarValue {
                         if let ScalarValue::FixedSizeBinary(_, v) = sv {
                             Ok(v)
                         } else {
-                            _internal_err!(
+                            _exec_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                 Expected {data_type:?}, got {sv:?}"
                             )
@@ -1965,7 +1963,7 @@ impl ScalarValue {
             | DataType::RunEndEncoded(_, _)
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {
-                return _internal_err!(
+                return _not_impl_err!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,
                     scalars.peek()

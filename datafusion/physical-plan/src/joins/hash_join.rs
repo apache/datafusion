@@ -3821,13 +3821,11 @@ mod tests {
             let stream = join.execute(0, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
+            // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Failed to allocate additional"
+                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
             );
-
-            // Asserting that operator-level reservation attempting to overallocate
-            assert_contains!(err.to_string(), "HashJoinInput");
         }
 
         Ok(())
@@ -3902,13 +3900,12 @@ mod tests {
             let stream = join.execute(1, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
+            // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Failed to allocate additional"
-            );
+                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
 
-            // Asserting that stream-level reservation attempting to overallocate
-            assert_contains!(err.to_string(), "HashJoinInput[1]");
+            );
         }
 
         Ok(())
