@@ -536,7 +536,13 @@ mod tests {
         );
         let rgm2 = get_row_group_meta_data(
             &schema_descr,
-            vec![ParquetStatistics::int32(Some(11), Some(20), None, Some(0), false)],
+            vec![ParquetStatistics::int32(
+                Some(11),
+                Some(20),
+                None,
+                Some(0),
+                false,
+            )],
         );
         let metrics = parquet_file_metrics();
         // missing statistics for first row group mean that the result from the predicate expression
@@ -795,13 +801,25 @@ mod tests {
             &schema_descr,
             // [0.1, 0.2]
             // c1 > 5, this row group will not be included in the results.
-            vec![ParquetStatistics::int32(Some(10), Some(20), None, Some(0), false)],
+            vec![ParquetStatistics::int32(
+                Some(10),
+                Some(20),
+                None,
+                Some(0),
+                false,
+            )],
         );
         let rgm3 = get_row_group_meta_data(
             &schema_descr,
             // [1, None]
             // c1 > 5, this row group can not be filtered out, so will be included in the results.
-            vec![ParquetStatistics::int32(Some(100), None, None, Some(0), false)],
+            vec![ParquetStatistics::int32(
+                Some(100),
+                None,
+                None,
+                Some(0),
+                false,
+            )],
         );
         let metrics = parquet_file_metrics();
         let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(3));
@@ -857,19 +875,37 @@ mod tests {
             &schema_descr,
             // [10, 20]
             // c1 > 5, this row group will be included in the results.
-            vec![ParquetStatistics::int32(Some(10), Some(20), None, Some(0), false)],
+            vec![ParquetStatistics::int32(
+                Some(10),
+                Some(20),
+                None,
+                Some(0),
+                false,
+            )],
         );
         let rgm3 = get_row_group_meta_data(
             &schema_descr,
             // [0, 2]
             // c1 > 5, this row group will not be included in the results.
-            vec![ParquetStatistics::int32(Some(0), Some(2), None, Some(0), false)],
+            vec![ParquetStatistics::int32(
+                Some(0),
+                Some(2),
+                None,
+                Some(0),
+                false,
+            )],
         );
         let rgm4 = get_row_group_meta_data(
             &schema_descr,
             // [None, 2]
             // c1 > 5, this row group can not be filtered out, so will be included in the results.
-            vec![ParquetStatistics::int32(None, Some(2), None, Some(0), false)],
+            vec![ParquetStatistics::int32(
+                None,
+                Some(2),
+                None,
+                Some(0),
+                false,
+            )],
         );
         let metrics = parquet_file_metrics();
         let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(4));
@@ -915,7 +951,13 @@ mod tests {
         let rgm2 = get_row_group_meta_data(
             &schema_descr,
             // [0.1, 0.2]
-            vec![ParquetStatistics::int64(Some(10), Some(20), None, Some(0), false)],
+            vec![ParquetStatistics::int64(
+                Some(10),
+                Some(20),
+                None,
+                Some(0),
+                false,
+            )],
         );
         let rgm3 = get_row_group_meta_data(
             &schema_descr,
@@ -993,7 +1035,11 @@ mod tests {
         let rgm3 = get_row_group_meta_data(
             &schema_descr,
             vec![ParquetStatistics::fixed_len_byte_array(
-                None, None, None, Some(0), false,
+                None,
+                None,
+                None,
+                Some(0),
+                false,
             )],
         );
         let metrics = parquet_file_metrics();
@@ -1057,7 +1103,13 @@ mod tests {
         );
         let rgm3 = get_row_group_meta_data(
             &schema_descr,
-            vec![ParquetStatistics::byte_array(None, None, None, Some(0), false)],
+            vec![ParquetStatistics::byte_array(
+                None,
+                None,
+                None,
+                Some(0),
+                false,
+            )],
         );
         let metrics = parquet_file_metrics();
         let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(3));
