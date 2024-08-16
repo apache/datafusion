@@ -130,12 +130,12 @@ pub struct PhysicalGroupBy {
     /// Distinct (Physical Expr, Alias) in the grouping set
     pub expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Corresponding NULL expressions for expr
-    pub null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Null mask for each group in this grouping set. Each group is
     /// composed of either one of the group expressions in expr or a null
     /// expression in null_expr. If `groups[i][j]` is true, then the the
     /// j-th expression in the i-th group is NULL, otherwise it is `expr[j]`.
-    pub groups: Vec<Vec<bool>>,
+    groups: Vec<Vec<bool>>,
 }
 
 impl PhysicalGroupBy {
