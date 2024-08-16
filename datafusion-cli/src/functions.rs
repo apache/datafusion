@@ -32,6 +32,7 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 use parquet::basic::ConvertedType;
+use parquet::data_type::{ByteArray, FixedLenByteArray};
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics;
@@ -276,43 +277,41 @@ fn convert_parquet_statistics(
             val.min_opt().map(|v| v.to_string()),
             val.max_opt().map(|v| v.to_string()),
         ),
-        (Statistics::ByteArray(val), ConvertedType::UTF8) => {
-            let min = val.min_opt().map(|v| {
-                v.as_utf8()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|_e| v.to_string())
-            });
-            let max = val.max_opt().map(|v| {
-                v.as_utf8()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|_e| v.to_string())
-            });
-
-            (min, max)
-        }
+        (Statistics::ByteArray(val), ConvertedType::UTF8) => (
+            byte_array_to_string(val.min_opt()),
+            byte_array_to_string(val.max_opt()),
+        ),
         (Statistics::ByteArray(val), _) => (
             val.min_opt().map(|v| v.to_string()),
             val.max_opt().map(|v| v.to_string()),
         ),
-        (Statistics::FixedLenByteArray(val), ConvertedType::UTF8) => {
-            let min = val.min_opt().map(|v| {
-                v.as_utf8()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|_e| v.to_string())
-            });
-            let max = val.max_opt().map(|v| {
-                v.as_utf8()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|_e| v.to_string())
-            });
-
-            (min, max)
-        }
+        (Statistics::FixedLenByteArray(val), ConvertedType::UTF8) => (
+            fixed_len_byte_array_to_string(val.min_opt()),
+            fixed_len_byte_array_to_string(val.max_opt()),
+        ),
         (Statistics::FixedLenByteArray(val), _) => (
             val.min_opt().map(|v| v.to_string()),
             val.max_opt().map(|v| v.to_string()),
         ),
     }
+}
+
+/// Convert to a string if it has utf8 encoding, otherwise print bytes directly
+fn byte_array_to_string(val: Option<&ByteArray>) -> Option<String> {
+    val.map(|v| {
+        v.as_utf8()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|_e| v.to_string())
+    })
+}
+
+/// Convert to a string if it has utf8 encoding, otherwise print bytes directly
+fn fixed_len_byte_array_to_string(val: Option<&FixedLenByteArray>) -> Option<String> {
+    val.map(|v| {
+        v.as_utf8()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|_e| v.to_string())
+    })
 }
 
 pub struct ParquetMetadataFunc {}
