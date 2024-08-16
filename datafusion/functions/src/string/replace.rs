@@ -21,7 +21,6 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringViewArray};
 use arrow::datatypes::DataType;
 
-use arrow::ipc::LargeUtf8;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::*;
