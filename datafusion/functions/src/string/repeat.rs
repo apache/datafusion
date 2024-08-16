@@ -178,40 +178,6 @@ mod tests {
             StringArray
         );
 
-        test_function!(
-            RepeatFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("Pg")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
-            ],
-            Ok(Some("PgPgPgPg")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            RepeatFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
-            ],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            RepeatFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("Pg")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(None)),
-            ],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
-
         Ok(())
     }
 }

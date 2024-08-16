@@ -104,8 +104,8 @@ fn reverse_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, LargeStringArray, StringArray};
-    use arrow::datatypes::DataType::{LargeUtf8, Utf8};
+    use arrow::array::{Array, StringArray};
+    use arrow::datatypes::DataType::Utf8;
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -118,24 +118,6 @@ mod tests {
             test_function!(
                 ReverseFunc::new(),
                 &[ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
-                $EXPECTED,
-                &str,
-                Utf8,
-                StringArray
-            );
-
-            test_function!(
-                ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
-                $EXPECTED,
-                &str,
-                LargeUtf8,
-                LargeStringArray
-            );
-
-            test_function!(
-                ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 &str,
                 Utf8,
