@@ -29,9 +29,12 @@ use crate::{
     DisplayFormatType, ExecutionPlan,
 };
 
-use arrow::compute::filter_record_batch;
+use arrow::compute::{filter_record_batch, take, FilterBuilder};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_array::builder::Int32Builder;
+use arrow_array::{BooleanArray, RecordBatchOptions};
+use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
@@ -47,6 +50,18 @@ use datafusion_physical_expr::{
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
+/// Options that control how FilterExec processes batches
+#[derive(Debug)]
+pub enum FilterKernel {
+    /// Use Arrow's `filter_array` which can return input batches without copying data when the
+    /// predicate evaluates to true for all rows in a batch
+    Arrow,
+    /// Use the `take` kernel to produce filtered batches, ensuring that no input batches are
+    /// passed through (can be useful for systems where the input to FilterExec can re-use
+    /// arrays)
+    Take,
+}
+
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
 #[derive(Debug)]
@@ -61,6 +76,8 @@ pub struct FilterExec {
     default_selectivity: u8,
     /// Properties equivalence properties, partitioning, etc.
     cache: PlanProperties,
+    /// Which kernel to use when filtering batches
+    filter_kernel: FilterKernel,
 }
 
 impl FilterExec {
@@ -68,6 +85,15 @@ impl FilterExec {
     pub fn try_new(
         predicate: Arc<dyn PhysicalExpr>,
         input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Self> {
+        Self::try_new_with_kernel(predicate, input, FilterKernel::Arrow)
+    }
+
+    /// Create a FilterExec on an input using the specified kernel to create filtered batches
+    pub fn try_new_with_kernel(
+        predicate: Arc<dyn PhysicalExpr>,
+        input: Arc<dyn ExecutionPlan>,
+        filter_kernel: FilterKernel,
     ) -> Result<Self> {
         match predicate.data_type(input.schema().as_ref())? {
             DataType::Boolean => {
@@ -80,6 +106,7 @@ impl FilterExec {
                     metrics: ExecutionPlanMetricsSet::new(),
                     default_selectivity,
                     cache,
+                    filter_kernel,
                 })
             }
             other => {
@@ -365,6 +392,29 @@ pub(crate) fn batch_filter(
                 }
             })
         })
+}
+
+fn filter_record_batch_with_take(
+    record_batch: &RecordBatch,
+    predicate: &BooleanArray,
+) -> std::result::Result<RecordBatch, ArrowError> {
+    // turn predicate into selection vector
+    let mut sv = Int32Builder::with_capacity(predicate.true_count());
+    for i in 0..predicate.len() {
+        if predicate.value(i) {
+            sv.append_value(i as i32);
+        }
+    }
+    let sv = sv.finish();
+
+    // use take to ensure that no input batches are passed through
+    let filtered_arrays = record_batch
+        .columns()
+        .iter()
+        .map(|a| take(a, &sv, None))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let options = RecordBatchOptions::default().with_row_count(Some(sv.len()));
+    RecordBatch::try_new_with_options(record_batch.schema(), filtered_arrays, &options)
 }
 
 impl Stream for FilterExecStream {
