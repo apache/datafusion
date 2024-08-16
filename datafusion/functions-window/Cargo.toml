@@ -42,3 +42,6 @@ datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+arrow = { workspace = true }
