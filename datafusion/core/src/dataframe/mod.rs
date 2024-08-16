@@ -1709,6 +1709,7 @@ mod tests {
     use arrow::array::{self, Int32Array};
     use datafusion_common::{Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
+    use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::window_function::row_number;
     use datafusion_expr::{
         cast, create_udf, expr, lit, BuiltInWindowFunction, ExprFunctionExt,
