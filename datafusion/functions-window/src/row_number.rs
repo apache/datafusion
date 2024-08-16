@@ -162,24 +162,6 @@ mod tests {
 
     use super::*;
 
-    // #[test]
-    // fn row_number_all_null() -> Result<()> {
-    //     let arr: ArrayRef = Arc::new(BooleanArray::from(vec![
-    //         None, None, None, None, None, None, None, None,
-    //     ]));
-    //     let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, true)]);
-    //     let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
-    //     let row_number = RowNumber::new("row_number".to_owned(), &DataType::UInt64);
-    //     let values = row_number.evaluate_args(&batch)?;
-    //     let result = row_number
-    //         .create_evaluator()?
-    //         .evaluate_all(&values, batch.num_rows())?;
-    //     let result = as_uint64_array(&result)?;
-    //     let result = result.values();
-    //     assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *result);
-    //     Ok(())
-    // }
-
     #[test]
     fn row_number_all_null() -> Result<()> {
         let values: ArrayRef = Arc::new(BooleanArray::from(vec![
