@@ -3703,12 +3703,10 @@ SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', null);
 
 ### `map_extract`
 
-Return corresponding values from a map for a given key, or NULL if the key is not found.
+Return a list containing the value for a given key or an empty list if the key is not contained in the map.
 
 ```
-SELECT map_extract(map, key);
-----
-1
+map_extract(map, key)
 ```
 
 #### Arguments
@@ -3724,7 +3722,7 @@ SELECT map_extract(map, key);
 ```
 SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
 ----
-1
+[1]
 ```
 
 #### Aliases

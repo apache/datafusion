@@ -18,16 +18,19 @@
 //! [`ScalarUDFImpl`] definitions for map_extract functions.
 
 use arrow::array::{ArrayRef, Capacities, MutableArrayData};
-use arrow_array::make_array;
+use arrow_array::{make_array, ListArray};
 
 use arrow::datatypes::DataType;
 use arrow_array::{Array, MapArray};
+use arrow_buffer::OffsetBuffer;
+use arrow_schema::Field;
 use datafusion_common::utils::get_map_entry_field;
 
 use datafusion_common::{cast::as_map_array, exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
+use std::vec;
 
 use crate::utils::make_scalar_function;
 
@@ -36,7 +39,7 @@ make_udf_expr_and_func!(
     MapExtract,
     map_extract,
     map key,
-    "Return corresponding values from a map for a given key,  or NULL if the key is not found.",
+    "Return a list containing the value for a given key or an empty list if the key is not contained in the map.",
     map_extract_udf
 );
 
@@ -73,7 +76,11 @@ impl ScalarUDFImpl for MapExtract {
         }
         let map_type = &arg_types[0];
         let map_fields = get_map_entry_field(map_type)?;
-        Ok(map_fields[1].data_type().clone())
+        Ok(DataType::List(Arc::new(Field::new(
+            "item",
+            map_fields.last().unwrap().data_type().clone(),
+            true,
+        ))))
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -102,6 +109,7 @@ fn general_map_extract_inner(
     query_keys_array: &dyn Array,
 ) -> Result<ArrayRef> {
     let keys = map_array.keys();
+    let mut offsets = vec![0_i32];
 
     let values = map_array.values();
     let original_data = values.to_data();
@@ -128,10 +136,17 @@ fn general_map_extract_inner(
                 mutable.extend_nulls(1);
             }
         }
+        offsets.push(offsets[row_index] + 1);
     }
 
     let data = mutable.freeze();
-    Ok(make_array(data))
+
+    Ok(Arc::new(ListArray::new(
+        Arc::new(Field::new("item", map_array.value_type().clone(), true)),
+        OffsetBuffer::<i32>::new(offsets.into()),
+        Arc::new(make_array(data)),
+        None,
+    )))
 }
 
 fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
