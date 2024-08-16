@@ -196,10 +196,11 @@ pub trait UrlTableFactory: Sync + Send {
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>>;
 }
 
-#[cfg(all(not(target_os = "windows"), not(feature = "home_dir")))]
+#[cfg(all(not(target_os = "windows"), feature = "home_dir"))]
 #[cfg(test)]
 mod tests {
     use crate::dynamic_file::catalog::substitute_tilde;
+    #[cfg(feature = "home_dir")]
     use dirs::home_dir;
 
     #[test]
