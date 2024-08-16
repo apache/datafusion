@@ -432,9 +432,8 @@ DROP TABLE datafusion.public.some_table;
 
 # information_schema_describe_table_not_exists
 
-# TODO: uncomment! changed to let tests progress, see https://github.com/sqlparser-rs/sqlparser-rs/issues/1385
-#statement error Error during planning: table 'datafusion.public.table' not found
-#describe table;
+statement error Error during planning: table 'datafusion.public.table' not found
+describe table;
 
 
 # information_schema_show_tables
