@@ -16,10 +16,11 @@
 // under the License.
 
 use std::any::Any;
+use std::fmt::Write;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray, Int64Array,
+    Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
@@ -31,6 +32,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
+use crate::string::common::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
@@ -87,14 +89,18 @@ impl ScalarUDFImpl for LPadFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(lpad, vec![])(args)
+        match args[0].data_type() {
+            Utf8 | Utf8View => make_scalar_function(lpad::<i32>, vec![])(args),
+            LargeUtf8 => make_scalar_function(lpad::<i64>, vec![])(args),
+            other => exec_err!("Unsupported data type {other:?} for function lpad"),
+        }
     }
 }
 
 /// Extends the string to length 'length' by prepending the characters fill (a space by default).
 /// If the string is already longer than length then it is truncated (on the right).
 /// lpad('hi', 5, 'xy') = 'xyxhi'
-pub fn lpad(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() <= 1 || args.len() > 3 {
         return exec_err!(
             "lpad was called with {} arguments. It requires at least 2 and at most 3.",
@@ -104,49 +110,28 @@ pub fn lpad(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let length_array = as_int64_array(&args[1])?;
 
-    match args[0].data_type() {
-        Utf8 => match args.len() {
-            2 => lpad_impl::<&GenericStringArray<i32>, &GenericStringArray<i32>, i32>(
-                args[0].as_string::<i32>(),
-                length_array,
-                None,
-            ),
-            3 => lpad_with_replace::<&GenericStringArray<i32>, i32>(
-                args[0].as_string::<i32>(),
-                length_array,
-                &args[2],
-            ),
-            _ => unreachable!(),
-        },
-        LargeUtf8 => match args.len() {
-            2 => lpad_impl::<&GenericStringArray<i64>, &GenericStringArray<i64>, i64>(
-                args[0].as_string::<i64>(),
-                length_array,
-                None,
-            ),
-            3 => lpad_with_replace::<&GenericStringArray<i64>, i64>(
-                args[0].as_string::<i64>(),
-                length_array,
-                &args[2],
-            ),
-            _ => unreachable!(),
-        },
-        Utf8View => match args.len() {
-            2 => lpad_impl::<&StringViewArray, &GenericStringArray<i32>, i32>(
-                args[0].as_string_view(),
-                length_array,
-                None,
-            ),
-            3 => lpad_with_replace::<&StringViewArray, i32>(
-                args[0].as_string_view(),
-                length_array,
-                &args[2],
-            ),
-            _ => unreachable!(),
-        },
-        other => {
-            exec_err!("Unsupported data type {other:?} for function lpad")
-        }
+    match (args.len(), args[0].data_type()) {
+        (2, Utf8View) => lpad_impl::<&StringViewArray, &GenericStringArray<i32>, T>(
+            args[0].as_string_view(),
+            length_array,
+            None,
+        ),
+        (2, Utf8 | LargeUtf8) => lpad_impl::<
+            &GenericStringArray<T>,
+            &GenericStringArray<T>,
+            T,
+        >(args[0].as_string::<T>(), length_array, None),
+        (3, Utf8View) => lpad_with_replace::<&StringViewArray, T>(
+            args[0].as_string_view(),
+            length_array,
+            &args[2],
+        ),
+        (3, Utf8 | LargeUtf8) => lpad_with_replace::<&GenericStringArray<T>, T>(
+            args[0].as_string::<T>(),
+            length_array,
+            &args[2],
+        ),
+        (_, _) => unreachable!(),
     }
 }
 
@@ -159,20 +144,20 @@ where
     V: StringArrayType<'a>,
 {
     match fill_array.data_type() {
-        Utf8 => lpad_impl::<V, &GenericStringArray<i32>, T>(
+        Utf8View => lpad_impl::<V, &StringViewArray, T>(
             string_array,
             length_array,
-            Some(fill_array.as_string::<i32>()),
+            Some(fill_array.as_string_view()),
         ),
         LargeUtf8 => lpad_impl::<V, &GenericStringArray<i64>, T>(
             string_array,
             length_array,
             Some(fill_array.as_string::<i64>()),
         ),
-        Utf8View => lpad_impl::<V, &StringViewArray, T>(
+        Utf8 => lpad_impl::<V, &GenericStringArray<i32>, T>(
             string_array,
             length_array,
-            Some(fill_array.as_string_view()),
+            Some(fill_array.as_string::<i32>()),
         ),
         other => {
             exec_err!("Unsupported data type {other:?} for function lpad")
@@ -190,93 +175,78 @@ where
     V2: StringArrayType<'a>,
     T: OffsetSizeTrait,
 {
-    if fill_array.is_none() {
-        let result = string_array
-            .iter()
-            .zip(length_array.iter())
-            .map(|(string, length)| match (string, length) {
-                (Some(string), Some(length)) => {
-                    if length > i32::MAX as i64 {
-                        return exec_err!("lpad requested length {length} too large");
-                    }
+    let array = if fill_array.is_none() {
+        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
 
-                    let length = if length < 0 { 0 } else { length as usize };
-                    if length == 0 {
-                        Ok(Some("".to_string()))
-                    } else {
-                        let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                        if length < graphemes.len() {
-                            Ok(Some(graphemes[..length].concat()))
-                        } else {
-                            let mut s: String = " ".repeat(length - graphemes.len());
-                            s.push_str(string);
-                            Ok(Some(s))
-                        }
-                    }
+        for (string, length) in string_array.iter().zip(length_array.iter()) {
+            if let (Some(string), Some(length)) = (string, length) {
+                if length > i32::MAX as i64 {
+                    return exec_err!("lpad requested length {length} too large");
                 }
-                _ => Ok(None),
-            })
-            .collect::<Result<GenericStringArray<T>>>()?;
 
-        Ok(Arc::new(result) as ArrayRef)
+                let length = if length < 0 { 0 } else { length as usize };
+                if length == 0 {
+                    builder.append_value("");
+                    continue;
+                }
+
+                let graphemes = string.graphemes(true).collect::<Vec<&str>>();
+                if length < graphemes.len() {
+                    builder.append_value(graphemes[..length].concat());
+                } else {
+                    builder.write_str(" ".repeat(length - graphemes.len()).as_str())?;
+                    builder.write_str(string)?;
+                    builder.append_value("");
+                }
+            } else {
+                builder.append_null();
+            }
+        }
+
+        builder.finish()
     } else {
-        let result = string_array
+        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+
+        for ((string, length), fill) in string_array
             .iter()
             .zip(length_array.iter())
             .zip(fill_array.unwrap().iter())
-            .map(|((string, length), fill)| match (string, length, fill) {
-                (Some(string), Some(length), Some(fill)) => {
-                    if length > i32::MAX as i64 {
-                        return exec_err!("lpad requested length {length} too large");
-                    }
-
-                    let length = if length < 0 { 0 } else { length as usize };
-                    if length == 0 {
-                        Ok(Some("".to_string()))
-                    } else {
-                        let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                        let fill_chars = fill.chars().collect::<Vec<char>>();
-
-                        if length < graphemes.len() {
-                            Ok(Some(graphemes[..length].concat()))
-                        } else if fill_chars.is_empty() {
-                            Ok(Some(string.to_string()))
-                        } else {
-                            let mut s = string.to_string();
-                            let mut char_vector =
-                                Vec::<char>::with_capacity(length - graphemes.len());
-                            for l in 0..length - graphemes.len() {
-                                char_vector
-                                    .push(*fill_chars.get(l % fill_chars.len()).unwrap());
-                            }
-                            s.insert_str(
-                                0,
-                                char_vector.iter().collect::<String>().as_str(),
-                            );
-                            Ok(Some(s))
-                        }
-                    }
+        {
+            if let (Some(string), Some(length), Some(fill)) = (string, length, fill) {
+                if length > i32::MAX as i64 {
+                    return exec_err!("lpad requested length {length} too large");
                 }
-                _ => Ok(None),
-            })
-            .collect::<Result<GenericStringArray<T>>>()?;
 
-        Ok(Arc::new(result) as ArrayRef)
-    }
-}
+                let length = if length < 0 { 0 } else { length as usize };
+                if length == 0 {
+                    builder.append_value("");
+                    continue;
+                }
 
-trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
-    fn iter(&self) -> ArrayIter<Self>;
-}
-impl<'a, O: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<O> {
-    fn iter(&self) -> ArrayIter<Self> {
-        GenericStringArray::<O>::iter(self)
-    }
-}
-impl<'a> StringArrayType<'a> for &'a StringViewArray {
-    fn iter(&self) -> ArrayIter<Self> {
-        StringViewArray::iter(self)
-    }
+                let graphemes = string.graphemes(true).collect::<Vec<&str>>();
+                let fill_chars = fill.chars().collect::<Vec<char>>();
+
+                if length < graphemes.len() {
+                    builder.append_value(graphemes[..length].concat());
+                } else if fill_chars.is_empty() {
+                    builder.append_value(string);
+                } else {
+                    for l in 0..length - graphemes.len() {
+                        let c = *fill_chars.get(l % fill_chars.len()).unwrap();
+                        builder.write_char(c)?;
+                    }
+                    builder.write_str(string)?;
+                    builder.append_value("");
+                }
+            } else {
+                builder.append_null();
+            }
+        }
+
+        builder.finish()
+    };
+
+    Ok(Arc::new(array) as ArrayRef)
 }
 
 #[cfg(test)]

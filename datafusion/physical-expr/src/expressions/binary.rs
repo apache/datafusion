@@ -2020,6 +2020,111 @@ mod tests {
     }
 
     #[test]
+    fn regex_with_nulls() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let a = Arc::new(StringArray::from(vec![
+            Some("abc"),
+            None,
+            Some("abc"),
+            None,
+            Some("abc"),
+        ])) as ArrayRef;
+        let b = Arc::new(StringArray::from(vec![
+            Some("^a"),
+            Some("^A"),
+            None,
+            None,
+            Some("^(b|c)"),
+        ])) as ArrayRef;
+
+        let regex_expected =
+            BooleanArray::from(vec![Some(true), None, None, None, Some(false)]);
+        let regex_not_expected =
+            BooleanArray::from(vec![Some(false), None, None, None, Some(true)]);
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexMatch,
+            regex_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexIMatch,
+            regex_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexNotMatch,
+            regex_not_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema),
+            &a,
+            &b,
+            Operator::RegexNotIMatch,
+            regex_not_expected.clone(),
+        )?;
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::LargeUtf8, true),
+            Field::new("b", DataType::LargeUtf8, true),
+        ]);
+        let a = Arc::new(LargeStringArray::from(vec![
+            Some("abc"),
+            None,
+            Some("abc"),
+            None,
+            Some("abc"),
+        ])) as ArrayRef;
+        let b = Arc::new(LargeStringArray::from(vec![
+            Some("^a"),
+            Some("^A"),
+            None,
+            None,
+            Some("^(b|c)"),
+        ])) as ArrayRef;
+
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexMatch,
+            regex_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexIMatch,
+            regex_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexNotMatch,
+            regex_not_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema),
+            &a,
+            &b,
+            Operator::RegexNotIMatch,
+            regex_not_expected.clone(),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     fn or_with_nulls_op() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Boolean, true),
