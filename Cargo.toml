@@ -164,3 +164,20 @@ large_futures = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_imports = "deny"
+
+
+## Temporary arrow-rs patch until 53.0.0 is released
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "042d725888358c73cd2a0d58868ea5c4bad778f7" }
