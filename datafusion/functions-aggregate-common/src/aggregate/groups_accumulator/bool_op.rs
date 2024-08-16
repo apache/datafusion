@@ -47,17 +47,22 @@ where
 
     /// Function that computes the output
     bool_fn: F,
+
+    /// The identity element for the boolean operation.
+    /// Any value combined with this returns the original value.
+    identity: bool,
 }
 
 impl<F> BooleanGroupsAccumulator<F>
 where
     F: Fn(bool, bool) -> bool + Send + Sync,
 {
-    pub fn new(bitop_fn: F) -> Self {
+    pub fn new(bool_fn: F, identity: bool) -> Self {
         Self {
             values: BooleanBufferBuilder::new(0),
             null_state: NullState::new(),
-            bool_fn: bitop_fn,
+            bool_fn,
+            identity,
         }
     }
 }
@@ -78,7 +83,9 @@ where
 
         if self.values.len() < total_num_groups {
             let new_groups = total_num_groups - self.values.len();
-            self.values.append_n(new_groups, Default::default());
+            // Fill with the identity element, so that when the first non-null value is encountered,
+            // it will combine with the identity and the result will be the first non-null value itself.
+            self.values.append_n(new_groups, self.identity);
         }
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
