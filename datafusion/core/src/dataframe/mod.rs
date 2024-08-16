@@ -2381,36 +2381,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_window_function_with_column() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-
-        let batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![5, 4, 3, 2, 1]))],
-        )?;
-
-        let ctx = SessionContext::new();
-
-        let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
-        ctx.register_table("t", Arc::new(provider))?;
-
-        let df = ctx.table("t").await?;
-
-        let func = Expr::WindowFunction(WindowFunction::new(
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::RowNumber,
-            ),
-            vec![],
-        ))
-        .alias("row_num");
-
-        let out = df.with_column("r", func)?;
-
-        assert_eq!(2, out.schema().fields().len());
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_distinct() -> Result<()> {
         let t = test_table().await?;
         let plan = t
@@ -2901,6 +2871,39 @@ mod tests {
                 "+----+----+-----+-----+"
             ],
             &df_results_overwrite_self
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_window_function_with_column() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
+        let ctx = SessionContext::new();
+        let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
+        let func = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::BuiltInWindowFunction(
+                BuiltInWindowFunction::RowNumber,
+            ),
+            vec![],
+        ))
+        .alias("row_num");
+
+        // Should create an additional column with alias 'r' that has window func results
+        let df = df_impl.with_column("r", func)?.limit(0, Some(2))?;
+        assert_eq!(4, df.schema().fields().len());
+
+        let df_results = df.clone().collect().await?;
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+-----+---+",
+                "| c1 | c2 | c3  | r |",
+                "+----+----+-----+---+",
+                "| c  | 2  | 1   | 1 |",
+                "| d  | 5  | -40 | 2 |",
+                "+----+----+-----+---+",
+            ],
+            &df_results
         );
 
         Ok(())
