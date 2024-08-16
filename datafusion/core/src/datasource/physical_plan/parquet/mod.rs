@@ -120,7 +120,7 @@ pub use writer::plan_to_parquet;
 ///   partitions, including concurrently reading multiple row groups from a single
 ///   file.
 ///
-/// * Predicate push down: skips row groups and pages and rows based on metadata
+/// * Predicate push down: skips row groups, pages, rows based on metadata
 ///   and late materialization. See "Predicate Pushdown" below.
 ///
 /// * Projection pushdown: reads and decodes only the columns required.
@@ -145,7 +145,7 @@ pub use writer::plan_to_parquet;
 /// # Predicate Pushdown
 ///
 /// `ParquetExec` uses the provided [`PhysicalExpr`] predicate as a filter to
-/// skip reading data and improve query performance using several techniques:
+/// skip reading unnecessary data and improve query performance using several techniques:
 ///
 /// * Row group pruning: skips entire row groups based on min/max statistics
 ///   found in [`ParquetMetaData`] and any Bloom filters that are present.
@@ -153,10 +153,10 @@ pub use writer::plan_to_parquet;
 /// * Page pruning: skips individual pages within a ColumnChunk using the
 ///   [Parquet PageIndex], if present.
 ///
-/// * Row filtering: skips rows within a page based using a form of late
+/// * Row filtering: skips rows within a page using a form of late
 ///   materialization. When possible, predicates are applied by the parquet
 ///   decoder *during* decode (see [`ArrowPredicate`] and [`RowFilter`] for more
-///   details). This is only enabled if `pushdown_filters` is set to true.
+///   details). This is only enabled if `ParquetScanOptions::pushdown_filters` is set to true.
 ///
 /// Note: If the predicate can not be used to accelerate the scan, it is ignored
 /// (no error is raised on predicate evaluation errors).
