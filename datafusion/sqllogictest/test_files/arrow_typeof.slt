@@ -289,22 +289,22 @@ query ?
 ---
 select arrow_cast(interval '30 minutes', 'Interval(MonthDayNano)');
 ----
-0 years 0 mons 0 days 0 hours 30 mins 0.000000000 secs
+30 mins
 
 query ?
 select arrow_cast('30 minutes', 'Interval(DayTime)');
 ----
-0 years 0 mons 0 days 0 hours 30 mins 0.000 secs
+30 mins
 
 query ?
 select arrow_cast('1 year 5 months', 'Interval(YearMonth)');
 ----
-1 years 5 mons 0 days 0 hours 0 mins 0.00 secs
+1 years 5 mons
 
 query ?
 select arrow_cast('30 minutes', 'Interval(MonthDayNano)');
 ----
-0 years 0 mons 0 days 0 hours 30 mins 0.000000000 secs
+30 mins
 
 
 ## Duration
