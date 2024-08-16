@@ -199,11 +199,37 @@ pub(crate) struct FilterCandidate {
 /// 1. Determine the columns required to evaluate the expression
 /// 2. Calculate data required to estimate the cost of evaluating the filter
 /// 3. Rewrite column expressions in the predicate which reference columns not
-///    in the particular file schema. This rewrite is necessary when the table
-///    schema is different than the file schema, so any given file may or
-///    may not contain all columns in the merged schema. If a particular column
-///    is not present replaces the column expression with a literal expression
-///    that produces a null value to match what the schema adapter would do.
+///    in the particular file schema.
+///
+/// # Schema Rewrite
+///
+/// When parquet files are read in the context of "schema evolution" there are
+/// potentially wo schemas:
+///
+/// 1. The table schema (the columns of the table that the parquet file is part of)
+/// 2. The file schema (the columns actually in the parquet file)
+///
+/// There are times when the table schema contains columns that are not in the
+/// file schema, such as when new columns have been added in new parquet files
+/// but old files do not have the columns.
+///
+/// When a file is missing a column from the table schema, the value of the
+/// missing column is filled in with `NULL`  via a `SchemaAdapter`.
+///
+/// When a predicate is pushed down to the parquet reader, the predicate is
+/// evaluated in the context of the file schema. If the predicate references a
+/// column that is in the table schema but not in the file schema, the column
+/// reference must be rewritten to a literal expression that represents the
+/// `NULL` value that would be produced by the `SchemaAdapter`.
+///
+/// For example, if:
+/// * The table schema is `id, name, address`
+/// * The file schema is  `id, name` (missing the `address` column)
+/// * predicate is `address = 'foo'`
+///
+/// When evaluating the predicate as a filter on the parquet file, the predicate
+/// must be rewritten to `NULL = 'foo'` as the `address` column will be filled
+/// in with `NULL` values during the rest of the evaluation.
 struct FilterCandidateBuilder<'a> {
     expr: Arc<dyn PhysicalExpr>,
     /// The schema of this parquet file
@@ -306,6 +332,8 @@ impl<'a> TreeNodeRewriter for FilterCandidateBuilder<'a> {
             if self.file_schema.field_with_name(column.name()).is_err() {
                 // Replace the column reference with a NULL (using the type from the table schema)
                 // e.g. `column = 'foo'` is rewritten be transformed to `NULL = 'foo'`
+                //
+                // See comments on `FilterCandidateBuilder` for more information
                 return match self.table_schema.field_with_name(column.name()) {
                     Ok(field) => {
                         // return the null value corresponding to the data type
