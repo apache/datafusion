@@ -28,7 +28,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-home_dir= ["dep:dirs"]
+home_dir = ["dep:dirs"]
 
 [dependencies]
 arrow-schema = { workspace = true }
