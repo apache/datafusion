@@ -91,6 +91,7 @@ Optional features:
 - `backtrace`: include backtrace information in error messages
 - `pyarrow`: conversions between PyArrow and DataFusion types
 - `serde`: enable arrow-schema's `serde` feature
+- `home_dir` : enable support for substituting the tilde character in the file path with the user home directory for the URL table
 
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/
