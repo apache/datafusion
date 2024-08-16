@@ -48,7 +48,7 @@ pub struct ParquetFormat {
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct AvroFormat {}
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct NdJsonFormat {
     #[prost(message, optional, tag = "1")]
     pub options: ::core::option::Option<JsonOptions>,
@@ -145,7 +145,7 @@ pub struct Decimal {
     pub scale: i32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct Decimal256Type {
     #[prost(uint32, tag = "3")]
     pub precision: u32,

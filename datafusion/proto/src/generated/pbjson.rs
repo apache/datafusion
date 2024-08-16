@@ -614,6 +614,7 @@ impl serde::Serialize for AggregateUdfExprNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         struct_ser.end()
@@ -12473,6 +12474,7 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         if let Some(v) = self.aggregate_function.as_ref() {
@@ -13655,6 +13657,7 @@ impl serde::Serialize for PhysicalExtensionExprNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalExtensionExprNode", len)?;
         if !self.expr.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("expr", pbjson::private::base64::encode(&self.expr).as_str())?;
         }
         if !self.inputs.is_empty() {
@@ -15701,6 +15704,7 @@ impl serde::Serialize for PhysicalWindowExprNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         if let Some(v) = self.window_function.as_ref() {
@@ -20227,6 +20231,7 @@ impl serde::Serialize for WindowExprNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         if let Some(v) = self.window_function.as_ref() {
