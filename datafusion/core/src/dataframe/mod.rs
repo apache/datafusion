@@ -1709,7 +1709,7 @@ mod tests {
     use arrow::array::{self, Int32Array};
     use datafusion_common::{Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
-    use datafusion_expr::expr::WindowFunction;
+    use datafusion_expr::window_function::row_number;
     use datafusion_expr::{
         cast, create_udf, expr, lit, BuiltInWindowFunction, ExprFunctionExt,
         ScalarFunctionImplementation, Volatility, WindowFunctionDefinition,
@@ -2876,18 +2876,14 @@ mod tests {
         Ok(())
     }
 
+    // Test issue: https://github.com/apache/datafusion/issues/11982
+    // Window function was creating unwanted projection when using with_column() method.
     #[tokio::test]
     async fn test_window_function_with_column() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
         let ctx = SessionContext::new();
         let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
-        let func = Expr::WindowFunction(WindowFunction::new(
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::RowNumber,
-            ),
-            vec![],
-        ))
-        .alias("row_num");
+        let func = row_number().alias("row_num");
 
         // Should create an additional column with alias 'r' that has window func results
         let df = df_impl.with_column("r", func)?.limit(0, Some(2))?;
