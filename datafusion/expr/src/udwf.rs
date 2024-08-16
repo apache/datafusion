@@ -185,7 +185,7 @@ impl WindowUDF {
         self.inner.nullable()
     }
 
-    /// Returns ordering if any introduced by this window function.
+    /// Returns custom result ordering introduced by this window function.
     ///
     /// See [`WindowUDFImpl::sort_options`] for more details.
     pub fn sort_options(&self) -> Option<SortOptions> {
@@ -344,7 +344,7 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         true
     }
 
-    /// Allows the window UDF to define a new ordering.
+    /// Allows the window UDF to define a custom result ordering.
     fn sort_options(&self) -> Option<SortOptions> {
         None
     }
