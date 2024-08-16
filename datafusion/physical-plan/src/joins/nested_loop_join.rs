@@ -1039,9 +1039,8 @@ mod tests {
 
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Failed to allocate additional"
+                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]"
             );
-            assert_contains!(err.to_string(), "NestedLoopJoinLoad[0]");
         }
 
         Ok(())

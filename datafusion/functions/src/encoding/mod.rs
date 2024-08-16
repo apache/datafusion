@@ -37,6 +37,7 @@ pub mod expr_fn {
     ));
 }
 
+/// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![encode(), decode()]
 }

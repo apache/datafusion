@@ -27,10 +27,10 @@ use sqlparser::ast::{
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
-    ScalarValue,
+    ScalarValue, TableReference,
 };
-use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
     lit, Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
     Operator, TryCast,
@@ -661,6 +661,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
             }
+            SQLExpr::Wildcard => Ok(Expr::Wildcard {
+                qualifier: None,
+                options: WildcardOptions::default(),
+            }),
+            SQLExpr::QualifiedWildcard(object_name) => Ok(Expr::Wildcard {
+                qualifier: Some(TableReference::from(object_name.to_string())),
+                options: WildcardOptions::default(),
+            }),
+            SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
     }
@@ -670,7 +679,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-        values: Vec<sqlparser::ast::Expr>,
+        values: Vec<SQLExpr>,
         fields: Vec<StructField>,
     ) -> Result<Expr> {
         if !fields.is_empty() {
@@ -693,6 +702,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
         not_impl_err!("Struct not supported by ExprPlanner: {create_struct_args:?}")
+    }
+
+    fn parse_tuple(
+        &self,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+        values: Vec<SQLExpr>,
+    ) -> Result<Expr> {
+        match values.first() {
+            Some(SQLExpr::Identifier(_)) | Some(SQLExpr::Value(_)) => {
+                self.parse_struct(schema, planner_context, values, vec![])
+            }
+            None => not_impl_err!("Empty tuple not supported yet"),
+            _ => {
+                not_impl_err!("Only identifiers and literals are supported in tuples")
+            }
+        }
     }
 
     fn sql_position_to_expr(

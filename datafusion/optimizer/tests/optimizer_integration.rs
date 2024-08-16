@@ -335,6 +335,27 @@ fn test_propagate_empty_relation_inner_join_and_unions() {
     assert_eq!(expected, format!("{plan}"));
 }
 
+#[test]
+fn select_wildcard_with_repeated_column() {
+    let sql = "SELECT *, col_int32 FROM test";
+    let err = test_sql(sql).expect_err("query should have failed");
+    assert_eq!(
+        "expand_wildcard_rule\ncaused by\nError during planning: Projections require unique expression names but the expression \"test.col_int32\" at position 0 and \"test.col_int32\" at position 7 have the same name. Consider aliasing (\"AS\") one of them.",
+        err.strip_backtrace()
+    );
+}
+
+#[test]
+fn select_wildcard_with_repeated_column_but_is_aliased() {
+    let sql = "SELECT *, col_int32 as col_32 FROM test";
+
+    let plan = test_sql(sql).unwrap();
+    let expected = "Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64, test.col_ts_nano_none, test.col_ts_nano_utc, test.col_int32 AS col_32\
+    \n  TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]";
+
+    assert_eq!(expected, format!("{plan}"));
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
