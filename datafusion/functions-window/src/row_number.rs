@@ -121,19 +121,6 @@ impl PartitionEvaluator for NumRowsEvaluator {
         _values: &[ArrayRef],
         num_rows: usize,
     ) -> Result<ArrayRef> {
-        // # Implementation Table
-        //
-        // |[`uses_window_frame`]|[`supports_bounded_execution`]|[`include_rank`]|function_to_implement|
-        // |---|---|----|----|
-        // |false (default)      |false (default)               |false (default)   | [`evaluate_all`]           |
-        //
-        // The row_number function:
-        //  - false: does not use values from the window frame
-        //  - true: supports bounded execution
-        //  - false: cannot be evaluated only from rank
-        //
-        // Because row_number supports bounded execution as per the implementation table the
-        // the `evaluate_all` does not require an implementation.
         Ok(std::sync::Arc::new(UInt64Array::from_iter_values(
             1..(num_rows as u64) + 1,
         )))
