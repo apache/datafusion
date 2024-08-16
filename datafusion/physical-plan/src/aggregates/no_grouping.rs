@@ -33,7 +33,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::filter::batch_filter;
+use crate::filter::{batch_filter, FilterKernel};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
@@ -215,7 +215,9 @@ fn aggregate_batch(
         .try_for_each(|((accum, expr), filter)| {
             // 1.2
             let batch = match filter {
-                Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
+                Some(filter) => {
+                    Cow::Owned(batch_filter(&batch, filter, &FilterKernel::Default)?)
+                }
                 None => Cow::Borrowed(&batch),
             };
 

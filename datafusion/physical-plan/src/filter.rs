@@ -29,7 +29,7 @@ use crate::{
     DisplayFormatType, ExecutionPlan,
 };
 
-use arrow::compute::{filter_record_batch, take, FilterBuilder};
+use arrow::compute::{filter_record_batch, take};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::builder::Int32Builder;
@@ -51,15 +51,15 @@ use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 /// Options that control how FilterExec processes batches
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum FilterKernel {
     /// Use Arrow's `filter_array` which can return input batches without copying data when the
     /// predicate evaluates to true for all rows in a batch
-    Arrow,
+    Default,
     /// Use the `take` kernel to produce filtered batches, ensuring that no input batches are
     /// passed through (can be useful for systems where the input to FilterExec can re-use
     /// arrays)
-    Take,
+    AlwaysCreateNewBatches,
 }
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
@@ -86,7 +86,7 @@ impl FilterExec {
         predicate: Arc<dyn PhysicalExpr>,
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
-        Self::try_new_with_kernel(predicate, input, FilterKernel::Arrow)
+        Self::try_new_with_kernel(predicate, input, FilterKernel::Default)
     }
 
     /// Create a FilterExec on an input using the specified kernel to create filtered batches
@@ -310,6 +310,7 @@ impl ExecutionPlan for FilterExec {
             predicate: Arc::clone(&self.predicate),
             input: self.input.execute(partition, context)?,
             baseline_metrics,
+            filter_kernel: self.filter_kernel,
         }))
     }
 
@@ -372,11 +373,14 @@ struct FilterExecStream {
     input: SendableRecordBatchStream,
     /// runtime metrics recording
     baseline_metrics: BaselineMetrics,
+    /// Filter kernel to use
+    filter_kernel: FilterKernel,
 }
 
 pub(crate) fn batch_filter(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
+    filter_kernel: &FilterKernel,
 ) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
@@ -384,7 +388,12 @@ pub(crate) fn batch_filter(
         .and_then(|array| {
             Ok(match as_boolean_array(&array) {
                 // apply filter array to record batch
-                Ok(filter_array) => filter_record_batch(batch, filter_array)?,
+                Ok(filter_array) => match filter_kernel {
+                    FilterKernel::Default => filter_record_batch(batch, filter_array)?,
+                    FilterKernel::AlwaysCreateNewBatches => {
+                        filter_record_batch_with_take(batch, filter_array)?
+                    }
+                },
                 Err(_) => {
                     return internal_err!(
                         "Cannot create filter_array from non-boolean predicates"
@@ -429,7 +438,8 @@ impl Stream for FilterExecStream {
             match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
                     let timer = self.baseline_metrics.elapsed_compute().timer();
-                    let filtered_batch = batch_filter(&batch, &self.predicate)?;
+                    let filtered_batch =
+                        batch_filter(&batch, &self.predicate, &self.filter_kernel)?;
                     timer.done();
                     // skip entirely filtered batches
                     if filtered_batch.num_rows() == 0 {
