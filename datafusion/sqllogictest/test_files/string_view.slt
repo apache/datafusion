@@ -697,7 +697,6 @@ logical_plan
 01)Projection: regexp_replace(test.column1_utf8view, Utf8("^https?://(?:www\.)?([^/]+)/.*$"), Utf8("\1")) AS k
 02)--TableScan: test projection=[column1_utf8view]
 
-
 ## Ensure no casts for REPEAT
 ## TODO file ticket
 query TT
@@ -710,7 +709,6 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REPLACE
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   REPLACE(column1_utf8view, 'foo', 'bar') as c1,
@@ -720,6 +718,18 @@ FROM test;
 logical_plan
 01)Projection: replace(test.column1_utf8view, Utf8View("foo"), Utf8View("bar")) AS c1, replace(test.column1_utf8view, test.column2_utf8view, Utf8View("bar")) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+query ??
+SELECT
+  REPLACE(column1_utf8view, 'foo', 'bar') as c1,
+  REPLACE(column1_utf8view, column2_utf8view, 'bar') as c2
+FROM test;
+----
+Andrew Andrew
+Xiangpeng bar
+Raphael baraphael
+NULL NULL
+
 
 ## Ensure no casts for REVERSE
 ## TODO file ticket
