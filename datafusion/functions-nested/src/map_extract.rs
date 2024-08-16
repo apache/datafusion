@@ -125,8 +125,8 @@ fn general_map_extract_inner(
 
         let query_key = query_keys_array.slice(row_index, 1);
 
-        let value_index = (0..len)
-            .find(|&i| keys.slice(start + i, 1).as_ref() == query_key.as_ref());
+        let value_index =
+            (0..len).find(|&i| keys.slice(start + i, 1).as_ref() == query_key.as_ref());
 
         match value_index {
             Some(index) => {
