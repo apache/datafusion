@@ -38,5 +38,3 @@ pub mod operator;
 pub mod signature;
 pub mod sort_properties;
 pub mod type_coercion;
-
-pub use operator::Operator;
