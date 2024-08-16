@@ -17,7 +17,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
+use arrow::array::{
+    ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, OffsetSizeTrait,
+    StringViewArray,
+};
 use arrow::datatypes::DataType;
 
 use datafusion_common::{Result, ScalarValue};
@@ -120,6 +123,22 @@ where
             result.map(ColumnarValue::Array)
         }
     })
+}
+
+pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+    fn iter(&self) -> ArrayIter<Self>;
+}
+
+impl<'a, T: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<T> {
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericStringArray::<T>::iter(self)
+    }
+}
+
+impl<'a> StringArrayType<'a> for &'a StringViewArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        StringViewArray::iter(self)
+    }
 }
 
 #[cfg(test)]

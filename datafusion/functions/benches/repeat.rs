@@ -21,10 +21,11 @@ use arrow::array::{ArrayRef, Int64Array, OffsetSizeTrait};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
 use datafusion_expr::ColumnarValue;
 use datafusion_functions::string;
 use std::sync::Arc;
+use std::time::Duration;
 
 fn create_args<O: OffsetSizeTrait>(
     size: usize,
@@ -55,11 +56,14 @@ fn create_args<O: OffsetSizeTrait>(
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let lower = string::lower();
-    for size in [1024, 8192] {
+    let repeat = string::repeat();
+    for size in [1024, 4096] {
         // REPEAT 3 TIMES
-        let repeat_times = 5;
+        let repeat_times = 3;
         let mut group = c.benchmark_group(format!("repeat {} times", repeat_times));
+        group.sampling_mode(SamplingMode::Flat);
+        group.sample_size(10);
+        group.measurement_time(Duration::from_secs(10));
 
         let args = create_args::<i32>(size, 32, repeat_times, true);
         group.bench_function(
@@ -67,7 +71,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_string_view [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(lower.invoke(&args))),
+            |b| b.iter(|| black_box(repeat.invoke(&args))),
         );
 
         let args = create_args::<i32>(size, 32, repeat_times, false);
@@ -76,7 +80,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(lower.invoke(&args))),
+            |b| b.iter(|| black_box(repeat.invoke(&args))),
         );
 
         let args = create_args::<i64>(size, 32, repeat_times, false);
@@ -85,14 +89,17 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_large_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(lower.invoke(&args))),
+            |b| b.iter(|| black_box(repeat.invoke(&args))),
         );
 
         group.finish();
 
         // REPEAT 30 TIMES
-        let repeat_times = 50;
+        let repeat_times = 30;
         let mut group = c.benchmark_group(format!("repeat {} times", repeat_times));
+        group.sampling_mode(SamplingMode::Flat);
+        group.sample_size(10);
+        group.measurement_time(Duration::from_secs(10));
 
         let args = create_args::<i32>(size, 32, repeat_times, true);
         group.bench_function(
@@ -100,7 +107,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_string_view [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(lower.invoke(&args))),
+            |b| b.iter(|| black_box(repeat.invoke(&args))),
         );
 
         let args = create_args::<i32>(size, 32, repeat_times, false);
@@ -109,7 +116,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(lower.invoke(&args))),
+            |b| b.iter(|| black_box(repeat.invoke(&args))),
         );
 
         let args = create_args::<i64>(size, 32, repeat_times, false);
@@ -118,7 +125,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_large_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(lower.invoke(&args))),
+            |b| b.iter(|| black_box(repeat.invoke(&args))),
         );
 
         group.finish();

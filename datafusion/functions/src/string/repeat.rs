@@ -19,8 +19,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray,
-    GenericStringBuilder, Int64Array, OffsetSizeTrait, StringViewArray,
+    ArrayRef, AsArray, GenericStringArray, GenericStringBuilder,
+    Int64Array, OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int64, LargeUtf8, Utf8, Utf8View};
@@ -31,7 +31,7 @@ use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use crate::utils::{make_scalar_function, utf8_to_str_type, StringArrayType};
 
 #[derive(Debug)]
 pub struct RepeatFunc {
@@ -127,20 +127,6 @@ where
     let array = builder.finish();
 
     Ok(Arc::new(array) as ArrayRef)
-}
-
-trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
-    fn iter(&self) -> ArrayIter<Self>;
-}
-impl<'a, O: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<O> {
-    fn iter(&self) -> ArrayIter<Self> {
-        GenericStringArray::<O>::iter(self)
-    }
-}
-impl<'a> StringArrayType<'a> for &'a StringViewArray {
-    fn iter(&self) -> ArrayIter<Self> {
-        StringViewArray::iter(self)
-    }
 }
 
 #[cfg(test)]
