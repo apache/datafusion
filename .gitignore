@@ -102,6 +102,9 @@ arrow-ballista
 datafusion/CHANGELOG.md.bak
 .githubchangeloggenerator.cache*
 
+# Data written by examples
+datafusion/core/example.parquet
+
 # Generated tpch data
 datafusion/sqllogictests/test_files/tpch/data/*
 
