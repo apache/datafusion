@@ -128,7 +128,7 @@ impl AggregateMode {
 #[derive(Clone, Debug, Default)]
 pub struct PhysicalGroupBy {
     /// Distinct (Physical Expr, Alias) in the grouping set
-    pub expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Corresponding NULL expressions for expr
     null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Null mask for each group in this grouping set. Each group is
