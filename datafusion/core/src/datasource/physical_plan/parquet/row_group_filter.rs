@@ -487,11 +487,23 @@ mod tests {
         let schema_descr = get_test_schema_descr(vec![field]);
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
-            vec![ParquetStatistics::int32(Some(1), Some(10), None, 0, false)],
+            vec![ParquetStatistics::int32(
+                Some(1),
+                Some(10),
+                None,
+                Some(0),
+                false,
+            )],
         );
         let rgm2 = get_row_group_meta_data(
             &schema_descr,
-            vec![ParquetStatistics::int32(Some(11), Some(20), None, 0, false)],
+            vec![ParquetStatistics::int32(
+                Some(11),
+                Some(20),
+                None,
+                Some(0),
+                false,
+            )],
         );
 
         let metrics = parquet_file_metrics();
