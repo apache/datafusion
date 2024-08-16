@@ -718,7 +718,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: replace(test.column1_utf8view, Utf8("foo"), Utf8("bar")) AS c1, replace(test.column1_utf8view, test.column2_utf8view, Utf8("bar")) AS c2
+01)Projection: replace(test.column1_utf8view, Utf8View("foo"), Utf8View("bar")) AS c1, replace(test.column1_utf8view, test.column2_utf8view, Utf8View("bar")) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for REVERSE

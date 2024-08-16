@@ -45,7 +45,11 @@ impl ReplaceFunc {
         use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![Exact(vec![Utf8, Utf8, Utf8])],
+                vec![
+                    Exact(vec![Utf8View, Utf8View, Utf8View]), 
+                    Exact(vec![Utf8, Utf8, Utf8]), 
+                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8])
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -69,10 +73,7 @@ impl ScalarUDFImpl for ReplaceFunc {
         match arg_types[0].clone() {
             DataType::Utf8 => return Ok(DataType::Utf8),
             DataType::LargeUtf8 => return Ok(DataType::LargeUtf8),
-            DataType::Utf8View => {
-                println!("utf8view");
-                return Ok(DataType::Utf8View);
-            }
+            DataType::Utf8View => return Ok(DataType::Utf8View),
             other => {
                 exec_err!("Unsupported data type {other:?} for function replace")
             }
