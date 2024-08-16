@@ -223,8 +223,6 @@ mod tests {
     use datafusion::catalog::SchemaProvider;
     use datafusion::prelude::SessionContext;
 
-    use super::*;
-
     fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {
         let ctx = SessionContext::new();
         ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
