@@ -250,46 +250,68 @@ impl TableProvider for ParquetMetadataTable {
 fn convert_parquet_statistics(
     value: &Statistics,
     converted_type: ConvertedType,
-) -> (String, String) {
+) -> (Option<String>, Option<String>) {
     match (value, converted_type) {
-        (Statistics::Boolean(val), _) => (val.min().to_string(), val.max().to_string()),
-        (Statistics::Int32(val), _) => (val.min().to_string(), val.max().to_string()),
-        (Statistics::Int64(val), _) => (val.min().to_string(), val.max().to_string()),
-        (Statistics::Int96(val), _) => (val.min().to_string(), val.max().to_string()),
-        (Statistics::Float(val), _) => (val.min().to_string(), val.max().to_string()),
-        (Statistics::Double(val), _) => (val.min().to_string(), val.max().to_string()),
+        (Statistics::Boolean(val), _) => (
+            val.min_opt().map(|v| v.to_string()),
+            val.max_opt().map(|v| v.to_string()),
+        ),
+        (Statistics::Int32(val), _) => (
+            val.min_opt().map(|v| v.to_string()),
+            val.max_opt().map(|v| v.to_string()),
+        ),
+        (Statistics::Int64(val), _) => (
+            val.min_opt().map(|v| v.to_string()),
+            val.max_opt().map(|v| v.to_string()),
+        ),
+        (Statistics::Int96(val), _) => (
+            val.min_opt().map(|v| v.to_string()),
+            val.max_opt().map(|v| v.to_string()),
+        ),
+        (Statistics::Float(val), _) => (
+            val.min_opt().map(|v| v.to_string()),
+            val.max_opt().map(|v| v.to_string()),
+        ),
+        (Statistics::Double(val), _) => (
+            val.min_opt().map(|v| v.to_string()),
+            val.max_opt().map(|v| v.to_string()),
+        ),
         (Statistics::ByteArray(val), ConvertedType::UTF8) => {
-            let min_bytes = val.min();
-            let max_bytes = val.max();
-            let min = min_bytes
-                .as_utf8()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|_| min_bytes.to_string());
+            let min = val.min_opt().map(|v| {
+                v.as_utf8()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|_e| v.to_string())
+            });
+            let max = val.max_opt().map(|v| {
+                v.as_utf8()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|_e| v.to_string())
+            });
 
-            let max = max_bytes
-                .as_utf8()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|_| max_bytes.to_string());
             (min, max)
         }
-        (Statistics::ByteArray(val), _) => (val.min().to_string(), val.max().to_string()),
+        (Statistics::ByteArray(val), _) => (
+            val.min_opt().map(|v| v.to_string()),
+            val.max_opt().map(|v| v.to_string()),
+        ),
         (Statistics::FixedLenByteArray(val), ConvertedType::UTF8) => {
-            let min_bytes = val.min();
-            let max_bytes = val.max();
-            let min = min_bytes
-                .as_utf8()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|_| min_bytes.to_string());
+            let min = val.min_opt().map(|v| {
+                v.as_utf8()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|_e| v.to_string())
+            });
+            let max = val.max_opt().map(|v| {
+                v.as_utf8()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|_e| v.to_string())
+            });
 
-            let max = max_bytes
-                .as_utf8()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|_| max_bytes.to_string());
             (min, max)
         }
-        (Statistics::FixedLenByteArray(val), _) => {
-            (val.min().to_string(), val.max().to_string())
-        }
+        (Statistics::FixedLenByteArray(val), _) => (
+            val.min_opt().map(|v| v.to_string()),
+            val.max_opt().map(|v| v.to_string()),
+        ),
     }
 }
 
@@ -376,16 +398,11 @@ impl TableFunctionImpl for ParquetMetadataFunc {
                 let converted_type = column.column_descr().converted_type();
 
                 if let Some(s) = column.statistics() {
-                    let (min_val, max_val) = if s.has_min_max_set() {
-                        let (min_val, max_val) =
-                            convert_parquet_statistics(s, converted_type);
-                        (Some(min_val), Some(max_val))
-                    } else {
-                        (None, None)
-                    };
+                    let (min_val, max_val) =
+                        convert_parquet_statistics(s, converted_type);
                     stats_min_arr.push(min_val.clone());
                     stats_max_arr.push(max_val.clone());
-                    stats_null_count_arr.push(Some(s.null_count() as i64));
+                    stats_null_count_arr.push(s.null_count_opt().map(|c| c as i64));
                     stats_distinct_count_arr.push(s.distinct_count().map(|c| c as i64));
                     stats_min_value_arr.push(min_val);
                     stats_max_value_arr.push(max_val);
