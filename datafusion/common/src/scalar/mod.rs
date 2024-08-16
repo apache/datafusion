@@ -1639,7 +1639,7 @@ impl ScalarValue {
         scalars: impl IntoIterator<Item = ScalarValue>,
         data_type: &DataType,
     ) -> Result<ArrayRef> {
-        let scalars = scalars.into_iter();
+        let mut scalars = scalars.into_iter().peekable();
 
         /// Creates an array of $ARRAY_TY by unpacking values of
         /// SCALAR_TY for primitive types
