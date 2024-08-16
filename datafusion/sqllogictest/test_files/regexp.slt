@@ -395,6 +395,26 @@ SELECT 'foo\nbar\nbaz' LIKE '%bar%';
 ----
 true
 
+query B
+SELECT NULL LIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL iLIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL not LIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL not iLIKE NULL;
+----
+NULL
+
 statement ok
 drop table t;
 
