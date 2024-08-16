@@ -162,7 +162,6 @@ This example produces the following physical plan:
 MemoryExec: partitions=0, partition_sizes=[]
 ```
 
-
 ## Table Sources
 
 The previous example used a [LogicalTableSource], which is used for tests and documentation in DataFusion, and is also
