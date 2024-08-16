@@ -319,7 +319,7 @@ impl SessionContext {
         Self {
             session_id: state.session_id().to_string(),
             session_start_time: Utc::now(),
-            state: Arc::new(RwLock::new(state.clone())),
+            state: Arc::new(RwLock::new(state)),
         }
     }
 
