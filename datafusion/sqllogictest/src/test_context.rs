@@ -101,7 +101,6 @@ impl TestContext {
             }
             "describe.slt" | "arrow_files.slt" | "csv_files.slt" | "json.slt"
             | "parquet.slt" => {
-                // TODO: duplicate enable url table
                 test_ctx.ctx = test_ctx.ctx.enable_url_table();
             }
             "joins.slt" => {

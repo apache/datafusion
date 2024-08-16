@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! dynamic_file_schema contains a SchemaProvider that creates tables from file paths
+//! dynamic_file contains a SchemaProvider that creates tables from file paths
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use async_trait::async_trait;

@@ -334,7 +334,7 @@ impl SessionContext {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
-    /// let ctx = SessionContext::new_with_config(cfg).enable_url_table()?;
+    /// let ctx = SessionContext::new_with_config(cfg).enable_url_table();
     /// let results = ctx
     ///   .sql("SELECT a, MIN(b) FROM 'tests/data/example.csv' as example GROUP BY a LIMIT 100")
     ///   .await?
