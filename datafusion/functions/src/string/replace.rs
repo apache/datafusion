@@ -21,6 +21,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringViewArray};
 use arrow::datatypes::DataType;
 
+use arrow::ipc::LargeUtf8;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::*;
@@ -74,6 +75,19 @@ impl ScalarUDFImpl for ReplaceFunc {
             DataType::Utf8 => return Ok(DataType::Utf8),
             DataType::LargeUtf8 => return Ok(DataType::LargeUtf8),
             DataType::Utf8View => return Ok(DataType::Utf8View),
+            DataType::Dictionary(_, value_type) => match *value_type {
+                DataType::LargeUtf8 | DataType::LargeBinary => return Ok(DataType::LargeUtf8),
+                DataType::Utf8 | DataType::Binary => return Ok(DataType::Utf8),
+                DataType::Utf8View | DataType::BinaryView => return Ok(DataType::Utf8View),
+                DataType::Null => return Ok(DataType::Null),
+                _ => {
+                    return exec_err!(
+                        "The replace function can only accept strings, but got {:?}.",
+                        *value_type
+                    );
+                }
+            },
+            DataType::Null => return Ok(DataType::Null),
             other => {
                 exec_err!("Unsupported data type {other:?} for function replace")
             }
