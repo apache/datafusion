@@ -308,8 +308,9 @@ impl ProjectionStream {
             .iter()
             .zip(&self.schema.fields)
             .map(|(expr, field)| {
-                expr.evaluate(batch)
-                    .and_then(|v| v.into_array_of_type(batch.num_rows(), field.data_type()))
+                expr.evaluate(batch).and_then(|v| {
+                    v.into_array_of_type(batch.num_rows(), field.data_type())
+                })
             })
             .collect::<Result<Vec<_>>>()?;
 

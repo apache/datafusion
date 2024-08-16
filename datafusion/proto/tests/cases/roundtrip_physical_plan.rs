@@ -40,7 +40,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    FileScanConfig, FileSinkConfig, ParquetExec,
+    wrap_partition_type_in_dict, FileScanConfig, FileSinkConfig, ParquetExec,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
@@ -682,7 +682,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         limit: None,
         table_partition_cols: vec![Field::new(
             "part".to_string(),
-            DataType::Int16,
+            wrap_partition_type_in_dict(DataType::Int16),
             false,
         )],
         output_ordering: vec![],

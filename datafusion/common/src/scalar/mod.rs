@@ -41,7 +41,7 @@ use crate::hash_utils::create_hashes;
 use crate::utils::{
     array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
 };
-use arrow::compute::kernels::numeric::*;
+use arrow::compute::kernels::{self, numeric::*};
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow::{
     array::*,
@@ -1534,6 +1534,10 @@ impl ScalarValue {
         }
     }
 
+    pub fn to_array_of_type(&self, data_type: &DataType) -> Result<ArrayRef> {
+        self.to_array_of_size_and_type(1, data_type)
+    }
+
     /// Converts a scalar value into an 1-row array.
     ///
     /// # Errors
@@ -1578,7 +1582,6 @@ impl ScalarValue {
     pub fn to_scalar(&self) -> Result<Scalar<ArrayRef>> {
         Ok(Scalar::new(self.to_array_of_size(1)?))
     }
-
 
     /// Converts an iterator of references [`ScalarValue`] into an [`ArrayRef`]
     /// corresponding to those values. For example, an iterator of
@@ -1631,11 +1634,11 @@ impl ScalarValue {
             Some(sv) => sv.data_type(),
         };
 
-        Self::iter_to_array_of_type(scalars.collect(), &data_type)
+        Self::iter_to_array_of_type(scalars, &data_type)
     }
 
     fn iter_to_array_of_type(
-        scalars: Vec<ScalarValue>,
+        scalars: impl IntoIterator<Item = ScalarValue>,
         data_type: &DataType,
     ) -> Result<ArrayRef> {
         let scalars = scalars.into_iter();
@@ -1821,7 +1824,7 @@ impl ScalarValue {
                 arrow::compute::concat(arrays.as_slice())?
             }
             DataType::Dictionary(key_type, value_type) => {
-                let values = Self::iter_to_array(scalars)?;
+                let values = Self::iter_to_array_of_type(scalars, value_type)?;
                 assert_eq!(values.data_type(), value_type.as_ref());
 
                 match key_type.as_ref() {
@@ -1870,10 +1873,7 @@ impl ScalarValue {
             | DataType::BinaryView
             | DataType::ListView(_)
             | DataType::LargeListView(_) => {
-                return _internal_err!(
-                    "Unsupported creation of {:?} array",
-                    data_type
-                );
+                return _internal_err!("Unsupported creation of {:?} array", data_type);
             }
         };
         Ok(array)
@@ -2091,6 +2091,17 @@ impl ScalarValue {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
         Arc::new(array_into_large_list_array(values, true))
+    }
+
+    pub fn to_array_of_size_and_type(
+        &self,
+        size: usize,
+        data_type: &DataType,
+    ) -> Result<ArrayRef> {
+        // TODO(@notfilippo): for now cast as it's a POC, but it can be optimized later with a bit `match`
+        let array = self.to_array_of_size(size)?;
+        let cast_array = kernels::cast::cast(&array, data_type)?;
+        Ok(cast_array)
     }
 
     /// Converts a scalar value into an array of `size` rows.
@@ -2985,11 +2996,6 @@ impl ScalarValue {
                 .iter()
                 .map(|sv| sv.size() - std::mem::size_of_val(sv))
                 .sum::<usize>()
-    }
-
-    pub fn supported_datatype(data_type: &DataType) -> Result<DataType, DataFusionError> {
-        let scalar = Self::try_from(data_type)?;
-        Ok(scalar.data_type())
     }
 }
 

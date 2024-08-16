@@ -27,8 +27,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use datafusion_common::cast::as_large_list_array;
 use datafusion_common::logical::eq::LogicallyEq;
+use datafusion_common::{cast::as_large_list_array, exec_datafusion_err};
 use datafusion_common::{
     cast::as_list_array,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
@@ -649,10 +649,10 @@ impl<'a> ConstEvaluator<'a> {
         let end_type = col_val.data_type();
         if end_type.logically_eq(&start_type) && start_type != end_type {
             return ConstSimplifyResult::SimplifyRuntimeError(
-                DataFusionError::Execution(format!(
+                exec_datafusion_err!(
                     "Skipping, end_type {} is logically equal to start_type {} but not strictly equal",
                     end_type, start_type
-                )),
+                ),
                 expr,
             );
         }
