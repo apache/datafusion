@@ -20,8 +20,8 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray,
-    GenericStringBuilder, Int64Array, OffsetSizeTrait, StringViewArray,
+    Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
+    OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use unicode_segmentation::UnicodeSegmentation;
@@ -32,6 +32,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
+use crate::string::common::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
@@ -246,20 +247,6 @@ where
     };
 
     Ok(Arc::new(array) as ArrayRef)
-}
-
-trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
-    fn iter(&self) -> ArrayIter<Self>;
-}
-impl<'a, T: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<T> {
-    fn iter(&self) -> ArrayIter<Self> {
-        GenericStringArray::<T>::iter(self)
-    }
-}
-impl<'a> StringArrayType<'a> for &'a StringViewArray {
-    fn iter(&self) -> ArrayIter<Self> {
-        StringViewArray::iter(self)
-    }
 }
 
 #[cfg(test)]
