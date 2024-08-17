@@ -19,12 +19,12 @@
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
 
 pub mod accumulate;
+pub mod blocked_accumulate;
 pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
-pub mod blocked_accumulate;
 
-use std::collections::VecDeque;
+use std::{collections::VecDeque, iter};
 
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
@@ -35,8 +35,10 @@ use datafusion_common::{
     arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr_common::{accumulator::Accumulator, groups_accumulator::GroupStatesMode};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::{
+    accumulator::Accumulator, groups_accumulator::GroupStatesMode,
+};
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -412,16 +414,16 @@ pub(crate) fn slice_and_maybe_filter(
 }
 
 /// Expend blocked values to a big enough size for holding `total_num_groups` groups.
-/// 
+///
 /// For example,
-/// 
+///
 /// before expanding:
 ///   values: [x, x, x], [x, x, x] (blocks=2, block_size=3)
 ///   total_num_groups: 8
-/// 
+///
 /// After expanding:
 ///   values: [x, x, x], [x, x, x], [default, default, default]
-/// 
+///
 pub fn ensure_enough_room_for_values<T: Clone>(
     values: &mut VecDeque<Vec<T>>,
     mode: GroupStatesMode,
@@ -435,11 +437,10 @@ pub fn ensure_enough_room_for_values<T: Clone>(
                 values.push_back(Vec::new());
             }
 
-            let single = values.back_mut().unwrap();
-            if single.len() < total_num_groups {
-                let new_groups = total_num_groups - single.len();
-                single.resize(new_groups, default_value.clone());
-            }
+            values
+                .back_mut()
+                .unwrap()
+                .resize(total_num_groups, default_value);
         }
         // It blocked mode, we ensure the blks are enough first,
         // and then ensure slots in blks are enough.
@@ -464,13 +465,16 @@ pub fn ensure_enough_room_for_values<T: Clone>(
 
             // Ensure slots are enough.
             let mut new_slots = total_num_groups - exist_slots;
+
             // Expand current blk.
             let cur_blk_rest_slots = blk_size - values[cur_blk_idx].len();
             if cur_blk_rest_slots >= new_slots {
-                values[cur_blk_idx].resize(new_slots, default_value.clone());
+                values[cur_blk_idx]
+                    .extend(iter::repeat(default_value.clone()).take(new_slots));
                 return;
             } else {
-                values[cur_blk_idx].resize(cur_blk_rest_slots, default_value.clone());
+                values[cur_blk_idx]
+                    .extend(iter::repeat(default_value.clone()).take(cur_blk_rest_slots));
                 new_slots -= cur_blk_rest_slots;
                 cur_blk_idx += 1;
             }
@@ -478,7 +482,8 @@ pub fn ensure_enough_room_for_values<T: Clone>(
             // Expand blks
             let expand_blks = new_slots / blk_size;
             for _ in 0..expand_blks {
-                values[cur_blk_idx].resize(blk_size, default_value.clone());
+                values[cur_blk_idx]
+                    .extend(iter::repeat(default_value.clone()).take(blk_size));
                 cur_blk_idx += 1;
             }
 
@@ -487,7 +492,7 @@ pub fn ensure_enough_room_for_values<T: Clone>(
             values
                 .back_mut()
                 .unwrap()
-                .resize(last_expand_slots, default_value);
+                .extend(iter::repeat(default_value.clone()).take(last_expand_slots));
         }
     }
 }

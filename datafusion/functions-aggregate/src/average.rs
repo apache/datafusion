@@ -453,7 +453,12 @@ where
 
         // increment counts, update sums
         ensure_enough_room_for_values(&mut self.counts, self.mode, total_num_groups, 0);
-        ensure_enough_room_for_values(&mut self.sums, self.mode, total_num_groups, T::default_value());
+        ensure_enough_room_for_values(
+            &mut self.sums,
+            self.mode,
+            total_num_groups,
+            T::default_value(),
+        );
 
         self.null_state.accumulate(
             group_indices,
@@ -462,18 +467,26 @@ where
             total_num_groups,
             |group_index, new_value| {
                 let sum = match self.mode {
-                    GroupStatesMode::Flat => self.sums.back_mut().unwrap().get_mut(group_index).unwrap(),
+                    GroupStatesMode::Flat => {
+                        self.sums.back_mut().unwrap().get_mut(group_index).unwrap()
+                    }
                     GroupStatesMode::Blocked(_) => {
                         let blocked_index = BlockedGroupIndex::new(group_index);
                         &mut self.sums[blocked_index.block_id][blocked_index.block_offset]
                     }
                 };
-                
+
                 let count = match self.mode {
-                    GroupStatesMode::Flat => self.counts.back_mut().unwrap().get_mut(group_index).unwrap(),
+                    GroupStatesMode::Flat => self
+                        .counts
+                        .back_mut()
+                        .unwrap()
+                        .get_mut(group_index)
+                        .unwrap(),
                     GroupStatesMode::Blocked(_) => {
                         let blocked_index = BlockedGroupIndex::new(group_index);
-                        &mut self.counts[blocked_index.block_id][blocked_index.block_offset]
+                        &mut self.counts[blocked_index.block_id]
+                            [blocked_index.block_offset]
                     }
                 };
 
@@ -560,10 +573,16 @@ where
             total_num_groups,
             |group_index, partial_count| {
                 let count = match self.mode {
-                    GroupStatesMode::Flat => self.counts.back_mut().unwrap().get_mut(group_index).unwrap(),
+                    GroupStatesMode::Flat => self
+                        .counts
+                        .back_mut()
+                        .unwrap()
+                        .get_mut(group_index)
+                        .unwrap(),
                     GroupStatesMode::Blocked(_) => {
                         let blocked_index = BlockedGroupIndex::new(group_index);
-                        &mut self.counts[blocked_index.block_id][blocked_index.block_offset]
+                        &mut self.counts[blocked_index.block_id]
+                            [blocked_index.block_offset]
                     }
                 };
                 *count += partial_count;
@@ -571,7 +590,12 @@ where
         );
 
         // update sums
-        ensure_enough_room_for_values(&mut self.sums, self.mode, total_num_groups, T::default_value());
+        ensure_enough_room_for_values(
+            &mut self.sums,
+            self.mode,
+            total_num_groups,
+            T::default_value(),
+        );
         self.null_state.accumulate(
             group_indices,
             partial_sums,
@@ -579,7 +603,9 @@ where
             total_num_groups,
             |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
                 let sum = match self.mode {
-                    GroupStatesMode::Flat => self.sums.back_mut().unwrap().get_mut(group_index).unwrap(),
+                    GroupStatesMode::Flat => {
+                        self.sums.back_mut().unwrap().get_mut(group_index).unwrap()
+                    }
                     GroupStatesMode::Blocked(_) => {
                         let blocked_index = BlockedGroupIndex::new(group_index);
                         &mut self.sums[blocked_index.block_id][blocked_index.block_offset]

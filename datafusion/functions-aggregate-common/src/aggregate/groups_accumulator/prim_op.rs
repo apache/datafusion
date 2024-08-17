@@ -31,7 +31,6 @@ use datafusion_expr_common::groups_accumulator::{
 use crate::aggregate::groups_accumulator::blocked_accumulate::BlockedNullState;
 use crate::aggregate::groups_accumulator::ensure_enough_room_for_values;
 
-
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
 /// the input type (such as `Sum`)

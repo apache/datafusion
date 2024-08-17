@@ -346,7 +346,9 @@ impl NullState {
                 }
                 first_n_null
             }
-            EmitTo::CurrentBlock(_) => unreachable!("can't support blocked emission in flat NullState"),
+            EmitTo::CurrentBlock(_) => {
+                unreachable!("can't support blocked emission in flat NullState")
+            }
         };
         NullBuffer::new(nulls)
     }

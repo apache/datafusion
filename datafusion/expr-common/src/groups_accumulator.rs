@@ -93,20 +93,16 @@ impl EmitTo {
         }
 
         match self {
-            Self::All => {
-                match mode {
-                    GroupStatesMode::Flat => {
-                        blocks.pop_front().unwrap()
-                    }
-                    GroupStatesMode::Blocked(_) => {
-                        let blocks = mem::take(blocks);
-                        blocks
-                            .into_iter()
-                            .flat_map(|blk| blk.into_iter())
-                            .collect::<Vec<_>>()
-                    }
+            Self::All => match mode {
+                GroupStatesMode::Flat => blocks.pop_front().unwrap(),
+                GroupStatesMode::Blocked(_) => {
+                    let blocks = mem::take(blocks);
+                    blocks
+                        .into_iter()
+                        .flat_map(|blk| blk.into_iter())
+                        .collect::<Vec<_>>()
                 }
-            }
+            },
             Self::First(n) => {
                 match mode {
                     GroupStatesMode::Flat => {
@@ -126,9 +122,7 @@ impl EmitTo {
                     }
                 }
             }
-            EmitTo::CurrentBlock(_) => {
-                blocks.pop_front().unwrap()
-            }
+            EmitTo::CurrentBlock(_) => blocks.pop_front().unwrap(),
         }
     }
 }
@@ -139,6 +133,7 @@ pub enum GroupStatesMode {
     Blocked(usize),
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct BlockedGroupIndex {
     pub block_id: usize,
     pub block_offset: usize,
