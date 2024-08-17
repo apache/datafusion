@@ -328,8 +328,7 @@ impl ExprSchemable for Expr {
             }
             Expr::WindowFunction(WindowFunction { fun, .. }) => match fun {
                 WindowFunctionDefinition::BuiltInWindowFunction(func) => {
-                    if func.name() == "ROW_NUMBER"
-                        || func.name() == "RANK"
+                    if func.name() == "RANK"
                         || func.name() == "NTILE"
                         || func.name() == "CUME_DIST"
                     {
@@ -339,7 +338,7 @@ impl ExprSchemable for Expr {
                     }
                 }
                 WindowFunctionDefinition::AggregateUDF(func) => Ok(func.is_nullable()),
-                _ => Ok(true),
+                WindowFunctionDefinition::WindowUDF(udwf) => Ok(udwf.nullable()),
             },
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
