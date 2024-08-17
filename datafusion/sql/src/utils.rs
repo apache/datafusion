@@ -338,13 +338,6 @@ pub(crate) fn transform_bottom_unnest(
                          inner_projection_exprs: &mut Vec<Expr>|
      -> Result<Vec<Expr>> {
         let inner_expr_name = expr_in_unnest.schema_name().to_string();
-        // let col = match expr_in_unnest {
-        //     Expr::Column(col) => col,
-        //     _ => {
-        //         // TODO: this failed
-        //         return internal_err!("unnesting on non-column expr is not supported");
-        //     }
-        // };
 
         // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
         // inside unnest execution, each column inside the inner projection
@@ -376,9 +369,9 @@ pub(crate) fn transform_bottom_unnest(
                         .collect(),
                 );
             }
-            DataType::List(field)
-            | DataType::FixedSizeList(field, _)
-            | DataType::LargeList(field) => {
+            DataType::List(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::LargeList(_) => {
                 // TODO: this memo only needs to be a hashset
                 let (already_projected, transformed_cols) =
                     match memo.get_mut(&inner_expr_name) {
@@ -435,6 +428,8 @@ pub(crate) fn transform_bottom_unnest(
     let exprs_under_unnest = RefCell::new(HashSet::new());
     let ancestor_unnest = RefCell::new(None);
 
+    // two conseqcutive unnest is something look like: unnest(unnest(some_expr))
+    // the last items represent the inner most exprs
     let consecutive_unnest = RefCell::new(Vec::<Option<Expr>>::new());
     // we need to mark only the latest unnest expr that was visitted during the down traversal
     let transform_down = |expr: Expr| -> Result<Transformed<Expr>> {
@@ -461,7 +456,7 @@ pub(crate) fn transform_bottom_unnest(
     let mut transformed_root_exprs = None;
     let transform_up = |expr: Expr| -> Result<Transformed<Expr>> {
         // From the bottom up, we know the latest consecutive unnest sequence
-        // we only do the transformation at the top unnest node
+        // only do the transformation at the top unnest node
         // For example given this complex expr
         // - unnest(array_concat(unnest([[1,2,3]]),unnest([[4,5,6]]))) + unnest(unnest([[7,8,9]))
         // traversal will be like this:
@@ -473,15 +468,22 @@ pub(crate) fn transform_bottom_unnest(
         // and the complex expr will be rewritten into:
         // unnest(array_concat(place_holder_col_1, place_holder_col_2)) + place_holder_col_3
         if let Expr::Unnest(Unnest { .. }) = expr {
-            let mut down_unnest_mut = ancestor_unnest.borrow_mut();
-            // upward traversal has reached the top unnest expr again
+            let mut ancestor_unnest_ref = ancestor_unnest.borrow_mut();
+            // upward traversal has reached the top most unnest expr again
             // reset it to None
-            if *down_unnest_mut == Some(expr.clone()) {
-                down_unnest_mut.take();
+            if *ancestor_unnest_ref == Some(expr.clone()) {
+                ancestor_unnest_ref.take();
             }
             // find inside consecutive_unnest, the sequence of continous unnest exprs
             let mut found_first_unnest = false;
             let mut unnest_stack = vec![];
+
+            // TODO: this is still a hack and sub-optimal
+            // it's trying to get the latest consecutive unnest exprs
+            // and check if current upward traversal is the returning to the root expr
+            // (e.g) unnest(unnest(col)) then the traversal happens like:
+            // - down(unnest) -> down(unnest) -> down(col) -> up(col) -> up(unnest) -> up(unnest)
+            // the result of such traversal is unnest(col,depth:=2)
             for item in consecutive_unnest.borrow().iter().rev() {
                 if let Some(expr) = item {
                     found_first_unnest = true;
@@ -497,11 +499,29 @@ pub(crate) fn transform_bottom_unnest(
             // this is the top most unnest expr inside the consecutive unnest exprs
             // e.g unnest(unnest(some_col))
             if expr == *unnest_stack.last().unwrap() {
+                // TODO: detect if the top level is an unnest on struct
+                // and if the unnest stack contain > 1 exprs
+                // then do not transform the top level unnest yet, instead do the transform
+                // for the inner unnest first
+                // e.g: unnest(unnest(unnest([[struct()]])))
+                // will needs to be transformed into
+                // unnest(unnest([[struct()]],depth=2))
                 let most_inner = unnest_stack.first().unwrap();
                 if let Expr::Unnest(Unnest { expr: ref arg }) = most_inner {
+                    let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
+                    // unnest(unnest(struct_arr_col)) is not allow to be done recursively
+                    // it needs to be splitted into multiple unnest logical plan
+                    // unnest(struct_arr)
+                    //  unnest(struct_arr_col) as struct_arr
+                    // instead of unnest(struct_arr_col, depth = 2)
+                    match data_type {
+                        DataType::Struct(_) => {}
+                        _ => {}
+                    }
                     let depth = unnest_stack.len();
                     let struct_allowed = (&expr == original_expr) && depth == 1;
 
+                    // TODO: arg should be inner most
                     let mut transformed_exprs =
                         transform(depth, arg, struct_allowed, inner_projection_exprs)?;
                     if struct_allowed {
@@ -525,7 +545,7 @@ pub(crate) fn transform_bottom_unnest(
         // For column exprs that are not descendants of any unnest node
         // retain their projection
         // e.g given expr tree unnest(col_a) + col_b, we have to retain projection of col_b
-        // down_unnest is non means current upward traversal is not descendant of any unnest
+        // this condition can be checked by maintaining an Option<current ancestor unnest>
         if matches!(&expr, Expr::Column(_)) && ancestor_unnest.borrow().is_none() {
             inner_projection_exprs.push(expr.clone());
         }

@@ -1,3 +1,11 @@
+query I
+select unnest(unnest(unnest([[[1]]])))
+----
+
+query I
+select unnest(unnest([struct(1,2,3)]))
+----
+
 statement ok
 CREATE TABLE recursive_unnest_table
 AS VALUES 
