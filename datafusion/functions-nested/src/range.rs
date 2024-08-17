@@ -55,7 +55,6 @@ impl Range {
                     TypeSignature::Exact(vec![Int64, Int64]),
                     TypeSignature::Exact(vec![Int64, Int64, Int64]),
                     TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
-                    TypeSignature::Any(3),
                 ],
                 Volatility::Immutable,
             ),
@@ -126,7 +125,6 @@ impl GenSeries {
                     TypeSignature::Exact(vec![Int64, Int64]),
                     TypeSignature::Exact(vec![Int64, Int64, Int64]),
                     TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
-                    TypeSignature::Any(3),
                 ],
                 Volatility::Immutable,
             ),
@@ -167,7 +165,7 @@ impl ScalarUDFImpl for GenSeries {
             Date32 => make_scalar_function(|args| gen_range_date(args, true))(args),
             dt => {
                 exec_err!(
-                    "unsupported type for range. Expected Int64 or Date32, got: {}",
+                    "unsupported type for gen_series. Expected Int64 or Date32, got: {}",
                     dt
                 )
             }
@@ -316,6 +314,11 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
     // values are date32s
     let values_builder = Date32Builder::new();
     let mut list_builder = ListBuilder::new(values_builder);
+
+    if start_array.unwrap().is_null(0) | stop_array.is_null(0) | step_array.unwrap().is_null(0) {
+        list_builder.append_null();
+        return Ok(Arc::new(list_builder.finish()));
+    }
 
     for (idx, stop) in stop_array.iter().enumerate() {
         let mut stop = stop.unwrap_or(0);
