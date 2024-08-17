@@ -315,7 +315,10 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
     let values_builder = Date32Builder::new();
     let mut list_builder = ListBuilder::new(values_builder);
 
-    if start_array.unwrap().is_null(0) | stop_array.is_null(0) | step_array.unwrap().is_null(0) {
+    if start_array.unwrap().is_null(0)
+        | stop_array.is_null(0)
+        | step_array.unwrap().is_null(0)
+    {
         list_builder.append_null();
         return Ok(Arc::new(list_builder.finish()));
     }
