@@ -17,39 +17,36 @@
 
 //! Tests for the limited distinct aggregation optimizer rule
 
+use super::test_util::{parquet_exec_with_sort, schema, trim_plan_display};
+
 use std::sync::Arc;
 
-use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
-use datafusion_physical_plan::aggregates::AggregateExec;
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::ExecutionPlan;
-
-use datafusion_common::Result;
-
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
-
-use datafusion::prelude::SessionContext;
-use datafusion::test_util::TestAggregate;
-use datafusion_physical_plan::aggregates::PhysicalGroupBy;
-use datafusion_physical_plan::collect;
-use datafusion_physical_plan::memory::MemoryExec;
-
-use arrow::array::Int32Array;
-use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
-use arrow::util::pretty::pretty_format_batches;
+use arrow::{
+    array::Int32Array,
+    compute::SortOptions,
+    datatypes::{DataType, Field, Schema},
+    record_batch::RecordBatch,
+    util::pretty::pretty_format_batches,
+};
 use arrow_schema::SchemaRef;
+use datafusion::{prelude::SessionContext, test_util::TestAggregate};
+use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{cast, col};
-use datafusion_physical_expr::{expressions, PhysicalExpr, PhysicalSortExpr};
-use datafusion_physical_plan::aggregates::AggregateMode;
-use datafusion_physical_plan::displayable;
-
-use crate::physical_optimizer::test_util::trim_plan_display;
-
-use super::test_util::{parquet_exec_with_sort, schema};
+use datafusion_physical_expr::{
+    expressions::{cast, col},
+    PhysicalExpr, PhysicalSortExpr,
+};
+use datafusion_physical_optimizer::{
+    limited_distinct_aggregation::LimitedDistinctAggregation, PhysicalOptimizerRule,
+};
+use datafusion_physical_plan::{
+    aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
+    collect, displayable, expressions,
+    limit::{GlobalLimitExec, LocalLimitExec},
+    memory::MemoryExec,
+    ExecutionPlan,
+};
 
 fn mock_data() -> Result<Arc<MemoryExec>> {
     let schema = Arc::new(Schema::new(vec![
