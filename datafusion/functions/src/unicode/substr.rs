@@ -20,11 +20,12 @@ use std::cmp::max;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait,
+    Array, ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray,
+    OffsetSizeTrait, StringViewArray, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
 
-use datafusion_common::cast::as_int64_array;
+use datafusion_common::cast::{as_int64_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -77,7 +78,11 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "substr")
+        if arg_types[0] == DataType::Utf8View {
+            Ok(DataType::Utf8View)
+        } else {
+            utf8_to_str_type(&arg_types[0], "substr")
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -107,11 +112,119 @@ pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Extracts the substring of string starting at the start'th character, and extending for count characters if that is specified. (Same as substring(string from start for count).)
-/// substr('alphabet', 3) = 'phabet'
-/// substr('alphabet', 3, 2) = 'ph'
-/// The implementation uses UTF-8 code points as characters
-fn calculate_substr<'a, V, T>(string_array: V, args: &[ArrayRef]) -> Result<ArrayRef>
+// Decoding ref the trait at: arrow/arrow-data/src/byte_view.rs:44
+// From<u128> for ByteView
+fn calculate_string_view(
+    string_array: &StringViewArray,
+    args: &[ArrayRef],
+) -> Result<ArrayRef> {
+    let mut builder = StringViewBuilder::new();
+    for block in string_array.data_buffers() {
+        builder.append_block(block.clone());
+    }
+
+    let start_array = as_int64_array(&args[0])?;
+
+    match args.len() {
+        1 => {
+            for (raw, start) in string_array.views().iter().zip(start_array.iter()) {
+                if let Some(start) = start {
+                    let length = *raw as u32;
+                    let start = (start - 1).max(0);
+                    if length == 0 {
+                        builder.append_null();
+                    } else if length > 12 {
+                        let buffer_index = (*raw >> 64) as u32;
+                        let offset = (*raw >> 96) as u32;
+                        // Safety: builder is guaranteed to have corresponding blocks
+                        unsafe {
+                            builder.append_view_unchecked(
+                                buffer_index,
+                                offset + start as u32,
+                                length - start as u32, // guarantee that length >= start
+                            );
+                        }
+                    } else {
+                        let bytes = ((*raw >> 32) & u128::MAX).to_le_bytes();
+                        let str = match std::str::from_utf8(&bytes[..14]) {
+                            Ok(str) => &str[start as usize..],
+                            _ => {
+                                return exec_err!(
+                                    "Failed to convert inline bytes to &str."
+                                )
+                            }
+                        };
+                        builder.append_value(str);
+                    }
+                } else {
+                    builder.append_null();
+                }
+            }
+        }
+        2 => {
+            let count_array = as_int64_array(&args[1])?;
+            for ((raw, start), count) in string_array
+                .views()
+                .iter()
+                .zip(start_array.iter())
+                .zip(count_array.iter())
+            {
+                if let (Some(start), Some(count)) = (start, count) {
+                    let length = *raw as u32;
+                    let start = (start - 1).max(0) as usize;
+                    if count < 0 {
+                        return exec_err!(
+                            "negative substring length not allowed: substr(<str>, {start}, {count})"
+                        );
+                    } else {
+                        let count = (count as u32).min(length);
+                        if length == 0 {
+                            builder.append_null();
+                        } else if length > 12 {
+                            let buffer_index = (*raw >> 64) as u32;
+                            let offset = (*raw >> 96) as u32;
+                            // Safety: builder is guaranteed to have corresponding blocks
+                            unsafe {
+                                builder.append_view_unchecked(
+                                    buffer_index,
+                                    offset + start as u32,
+                                    count, // guarantee that count >= start and count <= length
+                                );
+                            }
+                        } else {
+                            let bytes = ((*raw >> 32) & u128::MAX).to_le_bytes();
+                            let str = match std::str::from_utf8(&bytes[..14]) {
+                                Ok(str) => {
+                                    let end =
+                                        (start + count as usize).min(length as usize);
+                                    &str[start..end]
+                                }
+                                _ => {
+                                    return exec_err!(
+                                        "Failed to convert inline bytes to &str."
+                                    )
+                                }
+                            };
+                            builder.append_value(str);
+                        }
+                    }
+                } else {
+                    builder.append_null();
+                }
+            }
+        }
+        other => {
+            return exec_err!(
+                "substr was called with {other} arguments. It requires 2 or 3."
+            )
+        }
+    }
+
+    let result = builder.finish();
+    Ok(Arc::new(result) as ArrayRef)
+}
+
+fn calculate_string<'a, V, T>(string_array: V, args: &[ArrayRef]) -> Result<ArrayRef>
 where
     V: ArrayAccessor<Item = &'a str>,
     T: OffsetSizeTrait,
@@ -168,10 +281,34 @@ where
     }
 }
 
+/// Extracts the substring of string starting at the start'th character, and extending for count characters if that is specified. (Same as substring(string from start for count).)
+/// substr('alphabet', 3) = 'phabet'
+/// substr('alphabet', 3, 2) = 'ph'
+/// The implementation uses UTF-8 code points as characters
+fn calculate_substr<'a, V, T>(string_array: V, args: &[ArrayRef]) -> Result<ArrayRef>
+where
+    V: ArrayAccessor<Item = &'a str>,
+    T: OffsetSizeTrait,
+{
+    match string_array.data_type() {
+        DataType::Utf8View => {
+            calculate_string_view(as_string_view_array(&string_array)?, args)
+        }
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            calculate_string::<V, T>(string_array, args)
+        }
+        other => {
+            exec_err!(
+                "unexpected datatype {other}, expected Utf8View, Utf8 or LargeUtf8."
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::array::{Array, StringArray};
-    use arrow::datatypes::DataType::Utf8;
+    use arrow::datatypes::DataType::{Utf8, Utf8View};
 
     use datafusion_common::{exec_err, Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -189,7 +326,7 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
+            Utf8View,
             StringArray
         );
         test_function!(
