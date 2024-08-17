@@ -188,3 +188,5 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
         true
     }
 }
+
+// See tests in datafusion/core/tests/physical_optimizer/limited_distinct_aggregation.rs
