@@ -587,7 +587,7 @@ statement error
 SELECT v1, v2, SUMM(v2) OVER(ORDER BY v1) from test;
 
 # Window function
-statement error Did you mean 'ROW_NUMBER'?
+statement error Did you mean 'row_number'?
 SELECT v1, v2, ROWNUMBER() OVER(ORDER BY v1) from test;
 
 statement ok

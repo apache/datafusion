@@ -603,6 +603,11 @@ pub mod functions_aggregate {
     pub use datafusion_functions_aggregate::*;
 }
 
+/// re-export of [`datafusion_functions_window`] crate
+pub mod functions_window {
+    pub use datafusion_functions_window::*;
+}
+
 #[cfg(test)]
 pub mod test;
 pub mod test_util;
