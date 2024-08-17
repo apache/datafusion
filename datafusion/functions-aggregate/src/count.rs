@@ -479,10 +479,6 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let block_size = match self.mode {
-            GroupStatesMode::Flat => None,
-            GroupStatesMode::Blocked(blk_size) => Some(blk_size),
-        };
         let counts = emit_to.take_needed_from_blocks(&mut self.counts, self.mode);
 
         // Count is always non null (null inputs just don't contribute to the overall values)
@@ -494,10 +490,6 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
     // return arrays for counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let block_size = match self.mode {
-            GroupStatesMode::Flat => None,
-            GroupStatesMode::Blocked(blk_size) => Some(blk_size),
-        };
         let counts = emit_to.take_needed_from_blocks(&mut self.counts, self.mode);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
 

@@ -397,6 +397,10 @@ fn ensure_enough_room_for_nulls(
     total_num_groups: usize,
     default_value: bool,
 ) {
+    if total_num_groups == 0 {
+        return;
+    }
+
     match mode {
         // It flat mode, we just a single builder, and grow it constantly.
         GroupStatesMode::Flat => {
