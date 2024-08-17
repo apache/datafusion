@@ -254,23 +254,12 @@ impl AggregateExpr for AggregateFunctionExpr {
             return_type: &self.data_type,
             ordering_fields: &self.ordering_fields,
             is_distinct: self.is_distinct,
-            is_nullable: self.is_nullable,
         };
 
         self.fun.state_fields(args)
     }
 
     fn field(&self) -> Result<Field> {
-        // let args = StateFieldsArgs {
-        //     name: &self.name,
-        //     input_types: &self.input_types,
-        //     return_type: &self.data_type,
-        //     ordering_fields: &self.ordering_fields,
-        //     is_distinct: self.is_distinct,
-        //     is_nullable: self.is_nullable,
-        // };
-
-        // self.fun.fields(args)
         Ok(Field::new(
             &self.name,
             self.data_type.clone(),
