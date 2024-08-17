@@ -48,9 +48,9 @@ use datafusion_physical_expr::{
 
 use itertools::Itertools;
 
-mod group_values;
+pub mod group_values;
 mod no_grouping;
-mod order;
+pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
@@ -925,7 +925,7 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 ///
 /// A `LexRequirement` instance, which is the requirement that satisfies all the
 /// aggregate requirements. Returns an error in case of conflicting requirements.
-fn get_finer_aggregate_exprs_requirement(
+pub fn get_finer_aggregate_exprs_requirement(
     aggr_exprs: &mut [Arc<dyn AggregateExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
@@ -998,7 +998,7 @@ fn get_finer_aggregate_exprs_requirement(
 /// The expressions are different depending on `mode`:
 /// * Partial: AggregateExpr::expressions
 /// * Final: columns of `AggregateExpr::state_fields()`
-fn aggregate_expressions(
+pub fn aggregate_expressions(
     aggr_expr: &[Arc<dyn AggregateExpr>],
     mode: &AggregateMode,
     col_idx_base: usize,
@@ -1051,9 +1051,9 @@ fn merge_expressions(
     })
 }
 
-pub(crate) type AccumulatorItem = Box<dyn Accumulator>;
+pub type AccumulatorItem = Box<dyn Accumulator>;
 
-fn create_accumulators(
+pub fn create_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
 ) -> Result<Vec<AccumulatorItem>> {
     aggr_expr
@@ -1064,7 +1064,7 @@ fn create_accumulators(
 
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
 /// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
-fn finalize_aggregation(
+pub fn finalize_aggregation(
     accumulators: &mut [AccumulatorItem],
     mode: &AggregateMode,
 ) -> Result<Vec<ArrayRef>> {
