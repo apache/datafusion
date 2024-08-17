@@ -160,4 +160,4 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "substr"
-required-features = ["string_expressions"]
+required-features = ["unicode_expressions"]
