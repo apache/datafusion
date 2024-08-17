@@ -55,6 +55,7 @@ pub struct AggregateExprBuilder {
     is_distinct: bool,
     /// Whether the expression is reversed
     is_reversed: bool,
+    is_nullable: bool,
 }
 
 impl AggregateExprBuilder {
@@ -68,6 +69,7 @@ impl AggregateExprBuilder {
             ignore_nulls: false,
             is_distinct: false,
             is_reversed: false,
+            is_nullable: true,
         }
     }
 
@@ -81,6 +83,7 @@ impl AggregateExprBuilder {
             ignore_nulls,
             is_distinct,
             is_reversed,
+            is_nullable,
         } = self;
         if args.is_empty() {
             return internal_err!("args should not be empty");
@@ -127,6 +130,7 @@ impl AggregateExprBuilder {
             is_distinct,
             input_types: input_exprs_types,
             is_reversed,
+            is_nullable,
         }))
     }
 
@@ -174,6 +178,16 @@ impl AggregateExprBuilder {
         self.ignore_nulls = ignore_nulls;
         self
     }
+
+    pub fn is_non_nullable(mut self) -> Self {
+        self.is_nullable = false;
+        self
+    }
+
+    pub fn with_nullable(mut self, is_nullable: bool) -> Self {
+        self.is_nullable = is_nullable;
+        self
+    }
 }
 
 /// Physical aggregate expression of a UDAF.
@@ -194,6 +208,7 @@ pub struct AggregateFunctionExpr {
     is_distinct: bool,
     is_reversed: bool,
     input_types: Vec<DataType>,
+    is_nullable: bool,
 }
 
 impl AggregateFunctionExpr {
@@ -215,6 +230,10 @@ impl AggregateFunctionExpr {
     /// Return if the aggregation is reversed
     pub fn is_reversed(&self) -> bool {
         self.is_reversed
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        self.is_nullable
     }
 }
 
@@ -241,7 +260,11 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+        Ok(Field::new(
+            &self.name,
+            self.data_type.clone(),
+            self.is_nullable,
+        ))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {

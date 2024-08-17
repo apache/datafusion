@@ -163,6 +163,10 @@ impl AggregateUDF {
         self.inner.name()
     }
 
+    pub fn is_nullable(&self) -> bool {
+        self.inner.is_nullable()
+    }
+
     /// Returns the aliases for this function.
     pub fn aliases(&self) -> &[String] {
         self.inner.aliases()
@@ -341,6 +345,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// What [`DataType`] will be returned by this function, given the types of
     /// the arguments
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+    /// Whether the aggregate function is nullable
+    fn is_nullable(&self) -> bool {
+        true
+    }
 
     /// Return a new [`Accumulator`] that aggregates values for a specific
     /// group during query execution.
