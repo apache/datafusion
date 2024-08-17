@@ -20,16 +20,21 @@
 
 use crate::{
     disk_manager::{DiskManager, DiskManagerConfig},
-    memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool},
+    memory_pool::{
+        GreedyMemoryPool, MemoryPool, TrackConsumersPool, UnboundedMemoryPool,
+    },
     object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
-use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::{
+    fmt::{Debug, Formatter},
+    num::NonZeroUsize,
+};
 use url::Url;
 
 #[derive(Clone)]
@@ -213,7 +218,10 @@ impl RuntimeConfig {
     /// Note DataFusion does not yet respect this limit in all cases.
     pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
         let pool_size = (max_memory as f64 * memory_fraction) as usize;
-        self.with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
+        self.with_memory_pool(Arc::new(TrackConsumersPool::new(
+            GreedyMemoryPool::new(pool_size),
+            NonZeroUsize::new(5).unwrap(),
+        )))
     }
 
     /// Use the specified path to create any needed temporary files

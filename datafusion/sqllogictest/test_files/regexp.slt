@@ -230,6 +230,66 @@ SELECT regexp_match('aaa-555', '.*-(\d*)');
 ----
 [555]
 
+query B
+select 'abc' ~ null;
+----
+NULL
+
+query B
+select null ~ null;
+----
+NULL
+
+query B
+select null ~ 'abc';
+----
+NULL
+
+query B
+select 'abc' ~* null;
+----
+NULL
+
+query B
+select null ~* null;
+----
+NULL
+
+query B
+select null ~* 'abc';
+----
+NULL
+
+query B
+select 'abc' !~ null;
+----
+NULL
+
+query B
+select null !~ null;
+----
+NULL
+
+query B
+select null !~ 'abc';
+----
+NULL
+
+query B
+select 'abc' !~* null;
+----
+NULL
+
+query B
+select null !~* null;
+----
+NULL
+
+query B
+select null !~* 'abc';
+----
+NULL
+
 #
 # regexp_replace tests
 #
@@ -334,6 +394,26 @@ query B
 SELECT 'foo\nbar\nbaz' LIKE '%bar%';
 ----
 true
+
+query B
+SELECT NULL LIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL iLIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL not LIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL not iLIKE NULL;
+----
+NULL
 
 statement ok
 drop table t;

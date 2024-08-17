@@ -425,6 +425,43 @@ logical_plan
 01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
 02)--TableScan: test projection=[column1_utf8view]
 
+### Test TRANSLATE
+
+# Should run TRANSLATE using utf8view column successfully
+query T
+SELECT
+  TRANSLATE(column1_utf8view, 'foo', 'bar') as c
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+# Should run TRANSLATE using utf8 column successfully
+query T
+SELECT
+  TRANSLATE(column1_utf8, 'foo', 'bar') as c
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+# Should run TRANSLATE using large_utf8 column successfully
+query T
+SELECT
+  TRANSLATE(column1_large_utf8, 'foo', 'bar') as c
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+
+
 ### Initcap
 
 query TT
@@ -484,7 +521,30 @@ logical_plan
 01)Projection: test.column1_utf8view LIKE Utf8View("foo") AS like, test.column1_utf8view ILIKE Utf8View("foo") AS ilike
 02)--TableScan: test projection=[column1_utf8view]
 
+## Ensure no casts for SUBSTR
 
+query TT
+EXPLAIN SELECT
+  SUBSTR(column1_utf8view, 1, 3) as c1,
+  SUBSTR(column2_utf8, 1, 3) as c2,
+  SUBSTR(column2_large_utf8, 1, 3) as c3
+FROM test;
+----
+logical_plan
+01)Projection: substr(test.column1_utf8view, Int64(1), Int64(3)) AS c1, substr(test.column2_utf8, Int64(1), Int64(3)) AS c2, substr(test.column2_large_utf8, Int64(1), Int64(3)) AS c3
+02)--TableScan: test projection=[column2_utf8, column2_large_utf8, column1_utf8view]
+
+query TTT
+SELECT
+  SUBSTR(column1_utf8view, 1, 3) as c1,
+  SUBSTR(column2_utf8, 1, 3) as c2,
+  SUBSTR(column2_large_utf8, 1, 3) as c3
+FROM test;
+----
+And X X
+Xia Xia Xia
+Rap R R
+NULL R R
 
 ## Ensure no casts for ASCII
 
@@ -818,15 +878,22 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for OVERLAY
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   OVERLAY(column1_utf8view PLACING 'foo' FROM 2 ) as c1
 FROM test;
 ----
 logical_plan
-01)Projection: overlay(CAST(test.column1_utf8view AS Utf8), Utf8("foo"), Int64(2)) AS c1
+01)Projection: overlay(test.column1_utf8view, Utf8View("foo"), Int64(2)) AS c1
 02)--TableScan: test projection=[column1_utf8view]
+
+query T
+SELECT OVERLAY(column1_utf8view PLACING 'foo' FROM 2 ) as c1 FROM test;
+----
+Afooew
+Xfoogpeng
+Rfooael
+NULL
 
 ## Ensure no casts for REGEXP_LIKE
 query TT
@@ -860,14 +927,13 @@ logical_plan
 
 
 ## Ensure no casts for REPEAT
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   REPEAT(column1_utf8view, 2) as c1
 FROM test;
 ----
 logical_plan
-01)Projection: repeat(CAST(test.column1_utf8view AS Utf8), Int64(2)) AS c1
+01)Projection: repeat(test.column1_utf8view, Int64(2)) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REPLACE
@@ -884,14 +950,13 @@ logical_plan
 03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for REVERSE
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   REVERSE(column1_utf8view) as c1
 FROM test;
 ----
 logical_plan
-01)Projection: reverse(CAST(test.column1_utf8view AS Utf8)) AS c1
+01)Projection: reverse(test.column1_utf8view) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 
@@ -918,6 +983,29 @@ eng  (empty) ngpeng
 ael  (empty) hael
 NULL NULL    NULL
 
+## Ensure no casts for LEFT
+query TT
+EXPLAIN SELECT
+  LEFT(column1_utf8view, 3) as c2
+FROM test;
+----
+logical_plan
+01)Projection: left(test.column1_utf8view, Int64(3)) AS c2
+02)--TableScan: test projection=[column1_utf8view]
+
+# Test outputs of LEFT
+query TTT
+SELECT
+  LEFT(column1_utf8view, 3) as c1,
+  LEFT(column1_utf8view, 0) as c2,
+  LEFT(column1_utf8view, -3) as c3
+FROM test;
+----
+And  (empty) And
+Xia  (empty) Xiangp
+Rap  (empty) Raph
+NULL NULL    NULL
+
 ## Ensure no casts for RPAD
 ## TODO file ticket
 query TT
@@ -927,20 +1015,37 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: rpad(__common_expr_1, Int64(1)) AS c1, rpad(__common_expr_1, Int64(2), CAST(test.column2_utf8view AS Utf8)) AS c2
-02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
-03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+01)Projection: rpad(test.column1_utf8view, Int64(1)) AS c1, rpad(test.column1_utf8view, Int64(2), test.column2_utf8view) AS c2
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
+query TT
+EXPLAIN SELECT
+  RPAD(column1_utf8view, 12, column2_large_utf8) as c1
+FROM test;
+----
+logical_plan
+01)Projection: rpad(test.column1_utf8view, Int64(12), test.column2_large_utf8) AS c1
+02)--TableScan: test projection=[column2_large_utf8, column1_utf8view]
+
+query TT
+EXPLAIN SELECT
+  RPAD(column1_utf8view, 12, column2_utf8view) as c1
+FROM test;
+----
+logical_plan
+01)Projection: rpad(test.column1_utf8view, Int64(12), test.column2_utf8view) AS c1
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for SPLIT_PART
 ## TODO file ticket
 query TT
 EXPLAIN SELECT
-  SPLIT_PART(column1_utf8view, 'f', 1) as c
+  SPLIT_PART(column1_utf8view, 'f', 1) as c1,
+  SPLIT_PART('testtesttest',column1_utf8view, 1) as c2
 FROM test;
 ----
 logical_plan
-01)Projection: split_part(CAST(test.column1_utf8view AS Utf8), Utf8("f"), Int64(1)) AS c
+01)Projection: split_part(test.column1_utf8view, Utf8("f"), Int64(1)) AS c1, split_part(Utf8("testtesttest"), test.column1_utf8view, Int64(1)) AS c2
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for STRPOS
@@ -965,9 +1070,30 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: substr(__common_expr_1, Int64(1)) AS c, substr(__common_expr_1, Int64(1), Int64(2)) AS c2
-02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1
-03)----TableScan: test projection=[column1_utf8view]
+01)Projection: substr(test.column1_utf8view, Int64(1)) AS c, substr(test.column1_utf8view, Int64(1), Int64(2)) AS c2
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for SUBSTRINDEX
+query TT
+EXPLAIN SELECT
+  SUBSTR_INDEX(column1_utf8view, 'a', 1) as c,
+  SUBSTR_INDEX(column1_utf8view, 'a', 2) as c2
+FROM test;
+----
+logical_plan
+01)Projection: substr_index(test.column1_utf8view, Utf8View("a"), Int64(1)) AS c, substr_index(test.column1_utf8view, Utf8View("a"), Int64(2)) AS c2
+02)--TableScan: test projection=[column1_utf8view]
+
+query TT
+SELECT
+  SUBSTR_INDEX(column1_utf8view, 'a', 1) as c,
+  SUBSTR_INDEX(column1_utf8view, 'a', 2) as c2
+FROM test;
+----
+Andrew Andrew
+Xi Xiangpeng
+R Raph
+NULL NULL
 
 ## Ensure no casts on columns for STARTS_WITH
 query TT
@@ -981,14 +1107,13 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for TRANSLATE
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   TRANSLATE(column1_utf8view, 'foo', 'bar') as c
 FROM test;
 ----
 logical_plan
-01)Projection: translate(CAST(test.column1_utf8view AS Utf8), Utf8("foo"), Utf8("bar")) AS c
+01)Projection: translate(test.column1_utf8view, Utf8("foo"), Utf8("bar")) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for FIND_IN_SET

@@ -121,6 +121,10 @@ impl AggregateUDFImpl for Count {
         Ok(DataType::Int64)
     }
 
+    fn is_nullable(&self) -> bool {
+        false
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         if args.is_distinct {
             Ok(vec![Field::new_list(
@@ -133,7 +137,7 @@ impl AggregateUDFImpl for Count {
             Ok(vec![Field::new(
                 format_state_name(args.name, "count"),
                 DataType::Int64,
-                true,
+                false,
             )])
         }
     }

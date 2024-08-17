@@ -320,13 +320,11 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                Ok(func.is_nullable(args, input_schema))
+            }
             Expr::AggregateFunction(AggregateFunction { func, .. }) => {
-                // TODO: UDF should be able to customize nullability
-                if func.name() == "count" {
-                    Ok(false)
-                } else {
-                    Ok(true)
-                }
+                Ok(func.is_nullable())
             }
             Expr::WindowFunction(WindowFunction { fun, .. }) => {
                 match fun {
@@ -352,18 +350,6 @@ impl ExprSchemable for Expr {
                     }
                     _ => Ok(true),
                 }
-            }
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                // If all the element in coalesce is non-null, the result is non-null
-                if func.name() == "coalesce"
-                    && args
-                        .iter()
-                        .all(|e| !e.nullable(input_schema).ok().unwrap_or(true))
-                {
-                    return Ok(false);
-                }
-
-                Ok(true)
             }
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }

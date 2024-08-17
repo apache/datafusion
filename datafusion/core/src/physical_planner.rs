@@ -1610,6 +1610,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         .alias(name)
                         .with_ignore_nulls(ignore_nulls)
                         .with_distinct(*distinct)
+                        .with_nullable(func.is_nullable())
                         .build()?;
 
                 (agg_expr, filter, physical_sort_exprs)

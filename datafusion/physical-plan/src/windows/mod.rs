@@ -114,7 +114,6 @@ pub fn create_window_expr(
             let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
                 .schema(Arc::new(input_schema.clone()))
                 .alias(name)
-                .order_by(order_by.to_vec())
                 .with_ignore_nulls(ignore_nulls)
                 .build()?;
             window_expr_from_aggregate_expr(
