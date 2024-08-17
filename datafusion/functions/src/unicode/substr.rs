@@ -170,8 +170,7 @@ fn calculate_string_view(
                         let buffer_index = (*raw >> 64) as u32;
                         let offset = (*raw >> 96) as u32;
                         let str = string_array.value(idx);
-                        let (start, end) =
-                            get_true_start_count(str, start as usize, -1);
+                        let (start, end) = get_true_start_count(str, start as usize, -1);
                         // Safety: builder is guaranteed to have corresponding blocks
                         unsafe {
                             builder.append_view_unchecked(
@@ -186,8 +185,11 @@ fn calculate_string_view(
                         let str = match std::str::from_utf8(&bytes[..length as usize]) {
                             Ok(str) => {
                                 // Extract str[start, end) by char
-                                let (start, end) =
-                                    get_true_start_count(str, start as usize, length as i64);
+                                let (start, end) = get_true_start_count(
+                                    str,
+                                    start as usize,
+                                    length as i64,
+                                );
                                 &str[start..end]
                             }
                             _ => {
