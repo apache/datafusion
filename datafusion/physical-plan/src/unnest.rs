@@ -410,7 +410,7 @@ fn unnest_at_level(
     temp_batch: &mut HashMap<(usize, usize), ArrayRef>,
     level_to_unnest: usize,
     options: &UnnestOptions,
-) -> Result<Vec<ArrayRef>> {
+) -> Result<(Vec<ArrayRef>, usize)> {
     // unnested columns at this depth level
     // now do some kind of projection-like
     // This query:
@@ -475,7 +475,7 @@ fn unnest_at_level(
         })? as usize
     };
     if total_length == 0 {
-        return Ok(vec![]);
+        return Ok((vec![], 0));
     }
 
     // Unnest all the list arrays
@@ -493,7 +493,7 @@ fn unnest_at_level(
         .for_each(|(flatten_arr, (index_in_input_schema, depth))| {
             temp_batch.insert((*index_in_input_schema, *depth), flatten_arr);
         });
-    Ok(ret)
+    Ok((ret, total_length))
 }
 
 /// For each row in a `RecordBatch`, some list/struct columns need to be unnested.
@@ -524,13 +524,16 @@ fn build_batch(
                     true => batch.columns(),
                     false => &unnested_original_columns,
                 };
-                let temp = unnest_at_level(
+                let (temp, num_rows) = unnest_at_level(
                     input,
                     list_type_columns,
                     &mut temp_batch,
                     depth,
                     options,
                 )?;
+                if num_rows == 0 {
+                    return Ok(RecordBatch::new_empty(Arc::clone(schema)));
+                }
                 unnested_original_columns = temp;
             }
             let unnested_array_map: HashMap<usize, Vec<(Arc<dyn Array>, usize)>> =
@@ -987,7 +990,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_batch() -> datafusion_common::Result<()> {
+    fn test_build_batch_list_arr() -> datafusion_common::Result<()> {
         // col1                             | col2
         // [[1,2,3],null,[4,5]]             | ['a','b']
         // [[7,8,9,10], null, [11,12,13]]   | ['c','d']

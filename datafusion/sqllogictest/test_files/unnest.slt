@@ -60,10 +60,10 @@ select unnest([1,2,3]);
 3
 
 ## Basic unnest expression in select struct
-## query III
-## select unnest(struct(1,2,3));
-## ----
-## 1 2 3
+query III
+select unnest(struct(1,2,3));
+----
+1 2 3
 
 ## Basic unnest list expression in from clause
 query I
@@ -180,17 +180,13 @@ select unnest([1,2,3]) + unnest([1,2,3]), unnest([1,2,3]) + unnest([4,5]);
 4 7
 6 NULL
 
-##FIXME:
-## Expectation:
-## 2 5 4
-## 4 7 5
-## 6 NULL NULL
+
 query III
 select unnest(unnest([[1,2,3]])) + unnest(unnest([[1,2,3]])), unnest(unnest([[1,2,3]])) + unnest([4,5]), unnest([4,5]);
 ----
 2 5 4
-4 6 4
-6 7 4
+4 7 5
+6 NULL NULL
 
 
 
@@ -536,17 +532,25 @@ query ??II
 select unnest(column2), unnest(unnest(column2)), unnest(unnest(unnest(column2))), unnest(unnest(unnest(column2))) + 1 from recursive_unnest_table;
 ----
 [[1], [2]] [1] 1 2
-[[1], [2]] [2] 2 3
-[[1, 1]] [1, 1] 1 2
-[[1, 1]] [1, 1] 1 2
+[[1, 1]] [2] NULL NULL
+[[1], [2]] [1, 1] 2 3
+[[1, 1]] NULL NULL NULL
+[[1], [2]] [1] 1 2
+[[1, 1]] [2] 1 2
+[[1], [2]] [1, 1] NULL NULL
+[[1, 1]] NULL NULL NULL
 [[3, 4], [5]] [3, 4] 3 4
-[[3, 4], [5]] [3, 4] 4 5
-[[3, 4], [5]] [5] 5 6
-[[, 6], , [7, 8]] [, 6] NULL NULL
-[[, 6], , [7, 8]] [, 6] 6 7
-[[, 6], , [7, 8]] [7, 8] 7 8
-[[, 6], , [7, 8]] [7, 8] 8 9
-
+[[, 6], , [7, 8]] [5] 4 5
+[[3, 4], [5]] [, 6] 5 6
+[[, 6], , [7, 8]] NULL NULL NULL
+NULL [7, 8] NULL NULL
+[[3, 4], [5]] [3, 4] NULL NULL
+[[, 6], , [7, 8]] [5] 6 7
+[[3, 4], [5]] [, 6] NULL NULL
+[[, 6], , [7, 8]] NULL NULL NULL
+NULL [7, 8] NULL NULL
+[[3, 4], [5]] NULL 7 8
+[[, 6], , [7, 8]] NULL 8 9
 
 ## the same unnest expr is referened multiple times (unnest is not the bottom-most expr)
 query ??II

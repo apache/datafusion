@@ -458,6 +458,7 @@ pub(crate) fn transform_bottom_unnest(
             Ok(Transformed::no(expr))
         }
     };
+    let mut transformed_root_exprs = None;
     let transform_up = |expr: Expr| -> Result<Transformed<Expr>> {
         // From the bottom up, we know the latest consecutive unnest sequence
         // we only do the transformation at the top unnest node
@@ -503,7 +504,9 @@ pub(crate) fn transform_bottom_unnest(
 
                     let mut transformed_exprs =
                         transform(depth, arg, struct_allowed, inner_projection_exprs)?;
-                    // TODO: if transformed_exprs has > 1 expr, handle it properly
+                    if struct_allowed {
+                        transformed_root_exprs = Some(transformed_exprs.clone());
+                    }
                     return Ok(Transformed::new(
                         transformed_exprs.swap_remove(0),
                         true,
@@ -559,11 +562,13 @@ pub(crate) fn transform_bottom_unnest(
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }
     } else {
+        if let Some(transformed_root_exprs) = transformed_root_exprs {
+            return Ok(transformed_root_exprs);
+        }
         Ok(vec![transformed_expr])
     }
 }
 
-// write test for recursive_transform_unnest
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, ops::Add, sync::Arc};
