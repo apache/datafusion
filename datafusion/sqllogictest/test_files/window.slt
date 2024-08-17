@@ -49,7 +49,8 @@ OPTIONS ('format.has_header' 'true');
 ### execute_with_partition with 4 partitions
 statement ok
 CREATE EXTERNAL TABLE test (c1 int, c2 bigint, c3 boolean)
-STORED AS CSV LOCATION '../core/tests/data/partitioned_csv';
+STORED AS CSV LOCATION '../core/tests/data/partitioned_csv'
+OPTIONS('format.has_header' 'false');
 
 
 # for window functions without order by the first, last, and nth function call does not make sense
