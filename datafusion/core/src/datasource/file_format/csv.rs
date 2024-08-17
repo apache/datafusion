@@ -369,7 +369,7 @@ impl FileFormat for CsvFormat {
     async fn create_writer_physical_plan(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        _state: &SessionState,
+        state: &SessionState,
         conf: FileSinkConfig,
         order_requirements: Option<Vec<PhysicalSortRequirement>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -377,7 +377,26 @@ impl FileFormat for CsvFormat {
             return not_impl_err!("Overwrites are not implemented yet for CSV");
         }
 
-        let writer_options = CsvWriterOptions::try_from(&self.options)?;
+        // `has_header` and `newlines_in_values` fields of CsvOptions may inherit
+        // their values from session from configuration settings. To support
+        // this logic, writer options are built from the copy of `self.options`
+        // with updated values of these special fields.
+        let has_header = self
+            .options()
+            .has_header
+            .unwrap_or(state.config_options().catalog.has_header);
+        let newlines_in_values = self
+            .options()
+            .newlines_in_values
+            .unwrap_or(state.config_options().catalog.newlines_in_values);
+
+        let options = self
+            .options()
+            .clone()
+            .with_has_header(has_header)
+            .with_newlines_in_values(newlines_in_values);
+
+        let writer_options = CsvWriterOptions::try_from(&options)?;
 
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(CsvSink::new(conf, writer_options));
