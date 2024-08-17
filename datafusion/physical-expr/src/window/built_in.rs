@@ -17,24 +17,22 @@
 
 //! Physical exec for built-in window function expressions.
 
-use std::any::Any;
-use std::ops::Range;
-use std::sync::Arc;
-
 use super::{BuiltInWindowFunctionExpr, WindowExpr};
 use crate::expressions::PhysicalSortExpr;
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
-
 use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
-use datafusion_common::{not_impl_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
+use std::any::Any;
+use std::ops::Range;
+use std::sync::Arc;
 
 /// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
 #[derive(Debug)]
@@ -97,10 +95,6 @@ impl BuiltInWindowExpr {
 }
 
 impl WindowExpr for BuiltInWindowExpr {
-    fn func_name(&self) -> Result<&str> {
-        not_impl_err!("function name not determined")
-    }
-
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self

@@ -1313,6 +1313,7 @@ mod tests {
                 Arc::new(window_frame.clone()),
                 &input.schema(),
                 false,
+                true,
             )?],
             input,
             partitionby_exprs,

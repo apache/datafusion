@@ -80,14 +80,6 @@ impl WindowExpr for PlainAggregateWindowExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        // TODO: Fix window function to always return non-null for count
-        if let Ok(name) = self.func_name() {
-            if name == "count" {
-                let field = self.aggregate.field()?;
-                return Ok(field.with_nullable(true));
-            }
-        }
-
         self.aggregate.field()
     }
 
@@ -165,10 +157,6 @@ impl WindowExpr for PlainAggregateWindowExpr {
     fn uses_bounded_memory(&self) -> bool {
         !self.window_frame.end_bound.is_unbounded()
     }
-
-    fn func_name(&self) -> Result<&str> {
-        Ok(self.aggregate.func_name())
-    }
 }
 
 impl AggregateWindowExpr for PlainAggregateWindowExpr {
@@ -188,9 +176,9 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
         value_slice: &[ArrayRef],
         accumulator: &mut Box<dyn Accumulator>,
     ) -> Result<ScalarValue> {
-        let value = if cur_range.start == cur_range.end {
-            // We produce None if the window is empty.
-            ScalarValue::try_from(self.aggregate.field()?.data_type())?
+        if cur_range.start == cur_range.end {
+            self.aggregate
+                .default_value(self.aggregate.field()?.data_type())
         } else {
             // Accumulate any new rows that have entered the window:
             let update_bound = cur_range.end - last_range.end;
@@ -205,8 +193,7 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
                     .collect();
                 accumulator.update_batch(&update)?
             }
-            accumulator.evaluate()?
-        };
-        Ok(value)
+            accumulator.evaluate()
+        }
     }
 }

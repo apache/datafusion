@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::ScalarValue;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::expr::create_function_physical_name;
 use datafusion_expr::AggregateUDF;
@@ -459,8 +460,8 @@ impl AggregateExpr for AggregateFunctionExpr {
             .and_then(|flag| self.field().ok().map(|f| (f, flag)))
     }
 
-    fn func_name(&self) -> &str {
-        self.fun.name()
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        self.fun.default_value(data_type)
     }
 }
 

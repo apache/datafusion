@@ -100,6 +100,7 @@ pub fn create_window_expr(
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
     ignore_nulls: bool,
+    is_nullable: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
@@ -115,6 +116,7 @@ pub fn create_window_expr(
                 .schema(Arc::new(input_schema.clone()))
                 .alias(name)
                 .with_ignore_nulls(ignore_nulls)
+                .with_nullable(is_nullable)
                 .build()?;
             window_expr_from_aggregate_expr(
                 partition_by,
@@ -748,6 +750,7 @@ mod tests {
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
                 false,
+                true,
             )?],
             blocking_exec,
             vec![],

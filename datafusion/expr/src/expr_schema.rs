@@ -326,31 +326,21 @@ impl ExprSchemable for Expr {
             Expr::AggregateFunction(AggregateFunction { func, .. }) => {
                 Ok(func.is_nullable())
             }
-            Expr::WindowFunction(WindowFunction { fun, .. }) => {
-                match fun {
-                    WindowFunctionDefinition::BuiltInWindowFunction(func) => {
-                        if func.name() == "ROW_NUMBER"
-                            || func.name() == "RANK"
-                            || func.name() == "NTILE"
-                            || func.name() == "CUME_DIST"
-                        {
-                            Ok(false)
-                        } else {
-                            Ok(true)
-                        }
+            Expr::WindowFunction(WindowFunction { fun, .. }) => match fun {
+                WindowFunctionDefinition::BuiltInWindowFunction(func) => {
+                    if func.name() == "ROW_NUMBER"
+                        || func.name() == "RANK"
+                        || func.name() == "NTILE"
+                        || func.name() == "CUME_DIST"
+                    {
+                        Ok(false)
+                    } else {
+                        Ok(true)
                     }
-                    WindowFunctionDefinition::AggregateUDF(func) => {
-                        // TODO: UDF should be able to customize nullability
-                        if func.name() == "count" {
-                            // TODO: there is issue unsolved for count with window, should return false
-                            Ok(true)
-                        } else {
-                            Ok(true)
-                        }
-                    }
-                    _ => Ok(true),
                 }
-            }
+                WindowFunctionDefinition::AggregateUDF(func) => Ok(func.is_nullable()),
+                _ => Ok(true),
+            },
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
             | Expr::Unnest(_)

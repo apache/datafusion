@@ -287,6 +287,10 @@ impl AggregateUDFImpl for Count {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
+
+    fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
+        Ok(ScalarValue::Int64(Some(0)))
+    }
 }
 
 #[derive(Debug)]

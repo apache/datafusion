@@ -82,14 +82,6 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        // TODO: Fix window function to always return non-null for count
-        if let Ok(name) = self.func_name() {
-            if name == "count" {
-                let field = self.aggregate.field()?;
-                return Ok(field.with_nullable(true));
-            }
-        }
-
         self.aggregate.field()
     }
 
@@ -174,10 +166,6 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             window_frame: Arc::clone(&self.window_frame),
         }))
     }
-
-    fn func_name(&self) -> Result<&str> {
-        Ok(self.aggregate.func_name())
-    }
 }
 
 impl AggregateWindowExpr for SlidingAggregateWindowExpr {
@@ -195,8 +183,8 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
         accumulator: &mut Box<dyn Accumulator>,
     ) -> Result<ScalarValue> {
         if cur_range.start == cur_range.end {
-            // We produce None if the window is empty.
-            ScalarValue::try_from(self.aggregate.field()?.data_type())
+            self.aggregate
+                .default_value(self.aggregate.field()?.data_type())
         } else {
             // Accumulate any new rows that have entered the window:
             let update_bound = cur_range.end - last_range.end;
@@ -207,6 +195,7 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
                     .collect();
                 accumulator.update_batch(&update)?
             }
+
             // Remove rows that have now left the window:
             let retract_bound = cur_range.start - last_range.start;
             if retract_bound > 0 {

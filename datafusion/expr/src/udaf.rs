@@ -25,7 +25,7 @@ use std::vec;
 
 use arrow::datatypes::{DataType, Field};
 
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 
 use crate::expr::AggregateFunction;
 use crate::function::{
@@ -260,6 +260,11 @@ impl AggregateUDF {
     ///
     pub fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
+    }
+
+    /// See [`AggregateUDFImpl::default_value`] for more details.
+    pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        self.inner.default_value(data_type)
     }
 }
 
@@ -560,6 +565,13 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Note: this is used to use special aggregate implementations in certain conditions
     fn is_descending(&self) -> Option<bool> {
         None
+    }
+
+    /// Returns default value of the function given the input is Null
+    /// Most of the aggregate function return Null if input is Null,
+    /// while `count` returns 0 if input is Null
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        ScalarValue::try_from(data_type)
     }
 }
 
