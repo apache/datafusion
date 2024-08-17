@@ -842,30 +842,29 @@ fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
             );
         }
 
-        // Safety: Length is checked
-        unsafe {
-            // coerce data type and nullablity for each field
-            for (i, plan_field) in plan_schema.fields().iter().enumerate() {
-                let union_datatype = union_datatypes.get_unchecked_mut(i);
-                let union_nullable = union_nullabilities.get_unchecked_mut(i);
-                let union_field_map = union_field_meta.get_unchecked_mut(i);
+        // coerce data type and nullablity for each field
+        for (union_datatype, union_nullable, union_field_map, plan_field) in izip!(
+            union_datatypes.iter_mut(),
+            union_nullabilities.iter_mut(),
+            union_field_meta.iter_mut(),
+            plan_schema.fields().iter()
+        ) {
+            let coerced_type =
+                comparison_coercion(union_datatype, plan_field.data_type()).ok_or_else(
+                    || {
+                        plan_datafusion_err!(
+                            "Incompatible inputs for Union: Previous inputs were \
+                            of type {}, but got incompatible type {} on column '{}'",
+                            union_datatype,
+                            plan_field.data_type(),
+                            plan_field.name()
+                        )
+                    },
+                )?;
 
-                let coerced_type =
-                    comparison_coercion(union_datatype, plan_field.data_type())
-                        .ok_or_else(|| {
-                            plan_datafusion_err!(
-                                "Incompatible inputs for Union: Previous inputs were \
-                                of type {}, but got incompatible type {} on column '{}'",
-                                union_datatype,
-                                plan_field.data_type(),
-                                plan_field.name()
-                            )
-                        })?;
-
-                *union_datatype = coerced_type;
-                *union_nullable = *union_nullable || plan_field.is_nullable();
-                union_field_map.extend(plan_field.metadata().clone());
-            }
+            *union_datatype = coerced_type;
+            *union_nullable = *union_nullable || plan_field.is_nullable();
+            union_field_map.extend(plan_field.metadata().clone());
         }
     }
     let union_qualified_fields = izip!(
