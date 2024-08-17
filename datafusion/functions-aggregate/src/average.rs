@@ -37,7 +37,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
 };
 
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::blocked_accumulate::BlockedNullState;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::BlockedNullState;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::ensure_enough_room_for_values;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
@@ -501,7 +501,7 @@ where
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let counts = emit_to.take_needed_from_blocks(&mut self.counts, self.mode);
         let sums = emit_to.take_needed_from_blocks(&mut self.sums, self.mode);
-        let nulls = self.null_state.build(emit_to)?;
+        let nulls = self.null_state.build(emit_to);
 
         assert_eq!(nulls.len(), sums.len());
         assert_eq!(counts.len(), sums.len());
@@ -536,7 +536,7 @@ where
 
     // return arrays for sums and counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let nulls = self.null_state.build(emit_to)?;
+        let nulls = self.null_state.build(emit_to);
         let nulls = Some(nulls);
 
         let counts = emit_to.take_needed_from_blocks(&mut self.counts, self.mode);

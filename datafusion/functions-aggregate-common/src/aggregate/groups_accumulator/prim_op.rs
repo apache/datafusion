@@ -28,7 +28,7 @@ use datafusion_expr_common::groups_accumulator::{
     BlockedGroupIndex, EmitTo, GroupStatesMode, GroupsAccumulator,
 };
 
-use crate::aggregate::groups_accumulator::blocked_accumulate::BlockedNullState;
+use crate::aggregate::groups_accumulator::accumulate::BlockedNullState;
 use crate::aggregate::groups_accumulator::ensure_enough_room_for_values;
 
 /// An accumulator that implements a single operation over
@@ -139,7 +139,7 @@ where
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let values = emit_to.take_needed_from_blocks(&mut self.values_blocks, self.mode);
-        let nulls = self.null_state.build(emit_to)?;
+        let nulls = self.null_state.build(emit_to);
         let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
             .with_data_type(self.data_type.clone());
 
