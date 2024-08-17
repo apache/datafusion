@@ -112,27 +112,39 @@ pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn get_str_by_range(input: &str, start: usize, end: usize) -> &str {
-    let (mut st, mut ct) = (input.len(), input.len());
+// Return the exact byte index for [start, end), set count to -1 to ignore count
+fn get_true_start_count(input: &str, start: usize, count: i64) -> (usize, usize) {
+    let (mut st, mut ed) = (input.len(), input.len());
+    let mut start_counting = false;
+    let mut cnt = 0;
     for (char_cnt, (byte_cnt, _)) in input.char_indices().enumerate() {
         if char_cnt == start {
             st = byte_cnt;
+            if count != -1 {
+                start_counting = true;
+            } else {
+                break;
+            }
         }
-        if char_cnt == end {
-            ct = byte_cnt;
-            break;
+        if start_counting {
+            if cnt == count {
+                ed = byte_cnt;
+                break;
+            }
+            cnt += 1;
         }
     }
-    &input[st..ct]
+    (st, ed)
 }
 
-// Decoding ref the trait at: arrow/arrow-data/src/byte_view.rs:44
+// The decoding process refs the trait at: arrow/arrow-data/src/byte_view.rs:44
 // From<u128> for ByteView
 fn calculate_string_view(
     string_array: &StringViewArray,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let mut builder = StringViewBuilder::new();
+    // Copy all blocks from input
     for block in string_array.data_buffers() {
         builder.append_block(block.clone());
     }
@@ -141,32 +153,46 @@ fn calculate_string_view(
 
     match args.len() {
         1 => {
-            for (raw, start) in string_array.views().iter().zip(start_array.iter()) {
+            for (idx, (raw, start)) in string_array
+                .views()
+                .iter()
+                .zip(start_array.iter())
+                .enumerate()
+            {
                 if let Some(start) = start {
                     let length = *raw as u32;
                     let start = (start - 1).max(0);
+
+                    // Operate according to the length of bytes
                     if length == 0 {
                         builder.append_null();
                     } else if length > 12 {
                         let buffer_index = (*raw >> 64) as u32;
                         let offset = (*raw >> 96) as u32;
+                        let str = string_array.value(idx);
+                        let (start, end) =
+                            get_true_start_count(str, start as usize, -1);
                         // Safety: builder is guaranteed to have corresponding blocks
                         unsafe {
                             builder.append_view_unchecked(
                                 buffer_index,
                                 offset + start as u32,
-                                length - start as u32, // guarantee that length >= start
+                                // guarantee that end-offset >= 0 for end <= str.len()
+                                (end - start) as u32,
                             );
                         }
                     } else {
                         let bytes = ((*raw >> 32) & u128::MAX).to_le_bytes();
                         let str = match std::str::from_utf8(&bytes[..length as usize]) {
                             Ok(str) => {
-                                get_str_by_range(str, start as usize, length as usize)
+                                // Extract str[start, end) by char
+                                let (start, end) =
+                                    get_true_start_count(str, start as usize, length as i64);
+                                &str[start..end]
                             }
                             _ => {
                                 return exec_err!(
-                                    "Failed to convert inline bytes to &str."
+                                    "failed to convert inline bytes to &str."
                                 )
                             }
                         };
@@ -179,11 +205,12 @@ fn calculate_string_view(
         }
         2 => {
             let count_array = as_int64_array(&args[1])?;
-            for ((raw, start), count) in string_array
+            for (idx, ((raw, start), count)) in string_array
                 .views()
                 .iter()
                 .zip(start_array.iter())
                 .zip(count_array.iter())
+                .enumerate()
             {
                 if let (Some(start), Some(count)) = (start, count) {
                     let length = *raw as u32;
@@ -199,12 +226,16 @@ fn calculate_string_view(
                         } else if length > 12 {
                             let buffer_index = (*raw >> 64) as u32;
                             let offset = (*raw >> 96) as u32;
+                            let str = string_array.value(idx);
+                            let (start, end) =
+                                get_true_start_count(str, start, count as i64);
                             // Safety: builder is guaranteed to have corresponding blocks
                             unsafe {
                                 builder.append_view_unchecked(
                                     buffer_index,
                                     offset + start as u32,
-                                    count, // guarantee that count >= start and count <= length
+                                    // guarantee that end-offset >= 0 for end <= str.len()
+                                    (end - start) as u32,
                                 );
                             }
                         } else {
@@ -212,13 +243,14 @@ fn calculate_string_view(
                             let str = match std::str::from_utf8(&bytes[..length as usize])
                             {
                                 Ok(str) => {
-                                    let end =
-                                        (start + count as usize).min(length as usize);
-                                    get_str_by_range(str, start, end)
+                                    // Extract str[start, end) by char
+                                    let (start, end) =
+                                        get_true_start_count(str, start, count as i64);
+                                    &str[start..end]
                                 }
                                 _ => {
                                     return exec_err!(
-                                        "Failed to convert inline bytes to &str."
+                                        "failed to convert inline bytes to &str."
                                     )
                                 }
                             };
@@ -355,6 +387,33 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
             Ok(Some("alphabet")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            SubstrFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "this és longer than 12B"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+            ],
+            Ok(Some(" é")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            SubstrFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "this is longer than 12B"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+            ],
+            Ok(Some(" is longer than 12B")),
             &str,
             Utf8View,
             StringViewArray
