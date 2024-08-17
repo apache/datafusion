@@ -904,7 +904,7 @@ async fn roundtrip_expr_api() -> Result<()> {
             vec![lit(1), lit(2), lit(3)],
             vec![lit(10), lit(20), lit(30)],
         ),
-        row_number(vec![col("a")]),
+        row_number(),
     ];
 
     // ensure expressions created with the expr api can be round tripped
