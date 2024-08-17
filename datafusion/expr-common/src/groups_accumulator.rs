@@ -17,7 +17,7 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
-use std::cmp::min;
+use std::{cmp::min, collections::VecDeque, mem};
 
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -67,6 +67,67 @@ impl EmitTo {
                 // leave n+1,.. in v
                 std::mem::swap(v, &mut t);
                 t
+            }
+        }
+    }
+
+    /// Removes the number of rows from `blocks` required to emit,
+    /// returning a `Vec` with elements taken.
+    ///
+    /// The detailed behavior in different emissions:
+    ///   - For Emit::All, the groups in blocks will be merged into
+    ///  single block and returned.
+    ///
+    ///   - For Emit::First, it will be only supported in the flat,
+    ///  similar as `take_needed`.
+    ///
+    ///   - For Emit::CurrentBlock, the first block will be taken and return.
+    ///
+    pub fn take_needed_from_blocks<T>(
+        &self,
+        blocks: &mut VecDeque<Vec<T>>,
+        mode: GroupStatesMode,
+    ) -> Vec<T> {
+        if blocks.is_empty() {
+            return Vec::new();
+        }
+
+        match self {
+            Self::All => {
+                match mode {
+                    GroupStatesMode::Flat => {
+                        blocks.pop_front().unwrap()
+                    }
+                    GroupStatesMode::Blocked(_) => {
+                        let blocks = mem::take(blocks);
+                        blocks
+                            .into_iter()
+                            .flat_map(|blk| blk.into_iter())
+                            .collect::<Vec<_>>()
+                    }
+                }
+            }
+            Self::First(n) => {
+                match mode {
+                    GroupStatesMode::Flat => {
+                        let block = blocks.back_mut().unwrap();
+                        let split_at = min(block.len(), *n);
+
+                        // get end n+1,.. values into t
+                        let mut t = block.split_off(split_at);
+                        // leave n+1,.. in v
+                        std::mem::swap(block, &mut t);
+                        t
+                    }
+                    GroupStatesMode::Blocked(_) => {
+                        unreachable!(
+                            "can't support Emit::First in blocked mode accumulator"
+                        );
+                    }
+                }
+            }
+            EmitTo::CurrentBlock(_) => {
+                blocks.pop_front().unwrap()
             }
         }
     }

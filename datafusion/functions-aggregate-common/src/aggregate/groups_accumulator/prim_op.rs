@@ -28,10 +28,9 @@ use datafusion_expr_common::groups_accumulator::{
     BlockedGroupIndex, EmitTo, GroupStatesMode, GroupsAccumulator,
 };
 
-use crate::aggregate::groups_accumulator::accumulate::ensure_enough_room_for_values;
 use crate::aggregate::groups_accumulator::blocked_accumulate::BlockedNullState;
+use crate::aggregate::groups_accumulator::ensure_enough_room_for_values;
 
-use super::accumulate::NullState;
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -140,12 +139,7 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let block_size = match self.mode {
-            GroupStatesMode::Flat => None,
-            GroupStatesMode::Blocked(blk_size) => Some(blk_size),
-        };
-
-        let values = emit_to.take_needed(&mut self.values_blocks, block_size);
+        let values = emit_to.take_needed_from_blocks(&mut self.values_blocks, self.mode);
         let nulls = self.null_state.build(emit_to)?;
         let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
             .with_data_type(self.data_type.clone());
@@ -237,7 +231,7 @@ where
 
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
         self.values_blocks.clear();
-        self.null_state = NullState::new(mode);
+        self.null_state = BlockedNullState::new(mode);
         self.mode = mode;
 
         Ok(())

@@ -29,7 +29,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::groups_accumulator::GroupStatesMode;
+use datafusion_expr::groups_accumulator::{BlockedGroupIndex, GroupStatesMode};
 use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
@@ -37,7 +37,8 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
 };
 
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::blocked_accumulate::BlockedNullState;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::ensure_enough_room_for_values;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
 };
@@ -45,6 +46,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use log::debug;
 use std::any::Any;
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -397,13 +399,13 @@ where
     return_data_type: DataType,
 
     /// Count per group (use u64 to make UInt64Array)
-    counts: Vec<u64>,
+    counts: VecDeque<Vec<u64>>,
 
     /// Sums per group, stored as the native type
-    sums: Vec<T::Native>,
+    sums: VecDeque<Vec<T::Native>>,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: BlockedNullState,
 
     /// Function that computes the final average (value / count)
     avg_fn: F,
@@ -425,9 +427,9 @@ where
         Self {
             return_data_type: return_data_type.clone(),
             sum_data_type: sum_data_type.clone(),
-            counts: vec![],
-            sums: vec![],
-            null_state: NullState::new(GroupStatesMode::Flat),
+            counts: VecDeque::new(),
+            sums: VecDeque::new(),
+            null_state: BlockedNullState::new(GroupStatesMode::Flat),
             avg_fn,
             mode: GroupStatesMode::Flat,
         }
@@ -449,28 +451,9 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
-        // Maybe we should convert the `group_indices`
-        let group_indices = match self.mode {
-            GroupStatesMode::Flat => group_indices,
-            GroupStatesMode::Blocked(blk_size) => {
-                self.group_idx_convert_buffer.clear();
-
-                let converted_group_indices = group_indices.iter().map(|group_idx| {
-                    let blk_id =
-                        ((*group_idx as u64 >> 32) & 0x00000000ffffffff) as usize;
-                    let blk_offset = ((*group_idx as u64) & 0x00000000ffffffff) as usize;
-                    blk_id * blk_size + blk_offset
-                });
-                self.group_idx_convert_buffer
-                    .extend(converted_group_indices);
-
-                &self.group_idx_convert_buffer
-            }
-        };
-
         // increment counts, update sums
-        self.counts.resize(total_num_groups, 0);
-        self.sums.resize(total_num_groups, T::default_value());
+        ensure_enough_room_for_values(&mut self.counts, self.mode, total_num_groups, 0);
+        ensure_enough_room_for_values(&mut self.sums, self.mode, total_num_groups, T::default_value());
 
         self.null_state.accumulate(
             group_indices,
@@ -478,10 +461,24 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let sum = &mut self.sums[group_index];
-                *sum = sum.add_wrapping(new_value);
+                let sum = match self.mode {
+                    GroupStatesMode::Flat => self.sums.back_mut().unwrap().get_mut(group_index).unwrap(),
+                    GroupStatesMode::Blocked(_) => {
+                        let blocked_index = BlockedGroupIndex::new(group_index);
+                        &mut self.sums[blocked_index.block_id][blocked_index.block_offset]
+                    }
+                };
+                
+                let count = match self.mode {
+                    GroupStatesMode::Flat => self.counts.back_mut().unwrap().get_mut(group_index).unwrap(),
+                    GroupStatesMode::Blocked(_) => {
+                        let blocked_index = BlockedGroupIndex::new(group_index);
+                        &mut self.counts[blocked_index.block_id][blocked_index.block_offset]
+                    }
+                };
 
-                self.counts[group_index] += 1;
+                *sum = sum.add_wrapping(new_value);
+                *count += 1;
             },
         );
 
@@ -489,14 +486,9 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let block_size = match self.mode {
-            GroupStatesMode::Flat => None,
-            GroupStatesMode::Blocked(blk_size) => Some(blk_size),
-        };
-
-        let counts = emit_to.take_needed(&mut self.counts, block_size);
-        let sums = emit_to.take_needed(&mut self.sums, block_size);
-        let nulls = self.null_state.build(emit_to, block_size)?;
+        let counts = emit_to.take_needed_from_blocks(&mut self.counts, self.mode);
+        let sums = emit_to.take_needed_from_blocks(&mut self.sums, self.mode);
+        let nulls = self.null_state.build(emit_to)?;
 
         assert_eq!(nulls.len(), sums.len());
         assert_eq!(counts.len(), sums.len());
@@ -531,18 +523,13 @@ where
 
     // return arrays for sums and counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let block_size = match self.mode {
-            GroupStatesMode::Flat => None,
-            GroupStatesMode::Blocked(blk_size) => Some(blk_size),
-        };
-
-        let nulls = self.null_state.build(emit_to, block_size)?;
+        let nulls = self.null_state.build(emit_to)?;
         let nulls = Some(nulls);
 
-        let counts = emit_to.take_needed(&mut self.counts, block_size);
+        let counts = emit_to.take_needed_from_blocks(&mut self.counts, self.mode);
         let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
 
-        let sums = emit_to.take_needed(&mut self.sums, block_size);
+        let sums = emit_to.take_needed_from_blocks(&mut self.sums, self.mode);
         let sums = PrimitiveArray::<T>::new(sums.into(), nulls) // zero copy
             .with_data_type(self.sum_data_type.clone());
 
@@ -564,46 +551,40 @@ where
         let partial_counts = values[0].as_primitive::<UInt64Type>();
         let partial_sums = values[1].as_primitive::<T>();
 
-        // Maybe we should convert the `group_indices`
-        let group_indices = match self.mode {
-            GroupStatesMode::Flat => group_indices,
-            GroupStatesMode::Blocked(blk_size) => {
-                self.group_idx_convert_buffer.clear();
-
-                let converted_group_indices = group_indices.iter().map(|group_idx| {
-                    let blk_id =
-                        ((*group_idx as u64 >> 32) & 0x00000000ffffffff) as usize;
-                    let blk_offset = ((*group_idx as u64) & 0x00000000ffffffff) as usize;
-                    blk_id * blk_size + blk_offset
-                });
-                self.group_idx_convert_buffer
-                    .extend(converted_group_indices);
-
-                &self.group_idx_convert_buffer
-            }
-        };
-
         // update counts with partial counts
-        self.counts.resize(total_num_groups, 0);
+        ensure_enough_room_for_values(&mut self.counts, self.mode, total_num_groups, 0);
         self.null_state.accumulate(
             group_indices,
             partial_counts,
             opt_filter,
             total_num_groups,
             |group_index, partial_count| {
-                self.counts[group_index] += partial_count;
+                let count = match self.mode {
+                    GroupStatesMode::Flat => self.counts.back_mut().unwrap().get_mut(group_index).unwrap(),
+                    GroupStatesMode::Blocked(_) => {
+                        let blocked_index = BlockedGroupIndex::new(group_index);
+                        &mut self.counts[blocked_index.block_id][blocked_index.block_offset]
+                    }
+                };
+                *count += partial_count;
             },
         );
 
         // update sums
-        self.sums.resize(total_num_groups, T::default_value());
+        ensure_enough_room_for_values(&mut self.sums, self.mode, total_num_groups, T::default_value());
         self.null_state.accumulate(
             group_indices,
             partial_sums,
             opt_filter,
             total_num_groups,
             |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
-                let sum = &mut self.sums[group_index];
+                let sum = match self.mode {
+                    GroupStatesMode::Flat => self.sums.back_mut().unwrap().get_mut(group_index).unwrap(),
+                    GroupStatesMode::Blocked(_) => {
+                        let blocked_index = BlockedGroupIndex::new(group_index);
+                        &mut self.sums[blocked_index.block_id][blocked_index.block_offset]
+                    }
+                };
                 *sum = sum.add_wrapping(new_value);
             },
         );
@@ -647,7 +628,7 @@ where
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
         self.counts.clear();
         self.sums.clear();
-        self.null_state = NullState::new(mode);
+        self.null_state = BlockedNullState::new(mode);
         self.mode = mode;
 
         Ok(())

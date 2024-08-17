@@ -24,6 +24,8 @@ pub mod nulls;
 pub mod prim_op;
 pub mod blocked_accumulate;
 
+use std::collections::VecDeque;
+
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
@@ -33,7 +35,7 @@ use datafusion_common::{
     arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr_common::accumulator::Accumulator;
+use datafusion_expr_common::{accumulator::Accumulator, groups_accumulator::GroupStatesMode};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
@@ -406,5 +408,86 @@ pub(crate) fn slice_and_maybe_filter(
             .collect()
     } else {
         Ok(sliced_arrays)
+    }
+}
+
+/// Expend blocked values to a big enough size for holding `total_num_groups` groups.
+/// 
+/// For example,
+/// 
+/// before expanding:
+///   values: [x, x, x], [x, x, x] (blocks=2, block_size=3)
+///   total_num_groups: 8
+/// 
+/// After expanding:
+///   values: [x, x, x], [x, x, x], [default, default, default]
+/// 
+pub fn ensure_enough_room_for_values<T: Clone>(
+    values: &mut VecDeque<Vec<T>>,
+    mode: GroupStatesMode,
+    total_num_groups: usize,
+    default_value: T,
+) {
+    match mode {
+        // It flat mode, we just a single builder, and grow it constantly.
+        GroupStatesMode::Flat => {
+            if values.is_empty() {
+                values.push_back(Vec::new());
+            }
+
+            let single = values.back_mut().unwrap();
+            if single.len() < total_num_groups {
+                let new_groups = total_num_groups - single.len();
+                single.resize(new_groups, default_value.clone());
+            }
+        }
+        // It blocked mode, we ensure the blks are enough first,
+        // and then ensure slots in blks are enough.
+        GroupStatesMode::Blocked(blk_size) => {
+            let (mut cur_blk_idx, exist_slots) = if !values.is_empty() {
+                let cur_blk_idx = values.len() - 1;
+                let exist_slots =
+                    (values.len() - 1) * blk_size + values.back().unwrap().len();
+
+                (cur_blk_idx, exist_slots)
+            } else {
+                (0, 0)
+            };
+            let exist_blks = values.len();
+
+            // Ensure blks are enough.
+            let new_blks = (total_num_groups + blk_size - 1) / blk_size - exist_blks;
+            values.reserve(new_blks);
+            for _ in 0..new_blks {
+                values.push_back(Vec::with_capacity(blk_size));
+            }
+
+            // Ensure slots are enough.
+            let mut new_slots = total_num_groups - exist_slots;
+            // Expand current blk.
+            let cur_blk_rest_slots = blk_size - values[cur_blk_idx].len();
+            if cur_blk_rest_slots >= new_slots {
+                values[cur_blk_idx].resize(new_slots, default_value.clone());
+                return;
+            } else {
+                values[cur_blk_idx].resize(cur_blk_rest_slots, default_value.clone());
+                new_slots -= cur_blk_rest_slots;
+                cur_blk_idx += 1;
+            }
+
+            // Expand blks
+            let expand_blks = new_slots / blk_size;
+            for _ in 0..expand_blks {
+                values[cur_blk_idx].resize(blk_size, default_value.clone());
+                cur_blk_idx += 1;
+            }
+
+            // Expand the last blk.
+            let last_expand_slots = new_slots % blk_size;
+            values
+                .back_mut()
+                .unwrap()
+                .resize(last_expand_slots, default_value);
+        }
     }
 }
