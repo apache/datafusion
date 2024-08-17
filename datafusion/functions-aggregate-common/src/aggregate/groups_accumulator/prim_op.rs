@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
@@ -24,8 +25,11 @@ use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{
-    EmitTo, GroupStatesMode, GroupsAccumulator,
+    BlockedGroupIndex, EmitTo, GroupStatesMode, GroupsAccumulator,
 };
+
+use crate::aggregate::groups_accumulator::accumulate::ensure_enough_room_for_values;
+use crate::aggregate::groups_accumulator::blocked_accumulate::BlockedNullState;
 
 use super::accumulate::NullState;
 
@@ -45,7 +49,7 @@ where
     F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
     /// values per group, stored as the native type
-    values: Vec<T::Native>,
+    values_blocks: VecDeque<Vec<T::Native>>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -54,14 +58,12 @@ where
     starting_value: T::Native,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: BlockedNullState,
 
     /// Function that computes the primitive result
     prim_fn: F,
 
     mode: GroupStatesMode,
-
-    group_idx_convert_buffer: Vec<usize>,
 }
 
 impl<T, F> PrimitiveGroupsAccumulator<T, F>
@@ -71,13 +73,12 @@ where
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            values: vec![],
+            values_blocks: VecDeque::new(),
             data_type: data_type.clone(),
-            null_state: NullState::new(),
+            null_state: BlockedNullState::new(GroupStatesMode::Flat),
             starting_value: T::default_value(),
             prim_fn,
             mode: GroupStatesMode::Flat,
-            group_idx_convert_buffer: Vec::new(),
         }
     }
 
@@ -103,27 +104,13 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
-        // Maybe we should convert the `group_indices`
-        let group_indices = match self.mode {
-            GroupStatesMode::Flat => group_indices,
-            GroupStatesMode::Blocked(blk_size) => {
-                self.group_idx_convert_buffer.clear();
-
-                let converted_group_indices = group_indices.iter().map(|group_idx| {
-                    let blk_id =
-                        ((*group_idx as u64 >> 32) & 0x00000000ffffffff) as usize;
-                    let blk_offset = ((*group_idx as u64) & 0x00000000ffffffff) as usize;
-                    blk_id * blk_size + blk_offset
-                });
-                self.group_idx_convert_buffer
-                    .extend(converted_group_indices);
-
-                &self.group_idx_convert_buffer
-            }
-        };
-
-        // update values
-        self.values.resize(total_num_groups, self.starting_value);
+        // Ensure enough room in values
+        ensure_enough_room_for_values(
+            &mut self.values_blocks,
+            self.mode,
+            total_num_groups,
+            self.starting_value,
+        );
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
         self.null_state.accumulate(
@@ -132,7 +119,19 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let value = &mut self.values[group_index];
+                let value = match self.mode {
+                    GroupStatesMode::Flat => self
+                        .values_blocks
+                        .back_mut()
+                        .unwrap()
+                        .get_mut(group_index)
+                        .unwrap(),
+                    GroupStatesMode::Blocked(_) => {
+                        let blocked_index = BlockedGroupIndex::new(group_index);
+                        &mut self.values_blocks[blocked_index.block_id]
+                            [blocked_index.block_offset]
+                    }
+                };
                 (self.prim_fn)(value, new_value);
             },
         );
@@ -146,8 +145,8 @@ where
             GroupStatesMode::Blocked(blk_size) => Some(blk_size),
         };
 
-        let values = emit_to.take_needed(&mut self.values, block_size);
-        let nulls = self.null_state.build(emit_to, block_size)?;
+        let values = emit_to.take_needed(&mut self.values_blocks, block_size);
+        let nulls = self.null_state.build(emit_to)?;
         let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
             .with_data_type(self.data_type.clone());
 
@@ -228,7 +227,8 @@ where
     }
 
     fn size(&self) -> usize {
-        self.values.capacity() * std::mem::size_of::<T::Native>() + self.null_state.size()
+        self.values_blocks.capacity() * std::mem::size_of::<T::Native>()
+            + self.null_state.size()
     }
 
     fn supports_blocked_mode(&self) -> bool {
@@ -236,9 +236,8 @@ where
     }
 
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
-        self.values.clear();
-        self.null_state = NullState::new();
-
+        self.values_blocks.clear();
+        self.null_state = NullState::new(mode);
         self.mode = mode;
 
         Ok(())

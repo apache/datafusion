@@ -409,8 +409,6 @@ where
     avg_fn: F,
 
     mode: GroupStatesMode,
-
-    group_idx_convert_buffer: Vec<usize>,
 }
 
 impl<T, F> AvgGroupsAccumulator<T, F>
@@ -429,10 +427,9 @@ where
             sum_data_type: sum_data_type.clone(),
             counts: vec![],
             sums: vec![],
-            null_state: NullState::new(),
+            null_state: NullState::new(GroupStatesMode::Flat),
             avg_fn,
             mode: GroupStatesMode::Flat,
-            group_idx_convert_buffer: Vec::new(),
         }
     }
 }
@@ -650,8 +647,7 @@ where
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
         self.counts.clear();
         self.sums.clear();
-        self.null_state = NullState::new();
-
+        self.null_state = NullState::new(mode);
         self.mode = mode;
 
         Ok(())

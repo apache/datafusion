@@ -78,6 +78,23 @@ pub enum GroupStatesMode {
     Blocked(usize),
 }
 
+pub struct BlockedGroupIndex {
+    pub block_id: usize,
+    pub block_offset: usize,
+}
+
+impl BlockedGroupIndex {
+    pub fn new(group_index: usize) -> Self {
+        let block_id = ((group_index as u64 >> 32) & 0x00000000ffffffff) as usize;
+        let block_offset = ((group_index as u64) & 0x00000000ffffffff) as usize;
+
+        Self {
+            block_id,
+            block_offset,
+        }
+    }
+}
+
 /// `GroupAccumulator` implements a single aggregate (e.g. AVG) and
 /// stores the state for *all* groups internally.
 ///
