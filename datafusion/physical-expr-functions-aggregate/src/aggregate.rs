@@ -61,6 +61,7 @@ pub struct AggregateExprBuilder {
 
 impl AggregateExprBuilder {
     pub fn new(fun: Arc<AggregateUDF>, args: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        let is_nullable = fun.is_nullable();
         Self {
             fun,
             args,
@@ -70,7 +71,7 @@ impl AggregateExprBuilder {
             ignore_nulls: false,
             is_distinct: false,
             is_reversed: false,
-            is_nullable: true,
+            is_nullable,
         }
     }
 
@@ -177,16 +178,6 @@ impl AggregateExprBuilder {
 
     pub fn with_ignore_nulls(mut self, ignore_nulls: bool) -> Self {
         self.ignore_nulls = ignore_nulls;
-        self
-    }
-
-    pub fn is_non_nullable(mut self) -> Self {
-        self.is_nullable = false;
-        self
-    }
-
-    pub fn with_nullable(mut self, is_nullable: bool) -> Self {
-        self.is_nullable = is_nullable;
         self
     }
 }

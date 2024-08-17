@@ -255,7 +255,6 @@ pub fn bounded_window_exec(
                 Arc::new(WindowFrame::new(Some(false))),
                 schema.as_ref(),
                 false,
-                true,
             )
             .unwrap()],
             input.clone(),

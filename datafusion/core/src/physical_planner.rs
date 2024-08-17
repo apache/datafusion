@@ -80,7 +80,7 @@ use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
     DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, StringifiedPlan,
-    WindowFrame, WindowFrameBound, WindowFunctionDefinition, WriteOp,
+    WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
@@ -1509,11 +1509,6 @@ pub fn create_window_expr_with_name(
                     );
             }
 
-            let is_nullable = match fun {
-                WindowFunctionDefinition::AggregateUDF(udaf) => udaf.is_nullable(),
-                _ => true,
-            };
-
             let window_frame = Arc::new(window_frame.clone());
             let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
@@ -1526,7 +1521,6 @@ pub fn create_window_expr_with_name(
                 window_frame,
                 physical_schema,
                 ignore_nulls,
-                is_nullable,
             )
         }
         other => plan_err!("Invalid window expression '{other:?}'"),
@@ -1618,7 +1612,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         .alias(name)
                         .with_ignore_nulls(ignore_nulls)
                         .with_distinct(*distinct)
-                        .with_nullable(func.is_nullable())
                         .build()?;
 
                 (agg_expr, filter, physical_sort_exprs)

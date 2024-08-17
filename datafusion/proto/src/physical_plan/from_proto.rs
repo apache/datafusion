@@ -178,7 +178,6 @@ pub fn parse_physical_window_expr(
         Arc::new(window_frame),
         &extended_schema,
         false,
-        true,
     )
 }
 
