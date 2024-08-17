@@ -437,8 +437,21 @@ pub(crate) fn transform_bottom_unnest(
             expr: ref inner_expr,
         }) = expr
         {
+            let (data_type, _) = inner_expr.data_type_and_nullable(input.schema())?;
             let mut consecutive_unnest_mut = consecutive_unnest.borrow_mut();
             consecutive_unnest_mut.push(Some(expr.clone()));
+            // if expr inside unnest is a struct, do not consider
+            // the next unnest as consecutive unnest (if any)
+            // meaning unnest(unnest(struct_arr_col)) can't
+            // be interpreted as unest(struct_arr_col, depth:=2)
+            // but has to be split into multiple unnest logical plan instead
+            // a.k.a:
+            // - unnest(struct_col)
+            //      unnest(struct_arr_col) as struct_col
+
+            if let DataType::Struct(_) = data_type {
+                consecutive_unnest_mut.push(None);
+            }
 
             let mut maybe_ancestor = ancestor_unnest.borrow_mut();
             if maybe_ancestor.is_none() {
@@ -508,16 +521,12 @@ pub(crate) fn transform_bottom_unnest(
                 // unnest(unnest([[struct()]],depth=2))
                 let most_inner = unnest_stack.first().unwrap();
                 if let Expr::Unnest(Unnest { expr: ref arg }) = most_inner {
-                    let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
                     // unnest(unnest(struct_arr_col)) is not allow to be done recursively
                     // it needs to be splitted into multiple unnest logical plan
                     // unnest(struct_arr)
                     //  unnest(struct_arr_col) as struct_arr
                     // instead of unnest(struct_arr_col, depth = 2)
-                    match data_type {
-                        DataType::Struct(_) => {}
-                        _ => {}
-                    }
+
                     let depth = unnest_stack.len();
                     let struct_allowed = (&expr == original_expr) && depth == 1;
 
