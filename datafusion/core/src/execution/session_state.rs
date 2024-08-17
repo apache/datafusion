@@ -1044,6 +1044,7 @@ impl SessionStateBuilder {
         self.scalar_functions = Some(SessionStateDefaults::default_scalar_functions());
         self.aggregate_functions =
             Some(SessionStateDefaults::default_aggregate_functions());
+        self.window_functions = Some(SessionStateDefaults::default_window_functions());
         self
     }
 

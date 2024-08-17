@@ -543,12 +543,6 @@ pub struct RankState {
     pub n_rank: usize,
 }
 
-/// State for the 'ROW_NUMBER' built-in window function.
-#[derive(Debug, Clone, Default)]
-pub struct NumRowsState {
-    pub n_rows: usize,
-}
-
 /// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
 #[derive(Debug, Copy, Clone)]
 pub enum NthValueKind {

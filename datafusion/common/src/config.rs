@@ -183,7 +183,7 @@ config_namespace! {
 
         /// Default value for `format.has_header` for `CREATE EXTERNAL TABLE`
         /// if not specified explicitly in the statement.
-        pub has_header: bool, default = false
+        pub has_header: bool, default = true
 
         /// Specifies whether newlines in (quoted) CSV values are supported.
         ///
