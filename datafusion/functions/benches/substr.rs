@@ -101,7 +101,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for size in [1024, 4096] {
         // string_len = 12, substring_len=6 (see `create_args_without_count`)
         let len = 12;
-        let mut group = c.benchmark_group("shorter than 12");
+        let mut group = c.benchmark_group("SHORTER THAN 12");
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(10));
@@ -129,7 +129,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         // string_len = 128, start=1, count=64, substring_len=64
         let len = 128;
         let count = 64;
-        let mut group = c.benchmark_group("longer than 12");
+        let mut group = c.benchmark_group("LONGER THAN 12");
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(10));
@@ -166,7 +166,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         // string_len = 128, start=1, count=6, substring_len=6
         let len = 128;
         let count = 6;
-        let mut group = c.benchmark_group("src_len > 12 but sub_len < 12");
+        let mut group = c.benchmark_group("SRC_LEN > 12, SUB_LEN < 12");
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(10));
