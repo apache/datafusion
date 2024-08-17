@@ -113,9 +113,8 @@ pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn get_str_by_range(input: &str, start: usize, end: usize) -> &str {
-    let mut char_cnt = 0;
     let (mut st, mut ct) = (input.len(), input.len());
-    for (byte_cnt, _) in input.char_indices() {
+    for (char_cnt, (byte_cnt, _)) in input.char_indices().enumerate() {
         if char_cnt == start {
             st = byte_cnt;
         }
@@ -123,7 +122,6 @@ fn get_str_by_range(input: &str, start: usize, end: usize) -> &str {
             ct = byte_cnt;
             break;
         }
-        char_cnt += 1;
     }
     &input[st..ct]
 }
@@ -165,7 +163,7 @@ fn calculate_string_view(
                         let str = match std::str::from_utf8(&bytes[..length as usize]) {
                             Ok(str) => {
                                 get_str_by_range(str, start as usize, length as usize)
-                            },
+                            }
                             _ => {
                                 return exec_err!(
                                     "Failed to convert inline bytes to &str."
@@ -211,7 +209,8 @@ fn calculate_string_view(
                             }
                         } else {
                             let bytes = ((*raw >> 32) & u128::MAX).to_le_bytes();
-                            let str = match std::str::from_utf8(&bytes[..length as usize]) {
+                            let str = match std::str::from_utf8(&bytes[..length as usize])
+                            {
                                 Ok(str) => {
                                     let end =
                                         (start + count as usize).min(length as usize);
