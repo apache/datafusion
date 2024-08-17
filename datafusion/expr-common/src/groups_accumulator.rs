@@ -43,31 +43,22 @@ impl EmitTo {
     /// remaining values in `v`.
     ///
     /// This avoids copying if Self::All
-    pub fn take_needed<T>(&self, v: &mut Vec<T>, block_size: Option<usize>) -> Vec<T> {
+    pub fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
         match self {
             Self::All => {
                 // Take the entire vector, leave new (empty) vector
                 std::mem::take(v)
             }
             Self::First(n) => {
-                let split_at = min(v.len(), *n);
-
                 // get end n+1,.. values into t
-                let mut t = v.split_off(split_at);
+                let mut t = v.split_off(*n);
                 // leave n+1,.. in v
                 std::mem::swap(v, &mut t);
                 t
             }
-            EmitTo::CurrentBlock(_) => {
-                let block_size = block_size.unwrap();
-                let split_at = min(v.len(), block_size);
-
-                // get end n+1,.. values into t
-                let mut t = v.split_off(split_at);
-                // leave n+1,.. in v
-                std::mem::swap(v, &mut t);
-                t
-            }
+            Self::CurrentBlock(_) => unreachable!(
+                "can not support blocked emission in take_needed, you should use take_needed_from_blocks"
+            ),
         }
     }
 
@@ -122,7 +113,7 @@ impl EmitTo {
                     }
                 }
             }
-            EmitTo::CurrentBlock(_) => blocks.pop_front().unwrap(),
+            Self::CurrentBlock(_) => blocks.pop_front().unwrap(),
         }
     }
 }
