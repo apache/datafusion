@@ -23,7 +23,7 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
-use std::{collections::VecDeque, iter, mem};
+use std::iter;
 
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
@@ -34,7 +34,7 @@ use datafusion_common::{
     arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{Blocks, EmitTo, GroupsAccumulator};
 use datafusion_expr_common::{
     accumulator::Accumulator, groups_accumulator::GroupStatesMode,
 };
@@ -424,7 +424,7 @@ pub(crate) fn slice_and_maybe_filter(
 ///   values: [x, x, x], [x, x, x], [default, default, default]
 ///
 pub fn ensure_enough_room_for_values<T: Clone>(
-    values: &mut VecDeque<Vec<T>>,
+    values: &mut Blocks<T>,
     mode: GroupStatesMode,
     total_num_groups: usize,
     default_value: T,
@@ -436,34 +436,34 @@ pub fn ensure_enough_room_for_values<T: Clone>(
     match mode {
         // It flat mode, we just a single builder, and grow it constantly.
         GroupStatesMode::Flat => {
-            if values.is_empty() {
-                values.push_back(Vec::new());
-            }
-
             values
-                .back_mut()
+                .current_mut()
                 .unwrap()
                 .resize(total_num_groups, default_value);
         }
         // It blocked mode, we ensure the blks are enough first,
         // and then ensure slots in blks are enough.
         GroupStatesMode::Blocked(blk_size) => {
-            let (mut cur_blk_idx, exist_slots) = if !values.is_empty() {
-                let cur_blk_idx = values.len() - 1;
-                let exist_slots =
-                    (values.len() - 1) * blk_size + values.back().unwrap().len();
+            let (mut cur_blk_idx, exist_slots) = {
+                let cur_blk_idx = values.num_blocks() - 1;
+                let exist_slots = (values.num_blocks() - 1) * blk_size
+                    + values.current().unwrap().len();
 
                 (cur_blk_idx, exist_slots)
-            } else {
-                (0, 0)
             };
-            let exist_blks = values.len();
 
+            // No new groups, don't need to expand, just return.
+            if exist_slots >= total_num_groups {
+                return;
+            }
+
+            let exist_blks = values.num_blocks();
             // Ensure blks are enough.
             let new_blks = (total_num_groups + blk_size - 1) / blk_size - exist_blks;
-            values.reserve(new_blks);
-            for _ in 0..new_blks {
-                values.push_back(Vec::with_capacity(blk_size));
+            if new_blks > 0 {
+                for _ in 0..new_blks {
+                    values.push_block(Vec::with_capacity(blk_size));
+                }
             }
 
             // Ensure slots are enough.
@@ -472,17 +472,19 @@ pub fn ensure_enough_room_for_values<T: Clone>(
             // Expand current blk.
             let cur_blk_rest_slots = blk_size - values[cur_blk_idx].len();
             if cur_blk_rest_slots >= new_slots {
+                // We just need to expand current blocks.
                 values[cur_blk_idx]
                     .extend(iter::repeat(default_value.clone()).take(new_slots));
                 return;
-            } else {
-                values[cur_blk_idx]
-                    .extend(iter::repeat(default_value.clone()).take(cur_blk_rest_slots));
-                new_slots -= cur_blk_rest_slots;
-                cur_blk_idx += 1;
             }
 
-            // Expand blks
+            // Expand current blk to full, and expand next blks
+            values[cur_blk_idx]
+                .extend(iter::repeat(default_value.clone()).take(cur_blk_rest_slots));
+            new_slots -= cur_blk_rest_slots;
+            cur_blk_idx += 1;
+
+            // Expand whole blks
             let expand_blks = new_slots / blk_size;
             for _ in 0..expand_blks {
                 values[cur_blk_idx]
@@ -490,75 +492,14 @@ pub fn ensure_enough_room_for_values<T: Clone>(
                 cur_blk_idx += 1;
             }
 
-            // Expand the last blk.
+            // Expand the last blk if needed
             let last_expand_slots = new_slots % blk_size;
-            values
-                .back_mut()
-                .unwrap()
-                .extend(iter::repeat(default_value.clone()).take(last_expand_slots));
-        }
-    }
-}
-
-pub enum Blocks<T> {
-    Single(Vec<T>),
-    Multiple(VecDeque<Vec<T>>),
-}
-
-impl<T> Blocks<T> {
-    fn new() -> Self {
-        Self::Single(Vec::new())
-    }
-
-    fn current(&self) -> Option<&Vec<T>> {
-        match self {
-            Blocks::Single(blk) => Some(blk),
-            Blocks::Multiple(blks) => {
-                blks.back()
+            if last_expand_slots > 0 {
+                values
+                    .current_mut()
+                    .unwrap()
+                    .extend(iter::repeat(default_value.clone()).take(last_expand_slots));
             }
-        }
-    }
-
-    fn current_mut(&mut self) -> Option<&mut Vec<T>> {
-        match self {
-            Blocks::Single(blk) => Some(blk),
-            Blocks::Multiple(blks) => {
-                blks.back_mut()
-            }
-        }
-    }
-
-    fn push_block(&mut self, block: Vec<T>) {
-        loop {
-            match self {
-                // If found it is Single, convert to Multiple first
-                Blocks::Single(single) => {
-                    let mut new_multiple = VecDeque::with_capacity(2);
-                    let first_block = mem::take(single);
-                    new_multiple.push_back(first_block);
-
-                    *self = Self::Multiple(new_multiple);
-                }
-                // If found it Multiple, just push the block into it
-                Blocks::Multiple(multiple) => {
-                    multiple.push_back(block);
-                    break;
-                }
-            }
-        }
-    }
-
-    fn pop_current_block(&mut self) -> Option<Vec<T>> {
-        match self {
-            Blocks::Single(single) => Some(mem::take(single)),
-            Blocks::Multiple(multiple) => multiple.pop_front(),
-        }       
-    }
-
-    fn is_empty(&self) -> bool {
-        match self {
-            Blocks::Single(single) => single.is_empty(),
-            Blocks::Multiple(multiple) => multiple.is_empty(),
         }
     }
 }

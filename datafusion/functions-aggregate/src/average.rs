@@ -29,7 +29,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::groups_accumulator::{BlockedGroupIndex, GroupStatesMode};
+use datafusion_expr::groups_accumulator::{BlockedGroupIndex, Blocks, GroupStatesMode};
 use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
@@ -46,7 +46,6 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use log::debug;
 use std::any::Any;
-use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -399,10 +398,10 @@ where
     return_data_type: DataType,
 
     /// Count per group (use u64 to make UInt64Array)
-    counts: VecDeque<Vec<u64>>,
+    counts: Blocks<u64>,
 
     /// Sums per group, stored as the native type
-    sums: VecDeque<Vec<T::Native>>,
+    sums: Blocks<T::Native>,
 
     /// Track nulls in the input / filters
     null_state: BlockedNullState,
@@ -427,8 +426,8 @@ where
         Self {
             return_data_type: return_data_type.clone(),
             sum_data_type: sum_data_type.clone(),
-            counts: VecDeque::new(),
-            sums: VecDeque::new(),
+            counts: Blocks::new(),
+            sums: Blocks::new(),
             null_state: BlockedNullState::new(GroupStatesMode::Flat),
             avg_fn,
             mode: GroupStatesMode::Flat,
@@ -467,9 +466,12 @@ where
             total_num_groups,
             |group_index, new_value| {
                 let sum = match self.mode {
-                    GroupStatesMode::Flat => {
-                        self.sums.back_mut().unwrap().get_mut(group_index).unwrap()
-                    }
+                    GroupStatesMode::Flat => self
+                        .sums
+                        .current_mut()
+                        .unwrap()
+                        .get_mut(group_index)
+                        .unwrap(),
                     GroupStatesMode::Blocked(_) => {
                         let blocked_index = BlockedGroupIndex::new(group_index);
                         &mut self.sums[blocked_index.block_id][blocked_index.block_offset]
@@ -479,7 +481,7 @@ where
                 let count = match self.mode {
                     GroupStatesMode::Flat => self
                         .counts
-                        .back_mut()
+                        .current_mut()
                         .unwrap()
                         .get_mut(group_index)
                         .unwrap(),
@@ -575,7 +577,7 @@ where
                 let count = match self.mode {
                     GroupStatesMode::Flat => self
                         .counts
-                        .back_mut()
+                        .current_mut()
                         .unwrap()
                         .get_mut(group_index)
                         .unwrap(),
@@ -603,9 +605,12 @@ where
             total_num_groups,
             |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
                 let sum = match self.mode {
-                    GroupStatesMode::Flat => {
-                        self.sums.back_mut().unwrap().get_mut(group_index).unwrap()
-                    }
+                    GroupStatesMode::Flat => self
+                        .sums
+                        .current_mut()
+                        .unwrap()
+                        .get_mut(group_index)
+                        .unwrap(),
                     GroupStatesMode::Blocked(_) => {
                         let blocked_index = BlockedGroupIndex::new(group_index);
                         &mut self.sums[blocked_index.block_id][blocked_index.block_offset]

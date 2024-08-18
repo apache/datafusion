@@ -16,10 +16,10 @@
 // under the License.
 
 use ahash::RandomState;
-use datafusion_expr::groups_accumulator::{BlockedGroupIndex, GroupStatesMode};
+use datafusion_expr::groups_accumulator::{BlockedGroupIndex, Blocks, GroupStatesMode};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::ensure_enough_room_for_values;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::ops::BitAnd;
 use std::{fmt::Debug, sync::Arc};
 
@@ -360,7 +360,7 @@ struct CountGroupsAccumulator {
     /// output type of count is `DataType::Int64`. Thus by using `i64`
     /// for the counts, the output [`Int64Array`] can be created
     /// without copy.
-    counts: VecDeque<Vec<i64>>,
+    counts: Blocks<i64>,
 
     mode: GroupStatesMode,
 }
@@ -368,7 +368,7 @@ struct CountGroupsAccumulator {
 impl CountGroupsAccumulator {
     pub fn new() -> Self {
         Self {
-            counts: VecDeque::new(),
+            counts: Blocks::new(),
             mode: GroupStatesMode::Flat,
         }
     }
@@ -397,7 +397,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                 let count = match self.mode {
                     GroupStatesMode::Flat => self
                         .counts
-                        .back_mut()
+                        .current_mut()
                         .unwrap()
                         .get_mut(group_index)
                         .unwrap(),
@@ -442,7 +442,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                         let count = match self.mode {
                             GroupStatesMode::Flat => self
                                 .counts
-                                .back_mut()
+                                .current_mut()
                                 .unwrap()
                                 .get_mut(group_index)
                                 .unwrap(),
@@ -460,7 +460,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                     let count = match self.mode {
                         GroupStatesMode::Flat => self
                             .counts
-                            .back_mut()
+                            .current_mut()
                             .unwrap()
                             .get_mut(group_index)
                             .unwrap(),

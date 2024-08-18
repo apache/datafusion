@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
@@ -29,7 +28,7 @@ use datafusion_expr_common::groups_accumulator::{
 };
 
 use crate::aggregate::groups_accumulator::accumulate::BlockedNullState;
-use crate::aggregate::groups_accumulator::ensure_enough_room_for_values;
+use crate::aggregate::groups_accumulator::{ensure_enough_room_for_values, Blocks};
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -47,7 +46,7 @@ where
     F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
     /// values per group, stored as the native type
-    values_blocks: VecDeque<Vec<T::Native>>,
+    values_blocks: Blocks<T::Native>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -71,7 +70,7 @@ where
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            values_blocks: VecDeque::new(),
+            values_blocks: Blocks::new(),
             data_type: data_type.clone(),
             null_state: BlockedNullState::new(GroupStatesMode::Flat),
             starting_value: T::default_value(),
@@ -120,7 +119,7 @@ where
                 let value = match self.mode {
                     GroupStatesMode::Flat => self
                         .values_blocks
-                        .back_mut()
+                        .current_mut()
                         .unwrap()
                         .get_mut(group_index)
                         .unwrap(),
