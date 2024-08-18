@@ -600,12 +600,25 @@ impl BlockedNullState {
                     total_buffer.finish()
                 }
             },
+            EmitTo::First(n) => {
+                assert!(matches!(self.mode, GroupStatesMode::Flat));
+
+                let blk = self.seen_values_blocks.back_mut().unwrap();
+                // split off the first N values in seen_values
+                //
+                // TODO make this more efficient rather than two
+                // copies and bitwise manipulation
+                let nulls = blk.finish();
+                let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
+                // reset the existing seen buffer
+                for seen in nulls.iter().skip(n) {
+                    blk.append(seen);
+                }
+                first_n_null
+            }
             EmitTo::CurrentBlock(_) => {
                 let mut cur_blk = self.seen_values_blocks.pop_front().unwrap();
                 cur_blk.finish()
-            }
-            EmitTo::First(_) => {
-                unreachable!("can't support emitting first in in flat BlockedNullState")
             }
         };
 
