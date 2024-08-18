@@ -4879,3 +4879,21 @@ SELECT lead(column2, 1.1) OVER (order by column1) FROM t;
 
 query error DataFusion error: Execution error: Expected an integer value
 SELECT nth_value(column2, 1.1) OVER (order by column1) FROM t;
+
+statement ok
+drop table t;
+
+statement ok
+create table t(a int, b int) as values (1, 2)
+
+query II
+select a, row_number() over (order by b) as rn from t;
+----
+1 1
+
+# RowNumber expect 0 args.
+query error
+select a, row_number(a) over (order by b) as rn from t;
+
+statement ok
+drop table t;
