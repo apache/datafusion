@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::planner::{
@@ -35,8 +36,8 @@ use datafusion_expr::expr_rewriter::{
 };
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::utils::{
-    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
-    find_aggregate_exprs, find_window_exprs,
+    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_column_exprs,
+    find_window_exprs,
 };
 use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
@@ -750,37 +751,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
             .collect::<Result<Vec<Expr>>>()?;
 
-        // If the having expression is present and the group by expression is not present,
-        // we can ensure this is an invalid query. Expand the wildcard expression here to
-        // get a better error message.
-        let select_exprs_post_aggr = if having_expr_opt.is_some()
-            && group_by_exprs.is_empty()
-        {
-            select_exprs_post_aggr
-                .into_iter()
-                .map(|expr| {
-                    if let Expr::Wildcard { qualifier, options } = expr {
-                        if let Some(qualifier) = qualifier {
-                            Ok::<_, DataFusionError>(expand_qualified_wildcard(
-                                &qualifier,
-                                input.schema(),
-                                Some(&options),
-                            )?)
-                        } else {
-                            Ok(expand_wildcard(input.schema(), input, Some(&options))?)
-                        }
-                    } else {
-                        Ok(vec![expr])
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .collect()
-        } else {
-            select_exprs_post_aggr
-        };
-
         // finally, we have some validation that the re-written projection can be resolved
         // from the aggregate output columns
         check_columns_satisfy_exprs(
@@ -801,6 +771,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "HAVING clause references non-aggregate values",
             )?;
 
+            // If the select items only contain scalar expressions, we don't need to check
+            // the column used by the HAVING clause.
+            //
+            // For example, the following query is valid:
+            // SELECT 1 FROM t1 HAVING MAX(t1.v1) = 3;
+            if !check_contain_scalar_only(&select_exprs_post_aggr) {
+                // the column used by the HAVING clause must appear in the GROUP BY clause or
+                // must be part of an aggregate function.
+                let having_columns = find_column_exprs(&[having_expr.clone()]);
+                check_columns_satisfy_exprs(
+                    &column_exprs_post_aggr,
+                    &having_columns,
+                    "HAVING clause references non-aggregate values",
+                )?;
+            }
+
             Some(having_expr_post_aggr)
         } else {
             None
@@ -808,6 +794,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
+}
+
+fn check_contain_scalar_only(exprs: &[Expr]) -> bool {
+    exprs.iter().all(|expr| match expr {
+        Expr::ScalarFunction(_) => true,
+        Expr::Literal(_) => true,
+        Expr::Alias(alias) => check_contain_scalar_only(&[alias.expr.deref().clone()]),
+        _ => false,
+    })
 }
 
 // If there are any multiple-defined windows, we raise an error.
