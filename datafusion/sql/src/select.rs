@@ -35,7 +35,8 @@ use datafusion_expr::expr_rewriter::{
 };
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::utils::{
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
+    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
+    find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
@@ -214,7 +215,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
             LogicalPlanBuilder::from(plan)
-                .filter(having_expr_post_aggr)?
+                .having(having_expr_post_aggr)?
                 .build()?
         } else {
             plan
@@ -748,6 +749,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
             .collect::<Result<Vec<Expr>>>()?;
+
+        // If the having expression is present and the group by expression is not present,
+        // we can ensure this is an invalid query. Expand the wildcard expression here to
+        // get a better error message.
+        let select_exprs_post_aggr = if having_expr_opt.is_some()
+            && group_by_exprs.is_empty()
+        {
+            select_exprs_post_aggr
+                .into_iter()
+                .map(|expr| {
+                    if let Expr::Wildcard { qualifier, options } = expr {
+                        if let Some(qualifier) = qualifier {
+                            Ok::<_, DataFusionError>(expand_qualified_wildcard(
+                                &qualifier,
+                                input.schema(),
+                                Some(&options),
+                            )?)
+                        } else {
+                            Ok(expand_wildcard(input.schema(), &input, Some(&options))?)
+                        }
+                    } else {
+                        Ok(vec![expr])
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .collect()
+        } else {
+            select_exprs_post_aggr
+        };
 
         // finally, we have some validation that the re-written projection can be resolved
         // from the aggregate output columns
