@@ -180,7 +180,8 @@ impl<T> Blocks<T> {
             return;
         }
 
-        // Take and push the old current to `previous`, use the b
+        // Take and push the old current to `previous`, 
+        // use input `block` as the new `current`
         let old_cur = std::mem::replace(&mut self.current, Some(block)).unwrap();
         self.previous.push_back(old_cur);
     }
