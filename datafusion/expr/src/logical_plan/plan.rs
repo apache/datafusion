@@ -644,8 +644,10 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Values(Values { schema, values }))
             }
             LogicalPlan::Filter(Filter {
-                predicate, input, ..
-            }) => Filter::try_new(predicate, input).map(LogicalPlan::Filter),
+                predicate, input, having,
+            }) => {
+                Filter::try_new_internal(predicate, input, having).map(LogicalPlan::Filter)
+            },
             LogicalPlan::Repartition(_) => Ok(self),
             LogicalPlan::Window(Window {
                 input,
