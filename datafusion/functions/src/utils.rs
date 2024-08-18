@@ -71,6 +71,20 @@ macro_rules! get_optimal_return_type {
 // `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
 get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 
+// `optimized_utf8_to_str_type`: returns Utf8View when the string function has a specialised
+// implementation for StringView which returns Utf8View.
+pub(crate) fn optimized_utf8_to_str_type(
+    arg_type: &DataType,
+    name: &str,
+) -> Result<DataType> {
+    let support_list = ["substr"];
+    if support_list.contains(&name) {
+        Ok(DataType::Utf8View)
+    } else {
+        utf8_to_str_type(arg_type, name)
+    }
+}
+
 // `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
 get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
