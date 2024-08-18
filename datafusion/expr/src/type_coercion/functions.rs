@@ -572,9 +572,6 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        (Date32, _) if matches!(type_from, Date32 | Utf8 | LargeUtf8 | Null) => {
-            Some(type_into.clone())
-        }
         (Timestamp(TimeUnit::Nanosecond, None), _)
             if matches!(
                 type_from,
@@ -583,7 +580,7 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
-        (Interval(_), _) if matches!(type_from, Utf8 | LargeUtf8 | Null) => {
+        (Interval(_), _) if matches!(type_from, Utf8 | LargeUtf8) => {
             Some(type_into.clone())
         }
         // We can go into a Utf8View from a Utf8 or LargeUtf8
