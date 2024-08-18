@@ -243,7 +243,7 @@ impl<T> Index<usize> for Blocks<T> {
     fn index(&self, index: usize) -> &T {
         match self {
             Blocks::Single(Some(single)) => {
-                assert!(index == 0);
+                debug_assert!(index == 0);
                 single
             }
             Blocks::Multiple(multiple) => &multiple[index],
@@ -258,7 +258,7 @@ impl<T> IndexMut<usize> for Blocks<T> {
     fn index_mut(&mut self, index: usize) -> &mut T {
         match self {
             Blocks::Single(Some(single)) => {
-                assert!(index == 0);
+                debug_assert!(index == 0);
                 single
             }
             Blocks::Multiple(multiple) => &mut multiple[index],
