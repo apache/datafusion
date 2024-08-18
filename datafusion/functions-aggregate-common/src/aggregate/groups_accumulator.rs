@@ -23,7 +23,7 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
-use std::{collections::VecDeque, iter};
+use std::{collections::VecDeque, iter, mem};
 
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
@@ -496,6 +496,69 @@ pub fn ensure_enough_room_for_values<T: Clone>(
                 .back_mut()
                 .unwrap()
                 .extend(iter::repeat(default_value.clone()).take(last_expand_slots));
+        }
+    }
+}
+
+pub enum Blocks<T> {
+    Single(Vec<T>),
+    Multiple(VecDeque<Vec<T>>),
+}
+
+impl<T> Blocks<T> {
+    fn new() -> Self {
+        Self::Single(Vec::new())
+    }
+
+    fn current(&self) -> Option<&Vec<T>> {
+        match self {
+            Blocks::Single(blk) => Some(blk),
+            Blocks::Multiple(blks) => {
+                blks.back()
+            }
+        }
+    }
+
+    fn current_mut(&mut self) -> Option<&mut Vec<T>> {
+        match self {
+            Blocks::Single(blk) => Some(blk),
+            Blocks::Multiple(blks) => {
+                blks.back_mut()
+            }
+        }
+    }
+
+    fn push_block(&mut self, block: Vec<T>) {
+        loop {
+            match self {
+                // If found it is Single, convert to Multiple first
+                Blocks::Single(single) => {
+                    let mut new_multiple = VecDeque::with_capacity(2);
+                    let first_block = mem::take(single);
+                    new_multiple.push_back(first_block);
+
+                    *self = Self::Multiple(new_multiple);
+                }
+                // If found it Multiple, just push the block into it
+                Blocks::Multiple(multiple) => {
+                    multiple.push_back(block);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn pop_current_block(&mut self) -> Option<Vec<T>> {
+        match self {
+            Blocks::Single(single) => Some(mem::take(single)),
+            Blocks::Multiple(multiple) => multiple.pop_front(),
+        }       
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Blocks::Single(single) => single.is_empty(),
+            Blocks::Multiple(multiple) => multiple.is_empty(),
         }
     }
 }
