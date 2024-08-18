@@ -827,6 +827,16 @@ SELECT replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'hello')
 foohello
 
 query T
+SELECT replace(arrow_cast('foobar', 'Utf8View'), arrow_cast('bar', 'Utf8View'), arrow_cast('hello', 'Utf8View'))
+----
+foohello
+
+query T
+SELECT replace(arrow_cast('foobar', 'LargeUtf8'), arrow_cast('bar', 'LargeUtf8'), arrow_cast('hello', 'LargeUtf8'))
+----
+foohello
+
+query T
 SELECT rtrim(' foo  ')
 ----
  foo

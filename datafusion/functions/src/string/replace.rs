@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringViewArray};
+use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
@@ -27,7 +27,7 @@ use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
-use crate::utils::make_scalar_function;
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct ReplaceFunc {
@@ -70,31 +70,7 @@ impl ScalarUDFImpl for ReplaceFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0].clone() {
-            DataType::Utf8 => return Ok(DataType::Utf8),
-            DataType::LargeUtf8 => return Ok(DataType::LargeUtf8),
-            DataType::Utf8View => return Ok(DataType::Utf8View),
-            DataType::Dictionary(_, value_type) => match *value_type {
-                DataType::LargeUtf8 | DataType::LargeBinary => {
-                    return Ok(DataType::LargeUtf8)
-                }
-                DataType::Utf8 | DataType::Binary => return Ok(DataType::Utf8),
-                DataType::Utf8View | DataType::BinaryView => {
-                    return Ok(DataType::Utf8View)
-                }
-                DataType::Null => return Ok(DataType::Null),
-                _ => {
-                    return exec_err!(
-                        "The replace function can only accept strings, but got {:?}.",
-                        *value_type
-                    );
-                }
-            },
-            DataType::Null => return Ok(DataType::Null),
-            other => {
-                exec_err!("Unsupported data type {other:?} for function replace")
-            }
-        }
+        utf8_to_str_type(&arg_types[0], "replace")
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -122,7 +98,7 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
             (Some(string), Some(from), Some(to)) => Some(string.replace(from, to)),
             _ => None,
         })
-        .collect::<StringViewArray>();
+        .collect::<StringArray>();
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -153,8 +129,7 @@ mod tests {
     use arrow::array::Array;
     use arrow::array::LargeStringArray;
     use arrow::array::StringArray;
-    use arrow::array::StringViewArray;
-    use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
+    use arrow::datatypes::DataType::{LargeUtf8, Utf8};
     use datafusion_common::ScalarValue;
     #[test]
     fn test_functions() -> Result<()> {
@@ -197,8 +172,8 @@ mod tests {
             ],
             Ok(Some("aaccbcw")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
 
         Ok(())
