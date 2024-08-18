@@ -107,6 +107,11 @@ impl LogicalPlanBuilder {
         self.plan.schema()
     }
 
+    /// Return the LogicalPlan of the plan build so far
+    pub fn plan(&self) -> &LogicalPlan {
+        &self.plan
+    }
+
     /// Create an empty relation.
     ///
     /// `produce_one_row` set to true means this empty node needs to produce a placeholder row.
