@@ -5643,3 +5643,31 @@ query I??III?T
 select count(null), min(null), max(null), bit_and(NULL), bit_or(NULL), bit_xor(NULL), nth_value(NULL, 1), string_agg(NULL, ',');
 ----
 0 NULL NULL NULL NULL NULL NULL NULL
+
+# test min/max Float16 without group expression
+query RRTT
+WITH data AS (
+  SELECT arrow_cast(1, 'Float16') AS f
+  UNION ALL
+  SELECT arrow_cast(6, 'Float16') AS f
+)
+SELECT MIN(f), MAX(f), arrow_typeof(MIN(f)), arrow_typeof(MAX(f)) FROM data;
+----
+1 6 Float16 Float16
+
+# test min/max Float16 with group expression
+query IRRTT
+WITH data AS (
+  SELECT 1 as k, arrow_cast(1.8125, 'Float16') AS f
+  UNION ALL
+  SELECT 1 as k, arrow_cast(6.8007813, 'Float16') AS f
+  UNION ALL
+  SELECT 2 AS k, arrow_cast(8.5, 'Float16') AS f
+)
+SELECT k, MIN(f), MAX(f), arrow_typeof(MIN(f)), arrow_typeof(MAX(f))
+FROM data
+GROUP BY k
+ORDER BY k;
+----
+1 1.8125 6.8007813 Float16 Float16
+2 8.5 8.5 Float16 Float16
