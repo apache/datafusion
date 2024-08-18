@@ -804,6 +804,15 @@ pub fn find_base_plan(input: &LogicalPlan) -> &LogicalPlan {
     match input {
         LogicalPlan::Window(window) => find_base_plan(&window.input),
         LogicalPlan::Aggregate(agg) => find_base_plan(&agg.input),
+        LogicalPlan::Filter(filter) => {
+            if filter.having {
+                // If a filter is used for a having clause, its input plan is an aggregation.
+                // We should expand the wildcard expression based on the aggregation's input plan.
+                find_base_plan(&filter.input)
+            } else {
+                input
+            }
+        }
         _ => input,
     }
 }

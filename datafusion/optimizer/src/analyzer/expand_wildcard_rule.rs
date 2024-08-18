@@ -160,13 +160,14 @@ fn replace_columns(
 mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
 
-    use datafusion_common::{JoinType, TableReference};
-    use datafusion_expr::{
-        col, in_subquery, qualified_wildcard, table_scan, wildcard, LogicalPlanBuilder,
-    };
-
     use crate::test::{assert_analyzed_plan_eq_display_indent, test_table_scan};
     use crate::Analyzer;
+    use datafusion_common::{JoinType, TableReference};
+    use datafusion_expr::{
+        col, ident, in_subquery, lit, qualified_wildcard, table_scan, wildcard,
+        LogicalPlanBuilder,
+    };
+    use datafusion_functions_aggregate::expr_fn::max;
 
     use super::*;
 
@@ -300,5 +301,33 @@ mod tests {
         assert_eq!(expected, format!("{analyzed_plan}"));
 
         Ok(())
+    }
+
+    #[test]
+    fn plan_having_wildcard_projection() -> Result<()> {
+        let aggregate =
+            table_scan(Some("t1"), &employee_schema(), Some(vec![0, 1, 2, 3, 4]))?
+                .aggregate(
+                    vec![
+                        col("t1.id"),
+                        col("t1.first_name"),
+                        col("t1.last_name"),
+                        col("t1.state"),
+                        col("t1.salary"),
+                    ],
+                    vec![max(col("t1.salary"))],
+                )?
+                .build()?;
+        let plan = LogicalPlanBuilder::from(aggregate)
+            .having(ident("max(t1.salary)").gt(lit(100)))?
+            .project(vec![wildcard()])?
+            .build()?;
+
+        let expected = "Projection: t1.id, t1.first_name, t1.last_name, t1.state, t1.salary [id:Int32, first_name:Utf8, last_name:Utf8, state:Utf8, salary:Int32]\
+        \n  Filter: max(t1.salary) > Int32(100) [id:Int32, first_name:Utf8, last_name:Utf8, state:Utf8, salary:Int32, max(t1.salary):Int32;N]\
+        \n    Aggregate: groupBy=[[t1.id, t1.first_name, t1.last_name, t1.state, t1.salary]], aggr=[[max(t1.salary)]] [id:Int32, first_name:Utf8, last_name:Utf8, state:Utf8, salary:Int32, max(t1.salary):Int32;N]\
+        \n      TableScan: t1 projection=[id, first_name, last_name, state, salary] [id:Int32, first_name:Utf8, last_name:Utf8, state:Utf8, salary:Int32]";
+
+        assert_plan_eq(plan, expected)
     }
 }
