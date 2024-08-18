@@ -60,7 +60,7 @@ use std::sync::Arc;
 ///      order)                                    recent group index
 ///```
 #[derive(Debug)]
-pub(crate) struct GroupOrderingPartial {
+pub struct GroupOrderingPartial {
     /// State machine
     state: State,
 

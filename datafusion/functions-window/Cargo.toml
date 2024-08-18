@@ -16,9 +16,9 @@
 # under the License.
 
 [package]
-name = "datafusion-sql"
-description = "DataFusion SQL Query Planner"
-keywords = ["datafusion", "sql", "parser", "planner"]
+name = "datafusion-functions-window"
+description = "Window function packages for the DataFusion query engine"
+keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
@@ -32,30 +32,16 @@ rust-version = { workspace = true }
 workspace = true
 
 [lib]
-name = "datafusion_sql"
+name = "datafusion_functions_window"
 path = "src/lib.rs"
 
-[features]
-default = ["unicode_expressions", "unparser"]
-unicode_expressions = []
-unparser = []
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arrow = { workspace = true }
-arrow-array = { workspace = true }
-arrow-schema = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
+datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
 log = { workspace = true }
-regex = { workspace = true }
-sqlparser = { workspace = true }
-strum = { version = "0.26.1", features = ["derive"] }
 
 [dev-dependencies]
-ctor = { workspace = true }
-datafusion-functions = { workspace = true, default-features = true }
-datafusion-functions-aggregate = { workspace = true }
-datafusion-functions-window = { workspace = true }
-env_logger = { workspace = true }
-paste = "^1.0"
-rstest = { workspace = true }
+arrow = { workspace = true }
