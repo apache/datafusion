@@ -16,7 +16,9 @@
 // under the License.
 
 use ahash::RandomState;
-use datafusion_expr::groups_accumulator::{BlockedGroupIndex, Blocks, GroupStatesMode, VecBlocks};
+use datafusion_expr::groups_accumulator::{
+    BlockedGroupIndex, Blocks, GroupStatesMode, VecBlocks,
+};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::ensure_enough_room_for_values;
 use std::collections::HashSet;

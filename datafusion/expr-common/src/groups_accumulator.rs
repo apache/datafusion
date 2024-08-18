@@ -18,7 +18,10 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use std::{
-    cmp::min, collections::VecDeque, iter, mem, ops::{Index, IndexMut}
+    cmp::min,
+    collections::VecDeque,
+    iter, mem,
+    ops::{Index, IndexMut},
 };
 
 use arrow::array::{ArrayRef, BooleanArray};
@@ -210,6 +213,14 @@ impl<T> Blocks<T> {
         }
     }
 
+    pub fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &'_ mut T> + '_> {
+        match self {
+            Blocks::Single(None) => Box::new(iter::empty()),
+            Blocks::Single(Some(single)) => Box::new(iter::once(single)),
+            Blocks::Multiple(multiple) => Box::new(multiple.iter_mut()),
+        }
+    }
+
     pub fn clear(&mut self) {
         *self = Self::new();
     }
@@ -236,7 +247,9 @@ impl<T> Index<usize> for Blocks<T> {
                 single
             }
             Blocks::Multiple(multiple) => &multiple[index],
-            Blocks::Single(None) => unreachable!("can't use index to access empty blocks"),
+            Blocks::Single(None) => {
+                unreachable!("can't use index to access empty blocks")
+            }
         }
     }
 }
@@ -249,7 +262,9 @@ impl<T> IndexMut<usize> for Blocks<T> {
                 single
             }
             Blocks::Multiple(multiple) => &mut multiple[index],
-            Blocks::Single(None) => unreachable!("can't use index to access empty blocks"),
+            Blocks::Single(None) => {
+                unreachable!("can't use index to access empty blocks")
+            }
         }
     }
 }

@@ -34,7 +34,9 @@ use datafusion_common::{
     arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr_common::groups_accumulator::{Blocks, EmitTo, GroupsAccumulator, VecBlocks};
+use datafusion_expr_common::groups_accumulator::{
+    Blocks, EmitTo, GroupsAccumulator, VecBlocks,
+};
 use datafusion_expr_common::{
     accumulator::Accumulator, groups_accumulator::GroupStatesMode,
 };
@@ -436,6 +438,10 @@ pub fn ensure_enough_room_for_values<T: Clone>(
     match mode {
         // It flat mode, we just a single builder, and grow it constantly.
         GroupStatesMode::Flat => {
+            if values.num_blocks() == 0 {
+                values.push_block(Vec::new());
+            }
+
             values
                 .current_mut()
                 .unwrap()
@@ -444,12 +450,14 @@ pub fn ensure_enough_room_for_values<T: Clone>(
         // It blocked mode, we ensure the blks are enough first,
         // and then ensure slots in blks are enough.
         GroupStatesMode::Blocked(blk_size) => {
-            let (mut cur_blk_idx, exist_slots) = {
+            let (mut cur_blk_idx, exist_slots) = if values.num_blocks() > 0 {
                 let cur_blk_idx = values.num_blocks() - 1;
                 let exist_slots = (values.num_blocks() - 1) * blk_size
                     + values.current().unwrap().len();
 
                 (cur_blk_idx, exist_slots)
+            } else {
+                (0, 0)
             };
 
             // No new groups, don't need to expand, just return.
@@ -457,8 +465,8 @@ pub fn ensure_enough_room_for_values<T: Clone>(
                 return;
             }
 
-            let exist_blks = values.num_blocks();
             // Ensure blks are enough.
+            let exist_blks = values.num_blocks();
             let new_blks = (total_num_groups + blk_size - 1) / blk_size - exist_blks;
             if new_blks > 0 {
                 for _ in 0..new_blks {
