@@ -23,16 +23,17 @@ use arrow::datatypes::{DataType, Field};
 use arrow_array::types::{Date32Type, IntervalMonthDayNanoType};
 use arrow_array::NullArray;
 use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
-use arrow_schema::DataType::{Date32, Int64, Interval, List};
+use arrow_schema::DataType::*;
 use arrow_schema::IntervalUnit::MonthDayNano;
 use datafusion_common::cast::{as_date32_array, as_int64_array, as_interval_mdn_array};
 use datafusion_common::{exec_err, not_impl_datafusion_err, Result};
 use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, ScalarUDFImpl, Signature, Volatility,
 };
 use std::any::Any;
 use std::iter::from_fn;
 use std::sync::Arc;
+use itertools::Itertools;
 
 make_udf_expr_and_func!(
     Range,
@@ -49,15 +50,7 @@ pub(super) struct Range {
 impl Range {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64, Int64]),
-                    TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![],
         }
     }
@@ -74,9 +67,32 @@ impl ScalarUDFImpl for Range {
         &self.signature
     }
 
+    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        _arg_types.iter()
+            .map(|arg_type| match arg_type {
+                Null => Ok(Null),
+                Int8 => Ok(Int64),
+                Int16 => Ok(Int64),
+                Int32 => Ok(Int64),
+                Int64 => Ok(Int64),
+                UInt8 => Ok(Int64),
+                UInt16 => Ok(Int64),
+                UInt32 => Ok(Int64),
+                UInt64 => Ok(Int64),
+                Timestamp(_, _) => Ok(Date32),
+                Date32 => Ok(Date32),
+                Date64 => Ok(Date32),
+                Utf8 => Ok(Date32),
+                LargeUtf8 => Ok(Date32),
+                Utf8View => Ok(Date32),
+                Interval(_) => Ok(Interval(MonthDayNano)),
+                _ => exec_err!("Unsupported DataType"),
+            }).try_collect()
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.iter().any(|t| t.eq(&DataType::Null)) {
-            Ok(DataType::Null)
+        if arg_types.iter().any(|t| t.is_null()) {
+            Ok(Null)
         } else {
             Ok(List(Arc::new(Field::new(
                 "item",
@@ -87,7 +103,7 @@ impl ScalarUDFImpl for Range {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.iter().any(|arg| arg.data_type() == DataType::Null) {
+        if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
         match args[0].data_type() {
@@ -119,15 +135,7 @@ pub(super) struct GenSeries {
 impl GenSeries {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64, Int64]),
-                    TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![],
         }
     }
@@ -144,9 +152,32 @@ impl ScalarUDFImpl for GenSeries {
         &self.signature
     }
 
+    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        _arg_types.iter()
+            .map(|arg_type| match arg_type {
+                Null => Ok(Null),
+                Int8 => Ok(Int64),
+                Int16 => Ok(Int64),
+                Int32 => Ok(Int64),
+                Int64 => Ok(Int64),
+                UInt8 => Ok(Int64),
+                UInt16 => Ok(Int64),
+                UInt32 => Ok(Int64),
+                UInt64 => Ok(Int64),
+                Timestamp(_, _) => Ok(Date32),
+                Date32 => Ok(Date32),
+                Date64 => Ok(Date32),
+                Utf8 => Ok(Date32),
+                LargeUtf8 => Ok(Date32),
+                Utf8View => Ok(Date32),
+                Interval(_) => Ok(Interval(MonthDayNano)),
+                _ => exec_err!("Unsupported DataType"),
+            }).try_collect()
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.iter().any(|t| t.eq(&DataType::Null)) {
-            Ok(DataType::Null)
+        if arg_types.iter().any(|t| t.is_null()) {
+            Ok(Null)
         } else {
             Ok(List(Arc::new(Field::new(
                 "item",
@@ -157,7 +188,7 @@ impl ScalarUDFImpl for GenSeries {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.iter().any(|arg| arg.data_type() == DataType::Null) {
+        if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
         match args[0].data_type() {
@@ -314,14 +345,6 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
     // values are date32s
     let values_builder = Date32Builder::new();
     let mut list_builder = ListBuilder::new(values_builder);
-
-    if start_array.unwrap().is_null(0)
-        | stop_array.is_null(0)
-        | step_array.unwrap().is_null(0)
-    {
-        list_builder.append_null();
-        return Ok(Arc::new(list_builder.finish()));
-    }
 
     for (idx, stop) in stop_array.iter().enumerate() {
         let mut stop = stop.unwrap_or(0);
