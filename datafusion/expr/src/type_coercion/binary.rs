@@ -117,6 +117,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                     "Cannot infer common string type for string concat operation {lhs} {op} {rhs}"
                 ))
             }),
+        Operator::AtArrow if lhs == &json_type() && rhs == &json_type() => {
+            Ok(Signature::comparison(lhs.clone()))
+        }
         Operator::AtArrow | Operator::ArrowAt => array_coercion(lhs, rhs)
             .map(Signature::uniform)
             .ok_or_else(|| {
