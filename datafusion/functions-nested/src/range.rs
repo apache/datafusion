@@ -27,13 +27,11 @@ use arrow_schema::DataType::*;
 use arrow_schema::IntervalUnit::MonthDayNano;
 use datafusion_common::cast::{as_date32_array, as_int64_array, as_interval_mdn_array};
 use datafusion_common::{exec_err, not_impl_datafusion_err, Result};
-use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use itertools::Itertools;
 use std::any::Any;
 use std::iter::from_fn;
 use std::sync::Arc;
-use itertools::Itertools;
 
 make_udf_expr_and_func!(
     Range,
@@ -68,7 +66,8 @@ impl ScalarUDFImpl for Range {
     }
 
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        _arg_types.iter()
+        _arg_types
+            .iter()
             .map(|arg_type| match arg_type {
                 Null => Ok(Null),
                 Int8 => Ok(Int64),
@@ -87,7 +86,8 @@ impl ScalarUDFImpl for Range {
                 Utf8View => Ok(Date32),
                 Interval(_) => Ok(Interval(MonthDayNano)),
                 _ => exec_err!("Unsupported DataType"),
-            }).try_collect()
+            })
+            .try_collect()
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -153,7 +153,8 @@ impl ScalarUDFImpl for GenSeries {
     }
 
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        _arg_types.iter()
+        _arg_types
+            .iter()
             .map(|arg_type| match arg_type {
                 Null => Ok(Null),
                 Int8 => Ok(Int64),
@@ -172,7 +173,8 @@ impl ScalarUDFImpl for GenSeries {
                 Utf8View => Ok(Date32),
                 Interval(_) => Ok(Interval(MonthDayNano)),
                 _ => exec_err!("Unsupported DataType"),
-            }).try_collect()
+            })
+            .try_collect()
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
