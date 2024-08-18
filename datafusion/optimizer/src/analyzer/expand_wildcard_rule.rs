@@ -164,10 +164,8 @@ mod tests {
     use crate::Analyzer;
     use datafusion_common::{JoinType, TableReference};
     use datafusion_expr::{
-        col, ident, in_subquery, lit, qualified_wildcard, table_scan, wildcard,
-        LogicalPlanBuilder,
+        col, in_subquery, qualified_wildcard, table_scan, wildcard, LogicalPlanBuilder,
     };
-    use datafusion_functions_aggregate::expr_fn::max;
 
     use super::*;
 
