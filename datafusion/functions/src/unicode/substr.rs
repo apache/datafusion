@@ -174,7 +174,8 @@ fn calculate_string_view(
                         // 2. builder is guaranteed to have corresponding blocks
                         unsafe {
                             let str = string_array.value_unchecked(idx);
-                            let (start, end) = get_true_start_count(str, start as usize, -1);
+                            let (start, end) =
+                                get_true_start_count(str, start as usize, -1);
                             builder.append_view_unchecked(
                                 buffer_index,
                                 offset + start as u32,
@@ -192,11 +193,8 @@ fn calculate_string_view(
                             let str =
                                 std::str::from_utf8_unchecked(&bytes[..length as usize]);
                             // Extract str[start, end) by char
-                            let (start, end) = get_true_start_count(
-                                str,
-                                start as usize,
-                                length as i64,
-                            );
+                            let (start, end) =
+                                get_true_start_count(str, start as usize, length as i64);
                             builder.append_value(&str[start..end]);
                         }
                     }
@@ -249,8 +247,9 @@ fn calculate_string_view(
                             unsafe {
                                 let bytes =
                                     StringViewArray::inline_value(raw, length as usize);
-                                let str =
-                                    std::str::from_utf8_unchecked(&bytes[..length as usize]);
+                                let str = std::str::from_utf8_unchecked(
+                                    &bytes[..length as usize],
+                                );
                                 // Extract str[start, end) by char
                                 let (start, end) =
                                     get_true_start_count(str, start, count as i64);
