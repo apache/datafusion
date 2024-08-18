@@ -169,10 +169,12 @@ fn calculate_string_view(
                     } else if length > 12 {
                         let buffer_index = (*raw >> 64) as u32;
                         let offset = (*raw >> 96) as u32;
-                        let str = string_array.value(idx);
-                        let (start, end) = get_true_start_count(str, start as usize, -1);
-                        // Safety: builder is guaranteed to have corresponding blocks
+                        // Safety:
+                        // 1. idx < string_array.views.size()
+                        // 2. builder is guaranteed to have corresponding blocks
                         unsafe {
+                            let str = string_array.value_unchecked(idx);
+                            let (start, end) = get_true_start_count(str, start as usize, -1);
                             builder.append_view_unchecked(
                                 buffer_index,
                                 offset + start as u32,
@@ -181,24 +183,22 @@ fn calculate_string_view(
                             );
                         }
                     } else {
-                        let bytes = ((*raw >> 32) & u128::MAX).to_le_bytes();
-                        let str = match std::str::from_utf8(&bytes[..length as usize]) {
-                            Ok(str) => {
-                                // Extract str[start, end) by char
-                                let (start, end) = get_true_start_count(
-                                    str,
-                                    start as usize,
-                                    length as i64,
-                                );
-                                &str[start..end]
-                            }
-                            _ => {
-                                return exec_err!(
-                                    "failed to convert inline bytes to &str."
-                                )
-                            }
-                        };
-                        builder.append_value(str);
+                        // Safety:
+                        // (1) original bytes are valid utf-8,
+                        // (2) we do not slice on utf-8 codepoint
+                        unsafe {
+                            let bytes =
+                                StringViewArray::inline_value(raw, length as usize);
+                            let str =
+                                std::str::from_utf8_unchecked(&bytes[..length as usize]);
+                            // Extract str[start, end) by char
+                            let (start, end) = get_true_start_count(
+                                str,
+                                start as usize,
+                                length as i64,
+                            );
+                            builder.append_value(&str[start..end]);
+                        }
                     }
                 } else {
                     builder.append_null();
@@ -216,7 +216,7 @@ fn calculate_string_view(
             {
                 if let (Some(start), Some(count)) = (start, count) {
                     let length = *raw as u32;
-                    let start = (start - 1).max(0) as usize;
+                    let start = start.saturating_sub(1) as usize;
                     if count < 0 {
                         return exec_err!(
                             "negative substring length not allowed: substr(<str>, {start}, {count})"
@@ -228,11 +228,13 @@ fn calculate_string_view(
                         } else if length > 12 {
                             let buffer_index = (*raw >> 64) as u32;
                             let offset = (*raw >> 96) as u32;
-                            let str = string_array.value(idx);
-                            let (start, end) =
-                                get_true_start_count(str, start, count as i64);
-                            // Safety: builder is guaranteed to have corresponding blocks
+                            // Safety:
+                            // 1. idx < string_array.views.size()
+                            // 2. builder is guaranteed to have corresponding blocks
                             unsafe {
+                                let str = string_array.value_unchecked(idx);
+                                let (start, end) =
+                                    get_true_start_count(str, start, count as i64);
                                 builder.append_view_unchecked(
                                     buffer_index,
                                     offset + start as u32,
@@ -241,22 +243,19 @@ fn calculate_string_view(
                                 );
                             }
                         } else {
-                            let bytes = ((*raw >> 32) & u128::MAX).to_le_bytes();
-                            let str = match std::str::from_utf8(&bytes[..length as usize])
-                            {
-                                Ok(str) => {
-                                    // Extract str[start, end) by char
-                                    let (start, end) =
-                                        get_true_start_count(str, start, count as i64);
-                                    &str[start..end]
-                                }
-                                _ => {
-                                    return exec_err!(
-                                        "failed to convert inline bytes to &str."
-                                    )
-                                }
-                            };
-                            builder.append_value(str);
+                            // Safety:
+                            // (1) original bytes are valid utf-8,
+                            // (2) we do not slice on utf-8 codepoint
+                            unsafe {
+                                let bytes =
+                                    StringViewArray::inline_value(raw, length as usize);
+                                let str =
+                                    std::str::from_utf8_unchecked(&bytes[..length as usize]);
+                                // Extract str[start, end) by char
+                                let (start, end) =
+                                    get_true_start_count(str, start, count as i64);
+                                builder.append_value(&str[start..end]);
+                            }
                         }
                     }
                 } else {
