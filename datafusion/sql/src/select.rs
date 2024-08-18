@@ -767,7 +767,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 Some(&options),
                             )?)
                         } else {
-                            Ok(expand_wildcard(input.schema(), &input, Some(&options))?)
+                            Ok(expand_wildcard(input.schema(), input, Some(&options))?)
                         }
                     } else {
                         Ok(vec![expr])
