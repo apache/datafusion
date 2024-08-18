@@ -206,7 +206,7 @@ where
                 std::mem::swap(&mut self.values, &mut split);
                 build_primitive(split, null_group)
             }
-            EmitTo::CurrentBlock(_) => {
+            EmitTo::NextBlock(_) => {
                 return Err(DataFusionError::NotImplemented(
                     "blocked group values is not supported yet".to_string(),
                 ))

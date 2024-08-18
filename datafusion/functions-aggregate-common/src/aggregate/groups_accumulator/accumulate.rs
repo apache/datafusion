@@ -348,7 +348,7 @@ impl NullState {
                 }
                 first_n_null
             }
-            EmitTo::CurrentBlock(_) => {
+            EmitTo::NextBlock(_) => {
                 unreachable!("can't support blocked emission in flat NullState")
             }
         };
@@ -614,7 +614,7 @@ impl BlockedNullState {
                 }
                 first_n_null
             }
-            EmitTo::CurrentBlock(_) => {
+            EmitTo::NextBlock(_) => {
                 let mut cur_blk = self.seen_values_blocks.pop_first_block().unwrap();
                 cur_blk.finish()
             }

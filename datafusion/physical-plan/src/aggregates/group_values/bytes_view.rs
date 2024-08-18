@@ -117,7 +117,7 @@ impl GroupValues for GroupValuesBytesView {
 
                 emit_group_values
             }
-            EmitTo::CurrentBlock(_) => {
+            EmitTo::NextBlock(_) => {
                 return Err(DataFusionError::NotImplemented(
                     "blocked group values is not supported yet".to_string(),
                 ))

@@ -301,7 +301,7 @@ impl GroupValues for GroupValuesRows {
                 }
                 output
             }
-            EmitTo::CurrentBlock(true) => {
+            EmitTo::NextBlock(true) => {
                 let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
                 unsafe {
@@ -325,7 +325,7 @@ impl GroupValues for GroupValuesRows {
                 }
                 output
             }
-            EmitTo::CurrentBlock(false) => {
+            EmitTo::NextBlock(false) => {
                 let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
                 output

@@ -772,7 +772,7 @@ impl Stream for GroupedHashAggregateStream {
                             self.exec_state =
                                 ExecutionState::ProducingBlocks(Some(*blk - 1));
 
-                            EmitTo::CurrentBlock(true)
+                            EmitTo::NextBlock(true)
                         } else {
                             self.exec_state = if self.input_done {
                                 ExecutionState::Done
@@ -784,7 +784,7 @@ impl Stream for GroupedHashAggregateStream {
                             continue;
                         }
                     } else {
-                        EmitTo::CurrentBlock(false)
+                        EmitTo::NextBlock(false)
                     };
 
                     let emit_result = self.emit(emit_to, false);

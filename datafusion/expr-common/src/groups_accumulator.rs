@@ -39,8 +39,14 @@ pub enum EmitTo {
     /// For example, if `n=10`, group_index `0, 1, ... 9` are emitted
     /// and group indexes '`10, 11, 12, ...` become `0, 1, 2, ...`.
     First(usize),
-    /// Emit all groups managed by blocks
-    CurrentBlock(bool),
+    /// Emit next block in the blocked managed groups
+    ///
+    /// The flag's meaning:
+    /// - `true` represents it will be added new groups again,
+    /// we don't need to shift the values down.
+    /// - `false` represents new groups still be possible to be
+    /// added, and we need to shift the values down.
+    NextBlock(bool),
 }
 
 impl EmitTo {
@@ -62,7 +68,7 @@ impl EmitTo {
                 std::mem::swap(v, &mut t);
                 t
             }
-            Self::CurrentBlock(_) => unreachable!(
+            Self::NextBlock(_) => unreachable!(
                 "can not support blocked emission in take_needed, you should use take_needed_from_blocks"
             ),
         }
@@ -112,7 +118,7 @@ impl EmitTo {
                     }
                 }
             }
-            Self::CurrentBlock(_) => blocks.pop_first_block().unwrap(),
+            Self::NextBlock(_) => blocks.pop_first_block().unwrap(),
         }
     }
 }
@@ -141,12 +147,13 @@ impl BlockedGroupIndex {
     }
 }
 
+/// The basic data structure for blocked aggregation intermediate results
 pub struct Blocks<T> {
     /// The current block, it should be pushed into `previous`
     /// when next block is pushed
     current: Option<T>,
 
-    ///
+    /// The
     previous: VecDeque<T>,
 }
 

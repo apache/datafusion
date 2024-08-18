@@ -117,7 +117,7 @@ where
                 }
                 first_n
             }
-            EmitTo::CurrentBlock(_) => {
+            EmitTo::NextBlock(_) => {
                 return Err(DataFusionError::NotImplemented(
                     "blocked group values management is not supported".to_string(),
                 ))
