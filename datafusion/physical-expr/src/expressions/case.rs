@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::expressions::try_cast;
+use crate::expressions::{try_cast, BinaryExpr};
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
@@ -30,7 +30,7 @@ use arrow::compute::{and, and_not, is_null, not, nullif, or, prep_null_mask_filt
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Operator};
 
 use super::{Column, Literal};
 use itertools::Itertools;
@@ -58,9 +58,14 @@ enum EvalMethod {
     InfallibleExprOrNull,
     /// This is a specialization for a specific use case where we can take a fast path
     /// if there is just one when/then pair and both the `then` and `else` expressions
-    /// are literal values
+    /// are literal values.
     /// CASE WHEN condition THEN literal ELSE literal END
     ScalarOrScalar,
+    /// This is a specialization for a sprcific use case where we can take a fast path
+    /// for the divide-by-zero expression when the divisor is zero.
+    ///
+    /// CASE WHEN y > 0 THEN x / y ELSE NULL END
+    DivideZeroExpression,
 }
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -150,6 +155,35 @@ impl CaseExpr {
                 && else_expr.as_ref().unwrap().as_any().is::<Literal>()
             {
                 EvalMethod::ScalarOrScalar
+            } else if when_then_expr.len() == 1
+                && when_then_expr[0].0.as_any().is::<BinaryExpr>()
+            {
+                let b = when_then_expr[0]
+                    .0
+                    .as_any()
+                    .downcast_ref::<BinaryExpr>()
+                    .expect("expected binary expression");
+
+                if b.op().eq(&Operator::Gt) {
+                    if let Some(lit) = b.right().as_any().downcast_ref::<Literal>() {
+                        if matches!(lit.value(), ScalarValue::Int32(Some(0))) {
+                            if let Some(b) =
+                                when_then_expr[0].1.as_any().downcast_ref::<BinaryExpr>()
+                            {
+                                if b.op().eq(&Operator::Divide) {
+                                    return Ok(Self {
+                                        expr,
+                                        when_then_expr,
+                                        else_expr,
+                                        eval_method: EvalMethod::DivideZeroExpression,
+                                    })
+                                }
+                            }
+                        }
+                    }
+                }
+
+                EvalMethod::NoExpression
             } else {
                 EvalMethod::NoExpression
             };
@@ -386,6 +420,47 @@ impl CaseExpr {
 
         Ok(ColumnarValue::Array(zip(&when_value, &then_value, &else_)?))
     }
+
+    fn divide_by_zero_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let return_type = self.data_type(&batch.schema())?;
+
+        // start with nulls as default output
+        let mut current_value = new_null_array(&return_type, batch.num_rows());
+        let mut remainder = BooleanArray::from(vec![true; batch.num_rows()]);
+        let when_value = BooleanArray::from(vec![true; batch.num_rows()]);
+        for i in 0..self.when_then_expr.len() {
+            let then_value = self.when_then_expr[i]
+                .1
+                .evaluate(batch)?;
+            current_value = match then_value {
+                ColumnarValue::Scalar(ScalarValue::Null) => {
+                    nullif(current_value.as_ref(), &when_value)?
+                }
+                ColumnarValue::Scalar(then_value) => {
+                    zip(&when_value, &then_value.to_scalar()?, &current_value)?
+                }
+                ColumnarValue::Array(then_value) => {
+                    zip(&when_value, &then_value, &current_value)?
+                }
+            };
+
+            // Succeed tuples should be filtered out for short-circuit evaluation,
+            // null values for the current when expr should be kept
+            remainder = and_not(&remainder, &when_value)?;
+        }
+
+        if let Some(e) = &self.else_expr {
+            // keep `else_expr`'s data type and return type consistent
+            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
+                .unwrap_or_else(|_| Arc::clone(e));
+            let else_ = expr
+                .evaluate_selection(batch, &remainder)?
+                .into_array(batch.num_rows())?;
+            current_value = zip(&remainder, &else_, &current_value)?;
+        }
+
+        Ok(ColumnarValue::Array(current_value))
+    }
 }
 
 impl PhysicalExpr for CaseExpr {
@@ -449,6 +524,7 @@ impl PhysicalExpr for CaseExpr {
                 self.case_column_or_null(batch)
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
+            EvalMethod::DivideZeroExpression => self.divide_by_zero_expr(batch),
         }
     }
 
