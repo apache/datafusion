@@ -65,8 +65,8 @@ impl ScalarUDFImpl for Range {
         &self.signature
     }
 
-    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        _arg_types
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        arg_types
             .iter()
             .map(|arg_type| match arg_type {
                 Null => Ok(Null),
