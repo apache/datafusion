@@ -233,10 +233,22 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn len(&self) -> usize {
-        self.group_values
-            .iter()
-            .map(|rows| rows.num_rows())
-            .sum::<usize>()
+        match self.mode {
+            GroupStatesMode::Flat => self
+                .group_values
+                .current()
+                .map(|g| g.num_rows())
+                .unwrap_or(0),
+            GroupStatesMode::Blocked(blk_size) => {
+                let num_blocks = self.group_values.num_blocks();
+                if num_blocks == 0 {
+                    return 0;
+                }
+
+                (num_blocks - 1) * blk_size
+                    + self.group_values.current().unwrap().num_rows()
+            }
+        }
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {

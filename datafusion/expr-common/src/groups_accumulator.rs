@@ -180,12 +180,9 @@ impl<T> Blocks<T> {
             return;
         }
 
-        // Take and push the old current to `previous`
-        let old_cur = std::mem::take(&mut self.current).unwrap();
+        // Take and push the old current to `previous`, use the b
+        let old_cur = std::mem::replace(&mut self.current, Some(block)).unwrap();
         self.previous.push_back(old_cur);
-
-        // Set the new current
-        self.current = Some(block);
     }
 
     pub fn pop_first_block(&mut self) -> Option<T> {
