@@ -22,7 +22,7 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    exec_err, internal_datafusion_err, internal_err, plan_err,
     utils::{coerced_fixed_size_list_to_list, list_ndims},
     Result,
 };
@@ -236,9 +236,10 @@ fn get_valid_types_with_window_udf(
     func: &WindowUDF,
 ) -> Result<Vec<Vec<DataType>>> {
     let valid_types = match signature {
-        TypeSignature::UserDefined => {
-            return not_impl_err!("UserDefined signature is not supported yet")
-        }
+        TypeSignature::UserDefined => match func.coerce_types(current_types) {
+            Ok(coerced_types) => vec![coerced_types],
+            Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
+        },
         TypeSignature::OneOf(signatures) => signatures
             .iter()
             .filter_map(|t| get_valid_types_with_window_udf(t, current_types, func).ok())
