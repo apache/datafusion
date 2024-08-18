@@ -65,6 +65,13 @@ pub fn data_types_with_scalar_udf(
     try_coerce_types(valid_types, current_types, &signature.type_signature)
 }
 
+/// Performs type coercion for aggregate function arguments.
+///
+/// Returns the data types to which each argument must be coerced to
+/// match `signature`.
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
 pub fn data_types_with_aggregate_udf(
     current_types: &[DataType],
     func: &AggregateUDF,
@@ -94,6 +101,13 @@ pub fn data_types_with_aggregate_udf(
     try_coerce_types(valid_types, current_types, &signature.type_signature)
 }
 
+/// Performs type coercion for window function arguments.
+///
+/// Returns the data types to which each argument must be coerced to
+/// match `signature`.
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
 pub fn data_types_with_window_udf(
     current_types: &[DataType],
     func: &WindowUDF,

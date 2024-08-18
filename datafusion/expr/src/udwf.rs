@@ -362,7 +362,7 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// Coerce arguments of a function call to types that the function can evaluate.
     ///
     /// This function is only called if [`WindowUDFImpl::signature`] returns [`crate::TypeSignature::UserDefined`]. Most
-    /// UDAFs should return one of the other variants of `TypeSignature` which handle common
+    /// UDWFs should return one of the other variants of `TypeSignature` which handle common
     /// cases
     ///
     /// See the [type coercion module](crate::type_coercion)
