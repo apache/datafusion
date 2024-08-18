@@ -204,6 +204,8 @@ impl<T> Blocks<T> {
         self.previous.len() + 1
     }
 
+    // TODO: maybe impl a specific Iterator rather than use the trait object,
+    // it can slightly improve performance by eliminating the dynamic dispatch.
     pub fn iter(&self) -> Box<dyn Iterator<Item = &'_ T> + '_> {
         // If current is None, it means no data, return empty iter
         if self.current.is_none() {
@@ -220,6 +222,8 @@ impl<T> Blocks<T> {
         }
     }
 
+    // TODO: maybe impl a specific Iterator rather than use the trait object,
+    // it can slightly improve performance by eliminating the dynamic dispatch.
     pub fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &'_ mut T> + '_> {
         // If current is None, it means no data, return empty iter
         if self.current.is_none() {

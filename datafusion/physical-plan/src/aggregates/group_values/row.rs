@@ -216,6 +216,8 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn size(&self) -> usize {
+        // TODO: support size stats in `Blocks`,
+        // it is too expansive to calculate it again and again.
         let group_values_size = self
             .group_values
             .iter()
