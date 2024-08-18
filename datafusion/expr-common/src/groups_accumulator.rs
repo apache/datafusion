@@ -141,83 +141,93 @@ impl BlockedGroupIndex {
     }
 }
 
-pub enum Blocks<T> {
-    Single(Option<T>),
-    Multiple(VecDeque<T>),
+pub struct Blocks<T> {
+    /// The current block, it should be pushed into `previous`
+    /// when next block is pushed
+    current: Option<T>,
+
+    ///
+    previous: VecDeque<T>,
 }
 
 impl<T> Blocks<T> {
     pub fn new() -> Self {
-        Self::Single(None)
+        Self {
+            current: None,
+            previous: VecDeque::new(),
+        }
     }
 
     pub fn current(&self) -> Option<&T> {
-        match self {
-            Blocks::Single(blk) => blk.as_ref(),
-            Blocks::Multiple(blks) => blks.back(),
-        }
+        self.current.as_ref()
     }
 
     pub fn current_mut(&mut self) -> Option<&mut T> {
-        match self {
-            Blocks::Single(blk) => blk.as_mut(),
-            Blocks::Multiple(blks) => blks.back_mut(),
-        }
+        self.current.as_mut()
     }
 
     pub fn push_block(&mut self, block: T) {
-        loop {
-            match self {
-                // If found it is Single, convert to Multiple first
-                Blocks::Single(single_opt) => {
-                    let single_opt = mem::take(single_opt);
-                    if single_opt.is_none() {
-                        *self = Self::Single(Some(block));
-                        break;
-                    }
-
-                    let mut new_multiple = VecDeque::with_capacity(2);
-                    new_multiple.push_back(single_opt.unwrap());
-
-                    *self = Self::Multiple(new_multiple);
-                }
-                // If found it Multiple, just push the block into it
-                Blocks::Multiple(multiple) => {
-                    multiple.push_back(block);
-                    break;
-                }
-            }
+        // If empty, use the block as initialized current
+        if self.current.is_none() {
+            self.current = Some(block);
+            return;
         }
+
+        // Take and push the old current to `previous`
+        let old_cur = std::mem::take(&mut self.current).unwrap();
+        self.previous.push_back(old_cur);
+
+        // Set the new current
+        self.current = Some(block);
     }
 
     pub fn pop_first_block(&mut self) -> Option<T> {
-        match self {
-            Blocks::Single(single) => mem::take(single),
-            Blocks::Multiple(multiple) => multiple.pop_front(),
+        // If `previous` not empty, pop the first of them
+        if !self.previous.is_empty() {
+            return self.previous.pop_front();
         }
+
+        // Otherwise, we pop the current
+        std::mem::take(&mut self.current)
     }
 
     pub fn num_blocks(&self) -> usize {
-        match self {
-            Blocks::Single(None) => 0,
-            Blocks::Single(Some(_)) => 1,
-            Blocks::Multiple(multiple) => multiple.len(),
+        if self.current.is_none() {
+            return 0;
         }
+
+        self.previous.len() + 1
     }
 
     pub fn iter(&self) -> Box<dyn Iterator<Item = &'_ T> + '_> {
-        match self {
-            Blocks::Single(None) => Box::new(iter::empty()),
-            Blocks::Single(Some(single)) => Box::new(iter::once(single)),
-            Blocks::Multiple(multiple) => Box::new(multiple.iter()),
+        // If current is None, it means no data, return empty iter
+        if self.current.is_none() {
+            return Box::new(iter::empty());
+        }
+
+        let cur_iter = iter::once(self.current.as_ref().unwrap());
+
+        if !self.previous.is_empty() {
+            let previous_iter = self.previous.iter();
+            Box::new(previous_iter.chain(cur_iter))
+        } else {
+            Box::new(cur_iter)
         }
     }
 
     pub fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &'_ mut T> + '_> {
-        match self {
-            Blocks::Single(None) => Box::new(iter::empty()),
-            Blocks::Single(Some(single)) => Box::new(iter::once(single)),
-            Blocks::Multiple(multiple) => Box::new(multiple.iter_mut()),
+        // If current is None, it means no data, return empty iter
+        if self.current.is_none() {
+            return Box::new(iter::empty());
+        }
+
+        let cur_iter = iter::once(self.current.as_mut().unwrap());
+
+        if !self.previous.is_empty() {
+            let previous_iter = self.previous.iter_mut();
+            Box::new(previous_iter.chain(cur_iter))
+        } else {
+            Box::new(cur_iter)
         }
     }
 
@@ -227,13 +237,11 @@ impl<T> Blocks<T> {
 }
 
 impl<T: fmt::Debug> fmt::Debug for Blocks<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Single(single) => f.debug_tuple("Single").field(single).finish(),
-            Self::Multiple(multiple) => {
-                f.debug_tuple("Multiple").field(multiple).finish()
-            }
-        }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Blocks")
+            .field("current", &self.current)
+            .field("previous", &self.previous)
+            .finish()
     }
 }
 
@@ -241,30 +249,20 @@ impl<T> Index<usize> for Blocks<T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &T {
-        match self {
-            Blocks::Single(Some(single)) => {
-                debug_assert!(index == 0);
-                single
-            }
-            Blocks::Multiple(multiple) => &multiple[index],
-            Blocks::Single(None) => {
-                unreachable!("can't use index to access empty blocks")
-            }
+        if index < self.previous.len() {
+            &self.previous[index]
+        } else {
+            self.current.as_ref().unwrap()
         }
     }
 }
 
 impl<T> IndexMut<usize> for Blocks<T> {
     fn index_mut(&mut self, index: usize) -> &mut T {
-        match self {
-            Blocks::Single(Some(single)) => {
-                debug_assert!(index == 0);
-                single
-            }
-            Blocks::Multiple(multiple) => &mut multiple[index],
-            Blocks::Single(None) => {
-                unreachable!("can't use index to access empty blocks")
-            }
+        if index < self.previous.len() {
+            &mut self.previous[index]
+        } else {
+            self.current.as_mut().unwrap()
         }
     }
 }
@@ -278,24 +276,25 @@ impl<T> Default for Blocks<T> {
 pub type VecBlocks<T> = Blocks<Vec<T>>;
 
 impl<T> VecBlocks<T> {
-    pub fn into_to_vec(self) -> Vec<T> {
-        match self {
-            Blocks::Single(None) => Vec::new(),
-            Blocks::Single(Some(single)) => single,
-            Blocks::Multiple(multiple) => {
-                multiple.into_iter().flat_map(|v| v.into_iter()).collect()
-            }
+    pub fn into_to_vec(mut self) -> Vec<T> {
+        if self.current.is_none() {
+            return Vec::new();
+        }
+
+        if self.previous.is_empty() {
+            self.current.unwrap()
+        } else {
+            self.iter_mut()
+                .flat_map(|blk| std::mem::take(blk).into_iter())
+                .collect::<Vec<_>>()
         }
     }
 
     pub fn capacity(&self) -> usize {
-        match self {
-            Blocks::Single(None) => 0,
-            Blocks::Single(Some(single)) => single.capacity(),
-            Blocks::Multiple(multiple) => {
-                multiple.iter().map(|blk| blk.capacity()).sum::<usize>()
-            }
-        }
+        let cur_cap = self.current.as_ref().map(|blk| blk.capacity()).unwrap_or(0);
+        let prev_cap = self.previous.iter().map(|p| p.capacity()).sum::<usize>();
+
+        cur_cap + prev_cap
     }
 }
 
