@@ -18,10 +18,7 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use std::{
-    cmp::min,
-    collections::VecDeque,
-    mem,
-    ops::{Index, IndexMut},
+    cmp::min, collections::VecDeque, iter, mem, ops::{Index, IndexMut}
 };
 
 use arrow::array::{ArrayRef, BooleanArray};
@@ -82,13 +79,9 @@ impl EmitTo {
     ///
     pub fn take_needed_from_blocks<T>(
         &self,
-        blocks: &mut Blocks<T>,
+        blocks: &mut VecBlocks<T>,
         mode: GroupStatesMode,
     ) -> Vec<T> {
-        if blocks.is_empty() {
-            return Vec::new();
-        }
-
         match self {
             Self::All => match mode {
                 GroupStatesMode::Flat => blocks.pop_first_block().unwrap(),
@@ -146,37 +139,42 @@ impl BlockedGroupIndex {
 }
 
 pub enum Blocks<T> {
-    Single(Vec<T>),
-    Multiple(VecDeque<Vec<T>>),
+    Single(Option<T>),
+    Multiple(VecDeque<T>),
 }
 
 impl<T> Blocks<T> {
     pub fn new() -> Self {
-        Self::Single(Vec::new())
+        Self::Single(None)
     }
 
-    pub fn current(&self) -> Option<&Vec<T>> {
+    pub fn current(&self) -> Option<&T> {
         match self {
-            Blocks::Single(blk) => Some(blk),
+            Blocks::Single(blk) => blk.as_ref(),
             Blocks::Multiple(blks) => blks.back(),
         }
     }
 
-    pub fn current_mut(&mut self) -> Option<&mut Vec<T>> {
+    pub fn current_mut(&mut self) -> Option<&mut T> {
         match self {
-            Blocks::Single(blk) => Some(blk),
+            Blocks::Single(blk) => blk.as_mut(),
             Blocks::Multiple(blks) => blks.back_mut(),
         }
     }
 
-    pub fn push_block(&mut self, block: Vec<T>) {
+    pub fn push_block(&mut self, block: T) {
         loop {
             match self {
                 // If found it is Single, convert to Multiple first
-                Blocks::Single(single) => {
+                Blocks::Single(single_opt) => {
+                    let single_opt = mem::take(single_opt);
+                    if single_opt.is_none() {
+                        *self = Self::Single(Some(block));
+                        break;
+                    }
+
                     let mut new_multiple = VecDeque::with_capacity(2);
-                    let first_block = mem::take(single);
-                    new_multiple.push_back(first_block);
+                    new_multiple.push_back(single_opt.unwrap());
 
                     *self = Self::Multiple(new_multiple);
                 }
@@ -189,42 +187,26 @@ impl<T> Blocks<T> {
         }
     }
 
-    pub fn pop_first_block(&mut self) -> Option<Vec<T>> {
+    pub fn pop_first_block(&mut self) -> Option<T> {
         match self {
-            Blocks::Single(single) => Some(mem::take(single)),
+            Blocks::Single(single) => mem::take(single),
             Blocks::Multiple(multiple) => multiple.pop_front(),
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        match self {
-            Blocks::Single(single) => single.is_empty(),
-            Blocks::Multiple(multiple) => multiple.is_empty(),
         }
     }
 
     pub fn num_blocks(&self) -> usize {
         match self {
-            Blocks::Single(_) => 1,
+            Blocks::Single(None) => 0,
+            Blocks::Single(Some(_)) => 1,
             Blocks::Multiple(multiple) => multiple.len(),
         }
     }
 
-    pub fn into_to_vec(self) -> Vec<T> {
+    pub fn iter(&self) -> Box<dyn Iterator<Item = &'_ T> + '_> {
         match self {
-            Blocks::Single(single) => single,
-            Blocks::Multiple(multiple) => {
-                multiple.into_iter().flat_map(|v| v.into_iter()).collect()
-            }
-        }
-    }
-
-    pub fn capacity(&self) -> usize {
-        match self {
-            Blocks::Single(single) => single.capacity(),
-            Blocks::Multiple(multiple) => {
-                multiple.iter().map(|blk| blk.capacity()).sum::<usize>()
-            }
+            Blocks::Single(None) => Box::new(iter::empty()),
+            Blocks::Single(Some(single)) => Box::new(iter::once(single)),
+            Blocks::Multiple(multiple) => Box::new(multiple.iter()),
         }
     }
 
@@ -245,34 +227,60 @@ impl<T: fmt::Debug> fmt::Debug for Blocks<T> {
 }
 
 impl<T> Index<usize> for Blocks<T> {
-    type Output = Vec<T>;
+    type Output = T;
 
-    fn index(&self, index: usize) -> &Vec<T> {
+    fn index(&self, index: usize) -> &T {
         match self {
-            Blocks::Single(single) => {
+            Blocks::Single(Some(single)) => {
                 assert!(index == 0);
                 single
             }
             Blocks::Multiple(multiple) => &multiple[index],
+            Blocks::Single(None) => unreachable!("can't use index to access empty blocks"),
         }
     }
 }
 
 impl<T> IndexMut<usize> for Blocks<T> {
-    fn index_mut(&mut self, index: usize) -> &mut Vec<T> {
+    fn index_mut(&mut self, index: usize) -> &mut T {
         match self {
-            Blocks::Single(single) => {
+            Blocks::Single(Some(single)) => {
                 assert!(index == 0);
                 single
             }
             Blocks::Multiple(multiple) => &mut multiple[index],
+            Blocks::Single(None) => unreachable!("can't use index to access empty blocks"),
         }
     }
 }
 
-impl<T> Default for Blocks<T> {
+impl<T> Default for VecBlocks<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub type VecBlocks<T> = Blocks<Vec<T>>;
+
+impl<T> VecBlocks<T> {
+    pub fn into_to_vec(self) -> Vec<T> {
+        match self {
+            Blocks::Single(None) => Vec::new(),
+            Blocks::Single(Some(single)) => single,
+            Blocks::Multiple(multiple) => {
+                multiple.into_iter().flat_map(|v| v.into_iter()).collect()
+            }
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        match self {
+            Blocks::Single(None) => 0,
+            Blocks::Single(Some(single)) => single.capacity(),
+            Blocks::Multiple(multiple) => {
+                multiple.iter().map(|blk| blk.capacity()).sum::<usize>()
+            }
+        }
     }
 }
 

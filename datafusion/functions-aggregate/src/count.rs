@@ -16,7 +16,7 @@
 // under the License.
 
 use ahash::RandomState;
-use datafusion_expr::groups_accumulator::{BlockedGroupIndex, Blocks, GroupStatesMode};
+use datafusion_expr::groups_accumulator::{BlockedGroupIndex, Blocks, GroupStatesMode, VecBlocks};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::ensure_enough_room_for_values;
 use std::collections::HashSet;
@@ -360,7 +360,7 @@ struct CountGroupsAccumulator {
     /// output type of count is `DataType::Int64`. Thus by using `i64`
     /// for the counts, the output [`Int64Array`] can be created
     /// without copy.
-    counts: Blocks<i64>,
+    counts: VecBlocks<i64>,
 
     mode: GroupStatesMode,
 }

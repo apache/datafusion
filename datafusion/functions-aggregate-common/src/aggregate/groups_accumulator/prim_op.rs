@@ -24,7 +24,7 @@ use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{
-    BlockedGroupIndex, EmitTo, GroupStatesMode, GroupsAccumulator,
+    BlockedGroupIndex, EmitTo, GroupStatesMode, GroupsAccumulator, VecBlocks,
 };
 
 use crate::aggregate::groups_accumulator::accumulate::BlockedNullState;
@@ -46,7 +46,7 @@ where
     F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
     /// values per group, stored as the native type
-    values_blocks: Blocks<T::Native>,
+    values_blocks: VecBlocks<T::Native>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,

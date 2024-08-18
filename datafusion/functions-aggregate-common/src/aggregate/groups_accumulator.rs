@@ -34,7 +34,7 @@ use datafusion_common::{
     arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr_common::groups_accumulator::{Blocks, EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{Blocks, EmitTo, GroupsAccumulator, VecBlocks};
 use datafusion_expr_common::{
     accumulator::Accumulator, groups_accumulator::GroupStatesMode,
 };
@@ -424,7 +424,7 @@ pub(crate) fn slice_and_maybe_filter(
 ///   values: [x, x, x], [x, x, x], [default, default, default]
 ///
 pub fn ensure_enough_room_for_values<T: Clone>(
-    values: &mut Blocks<T>,
+    values: &mut VecBlocks<T>,
     mode: GroupStatesMode,
     total_num_groups: usize,
     default_value: T,

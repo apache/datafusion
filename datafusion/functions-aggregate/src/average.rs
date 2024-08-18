@@ -29,7 +29,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::groups_accumulator::{BlockedGroupIndex, Blocks, GroupStatesMode};
+use datafusion_expr::groups_accumulator::{BlockedGroupIndex, Blocks, GroupStatesMode, VecBlocks};
 use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
@@ -398,10 +398,10 @@ where
     return_data_type: DataType,
 
     /// Count per group (use u64 to make UInt64Array)
-    counts: Blocks<u64>,
+    counts: VecBlocks<u64>,
 
     /// Sums per group, stored as the native type
-    sums: Blocks<T::Native>,
+    sums: VecBlocks<T::Native>,
 
     /// Track nulls in the input / filters
     null_state: BlockedNullState,
