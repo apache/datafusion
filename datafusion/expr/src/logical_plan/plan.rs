@@ -2099,7 +2099,7 @@ impl Filter {
 
     /// Create a new filter operator for a having clause.
     /// This is similar to a filter, but its having flag is set to true.
-    pub fn try_new_having(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+    pub fn try_new_with_having(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
         Self::try_new_internal(predicate, input, true)
     }
 

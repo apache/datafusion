@@ -5655,8 +5655,38 @@ select * from having_test group by v1, v2 having max(v1) = 3
 ----
 3 4
 
-query error DataFusion error: Error during planning: Projection references non-aggregate values: Expression having_test\.v1 could not be resolved from available columns: max\(having_test\.v1\)
+query TT
+EXPLAIN select * from having_test group by v1, v2 having max(v1) = 3
+----
+logical_plan
+01)Projection: having_test.v1, having_test.v2
+02)--Filter: max(having_test.v1) = Int32(3)
+03)----Aggregate: groupBy=[[having_test.v1, having_test.v2]], aggr=[[max(having_test.v1)]]
+04)------TableScan: having_test projection=[v1, v2]
+physical_plan
+01)ProjectionExec: expr=[v1@0 as v1, v2@1 as v2]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: max(having_test.v1)@2 = 3
+04)------AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+
+query error DataFusion error: Error during planning: HAVING clause references non-aggregate values: Expression having_test\.v1 could not be resolved from available columns: max\(having_test\.v1\)
 select * from having_test having max(v1) = 3
+
+# If the select items only contain scalar expressions, the having clause is valid.
+query P
+select now() from having_test having max(v1) = 4
+----
+
+# If the select items only contain scalar expressions, the having clause is valid.
+query I
+select 0 from having_test having max(v1) = 4
+----
 
 # because v2 is not in the group by clause, the sql is invalid
 query error
