@@ -269,7 +269,7 @@ impl<T> IndexMut<usize> for Blocks<T> {
     }
 }
 
-impl<T> Default for VecBlocks<T> {
+impl<T> Default for Blocks<T> {
     fn default() -> Self {
         Self::new()
     }

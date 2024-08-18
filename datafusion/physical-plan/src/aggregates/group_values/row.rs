@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::VecDeque;
 use std::mem;
 
 use crate::aggregates::group_values::GroupValues;
@@ -28,7 +27,7 @@ use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use datafusion_expr::groups_accumulator::GroupStatesMode;
+use datafusion_expr::groups_accumulator::{Blocks, GroupStatesMode};
 use datafusion_expr::EmitTo;
 use hashbrown::raw::RawTable;
 
@@ -61,7 +60,7 @@ pub struct GroupValuesRows {
     /// important for multi-column group keys.
     ///
     /// [`Row`]: arrow::row::Row
-    group_values: VecDeque<Rows>,
+    group_values: Blocks<Rows>,
 
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
@@ -97,7 +96,7 @@ impl GroupValuesRows {
             row_converter,
             map,
             map_size: 0,
-            group_values: VecDeque::new(),
+            group_values: Blocks::new(),
             hashes_buffer: Default::default(),
             rows_buffer,
             random_state: Default::default(),
@@ -115,7 +114,7 @@ impl GroupValues for GroupValuesRows {
         let n_rows = group_rows.num_rows();
 
         let mut group_values = mem::take(&mut self.group_values);
-        if group_values.is_empty() {
+        if group_values.num_blocks() == 0 {
             let block = match self.mode {
                 GroupStatesMode::Flat => self.row_converter.empty_rows(0, 0),
                 GroupStatesMode::Blocked(blk_size) => {
@@ -123,7 +122,7 @@ impl GroupValues for GroupValuesRows {
                 }
             };
 
-            group_values.push_back(block);
+            group_values.push_block(block);
         }
 
         // tracks to which group each of the input rows belongs
@@ -152,7 +151,7 @@ impl GroupValues for GroupValuesRows {
                 match mode {
                     GroupStatesMode::Flat => {
                         group_rows.row(row)
-                            == group_values.back().unwrap().row(*group_idx)
+                            == group_values.current().unwrap().row(*group_idx)
                     }
                     GroupStatesMode::Blocked(_) => {
                         let block_id =
@@ -172,24 +171,24 @@ impl GroupValues for GroupValuesRows {
                     // Add new entry to aggr_state and save newly created index
                     let group_idx = match mode {
                         GroupStatesMode::Flat => {
-                            let blk = group_values.back_mut().unwrap();
+                            let blk = group_values.current_mut().unwrap();
                             let group_idx = blk.num_rows();
                             blk.push(group_rows.row(row));
                             group_idx
                         }
                         GroupStatesMode::Blocked(blk_size) => {
-                            if group_values.back().unwrap().num_rows() == blk_size {
+                            if group_values.current().unwrap().num_rows() == blk_size {
                                 // Use blk_size as offset cap,
                                 // and old block's buffer size as buffer cap
                                 let new_buf_cap =
-                                    rows_buffer_size(group_values.back().unwrap());
+                                    rows_buffer_size(group_values.current().unwrap());
                                 let new_blk =
                                     self.row_converter.empty_rows(blk_size, new_buf_cap);
-                                group_values.push_back(new_blk);
+                                group_values.push_block(new_blk);
                             }
 
-                            let blk_id = (group_values.len() - 1) as u64;
-                            let cur_blk = group_values.back_mut().unwrap();
+                            let blk_id = (group_values.num_blocks() - 1) as u64;
+                            let cur_blk = group_values.current_mut().unwrap();
                             let blk_offset = cur_blk.num_rows() as u64;
                             cur_blk.push(group_rows.row(row));
 
@@ -246,7 +245,7 @@ impl GroupValues for GroupValuesRows {
         let mut output = match emit_to {
             EmitTo::All => match self.mode {
                 GroupStatesMode::Flat => {
-                    let blk = group_values.pop_back().unwrap();
+                    let blk = group_values.pop_first_block().unwrap();
                     let output = self.row_converter.convert_rows(blk.into_iter())?;
                     output
                 }
@@ -263,7 +262,7 @@ impl GroupValues for GroupValuesRows {
                     let mut total_rows = self
                         .row_converter
                         .empty_rows(total_rows_num, total_buffer_size);
-                    for rows in &group_values {
+                    for rows in group_values.iter() {
                         for row in rows.into_iter() {
                             total_rows.push(row);
                         }
@@ -277,7 +276,7 @@ impl GroupValues for GroupValuesRows {
                 }
             },
             EmitTo::First(n) => {
-                let blk = group_values.back_mut().unwrap();
+                let blk = group_values.current_mut().unwrap();
                 let groups_rows = blk.iter().take(n);
                 let output = self.row_converter.convert_rows(groups_rows)?;
                 // Clear out first n group keys by copying them to a new Rows.
@@ -303,7 +302,7 @@ impl GroupValues for GroupValuesRows {
                 output
             }
             EmitTo::CurrentBlock(true) => {
-                let cur_blk = group_values.pop_front().unwrap();
+                let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
                 unsafe {
                     for bucket in self.map.iter() {
@@ -327,7 +326,7 @@ impl GroupValues for GroupValuesRows {
                 output
             }
             EmitTo::CurrentBlock(false) => {
-                let cur_blk = group_values.pop_front().unwrap();
+                let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
                 output
             }
