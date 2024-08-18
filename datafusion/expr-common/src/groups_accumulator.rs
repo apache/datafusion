@@ -145,6 +145,18 @@ impl BlockedGroupIndex {
             block_offset,
         }
     }
+
+    pub fn new_from_parts(block_id: usize, block_offset: usize) -> Self {
+        Self {
+            block_id,
+            block_offset,
+        }
+    }
+
+    pub fn as_packed_index(&self) -> usize {
+        ((((self.block_id as u64) << 32) & 0xffffffff00000000)
+            | (self.block_offset as u64 & 0x00000000ffffffff)) as usize
+    }
 }
 
 /// The basic data structure for blocked aggregation intermediate results
@@ -180,7 +192,7 @@ impl<T> Blocks<T> {
             return;
         }
 
-        // Take and push the old current to `previous`, 
+        // Take and push the old current to `previous`,
         // use input `block` as the new `current`
         let old_cur = std::mem::replace(&mut self.current, Some(block)).unwrap();
         self.previous.push_back(old_cur);

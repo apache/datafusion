@@ -27,7 +27,7 @@ use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use datafusion_expr::groups_accumulator::{Blocks, GroupStatesMode};
+use datafusion_expr::groups_accumulator::{BlockedGroupIndex, Blocks, GroupStatesMode};
 use datafusion_expr::EmitTo;
 use hashbrown::raw::RawTable;
 
@@ -154,11 +154,10 @@ impl GroupValues for GroupValuesRows {
                             == group_values.current().unwrap().row(*group_idx)
                     }
                     GroupStatesMode::Blocked(_) => {
-                        let block_id =
-                            ((*group_idx as u64 >> 32) & 0x00000000ffffffff) as usize;
-                        let block_offset =
-                            ((*group_idx as u64) & 0x00000000ffffffff) as usize;
-                        group_rows.row(row) == group_values[block_id].row(block_offset)
+                        let blocked_index = BlockedGroupIndex::new(*group_idx);
+                        group_rows.row(row)
+                            == group_values[blocked_index.block_id]
+                                .row(blocked_index.block_offset)
                     }
                 }
             });
@@ -187,14 +186,14 @@ impl GroupValues for GroupValuesRows {
                                 group_values.push_block(new_blk);
                             }
 
-                            let blk_id = (group_values.num_blocks() - 1) as u64;
+                            let blk_id = group_values.num_blocks() - 1;
                             let cur_blk = group_values.current_mut().unwrap();
-                            let blk_offset = cur_blk.num_rows() as u64;
+                            let blk_offset = cur_blk.num_rows();
                             cur_blk.push(group_rows.row(row));
 
-                            (((blk_id << 32) & 0xffffffff00000000)
-                                | (blk_offset & 0x00000000ffffffff))
-                                as usize
+                            let blocked_index =
+                                BlockedGroupIndex::new_from_parts(blk_id, blk_offset);
+                            blocked_index.as_packed_index()
                         }
                     };
 
@@ -321,16 +320,16 @@ impl GroupValues for GroupValuesRows {
                 unsafe {
                     for bucket in self.map.iter() {
                         // Decrement group index by n
-                        let group_idx = bucket.as_ref().1 as u64;
-                        let blk_id = (group_idx >> 32) & 0x00000000ffffffff;
-                        let blk_offset = group_idx & 0x00000000ffffffff;
-                        match blk_id.checked_sub(1) {
+                        let group_idx = bucket.as_ref().1;
+                        let old_blk_idx = BlockedGroupIndex::new(group_idx);
+                        match old_blk_idx.block_id.checked_sub(1) {
                             // Group index was >= n, shift value down
-                            Some(bid) => {
-                                let new_group_idx = (((bid << 32) & 0xffffffff00000000)
-                                    | (blk_offset & 0x00000000ffffffff))
-                                    as usize;
-                                bucket.as_mut().1 = new_group_idx;
+                            Some(new_blk_id) => {
+                                let new_group_idx = BlockedGroupIndex::new_from_parts(
+                                    new_blk_id,
+                                    old_blk_idx.block_offset,
+                                );
+                                bucket.as_mut().1 = new_group_idx.as_packed_index();
                             }
                             // Group index was < n, so remove from table
                             None => self.map.erase(bucket),
