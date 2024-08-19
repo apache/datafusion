@@ -114,6 +114,16 @@ impl EmitTo {
     }
 }
 
+/// Mode for `accumulators` and `group values`
+///
+/// Their meanings:
+///   - Flat, the values in them will be managed with a single `Vec`.
+///   It will grow constantly when more and more values are inserted,
+///   that leads to a considerable amount of copying, and finally a bad performance.
+///
+///   - Blocked, the values in them will be managed with multiple `Vec`s.
+///   When the block is large enough, a new block will be allocated and used
+///   for inserting. Obviously, this strategy can avoid copying and get a good performance.
 #[derive(Debug, Clone, Copy)]
 pub enum GroupStatesMode {
     Flat,
