@@ -88,7 +88,7 @@ impl ScalarUDFImpl for Range {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.iter().any(|arg| arg.data_type() == DataType::Null) {
+        if args.iter().any(|arg| arg.data_type() == &DataType::Null) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
         match args[0].data_type() {
@@ -159,7 +159,7 @@ impl ScalarUDFImpl for GenSeries {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.iter().any(|arg| arg.data_type() == DataType::Null) {
+        if args.iter().any(|arg| arg.data_type() == &DataType::Null) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
         match args[0].data_type() {

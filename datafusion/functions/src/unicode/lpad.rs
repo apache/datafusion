@@ -265,8 +265,8 @@ mod tests {
             test_function!(
                 LPadFunc::new(),
                 &[
-                    ColumnarValue::Scalar(ScalarValue::Utf8($INPUT)),
-                    ColumnarValue::Scalar($LENGTH)
+                    ColumnarValue::from(ScalarValue::Utf8($INPUT)),
+                    ColumnarValue::from($LENGTH)
                 ],
                 $EXPECTED,
                 &str,
@@ -280,9 +280,9 @@ mod tests {
             test_function!(
                 LPadFunc::new(),
                 &[
-                    ColumnarValue::Scalar(ScalarValue::Utf8($INPUT)),
-                    ColumnarValue::Scalar($LENGTH),
-                    ColumnarValue::Scalar(ScalarValue::Utf8($REPLACE))
+                    ColumnarValue::from(ScalarValue::Utf8($INPUT)),
+                    ColumnarValue::from($LENGTH),
+                    ColumnarValue::from(ScalarValue::Utf8($REPLACE))
                 ],
                 $EXPECTED,
                 &str,

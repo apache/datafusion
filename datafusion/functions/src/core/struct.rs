@@ -109,9 +109,9 @@ mod tests {
     fn test_struct() {
         // struct(1, 2, 3) = {"c0": 1, "c1": 2, "c2": 3}
         let args = [
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::from(ScalarValue::Int64(Some(1))),
+            ColumnarValue::from(ScalarValue::Int64(Some(2))),
+            ColumnarValue::from(ScalarValue::Int64(Some(3))),
         ];
         let struc = struct_expr(&args)
             .expect("failed to initialize function struct")

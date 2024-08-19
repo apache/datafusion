@@ -126,7 +126,7 @@ fn nvl2_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 internal_err!("except Scalar value, but got Array")
             }
             ColumnarValue::Scalar(scalar) => {
-                if scalar.is_null() {
+                if scalar.value().is_null() {
                     current_value = &args[2];
                 }
                 Ok(current_value.clone())

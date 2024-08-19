@@ -137,12 +137,20 @@ impl ScalarUDFImpl for DateTruncFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let (granularity, array) = (&args[0], &args[1]);
 
-        let granularity = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) =
-            granularity
-        {
-            v.to_lowercase()
-        } else {
-            return exec_err!("Granularity of `date_trunc` must be non-null scalar Utf8");
+        let granularity = match granularity {
+            ColumnarValue::Scalar(scalar) => match scalar.value() {
+                ScalarValue::Utf8(Some(v)) => v.to_lowercase(),
+                _ => {
+                    return exec_err!(
+                        "Granularity of `date_trunc` must be non-null scalar Utf8"
+                    )
+                }
+            },
+            _ => {
+                return exec_err!(
+                    "Granularity of `date_trunc` must be non-null scalar Utf8"
+                )
+            }
         };
 
         fn process_array<T: ArrowTimestampType>(
@@ -168,22 +176,29 @@ impl ScalarUDFImpl for DateTruncFunc {
             let parsed_tz = parse_tz(tz_opt)?;
             let value = general_date_trunc(T::UNIT, v, parsed_tz, granularity.as_str())?;
             let value = ScalarValue::new_timestamp::<T>(value, tz_opt.clone());
-            Ok(ColumnarValue::Scalar(value))
+            Ok(ColumnarValue::from(value))
         }
 
         Ok(match array {
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-                process_scalar::<TimestampNanosecondType>(v, granularity, tz_opt)?
-            }
-            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
-                process_scalar::<TimestampMicrosecondType>(v, granularity, tz_opt)?
-            }
-            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
-                process_scalar::<TimestampMillisecondType>(v, granularity, tz_opt)?
-            }
-            ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
-                process_scalar::<TimestampSecondType>(v, granularity, tz_opt)?
-            }
+            ColumnarValue::Scalar(scalar) => match scalar.value() {
+                ScalarValue::TimestampNanosecond(v, tz_opt) => {
+                    process_scalar::<TimestampNanosecondType>(v, granularity, tz_opt)?
+                }
+                ScalarValue::TimestampMicrosecond(v, tz_opt) => {
+                    process_scalar::<TimestampMicrosecondType>(v, granularity, tz_opt)?
+                }
+                ScalarValue::TimestampMillisecond(v, tz_opt) => {
+                    process_scalar::<TimestampMillisecondType>(v, granularity, tz_opt)?
+                }
+                ScalarValue::TimestampSecond(v, tz_opt) => {
+                    process_scalar::<TimestampSecondType>(v, granularity, tz_opt)?
+                }
+                _ => {
+                    return exec_err!(
+            "second argument of `date_trunc` must be nanosecond timestamp scalar or array"
+        );
+                }
+            },
             ColumnarValue::Array(array) => {
                 let array_type = array.data_type();
                 match array_type {
@@ -211,11 +226,6 @@ impl ScalarUDFImpl for DateTruncFunc {
                         &None,
                     )?,
                 }
-            }
-            _ => {
-                return exec_err!(
-            "second argument of `date_trunc` must be nanosecond timestamp scalar or array"
-        );
             }
         })
     }
@@ -685,7 +695,7 @@ mod tests {
                 .with_timezone_opt(tz_opt.clone());
             let result = DateTruncFunc::new()
                 .invoke(&[
-                    ColumnarValue::Scalar(ScalarValue::from("day")),
+                    ColumnarValue::from(ScalarValue::from("day")),
                     ColumnarValue::Array(Arc::new(input)),
                 ])
                 .unwrap();
@@ -843,7 +853,7 @@ mod tests {
                 .with_timezone_opt(tz_opt.clone());
             let result = DateTruncFunc::new()
                 .invoke(&[
-                    ColumnarValue::Scalar(ScalarValue::from("hour")),
+                    ColumnarValue::from(ScalarValue::from("hour")),
                     ColumnarValue::Array(Arc::new(input)),
                 ])
                 .unwrap();

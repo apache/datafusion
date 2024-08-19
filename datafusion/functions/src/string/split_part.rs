@@ -196,11 +196,11 @@ mod tests {
         test_function!(
             SplitPartFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("~@~")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("~@~")))),
+                ColumnarValue::from(ScalarValue::Int64(Some(2))),
             ],
             Ok(Some("def")),
             &str,
@@ -210,11 +210,11 @@ mod tests {
         test_function!(
             SplitPartFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("~@~")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(20))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("~@~")))),
+                ColumnarValue::from(ScalarValue::Int64(Some(20))),
             ],
             Ok(Some("")),
             &str,
@@ -224,11 +224,11 @@ mod tests {
         test_function!(
             SplitPartFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("~@~")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(-1))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("~@~")))),
+                ColumnarValue::from(ScalarValue::Int64(Some(-1))),
             ],
             Ok(Some("ghi")),
             &str,
@@ -238,11 +238,11 @@ mod tests {
         test_function!(
             SplitPartFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("~@~")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("~@~")))),
+                ColumnarValue::from(ScalarValue::Int64(Some(0))),
             ],
             exec_err!("field position must not be zero"),
             &str,

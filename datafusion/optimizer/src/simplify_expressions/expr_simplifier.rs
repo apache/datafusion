@@ -27,13 +27,14 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use datafusion_common::logical::eq::LogicallyEq;
+// use datafusion_common::logical::eq::LogicallyEq;
 use datafusion_common::{cast::as_large_list_array, exec_datafusion_err};
 use datafusion_common::{
     cast::as_list_array,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::logical::eq::LogicallyEq;
 use datafusion_expr::expr::{InList, InSubquery, WindowFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
@@ -629,7 +630,7 @@ impl<'a> ConstEvaluator<'a> {
             return ConstSimplifyResult::NotSimplified(s);
         }
 
-        let start_type = match expr.get_type(&self.input_schema) {
+        let expected_type = match expr.get_type(&self.input_schema) {
             Ok(t) => t,
             Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
         };
@@ -644,18 +645,6 @@ impl<'a> ConstEvaluator<'a> {
             Ok(v) => v,
             Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
         };
-
-        // TODO(@notfilippo): a fix for the select_arrow_cast error
-        let end_type = col_val.data_type();
-        if end_type.logically_eq(&start_type) && start_type != end_type {
-            return ConstSimplifyResult::SimplifyRuntimeError(
-                exec_datafusion_err!(
-                    "Skipping, end_type {} is logically equal to start_type {} but not strictly equal",
-                    end_type, start_type
-                ),
-                expr,
-            );
-        }
 
         match col_val {
             ColumnarValue::Array(a) => {
@@ -691,8 +680,22 @@ impl<'a> ConstEvaluator<'a> {
                 }
             }
             ColumnarValue::Scalar(s) => {
+                // TODO(@notfilippo): a fix for the select_arrow_cast error
+                let actual_type = s.value().data_type();
+                if expected_type.logically_eq(&actual_type)
+                    && expected_type.ne(&actual_type)
+                {
+                    return ConstSimplifyResult::SimplifyRuntimeError(
+                        exec_datafusion_err!(
+                    "Skipping, actual_type {} is logically equal to expected_type {} but not strictly equal",
+                    actual_type, expected_type
+                ),
+                        expr,
+                    );
+                }
+
                 // TODO: support the optimization for `Map` type after support impl hash for it
-                if matches!(&s, ScalarValue::Map(_)) {
+                if matches!(s.value(), ScalarValue::Map(_)) {
                     ConstSimplifyResult::SimplifyRuntimeError(
                         DataFusionError::NotImplemented(
                             "Const evaluate for Map type is still not supported"
@@ -701,7 +704,7 @@ impl<'a> ConstEvaluator<'a> {
                         expr,
                     )
                 } else {
-                    ConstSimplifyResult::Simplified(s)
+                    ConstSimplifyResult::Simplified(s.into_value())
                 }
             }
         }

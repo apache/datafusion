@@ -503,7 +503,7 @@ SELECT
   INITCAP(column1_large_utf8_lower) as c3
 FROM test_lowercase;
 ----
-Andrew Andrew Andrew    
+Andrew Andrew Andrew
 Xiangpeng Xiangpeng Xiangpeng
 Raphael Raphael Raphael
 NULL NULL NULL
@@ -688,7 +688,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: ltrim(test.column1_utf8view, Utf8View("foo")) AS l
+01)Projection: ltrim(test.column1_utf8view, CAST(Utf8("foo") AS Utf8View)) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test LTRIM with Utf8View bytes longer than 12
@@ -698,7 +698,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: ltrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+01)Projection: ltrim(test.column1_utf8view, CAST(Utf8("this is longer than 12") AS Utf8View)) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test LTRIM outputs
@@ -734,7 +734,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: rtrim(test.column1_utf8view, Utf8View("foo")) AS l
+01)Projection: rtrim(test.column1_utf8view, CAST(Utf8("foo") AS Utf8View)) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test RTRIM with Utf8View bytes longer than 12
@@ -744,7 +744,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: rtrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+01)Projection: rtrim(test.column1_utf8view, CAST(Utf8("this is longer than 12") AS Utf8View)) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test RTRIM outputs
@@ -816,7 +816,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: ends_with(test.column1_utf8view, Utf8View("foo")) AS c1, ends_with(test.column2_utf8view, test.column2_utf8view) AS c2
+01)Projection: ends_with(test.column1_utf8view, CAST(Utf8("foo") AS Utf8View)) AS c1, ends_with(test.column2_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for LEVENSHTEIN
@@ -827,7 +827,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: levenshtein(test.column1_utf8view, Utf8View("foo")) AS c1, levenshtein(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: levenshtein(test.column1_utf8view, CAST(Utf8("foo") AS Utf8View)) AS c1, levenshtein(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for LOWER
@@ -887,7 +887,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: overlay(test.column1_utf8view, Utf8View("foo"), Int64(2)) AS c1
+01)Projection: overlay(test.column1_utf8view, CAST(Utf8("foo") AS Utf8View), Int64(2)) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 query T
@@ -1084,8 +1084,9 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: substr_index(test.column1_utf8view, Utf8View("a"), Int64(1)) AS c, substr_index(test.column1_utf8view, Utf8View("a"), Int64(2)) AS c2
-02)--TableScan: test projection=[column1_utf8view]
+01)Projection: substr_index(test.column1_utf8view, __common_expr_1, Int64(1)) AS c, substr_index(test.column1_utf8view, __common_expr_1, Int64(2)) AS c2
+02)--Projection: CAST(Utf8("a") AS Utf8View) AS __common_expr_1, test.column1_utf8view
+03)----TableScan: test projection=[column1_utf8view]
 
 query TT
 SELECT
@@ -1106,7 +1107,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(test.column1_utf8view, Utf8View("foo")) AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: starts_with(test.column1_utf8view, CAST(Utf8("foo") AS Utf8View)) AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for TRANSLATE
@@ -1126,7 +1127,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: find_in_set(test.column1_utf8view, Utf8View("a,b,c,d")) AS c
+01)Projection: find_in_set(test.column1_utf8view, CAST(Utf8("a,b,c,d") AS Utf8View)) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 query I

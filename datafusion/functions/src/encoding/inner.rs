@@ -173,7 +173,7 @@ fn encode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
                 "Unsupported data type {other:?} for function encode({encoding})"
             ),
         },
-        ColumnarValue::Scalar(scalar) => match scalar {
+        ColumnarValue::Scalar(scalar) => match scalar.value() {
             ScalarValue::Utf8(a) => {
                 Ok(encoding.encode_scalar(a.as_ref().map(|s: &String| s.as_bytes())))
             }
@@ -198,7 +198,7 @@ fn decode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
                 "Unsupported data type {other:?} for function decode({encoding})"
             ),
         },
-        ColumnarValue::Scalar(scalar) => match scalar {
+        ColumnarValue::Scalar(scalar) => match scalar.value() {
             ScalarValue::Utf8(a) => {
                 encoding.decode_scalar(a.as_ref().map(|s: &String| s.as_bytes()))
             }
@@ -254,7 +254,7 @@ macro_rules! decode_to_array {
 
 impl Encoding {
     fn encode_scalar(self, value: Option<&[u8]>) -> ColumnarValue {
-        ColumnarValue::Scalar(match self {
+        ColumnarValue::from(match self {
             Self::Base64 => ScalarValue::Utf8(
                 value.map(|v| general_purpose::STANDARD_NO_PAD.encode(v)),
             ),
@@ -289,7 +289,7 @@ impl Encoding {
     fn decode_scalar(self, value: Option<&[u8]>) -> Result<ColumnarValue> {
         let value = match value {
             Some(value) => value,
-            None => return Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),
+            None => return Ok(ColumnarValue::from(ScalarValue::Binary(None))),
         };
 
         let out = match self {
@@ -311,7 +311,7 @@ impl Encoding {
             })?,
         };
 
-        Ok(ColumnarValue::Scalar(ScalarValue::Binary(Some(out))))
+        Ok(ColumnarValue::from(ScalarValue::Binary(Some(out))))
     }
 
     fn decode_binary_array<T>(self, value: &dyn Array) -> Result<ColumnarValue>
@@ -376,7 +376,7 @@ fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         );
     }
     let encoding = match &args[1] {
-        ColumnarValue::Scalar(scalar) => match scalar {
+        ColumnarValue::Scalar(scalar) => match scalar.value() {
             ScalarValue::Utf8(Some(method)) => {
                 method.parse::<Encoding>()
             }
@@ -402,7 +402,7 @@ fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         );
     }
     let encoding = match &args[1] {
-        ColumnarValue::Scalar(scalar) => match scalar {
+        ColumnarValue::Scalar(scalar) => match scalar.value() {
             ScalarValue::Utf8(Some(method)) => {
                 method.parse::<Encoding>()
             }

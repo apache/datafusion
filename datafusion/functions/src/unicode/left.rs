@@ -153,8 +153,8 @@ mod tests {
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("abcde")),
-                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+                ColumnarValue::from(ScalarValue::from("abcde")),
+                ColumnarValue::from(ScalarValue::from(2i64)),
             ],
             Ok(Some("ab")),
             &str,
@@ -164,8 +164,8 @@ mod tests {
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("abcde")),
-                ColumnarValue::Scalar(ScalarValue::from(200i64)),
+                ColumnarValue::from(ScalarValue::from("abcde")),
+                ColumnarValue::from(ScalarValue::from(200i64)),
             ],
             Ok(Some("abcde")),
             &str,
@@ -175,8 +175,8 @@ mod tests {
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("abcde")),
-                ColumnarValue::Scalar(ScalarValue::from(-2i64)),
+                ColumnarValue::from(ScalarValue::from("abcde")),
+                ColumnarValue::from(ScalarValue::from(-2i64)),
             ],
             Ok(Some("abc")),
             &str,
@@ -186,8 +186,8 @@ mod tests {
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("abcde")),
-                ColumnarValue::Scalar(ScalarValue::from(-200i64)),
+                ColumnarValue::from(ScalarValue::from("abcde")),
+                ColumnarValue::from(ScalarValue::from(-200i64)),
             ],
             Ok(Some("")),
             &str,
@@ -197,8 +197,8 @@ mod tests {
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("abcde")),
-                ColumnarValue::Scalar(ScalarValue::from(0i64)),
+                ColumnarValue::from(ScalarValue::from("abcde")),
+                ColumnarValue::from(ScalarValue::from(0i64)),
             ],
             Ok(Some("")),
             &str,
@@ -208,8 +208,8 @@ mod tests {
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from(2i64)),
             ],
             Ok(None),
             &str,
@@ -219,8 +219,8 @@ mod tests {
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("abcde")),
-                ColumnarValue::Scalar(ScalarValue::Int64(None)),
+                ColumnarValue::from(ScalarValue::from("abcde")),
+                ColumnarValue::from(ScalarValue::Int64(None)),
             ],
             Ok(None),
             &str,
@@ -230,8 +230,8 @@ mod tests {
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from("joséésoj")),
+                ColumnarValue::from(ScalarValue::from(5i64)),
             ],
             Ok(Some("joséé")),
             &str,
@@ -241,8 +241,8 @@ mod tests {
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
-                ColumnarValue::Scalar(ScalarValue::from(-3i64)),
+                ColumnarValue::from(ScalarValue::from("joséésoj")),
+                ColumnarValue::from(ScalarValue::from(-3i64)),
             ],
             Ok(Some("joséé")),
             &str,
@@ -253,8 +253,8 @@ mod tests {
         test_function!(
             LeftFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("abcde")),
-                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+                ColumnarValue::from(ScalarValue::from("abcde")),
+                ColumnarValue::from(ScalarValue::from(2i64)),
             ],
             internal_err!(
                 "function left requires compilation with feature flag: unicode_expressions."

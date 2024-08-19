@@ -138,12 +138,20 @@ impl ScalarUDFImpl for DatePartFunc {
         }
         let (part, array) = (&args[0], &args[1]);
 
-        let part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = part {
-            v
-        } else {
-            return exec_err!(
-                "First argument of `DATE_PART` must be non-null scalar Utf8"
-            );
+        let part = match part {
+            ColumnarValue::Scalar(scalar) => match scalar.value() {
+                ScalarValue::Utf8(Some(v)) => v,
+                _ => {
+                    return exec_err!(
+                        "First argument of `DATE_PART` must be non-null scalar Utf8"
+                    )
+                }
+            },
+            _ => {
+                return exec_err!(
+                    "First argument of `DATE_PART` must be non-null scalar Utf8"
+                )
+            }
         };
 
         let is_scalar = matches!(array, ColumnarValue::Scalar(_));
@@ -178,7 +186,7 @@ impl ScalarUDFImpl for DatePartFunc {
         };
 
         Ok(if is_scalar {
-            ColumnarValue::Scalar(ScalarValue::try_from_array(arr.as_ref(), 0)?)
+            ColumnarValue::from(ScalarValue::try_from_array(arr.as_ref(), 0)?)
         } else {
             ColumnarValue::Array(arr)
         })

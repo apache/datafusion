@@ -65,7 +65,7 @@ impl ScalarUDFImpl for ArrowTypeOfFunc {
         }
 
         let input_data_type = args[0].data_type();
-        Ok(ColumnarValue::Scalar(ScalarValue::from(format!(
+        Ok(ColumnarValue::from(ScalarValue::from(format!(
             "{input_data_type}"
         ))))
     }

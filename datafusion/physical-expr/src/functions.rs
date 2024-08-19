@@ -34,8 +34,8 @@
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
+use datafusion_common::Result;
+use datafusion_expr::{ColumnarValue, Scalar, ScalarFunctionImplementation};
 
 pub use crate::scalar_function::create_physical_expr;
 // For backward compatibility
@@ -113,7 +113,7 @@ where
         let result = (inner)(&args);
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+            let result = result.and_then(|arr| Scalar::try_from_array(&arr, 0));
             result.map(ColumnarValue::Scalar)
         } else {
             result.map(ColumnarValue::Array)

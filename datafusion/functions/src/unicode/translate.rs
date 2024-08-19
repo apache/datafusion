@@ -171,9 +171,9 @@ mod tests {
         test_function!(
             TranslateFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("12345")),
-                ColumnarValue::Scalar(ScalarValue::from("143")),
-                ColumnarValue::Scalar(ScalarValue::from("ax"))
+                ColumnarValue::from(ScalarValue::from("12345")),
+                ColumnarValue::from(ScalarValue::from("143")),
+                ColumnarValue::from(ScalarValue::from("ax"))
             ],
             Ok(Some("a2x5")),
             &str,
@@ -183,9 +183,9 @@ mod tests {
         test_function!(
             TranslateFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("143")),
-                ColumnarValue::Scalar(ScalarValue::from("ax"))
+                ColumnarValue::from(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from("143")),
+                ColumnarValue::from(ScalarValue::from("ax"))
             ],
             Ok(None),
             &str,
@@ -195,9 +195,9 @@ mod tests {
         test_function!(
             TranslateFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("12345")),
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("ax"))
+                ColumnarValue::from(ScalarValue::from("12345")),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from("ax"))
             ],
             Ok(None),
             &str,
@@ -207,9 +207,9 @@ mod tests {
         test_function!(
             TranslateFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("12345")),
-                ColumnarValue::Scalar(ScalarValue::from("143")),
-                ColumnarValue::Scalar(ScalarValue::Utf8(None))
+                ColumnarValue::from(ScalarValue::from("12345")),
+                ColumnarValue::from(ScalarValue::from("143")),
+                ColumnarValue::from(ScalarValue::Utf8(None))
             ],
             Ok(None),
             &str,
@@ -219,9 +219,9 @@ mod tests {
         test_function!(
             TranslateFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("é2íñ5")),
-                ColumnarValue::Scalar(ScalarValue::from("éñí")),
-                ColumnarValue::Scalar(ScalarValue::from("óü")),
+                ColumnarValue::from(ScalarValue::from("é2íñ5")),
+                ColumnarValue::from(ScalarValue::from("éñí")),
+                ColumnarValue::from(ScalarValue::from("óü")),
             ],
             Ok(Some("ó2ü5")),
             &str,
@@ -232,9 +232,9 @@ mod tests {
         test_function!(
             TranslateFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("12345")),
-                ColumnarValue::Scalar(ScalarValue::from("143")),
-                ColumnarValue::Scalar(ScalarValue::from("ax")),
+                ColumnarValue::from(ScalarValue::from("12345")),
+                ColumnarValue::from(ScalarValue::from("143")),
+                ColumnarValue::from(ScalarValue::from("ax")),
             ],
             internal_err!(
                 "function translate requires compilation with feature flag: unicode_expressions."

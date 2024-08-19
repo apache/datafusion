@@ -96,8 +96,8 @@ impl ScalarUDFImpl for PowUdf {
         // function, but we check again to make sure
         assert_eq!(args.len(), 2);
         let (base, exp) = (&args[0], &args[1]);
-        assert_eq!(base.data_type(), DataType::Float64);
-        assert_eq!(exp.data_type(), DataType::Float64);
+        assert_eq!(base.data_type(), &DataType::Float64);
+        assert_eq!(exp.data_type(), &DataType::Float64);
 
         match (base, exp) {
             // For demonstration purposes we also implement the scalar / scalar
@@ -108,28 +108,31 @@ impl ScalarUDFImpl for PowUdf {
             // the DataFusion expression simplification logic will often invoke
             // this path once during planning, and simply use the result during
             // execution.
-            (
-                ColumnarValue::Scalar(ScalarValue::Float64(base)),
-                ColumnarValue::Scalar(ScalarValue::Float64(exp)),
-            ) => {
-                // compute the output. Note DataFusion treats `None` as NULL.
-                let res = match (base, exp) {
-                    (Some(base), Some(exp)) => Some(base.powf(*exp)),
-                    // one or both arguments were NULL
-                    _ => None,
-                };
-                Ok(ColumnarValue::Scalar(ScalarValue::from(res)))
+            (ColumnarValue::Scalar(base), ColumnarValue::Scalar(exp)) => {
+                match (base.value(), exp.value()) {
+                    (ScalarValue::Float64(base), ScalarValue::Float64(exp)) => {
+                        // compute the output. Note DataFusion treats `None` as NULL.
+                        let res = match (base, exp) {
+                            (Some(base), Some(exp)) => Some(base.powf(*exp)),
+                            // one or both arguments were NULL
+                            _ => None,
+                        };
+                        Ok(ColumnarValue::from(ScalarValue::from(res)))
+                    }
+                    _ => {
+                        internal_err!("Invalid argument types to pow function")
+                    }
+                }
             }
             // special case if the exponent is a constant
-            (
-                ColumnarValue::Array(base_array),
-                ColumnarValue::Scalar(ScalarValue::Float64(exp)),
-            ) => {
-                let result_array = match exp {
+            (ColumnarValue::Array(base_array), ColumnarValue::Scalar(exp)) => {
+                let result_array = match exp.value() {
                     // a ^ null = null
-                    None => new_null_array(base_array.data_type(), base_array.len()),
+                    ScalarValue::Float64(None) => {
+                        new_null_array(base_array.data_type(), base_array.len())
+                    }
                     // a ^ exp
-                    Some(exp) => {
+                    ScalarValue::Float64(Some(exp)) => {
                         // DataFusion has ensured both arguments are Float64:
                         let base_array = base_array.as_primitive::<Float64Type>();
                         // calculate the result for every row. The `unary`
@@ -139,24 +142,25 @@ impl ScalarUDFImpl for PowUdf {
                             compute::unary(base_array, |base| base.powf(*exp));
                         Arc::new(res)
                     }
+                    _ => return internal_err!("Invalid argument types to pow function"),
                 };
                 Ok(ColumnarValue::Array(result_array))
             }
 
             // special case if the base is a constant (note this code is quite
             // similar to the previous case, so we omit comments)
-            (
-                ColumnarValue::Scalar(ScalarValue::Float64(base)),
-                ColumnarValue::Array(exp_array),
-            ) => {
-                let res = match base {
-                    None => new_null_array(exp_array.data_type(), exp_array.len()),
-                    Some(base) => {
+            (ColumnarValue::Scalar(base), ColumnarValue::Array(exp_array)) => {
+                let res = match base.value() {
+                    ScalarValue::Float64(None) => {
+                        new_null_array(exp_array.data_type(), exp_array.len())
+                    }
+                    ScalarValue::Float64(Some(base)) => {
                         let exp_array = exp_array.as_primitive::<Float64Type>();
                         let res: Float64Array =
                             compute::unary(exp_array, |exp| base.powf(exp));
                         Arc::new(res)
                     }
+                    _ => return internal_err!("Invalid argument types to pow function"),
                 };
                 Ok(ColumnarValue::Array(res))
             }
@@ -168,10 +172,6 @@ impl ScalarUDFImpl for PowUdf {
                     |base, exp| base.powf(exp),
                 )?;
                 Ok(ColumnarValue::Array(Arc::new(res)))
-            }
-            // if the types were not float, it is a bug in DataFusion
-            _ => {
-                internal_err!("Invalid argument types to pow function")
             }
         }
     }

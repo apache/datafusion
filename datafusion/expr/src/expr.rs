@@ -2784,7 +2784,7 @@ mod test {
             }
 
             fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-                Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+                Ok(ColumnarValue::from(ScalarValue::from("a")))
             }
         }
         let udf = Arc::new(ScalarUDF::from(TestScalarUDF {

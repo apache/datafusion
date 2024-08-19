@@ -98,7 +98,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut rng = rand::thread_rng();
         let data = ColumnarValue::Array(Arc::new(data(&mut rng)) as ArrayRef);
         let patterns =
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".to_string())));
+            ColumnarValue::from(ScalarValue::Utf8(Some("%Y-%m-%d".to_string())));
 
         b.iter(|| {
             black_box(
@@ -118,10 +118,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             .and_utc()
             .timestamp_nanos_opt()
             .unwrap();
-        let data = ColumnarValue::Scalar(TimestampNanosecond(Some(timestamp), None));
-        let pattern = ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-            "%d-%m-%Y %H:%M:%S".to_string(),
-        )));
+        let data = ColumnarValue::from(TimestampNanosecond(Some(timestamp), None));
+        let pattern =
+            ColumnarValue::from(ScalarValue::Utf8(Some("%d-%m-%Y %H:%M:%S".to_string())));
 
         b.iter(|| {
             black_box(

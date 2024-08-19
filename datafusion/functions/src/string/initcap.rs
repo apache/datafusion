@@ -137,7 +137,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::from("hi THOMAS"))],
+            &[ColumnarValue::from(ScalarValue::from("hi THOMAS"))],
             Ok(Some("Hi Thomas")),
             &str,
             Utf8,
@@ -145,7 +145,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::from(""))],
+            &[ColumnarValue::from(ScalarValue::from(""))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -153,7 +153,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::from(""))],
+            &[ColumnarValue::from(ScalarValue::from(""))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -161,7 +161,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(None))],
+            &[ColumnarValue::from(ScalarValue::Utf8(None))],
             Ok(None),
             &str,
             Utf8,

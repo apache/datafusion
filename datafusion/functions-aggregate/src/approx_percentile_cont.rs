@@ -147,7 +147,7 @@ fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
     let empty_schema = Arc::new(Schema::empty());
     let batch = RecordBatch::new_empty(Arc::clone(&empty_schema));
     if let ColumnarValue::Scalar(s) = expr.evaluate(&batch)? {
-        Ok(s)
+        Ok(s.into_value())
     } else {
         internal_err!("Didn't expect ColumnarValue::Array")
     }

@@ -161,7 +161,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
             validate_data_types(args, "to_timestamp")?;
         }
 
-        match args[0].data_type() {
+        match args[0].data_type().clone() {
             DataType::Int32 | DataType::Int64 => args[0]
                 .cast_to(&Timestamp(Second, None), None)?
                 .cast_to(&Timestamp(Nanosecond, None), None),
@@ -214,7 +214,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
             validate_data_types(args, "to_timestamp")?;
         }
 
-        match args[0].data_type() {
+        match args[0].data_type().clone() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Second, None), None)
             }
@@ -264,7 +264,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             validate_data_types(args, "to_timestamp")?;
         }
 
-        match args[0].data_type() {
+        match args[0].data_type().clone() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Millisecond, None), None)
             }
@@ -314,7 +314,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             validate_data_types(args, "to_timestamp")?;
         }
 
-        match args[0].data_type() {
+        match args[0].data_type().clone() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Microsecond, None), None)
             }
@@ -364,7 +364,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
             validate_data_types(args, "to_timestamp")?;
         }
 
-        match args[0].data_type() {
+        match args[0].data_type().clone() {
             DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
             }
@@ -803,7 +803,7 @@ mod tests {
 
         for udf in &udfs {
             for array in arrays {
-                let rt = udf.return_type(&[array.data_type()]).unwrap();
+                let rt = udf.return_type(&[array.data_type().clone()]).unwrap();
                 assert!(matches!(rt, DataType::Timestamp(_, Some(_))));
 
                 let res = udf
@@ -846,7 +846,7 @@ mod tests {
 
         for udf in &udfs {
             for array in arrays {
-                let rt = udf.return_type(&[array.data_type()]).unwrap();
+                let rt = udf.return_type(&[array.data_type().clone()]).unwrap();
                 assert!(matches!(rt, DataType::Timestamp(_, None)));
 
                 let res = udf
@@ -896,9 +896,9 @@ mod tests {
             // test UTF8
             let string_array = [
                 ColumnarValue::Array(Arc::new(data.clone()) as ArrayRef),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%s".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%c".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%+".to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(Some("%s".to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(Some("%c".to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(Some("%+".to_string()))),
             ];
             let parsed_timestamps = func(&string_array)
                 .expect("that to_timestamp with format args parsed values without error");
@@ -925,9 +925,9 @@ mod tests {
             // test other types
             let string_array = [
                 ColumnarValue::Array(Arc::new(data.clone()) as ArrayRef),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(3))),
+                ColumnarValue::from(ScalarValue::Int32(Some(1))),
+                ColumnarValue::from(ScalarValue::Int32(Some(2))),
+                ColumnarValue::from(ScalarValue::Int32(Some(3))),
             ];
 
             let expected = "Unsupported data type Int32 for function".to_string();

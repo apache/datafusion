@@ -20,9 +20,9 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::function::Hint;
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
+use datafusion_expr::{ColumnarValue, Scalar, ScalarFunctionImplementation};
 
 /// Creates a function to identify the optimal return type of a string function given
 /// the type of its first argument.
@@ -114,7 +114,7 @@ where
         let result = (inner)(&args);
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+            let result = result.and_then(|arr| Scalar::try_from_array(&arr, 0));
             result.map(ColumnarValue::Scalar)
         } else {
             result.map(ColumnarValue::Array)
@@ -135,7 +135,7 @@ pub mod test {
             let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
             let func = $FUNC;
 
-            let type_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
+            let type_array = $ARGS.iter().map(|arg| arg.data_type().clone()).collect::<Vec<_>>();
             let return_type = func.return_type(&type_array);
 
             match expected {

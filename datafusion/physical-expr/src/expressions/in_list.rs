@@ -37,10 +37,8 @@ use datafusion_common::cast::{
     as_boolean_array, as_generic_binary_array, as_string_array,
 };
 use datafusion_common::hash_utils::HashValue;
-use datafusion_common::{
-    exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue,
-};
-use datafusion_expr::{ColumnarValue, Operator};
+use datafusion_common::{exec_err, internal_err, not_impl_err, DFSchema, Result};
+use datafusion_expr::{ColumnarValue, Operator, Scalar};
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
@@ -227,7 +225,7 @@ fn evaluate_list(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    ScalarValue::iter_to_array(scalars)
+    Scalar::iter_to_array(scalars)
 }
 
 fn try_cast_static_filter_to_set(
@@ -453,7 +451,7 @@ mod tests {
     use super::*;
     use crate::expressions;
     use crate::expressions::{col, lit, try_cast};
-    use datafusion_common::plan_err;
+    use datafusion_common::{plan_err, ScalarValue};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);

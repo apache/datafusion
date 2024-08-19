@@ -21,8 +21,8 @@ use arrow::buffer::NullBuffer;
 use arrow::compute::SortOptions;
 use arrow::error::ArrowError;
 use datafusion_common::internal_err;
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_common::Result;
+use datafusion_expr_common::columnar_value::{ColumnarValue, Scalar};
 use datafusion_expr_common::operator::Operator;
 use std::sync::Arc;
 
@@ -39,15 +39,14 @@ pub fn apply(
             Ok(ColumnarValue::Array(f(&left.as_ref(), &right.as_ref())?))
         }
         (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => Ok(
-            ColumnarValue::Array(f(&left.to_scalar()?, &right.as_ref())?),
+            ColumnarValue::Array(f(&left.value().to_scalar()?, &right.as_ref())?),
         ),
         (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => Ok(
             ColumnarValue::Array(f(&left.as_ref(), &right.to_scalar()?)?),
         ),
         (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
             let array = f(&left.to_scalar()?, &right.to_scalar()?)?;
-            let scalar = ScalarValue::try_from_array(array.as_ref(), 0)?;
-            Ok(ColumnarValue::Scalar(scalar))
+            Ok(ColumnarValue::Scalar(Scalar::try_from_array(&array, 0)?))
         }
     }
 }

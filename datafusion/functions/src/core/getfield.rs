@@ -168,7 +168,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
 
         if args[0].data_type().is_null() {
-            return Ok(ColumnarValue::Scalar(ScalarValue::Null));
+            return Ok(ColumnarValue::from(ScalarValue::Null));
         }
 
         let arrays = ColumnarValue::values_to_arrays(args)?;
@@ -183,7 +183,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
         };
 
-        match (array.data_type(), name) {
+        match (array.data_type(), name.value()) {
             (DataType::Map(_, _), ScalarValue::Utf8(Some(k))) => {
                 let map_array = as_map_array(array.as_ref())?;
                 let key_scalar: Scalar<arrow::array::GenericByteArray<arrow::datatypes::GenericStringType<i32>>> = Scalar::new(StringArray::from(vec![k.clone()]));
@@ -227,7 +227,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                 "get indexed field is only possible on struct with utf8 indexes. \
                              Tried with {name:?} index"
             ),
-            (DataType::Null, _) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
+            (DataType::Null, _) => Ok(ColumnarValue::from(ScalarValue::Null)),
             (dt, name) => exec_err!(
                 "get indexed field is only possible on lists with int64 indexes or struct \
                                          with utf8 indexes. Tried {dt:?} with {name:?} index"

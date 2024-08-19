@@ -131,7 +131,7 @@ mod tests {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
+                &[ColumnarValue::from(ScalarValue::Utf8($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,

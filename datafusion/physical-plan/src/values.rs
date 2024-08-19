@@ -33,6 +33,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_execution::TaskContext;
+use datafusion_expr::Scalar;
 use datafusion_physical_expr::EquivalenceProperties;
 
 /// Execution plan for values list based relation (produces constant rows)
@@ -74,7 +75,7 @@ impl ValuesExec {
                         match r {
                             Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
                             Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
-                                ScalarValue::try_from_array(&a, 0)
+                                Ok(Scalar::from(ScalarValue::try_from_array(&a, 0)?))
                             }
                             Ok(ColumnarValue::Array(a)) => {
                                 plan_err!(
@@ -85,7 +86,7 @@ impl ValuesExec {
                         }
                     })
                     .collect::<Result<Vec<_>>>()
-                    .and_then(ScalarValue::iter_to_array)
+                    .and_then(Scalar::iter_to_array)
             })
             .collect::<Result<Vec<_>>>()?;
         let batch = RecordBatch::try_new(Arc::clone(&schema), arr)?;

@@ -214,10 +214,10 @@ where
             >(array, op)?)),
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
-        ColumnarValue::Scalar(scalar) => match scalar {
+        ColumnarValue::Scalar(scalar) => match scalar.value() {
             ScalarValue::Utf8(a) => {
                 let result = a.as_ref().map(|x| op(x));
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
+                Ok(ColumnarValue::from(ScalarValue::Utf8(result)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },

@@ -30,7 +30,7 @@ fn create_args(size: usize, characters: &str) -> Vec<ColumnarValue> {
     let array = Arc::new(StringArray::from_iter_values(iter)) as ArrayRef;
     vec![
         ColumnarValue::Array(array),
-        ColumnarValue::Scalar(ScalarValue::Utf8(Some(characters.to_string()))),
+        ColumnarValue::from(ScalarValue::Utf8(Some(characters.to_string()))),
     ]
 }
 

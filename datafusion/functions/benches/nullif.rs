@@ -29,7 +29,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for size in [1024, 4096, 8192] {
         let array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, 32));
         let args = vec![
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("abcd".to_string()))),
+            ColumnarValue::from(ScalarValue::Utf8(Some("abcd".to_string()))),
             ColumnarValue::Array(array),
         ];
         c.bench_function(&format!("nullif scalar array: {}", size), |b| {

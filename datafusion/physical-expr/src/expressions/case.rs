@@ -223,12 +223,12 @@ impl CaseExpr {
                 .evaluate_selection(batch, &when_match)?;
 
             current_value = match then_value {
-                ColumnarValue::Scalar(ScalarValue::Null) => {
-                    nullif(current_value.as_ref(), &when_match)?
-                }
-                ColumnarValue::Scalar(then_value) => {
-                    zip(&when_match, &then_value.to_scalar()?, &current_value)?
-                }
+                ColumnarValue::Scalar(scalar) => match scalar.value() {
+                    ScalarValue::Null => nullif(current_value.as_ref(), &when_match)?,
+                    then_value => {
+                        zip(&when_match, &then_value.to_scalar()?, &current_value)?
+                    }
+                },
                 ColumnarValue::Array(then_value) => {
                     zip(&when_match, &then_value, &current_value)?
                 }
@@ -294,12 +294,12 @@ impl CaseExpr {
                 .evaluate_selection(batch, &when_value)?;
 
             current_value = match then_value {
-                ColumnarValue::Scalar(ScalarValue::Null) => {
-                    nullif(current_value.as_ref(), &when_value)?
-                }
-                ColumnarValue::Scalar(then_value) => {
-                    zip(&when_value, &then_value.to_scalar()?, &current_value)?
-                }
+                ColumnarValue::Scalar(scalar) => match scalar.value() {
+                    ScalarValue::Null => nullif(current_value.as_ref(), &when_value)?,
+                    then_value => {
+                        zip(&when_value, &then_value.to_scalar()?, &current_value)?
+                    }
+                },
                 ColumnarValue::Array(then_value) => {
                     zip(&when_value, &then_value, &current_value)?
                 }

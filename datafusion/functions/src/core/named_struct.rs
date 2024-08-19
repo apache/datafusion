@@ -47,8 +47,15 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
             let name_column = &chunk[0];
             let name = match name_column {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(name_scalar))) => name_scalar,
-                _ => return exec_err!("named_struct even arguments must be string literals, got {name_column:?} instead at position {}", i * 2)
+                ColumnarValue::Scalar(scalar) => match scalar.value() {
+                    ScalarValue::Utf8(Some(name_scalar)) => name_scalar,
+                    _ => return exec_err!(
+                        "named_struct even arguments must be string literals, got {name_column:?} instead at position {}", i * 2
+                    )
+                },
+                _ => return exec_err!(
+                    "named_struct even arguments must be string literals, got {name_column:?} instead at position {}", i * 2
+                )
             };
 
             Ok((name, chunk[1].clone()))

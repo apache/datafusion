@@ -147,8 +147,8 @@ mod tests {
         test_function!(
             RepeatFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("Pg")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("Pg")))),
+                ColumnarValue::from(ScalarValue::Int64(Some(4))),
             ],
             Ok(Some("PgPgPgPg")),
             &str,
@@ -158,8 +158,8 @@ mod tests {
         test_function!(
             RepeatFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::Int64(Some(4))),
             ],
             Ok(None),
             &str,
@@ -169,8 +169,8 @@ mod tests {
         test_function!(
             RepeatFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("Pg")))),
-                ColumnarValue::Scalar(ScalarValue::Int64(None)),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("Pg")))),
+                ColumnarValue::from(ScalarValue::Int64(None)),
             ],
             Ok(None),
             &str,

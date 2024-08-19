@@ -94,6 +94,7 @@ macro_rules! digest_to_scalar {
             digest.update(v);
             digest.finalize().as_slice().to_vec()
         }))
+        .into()
     }};
 }
 
@@ -120,7 +121,7 @@ pub fn digest(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         );
     }
     let digest_algorithm = match &args[1] {
-        ColumnarValue::Scalar(scalar) => match scalar {
+        ColumnarValue::Scalar(scalar) => match scalar.value() {
             ScalarValue::Utf8(Some(method)) => method.parse::<DigestAlgorithm>(),
             other => exec_err!("Unsupported data type {other:?} for function digest"),
         },
@@ -189,10 +190,12 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 .collect();
             ColumnarValue::Array(Arc::new(string_array))
         }
-        ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
-            ColumnarValue::Scalar(ScalarValue::Utf8(opt.map(hex_encode::<_>)))
-        }
-        _ => return exec_err!("Impossibly got invalid results from digest"),
+        ColumnarValue::Scalar(scalar) => match scalar.into_value() {
+            ScalarValue::Binary(opt) => {
+                ColumnarValue::from(ScalarValue::Utf8(opt.map(hex_encode::<_>)))
+            }
+            _ => return exec_err!("Impossibly got invalid results from digest"),
+        },
     })
 }
 
@@ -254,7 +257,8 @@ impl DigestAlgorithm {
                 let mut digest = Blake3::default();
                 digest.update(v);
                 Blake3::finalize(&digest).as_bytes().to_vec()
-            })),
+            }))
+            .into(),
         })
     }
 
@@ -337,7 +341,7 @@ pub fn digest_process(
             ),
         },
         ColumnarValue::Scalar(scalar) => {
-            match scalar {
+            match scalar.value() {
                 ScalarValue::Utf8(a) => Ok(digest_algorithm
                     .digest_scalar(a.as_ref().map(|s: &String| s.as_bytes()))),
                 ScalarValue::Binary(a) => Ok(digest_algorithm

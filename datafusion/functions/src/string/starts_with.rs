@@ -117,8 +117,8 @@ mod tests {
         .into_iter()
         .flat_map(|(a, b, c)| {
             let utf_8_args = vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(a.map(|s| s.to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(b.map(|s| s.to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(a.map(|s| s.to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(b.map(|s| s.to_string()))),
             ];
 
             vec![(utf_8_args, c)]

@@ -108,8 +108,8 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("alph")),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from("alph")),
             ],
             Ok(Some(true)),
             bool,
@@ -119,8 +119,8 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("dddddd")),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from("dddddd")),
             ],
             Ok(Some(false)),
             bool,
@@ -130,8 +130,8 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("pha")),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from("pha")),
             ],
             Ok(Some(true)),
             bool,

@@ -115,22 +115,23 @@ impl ScalarUDFImpl for ToCharFunc {
         }
 
         match &args[1] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Null) => {
-                _to_char_scalar(args[0].clone(), None)
-            }
-            // constant format
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
-                // invoke to_char_scalar with the known string, without converting to array
-                _to_char_scalar(args[0].clone(), Some(format))
-            }
+            ColumnarValue::Scalar(scalar) => match scalar.value() {
+                ScalarValue::Utf8(None) | ScalarValue::Null => {
+                    _to_char_scalar(args[0].clone(), None)
+                }
+                // constant format
+                ScalarValue::Utf8(Some(format)) => {
+                    // invoke to_char_scalar with the known string, without converting to array
+                    _to_char_scalar(args[0].clone(), Some(format))
+                }
+                _ => {
+                    exec_err!(
+                        "Format for `to_char` must be non-null Utf8, received {:?}",
+                        args[1].data_type()
+                    )
+                }
+            },
             ColumnarValue::Array(_) => _to_char_array(args),
-            _ => {
-                exec_err!(
-                    "Format for `to_char` must be non-null Utf8, received {:?}",
-                    args[1].data_type()
-                )
-            }
         }
     }
 
@@ -177,13 +178,13 @@ fn _to_char_scalar(
 ) -> Result<ColumnarValue> {
     // it's possible that the expression is a scalar however because
     // of the implementation in arrow-rs we need to convert it to an array
-    let data_type = &expression.data_type();
+    let data_type = expression.data_type().clone();
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
     let array = expression.into_array(1)?;
 
     if format.is_none() {
         if is_scalar_expression {
-            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+            return Ok(ColumnarValue::from(ScalarValue::Utf8(None)));
         } else {
             return Ok(ColumnarValue::Array(new_null_array(
                 &DataType::Utf8,
@@ -192,7 +193,7 @@ fn _to_char_scalar(
         }
     }
 
-    let format_options = match _build_format_options(data_type, format) {
+    let format_options = match _build_format_options(&data_type, format) {
         Ok(value) => value,
         Err(value) => return value,
     };
@@ -204,7 +205,7 @@ fn _to_char_scalar(
 
     if let Ok(formatted) = formatted {
         if is_scalar_expression {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            Ok(ColumnarValue::from(ScalarValue::Utf8(Some(
                 formatted.first().unwrap().to_string(),
             ))))
         } else {
@@ -252,10 +253,10 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             results,
         )) as ArrayRef)),
         ColumnarValue::Scalar(_) => match results.first().unwrap() {
-            Some(value) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            Some(value) => Ok(ColumnarValue::from(ScalarValue::Utf8(Some(
                 value.to_string(),
             )))),
-            None => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+            None => Ok(ColumnarValue::from(ScalarValue::Utf8(None))),
         },
     }
 }
@@ -351,13 +352,15 @@ mod tests {
 
         for (value, format, expected) in scalar_data {
             let result = ToCharFunc::new()
-                .invoke(&[ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)])
+                .invoke(&[ColumnarValue::from(value), ColumnarValue::from(format)])
                 .expect("that to_char parsed values without error");
 
-            if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
-                assert_eq!(expected, date.unwrap());
-            } else {
-                panic!("Expected a scalar value")
+            match result {
+                ColumnarValue::Scalar(scalar) => match scalar.value() {
+                    ScalarValue::Utf8(Some(date)) => assert_eq!(&expected, date),
+                    _ => panic!("Expected a scalar value"),
+                },
+                _ => panic!("Expected a scalar value"),
             }
         }
 
@@ -426,15 +429,17 @@ mod tests {
         for (value, format, expected) in scalar_array_data {
             let result = ToCharFunc::new()
                 .invoke(&[
-                    ColumnarValue::Scalar(value),
+                    ColumnarValue::from(value),
                     ColumnarValue::Array(Arc::new(format) as ArrayRef),
                 ])
                 .expect("that to_char parsed values without error");
 
-            if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
-                assert_eq!(expected, date.unwrap());
-            } else {
-                panic!("Expected a scalar value")
+            match result {
+                ColumnarValue::Scalar(scalar) => match scalar.value() {
+                    ScalarValue::Utf8(Some(date)) => assert_eq!(&expected, date),
+                    _ => panic!("Expected a scalar value"),
+                },
+                _ => panic!("Expected a scalar value"),
             }
         }
 
@@ -552,7 +557,7 @@ mod tests {
             let result = ToCharFunc::new()
                 .invoke(&[
                     ColumnarValue::Array(value as ArrayRef),
-                    ColumnarValue::Scalar(format),
+                    ColumnarValue::from(format),
                 ])
                 .expect("that to_char parsed values without error");
 
@@ -585,8 +590,8 @@ mod tests {
         //
 
         // invalid number of arguments
-        let result = ToCharFunc::new()
-            .invoke(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))]);
+        let result =
+            ToCharFunc::new().invoke(&[ColumnarValue::from(ScalarValue::Int32(Some(1)))]);
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
             "Execution error: to_char function requires 2 arguments, got 1"
@@ -594,8 +599,8 @@ mod tests {
 
         // invalid type
         let result = ToCharFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::from(ScalarValue::Int32(Some(1))),
+            ColumnarValue::from(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert_eq!(
             result.err().unwrap().strip_backtrace(),

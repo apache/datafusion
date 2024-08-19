@@ -1813,8 +1813,11 @@ impl ScalarValue {
                 if let Some(DataType::FixedSizeList(f, l)) = first_non_null_data_type {
                     for array in arrays.iter_mut() {
                         if array.is_null(0) {
-                            *array =
-                                Arc::new(FixedSizeListArray::new_null(f.clone(), l, 1));
+                            *array = Arc::new(FixedSizeListArray::new_null(
+                                Arc::clone(&f),
+                                l,
+                                1,
+                            ));
                         }
                     }
                 }

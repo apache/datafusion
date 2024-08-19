@@ -76,8 +76,8 @@ impl PhysicalExpr for IsNotNullExpr {
                 let is_not_null = super::is_null::compute_is_not_null(array)?;
                 Ok(ColumnarValue::Array(Arc::new(is_not_null)))
             }
-            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
-                ScalarValue::Boolean(Some(!scalar.is_null())),
+            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::from(
+                ScalarValue::Boolean(Some(!scalar.value().is_null())),
             )),
         }
     }

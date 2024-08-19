@@ -83,11 +83,13 @@ impl ScalarUDFImpl for ConcatFunc {
         if array_len.is_none() {
             let mut result = String::new();
             for arg in args {
-                if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = arg {
-                    result.push_str(v);
+                if let ColumnarValue::Scalar(scalar) = arg {
+                    if let ScalarValue::Utf8(Some(v)) = scalar.value() {
+                        result.push_str(v);
+                    }
                 }
             }
-            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))));
+            return Ok(ColumnarValue::from(ScalarValue::Utf8(Some(result))));
         }
 
         // Array
@@ -97,12 +99,15 @@ impl ScalarUDFImpl for ConcatFunc {
 
         for arg in args {
             match arg {
-                ColumnarValue::Scalar(ScalarValue::Utf8(maybe_value)) => {
-                    if let Some(s) = maybe_value {
-                        data_size += s.len() * len;
-                        columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
+                ColumnarValue::Scalar(scalar) => match scalar.value() {
+                    ScalarValue::Utf8(maybe_value) => {
+                        if let Some(s) = maybe_value {
+                            data_size += s.len() * len;
+                            columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
+                        }
                     }
-                }
+                    _ => unreachable!(),
+                },
                 ColumnarValue::Array(array) => {
                     let string_array = as_string_array(array)?;
                     data_size += string_array.values().len();
@@ -113,7 +118,6 @@ impl ScalarUDFImpl for ConcatFunc {
                     };
                     columns.push(column);
                 }
-                _ => unreachable!(),
             }
         }
 
@@ -203,9 +207,9 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
-                ColumnarValue::Scalar(ScalarValue::from("bb")),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::from(ScalarValue::from("aa")),
+                ColumnarValue::from(ScalarValue::from("bb")),
+                ColumnarValue::from(ScalarValue::from("cc")),
             ],
             Ok(Some("aabbcc")),
             &str,
@@ -215,9 +219,9 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::from(ScalarValue::from("aa")),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from("cc")),
             ],
             Ok(Some("aacc")),
             &str,
@@ -226,7 +230,7 @@ mod tests {
         );
         test_function!(
             ConcatFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(None))],
+            &[ColumnarValue::from(ScalarValue::Utf8(None))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -240,7 +244,7 @@ mod tests {
     fn concat() -> Result<()> {
         let c0 =
             ColumnarValue::Array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
-        let c1 = ColumnarValue::Scalar(ScalarValue::Utf8(Some(",".to_string())));
+        let c1 = ColumnarValue::from(ScalarValue::Utf8(Some(",".to_string())));
         let c2 = ColumnarValue::Array(Arc::new(StringArray::from(vec![
             Some("x"),
             None,

@@ -23,12 +23,12 @@ use std::sync::Arc;
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::compute;
-use arrow::compute::{cast_with_options, CastOptions};
+use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, Result, ScalarValue};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
@@ -83,18 +83,7 @@ impl PhysicalExpr for TryCastExpr {
             safe: true,
             format_options: DEFAULT_FORMAT_OPTIONS,
         };
-        match value {
-            ColumnarValue::Array(array) => {
-                let cast = cast_with_options(&array, &self.cast_type, &options)?;
-                Ok(ColumnarValue::Array(cast))
-            }
-            ColumnarValue::Scalar(scalar) => {
-                let array = scalar.to_array()?;
-                let cast_array = cast_with_options(&array, &self.cast_type, &options)?;
-                let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-                Ok(ColumnarValue::Scalar(cast_scalar))
-            }
-        }
+        value.cast_to(&self.cast_type, Some(&options))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

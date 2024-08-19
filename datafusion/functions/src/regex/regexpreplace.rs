@@ -27,12 +27,12 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
-use datafusion_common::ScalarValue;
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
 use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::Scalar;
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use regex::Regex;
@@ -116,7 +116,7 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
         let result = regexp_replace_func(args);
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+            let result = result.and_then(|arr| Scalar::try_from_array(&arr, 0));
             result.map(ColumnarValue::Scalar)
         } else {
             result.map(ColumnarValue::Array)

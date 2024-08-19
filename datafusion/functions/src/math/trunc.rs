@@ -115,16 +115,22 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
     //or then invoke the compute_truncate method to process precision
     let num = &args[0];
     let precision = if args.len() == 1 {
-        ColumnarValue::Scalar(Int64(Some(0)))
+        ColumnarValue::from(Int64(Some(0)))
     } else {
         ColumnarValue::Array(Arc::clone(&args[1]))
     };
 
     match args[0].data_type() {
         Float64 => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
-                make_function_scalar_inputs!(num, "num", Float64Array, { f64::trunc }),
-            ) as ArrayRef),
+            ColumnarValue::Scalar(scalar) => match scalar.value() {
+                Int64(Some(0)) => Ok(Arc::new(make_function_scalar_inputs!(
+                    num,
+                    "num",
+                    Float64Array,
+                    { f64::trunc }
+                )) as ArrayRef),
+                _ => exec_err!("trunc function requires a scalar or array for precision"),
+            },
             ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
                 num,
                 precision,
@@ -134,12 +140,17 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Int64Array,
                 { compute_truncate64 }
             )) as ArrayRef),
-            _ => exec_err!("trunc function requires a scalar or array for precision"),
         },
         Float32 => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
-                make_function_scalar_inputs!(num, "num", Float32Array, { f32::trunc }),
-            ) as ArrayRef),
+            ColumnarValue::Scalar(scalar) => match scalar.value() {
+                Int64(Some(0)) => Ok(Arc::new(make_function_scalar_inputs!(
+                    num,
+                    "num",
+                    Float32Array,
+                    { f32::trunc }
+                )) as ArrayRef),
+                _ => exec_err!("trunc function requires a scalar or array for precision"),
+            },
             ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
                 num,
                 precision,
@@ -149,7 +160,6 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Int64Array,
                 { compute_truncate32 }
             )) as ArrayRef),
-            _ => exec_err!("trunc function requires a scalar or array for precision"),
         },
         other => exec_err!("Unsupported data type {other:?} for function trunc"),
     }

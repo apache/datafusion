@@ -276,8 +276,8 @@ impl PhysicalExpr for BinaryExpr {
 
         let lhs = self.left.evaluate(batch)?;
         let rhs = self.right.evaluate(batch)?;
-        let left_data_type = lhs.data_type();
-        let right_data_type = rhs.data_type();
+        let left_data_type = lhs.data_type().clone();
+        let right_data_type = rhs.data_type().clone();
 
         let schema = batch.schema();
         let input_schema = schema.as_ref();
@@ -319,9 +319,10 @@ impl PhysicalExpr for BinaryExpr {
         let scalar_result = match (&lhs, &rhs) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
                 // if left is array and right is literal - use scalar operations
-                self.evaluate_array_scalar(array, scalar.clone())?.map(|r| {
-                    r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
-                })
+                self.evaluate_array_scalar(array, scalar.clone().into_value())?
+                    .map(|r| {
+                        r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
+                    })
             }
             (_, _) => None, // default to array implementation
         };

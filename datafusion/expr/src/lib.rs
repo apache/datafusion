@@ -68,7 +68,7 @@ pub mod window_state;
 
 pub use built_in_window_function::BuiltInWindowFunction;
 pub use datafusion_expr_common::accumulator::Accumulator;
-pub use datafusion_expr_common::columnar_value::ColumnarValue;
+pub use datafusion_expr_common::columnar_value::{ColumnarValue, Scalar};
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::signature::{

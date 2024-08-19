@@ -91,11 +91,11 @@ impl ScalarUDFImpl for CoalesceFunc {
                         current_value = zip(&to_apply, array, &current_value)?;
                         remainder = and(&remainder, &is_null(array)?)?;
                     }
-                    ColumnarValue::Scalar(value) => {
-                        if value.is_null() {
+                    ColumnarValue::Scalar(scalar) => {
+                        if scalar.value().is_null() {
                             continue;
                         } else {
-                            let last_value = value.to_scalar()?;
+                            let last_value = scalar.to_scalar()?;
                             current_value = zip(&remainder, &last_value, &current_value)?;
                             break;
                         }
@@ -110,7 +110,7 @@ impl ScalarUDFImpl for CoalesceFunc {
             let result = args
                 .iter()
                 .filter_map(|x| match x {
-                    ColumnarValue::Scalar(s) if !s.is_null() => Some(x.clone()),
+                    ColumnarValue::Scalar(s) if !s.value().is_null() => Some(x.clone()),
                     _ => None,
                 })
                 .next()

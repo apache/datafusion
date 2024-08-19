@@ -59,7 +59,7 @@ fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarV
         );
     }
 
-    let data_type = args[0].data_type();
+    let data_type = args[0].data_type().clone();
     let can_evaluate_to_const = can_evaluate_to_const(args);
     let key = get_first_array_ref(&args[0])?;
     let value = get_first_array_ref(&args[1])?;
@@ -70,7 +70,7 @@ fn get_first_array_ref(
     columnar_value: &ColumnarValue,
 ) -> datafusion_common::Result<ArrayRef> {
     match columnar_value {
-        ColumnarValue::Scalar(value) => match value {
+        ColumnarValue::Scalar(value) => match value.value() {
             ScalarValue::List(array) => Ok(array.value(0)),
             ScalarValue::LargeList(array) => Ok(array.value(0)),
             ScalarValue::FixedSizeList(array) => Ok(array.value(0)),
@@ -135,7 +135,7 @@ fn make_map_batch_internal(
     let map_array = Arc::new(MapArray::from(map_data));
 
     Ok(if can_evaluate_to_const {
-        ColumnarValue::Scalar(ScalarValue::try_from_array(map_array.as_ref(), 0)?)
+        ColumnarValue::from(ScalarValue::try_from_array(map_array.as_ref(), 0)?)
     } else {
         ColumnarValue::Array(map_array)
     })
