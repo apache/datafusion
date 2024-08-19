@@ -898,7 +898,8 @@ mod tests {
         let rgm4 = get_row_group_meta_data(
             &schema_descr,
             // [None, 2]
-            // c1 > 5, this row group can not be filtered out, so will be included in the results.
+            // c1 > 5, this row group will also not be included in the results
+            // (the min value is unknown, but the max value is 2, so no values can be greater than 5)
             vec![ParquetStatistics::int32(
                 None,
                 Some(2),
@@ -916,7 +917,7 @@ mod tests {
             &pruning_predicate,
             &metrics,
         );
-        assert_pruned(row_groups, ExpectedPruning::Some(vec![0, 1, 3]));
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![0, 1]));
     }
     #[test]
     fn row_group_pruning_predicate_decimal_type3() {
