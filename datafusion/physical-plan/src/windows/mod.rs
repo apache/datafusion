@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::{
     expressions::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
-        PhysicalSortExpr, RowNumber,
+        PhysicalSortExpr,
     },
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
@@ -49,6 +49,7 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
@@ -218,7 +219,6 @@ fn create_built_in_window_expr(
     let out_data_type: &DataType = input_schema.field_with_name(&name)?.data_type();
 
     Ok(match fun {
-        BuiltInWindowFunction::RowNumber => Arc::new(RowNumber::new(name, out_data_type)),
         BuiltInWindowFunction::Rank => Arc::new(rank(name, out_data_type)),
         BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, out_data_type)),
         BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name, out_data_type)),
@@ -356,8 +356,11 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        let nullable = true;
-        Ok(Field::new(&self.name, self.data_type.clone(), nullable))
+        Ok(Field::new(
+            &self.name,
+            self.data_type.clone(),
+            self.fun.nullable(),
+        ))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -374,6 +377,16 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
 
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
         None
+    }
+
+    fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
+        self.fun
+            .sort_options()
+            .zip(schema.column_with_name(self.name()))
+            .map(|(options, (idx, field))| {
+                let expr = Arc::new(Column::new(field.name(), idx));
+                PhysicalSortExpr { expr, options }
+            })
     }
 }
 

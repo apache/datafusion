@@ -29,6 +29,7 @@ members = [
     "datafusion/functions-aggregate",
     "datafusion/functions-aggregate-common",
     "datafusion/functions-nested",
+    "datafusion/functions-window",
     "datafusion/optimizer",
     "datafusion/physical-expr",
     "datafusion/physical-expr-common",
@@ -102,6 +103,7 @@ datafusion-functions = { path = "datafusion/functions", version = "41.0.0" }
 datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "41.0.0" }
 datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "41.0.0" }
 datafusion-functions-nested = { path = "datafusion/functions-nested", version = "41.0.0" }
+datafusion-functions-window = { path = "datafusion/functions-window", version = "41.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "41.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "41.0.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "41.0.0", default-features = false }
@@ -133,7 +135,7 @@ rand = "0.8"
 regex = "1.8"
 rstest = "0.22.0"
 serde_json = "1"
-sqlparser = { version = "0.49", features = ["visitor"] }
+sqlparser = { version = "0.50.0", features = ["visitor"] }
 tempfile = "3"
 thiserror = "1.0.44"
 tokio = { version = "1.36", features = ["macros", "rt", "sync"] }

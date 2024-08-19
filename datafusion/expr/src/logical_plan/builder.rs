@@ -107,6 +107,11 @@ impl LogicalPlanBuilder {
         self.plan.schema()
     }
 
+    /// Return the LogicalPlan of the plan build so far
+    pub fn plan(&self) -> &LogicalPlan {
+        &self.plan
+    }
+
     /// Create an empty relation.
     ///
     /// `produce_one_row` set to true means this empty node needs to produce a placeholder row.
@@ -1288,7 +1293,7 @@ pub fn build_join_schema(
 ///
 /// This allows MySQL style selects like
 /// `SELECT col FROM t WHERE pk = 5` if col is unique
-fn add_group_by_exprs_from_dependencies(
+pub fn add_group_by_exprs_from_dependencies(
     mut group_expr: Vec<Expr>,
     schema: &DFSchemaRef,
 ) -> Result<Vec<Expr>> {

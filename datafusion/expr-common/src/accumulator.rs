@@ -64,8 +64,8 @@ pub trait Accumulator: Send + Sync + Debug {
     /// For example, the `SUM` accumulator maintains a running sum,
     /// and `evaluate` will produce that running sum as its output.
     ///
-    /// After this call, the accumulator's internal state should be
-    /// equivalent to when it was first created.
+    /// This function should not be called twice, otherwise it will
+    /// result in potentially non-deterministic behavior.
     ///
     /// This function gets `&mut self` to allow for the accumulator to build
     /// arrow compatible internal state that can be returned without copying
@@ -85,8 +85,8 @@ pub trait Accumulator: Send + Sync + Debug {
     /// Returns the intermediate state of the accumulator, consuming the
     /// intermediate state.
     ///
-    /// After this call, the accumulator's internal state should be
-    /// equivalent to when it was first created.
+    /// This function should not be called twice, otherwise it will
+    /// result in potentially non-deterministic behavior.
     ///
     /// This function gets `&mut self` to allow for the accumulator to build
     /// arrow compatible internal state that can be returned without copying

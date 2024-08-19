@@ -3640,6 +3640,7 @@ Unwraps struct fields into columns.
 
 - [map](#map)
 - [make_map](#make_map)
+- [map_extract](#map_extract)
 
 ### `map`
 
@@ -3699,6 +3700,34 @@ SELECT MAKE_MAP('POST', 41, 'HEAD', 33, 'PATCH', null);
 ----
 {POST: 41, HEAD: 33, PATCH: }
 ```
+
+### `map_extract`
+
+Return a list containing the value for a given key or an empty list if the key is not contained in the map.
+
+```
+map_extract(map, key)
+```
+
+#### Arguments
+
+- `map`: Map expression.
+  Can be a constant, column, or function, and any combination of map operators.
+- `key`: Key to extract from the map.
+  Can be a constant, column, or function, any combination of arithmetic or
+  string operators, or a named expression of previous listed.
+
+#### Example
+
+```
+SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
+----
+[1]
+```
+
+#### Aliases
+
+- element_at
 
 ## Hashing Functions
 

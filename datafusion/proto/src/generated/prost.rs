@@ -1919,7 +1919,9 @@ pub struct PartitionStats {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum BuiltInWindowFunction {
-    RowNumber = 0,
+    /// <https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum>
+    Unspecified = 0,
+    /// ROW_NUMBER = 0;
     Rank = 1,
     DenseRank = 2,
     PercentRank = 3,
@@ -1938,7 +1940,7 @@ impl BuiltInWindowFunction {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            BuiltInWindowFunction::RowNumber => "ROW_NUMBER",
+            BuiltInWindowFunction::Unspecified => "UNSPECIFIED",
             BuiltInWindowFunction::Rank => "RANK",
             BuiltInWindowFunction::DenseRank => "DENSE_RANK",
             BuiltInWindowFunction::PercentRank => "PERCENT_RANK",
@@ -1954,7 +1956,7 @@ impl BuiltInWindowFunction {
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
-            "ROW_NUMBER" => Some(Self::RowNumber),
+            "UNSPECIFIED" => Some(Self::Unspecified),
             "RANK" => Some(Self::Rank),
             "DENSE_RANK" => Some(Self::DenseRank),
             "PERCENT_RANK" => Some(Self::PercentRank),
