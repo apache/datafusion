@@ -442,6 +442,7 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// The [`RuntimeEnv`] associated with the [`TaskContext`] argument
     runtime: Arc<RuntimeEnv>,
+    /// Have we enabled the blocked optimization for group values and accumulators.
     enable_blocked_group_states: bool,
 }
 
