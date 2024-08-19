@@ -847,8 +847,7 @@ pub fn exprlist_len(
                             .iter()
                             .enumerate()
                             .filter_map(|(idx, field)| {
-                                let (maybe_table_ref, _) =
-                                    schema.qualified_field(idx);
+                                let (maybe_table_ref, _) = schema.qualified_field(idx);
                                 if maybe_table_ref.map_or(true, |q| q == qualifier) {
                                     Some((maybe_table_ref.cloned(), Arc::clone(field)))
                                 } else {
