@@ -167,7 +167,6 @@ large_futures = "warn"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_imports = "deny"
 
-
 ## Temporary arrow-rs patch until 53.0.0 is released
 
 [patch.crates-io]

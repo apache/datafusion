@@ -63,8 +63,6 @@ ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.17"
 
-
-
 ## Temporary arrow-rs patch until 53.0.0 is released
 
 [patch.crates-io]
