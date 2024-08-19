@@ -443,8 +443,6 @@ pub(crate) struct GroupedHashAggregateStream {
     /// The [`RuntimeEnv`] associated with the [`TaskContext`] argument
     runtime: Arc<RuntimeEnv>,
     enable_blocked_group_states: bool,
-
-    group_states_block_size: usize,
 }
 
 impl GroupedHashAggregateStream {
@@ -595,7 +593,6 @@ impl GroupedHashAggregateStream {
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
             enable_blocked_group_states,
-            group_states_block_size: batch_size,
         })
     }
 }
