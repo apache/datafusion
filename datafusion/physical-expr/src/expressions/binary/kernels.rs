@@ -27,6 +27,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::internal_err;
 use datafusion_common::{Result, ScalarValue};
 
+use arrow_schema::ArrowError;
 use std::sync::Arc;
 
 /// Downcasts $LEFT and $RIGHT to $ARRAY_TYPE and then calls $KERNEL($LEFT, $RIGHT)
@@ -131,3 +132,22 @@ create_dyn_scalar_kernel!(bitwise_or_dyn_scalar, bitwise_or_scalar);
 create_dyn_scalar_kernel!(bitwise_xor_dyn_scalar, bitwise_xor_scalar);
 create_dyn_scalar_kernel!(bitwise_shift_right_dyn_scalar, bitwise_shift_right_scalar);
 create_dyn_scalar_kernel!(bitwise_shift_left_dyn_scalar, bitwise_shift_left_scalar);
+
+pub fn concat_elements_utf8view(
+    left: &StringViewArray,
+    right: &StringViewArray,
+) -> std::result::Result<StringViewArray, ArrowError> {
+    let mut result = StringViewBuilder::new();
+    for (l, r) in left.iter().zip(right.iter()) {
+        match (l, r) {
+            (None, None) => {
+                result.append_null();
+            }
+            _ => {
+                let concat_val = format!("{}{}", l.unwrap_or(""), r.unwrap_or(""));
+                result.append_value(concat_val);
+            }
+        }
+    }
+    Ok(result.finish())
+}
