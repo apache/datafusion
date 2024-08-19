@@ -42,7 +42,7 @@ use arrow_schema::SortOptions;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::groups_accumulator::GroupStatesMode;
@@ -558,6 +558,7 @@ impl GroupedHashAggregateStream {
 
         // Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
         let enable_blocked_group_states = maybe_enable_blocked_group_states(
+            &context,
             group_values.as_mut(),
             &mut accumulators,
             batch_size,
@@ -593,15 +594,21 @@ impl GroupedHashAggregateStream {
 /// Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
 /// The blocked optimization will be enabled when:
 ///   - It is not streaming aggregation(because blocked mode can't support Emit::first(exact n))
-///   - The accumulator is not empty
+///   - The spilling is disabled(still need to consider more to support it efficiently)
+///   - The accumulator is not empty(I am still not sure about logic in this case)
 ///   - `GroupValues` and all `GroupsAccumulator`s support blocked mode
+// TODO: support blocked optimization in streaming, spilling, and maybe empty accumulators case?
 fn maybe_enable_blocked_group_states(
+    context: &TaskContext,
     group_values: &mut dyn GroupValues,
     accumulators: &mut [Box<dyn GroupsAccumulator>],
     block_size: usize,
     group_ordering: &GroupOrdering,
 ) -> Result<bool> {
-    if !matches!(group_ordering, GroupOrdering::None) || accumulators.is_empty() {
+    if !matches!(group_ordering, GroupOrdering::None)
+        || accumulators.is_empty()
+        || enable_spilling(context.memory_pool().as_ref())
+    {
         return Ok(false);
     }
 
@@ -619,6 +626,11 @@ fn maybe_enable_blocked_group_states(
         }
         _ => Ok(false),
     }
+}
+
+// TODO: we should add a function(like `name`) to distinguish different memory pools.
+fn enable_spilling(memory_pool: &dyn MemoryPool) -> bool {
+    !format!("{memory_pool:?}").contains("UnboundedMemoryPool")
 }
 
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
