@@ -60,7 +60,7 @@ impl OptimizerRule for EliminateNestedUnion {
                 let inputs = inputs
                     .into_iter()
                     .flat_map(extract_plans_from_union)
-                    .map(|plan| coerce_plan_expr_for_schema(&plan, &schema))
+                    .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
                     .collect::<Result<Vec<_>>>()?;
 
                 Ok(Transformed::yes(LogicalPlan::Union(Union {
@@ -75,7 +75,7 @@ impl OptimizerRule for EliminateNestedUnion {
                             .into_iter()
                             .map(extract_plan_from_distinct)
                             .flat_map(extract_plans_from_union)
-                            .map(|plan| coerce_plan_expr_for_schema(&plan, &schema))
+                            .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
                             .collect::<Result<Vec<_>>>()?;
 
                         Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::All(
