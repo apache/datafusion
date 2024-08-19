@@ -117,8 +117,8 @@ pub trait Accumulator: Send + Sync + Debug {
     /// ┌─────────────────────────┐      ┌─────────────────────────┐
     /// │        GroubyBy         │      │        GroubyBy         │
     /// │(AggregateMode::Partial) │      │(AggregateMode::Partial) │
-    /// └─────────────────────────┘      └────────────▲────────────┘
-    ///              ▲                                │
+    /// └─────────────────────────┘      └─────────────────────────┘
+    ///              ▲                                ▲
     ///              │                                │    update_batch() is called for
     ///              │                                │    each input RecordBatch
     ///         .─────────.                      .─────────.
@@ -185,15 +185,15 @@ pub trait Accumulator: Send + Sync + Debug {
     /// │(AggregateMode::Partial) │  │ (AggregateMode::Partial) │     the groups
     /// └─────────────────────────┘  └──────────────────────────┘
     ///              ▲                             ▲
-    ///              │                            ┌┘
-    ///              │                            │
-    ///         .─────────.                  .─────────.
-    ///      ,─'           '─.            ,─'           '─.
-    ///     ;      Input      :          ;      Input      :          1. Since input data is
-    ///     :   Partition 0   ;          :   Partition 1   ;          arbitrarily or RoundRobin
-    ///      ╲               ╱            ╲               ╱           distributed, each partition
-    ///       '─.         ,─'              '─.         ,─'            likely has all distinct
-    ///          `───────'                    `───────'
+    ///              │                             │
+    ///              │                             │
+    ///         .─────────.                   .─────────.
+    ///      ,─'           '─.             ,─'           '─.
+    ///     ;      Input      :           ;      Input      :         1. Since input data is
+    ///     :   Partition 0   ;           :   Partition 1   ;         arbitrarily or RoundRobin
+    ///      ╲               ╱             ╲               ╱          distributed, each partition
+    ///       '─.         ,─'               '─.         ,─'           likely has all distinct
+    ///          `───────'                     `───────'
     /// ```
     ///
     /// This structure is used so that the `AggregateMode::Partial` accumulators
