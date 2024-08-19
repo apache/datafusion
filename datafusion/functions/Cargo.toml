@@ -66,6 +66,7 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { workspace = true }
+arrow-data = { workspace = true }
 arrow-buffer = { workspace = true }
 base64 = { version = "0.22", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
