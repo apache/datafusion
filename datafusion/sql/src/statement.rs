@@ -57,8 +57,8 @@ use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
     CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, FromTable, Ident, Insert,
     ObjectName, ObjectType, OneOrManyWithParens, Query, SchemaName, SetExpr,
-    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
-    TableWithJoins, TransactionMode, UnaryOperator, Value,
+    ShowCreateObject, ShowStatementFilter, SqlOption, Statement, TableConstraint,
+    TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -189,6 +189,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         self.sql_statement_to_plan_with_context_impl(statement, planner_context)
     }
 
+    fn options_to_schema_metadata(
+        options: &Option<Vec<SqlOption>>,
+    ) -> HashMap<String, String> {
+        let mut metadata: HashMap<String, String> = HashMap::new();
+        for option in options.as_ref().unwrap_or(&vec![]) {
+            metadata.insert(option.name.to_string(), option.value.to_string());
+        }
+        metadata
+    }
+
     fn sql_statement_to_plan_with_context_impl(
         &self,
         statement: Statement,
@@ -229,6 +239,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 with_options,
                 if_not_exists,
                 or_replace,
+                options,
                 ..
             }) if table_properties.is_empty() && with_options.is_empty() => {
                 // Merge inline constraints and existing constraints
@@ -290,7 +301,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
 
                     None => {
-                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                        let schema = self
+                            .build_schema(columns)?
+                            .with_metadata(Self::options_to_schema_metadata(&options))
+                            .to_dfschema_ref()?;
                         let plan = EmptyRelation {
                             produce_one_row: false,
                             schema,
