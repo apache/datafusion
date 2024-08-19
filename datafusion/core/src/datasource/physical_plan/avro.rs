@@ -165,6 +165,10 @@ impl ExecutionPlan for AvroExec {
         Some(self.metrics.clone_inner())
     }
 
+    fn fetch(&self) -> Option<usize> {
+        self.base_config.limit
+    }
+
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let new_config = self.base_config.clone().with_limit(limit);
 

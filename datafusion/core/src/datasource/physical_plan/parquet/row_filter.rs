@@ -15,6 +15,50 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Utilities to push down of DataFusion filter predicates (any DataFusion
+//! `PhysicalExpr` that evaluates to a [`BooleanArray`]) to the parquet decoder
+//! level in `arrow-rs`.
+//!
+//! DataFusion will use a `ParquetRecordBatchStream` to read data from parquet
+//! into [`RecordBatch`]es.
+//!
+//! The `ParquetRecordBatchStream` takes an optional `RowFilter` which is itself
+//! a Vec of `Box<dyn ArrowPredicate>`. During decoding, the predicates are
+//! evaluated in order, to generate a mask which is used to avoid decoding rows
+//! in projected columns which do not pass the filter which can significantly
+//! reduce the amount of compute required for decoding and thus improve query
+//! performance.
+//!
+//! Since the predicates are applied serially in the order defined in the
+//! `RowFilter`, the optimal ordering depends on the exact filters. The best
+//! filters to execute first have two properties:
+//!
+//! 1. They are relatively inexpensive to evaluate (e.g. they read
+//!    column chunks which are relatively small)
+//!
+//! 2. They filter many (contiguous) rows, reducing the amount of decoding
+//!    required for subsequent filters and projected columns
+//!
+//! If requested, this code will reorder the filters based on heuristics try and
+//! reduce the evaluation cost.
+//!
+//! The basic algorithm for constructing the `RowFilter` is as follows
+//!
+//! 1. Break conjunctions into separate predicates. An expression
+//!    like `a = 1 AND (b = 2 AND c = 3)` would be
+//!    separated into the expressions `a = 1`, `b = 2`, and `c = 3`.
+//! 2. Determine whether each predicate can be evaluated as an `ArrowPredicate`.
+//! 3. Determine, for each predicate, the total compressed size of all
+//!    columns required to evaluate the predicate.
+//! 4. Determine, for each predicate, whether all columns required to
+//!    evaluate the expression are sorted.
+//! 5. Re-order the predicate by total size (from step 3).
+//! 6. Partition the predicates according to whether they are sorted (from step 4)
+//! 7. "Compile" each predicate `Expr` to a `DatafusionArrowPredicate`.
+//! 8. Build the `RowFilter` with the sorted predicates followed by
+//!    the unsorted predicates. Within each partition, predicates are
+//!    still be sorted by size.
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -40,41 +84,24 @@ use crate::physical_plan::metrics;
 
 use super::ParquetFileMetrics;
 
-/// This module contains utilities for enabling the pushdown of DataFusion filter predicates (which
-/// can be any DataFusion `Expr` that evaluates to a `BooleanArray`) to the parquet decoder level in `arrow-rs`.
-/// DataFusion will use a `ParquetRecordBatchStream` to read data from parquet into arrow `RecordBatch`es.
-/// When constructing the  `ParquetRecordBatchStream` you can provide a `RowFilter` which is itself just a vector
-/// of `Box<dyn ArrowPredicate>`. During decoding, the predicates are evaluated to generate a mask which is used
-/// to avoid decoding rows in projected columns which are not selected which can significantly reduce the amount
-/// of compute required for decoding.
+/// A "compiled" predicate passed to `ParquetRecordBatchStream` to perform
+/// row-level filtering during parquet decoding.
 ///
-/// Since the predicates are applied serially in the order defined in the `RowFilter`, the optimal ordering
-/// will depend on the exact filters. The best filters to execute first have two properties:
-///     1. The are relatively inexpensive to evaluate (e.g. they read column chunks which are relatively small)
-///     2. They filter a lot of rows, reducing the amount of decoding required for subsequent filters and projected columns
+/// See the module level documentation for more information.
 ///
-/// Given the metadata exposed by parquet, the selectivity of filters is not easy to estimate so the heuristics we use here primarily
-/// focus on the evaluation cost.
+/// Implements the `ArrowPredicate` trait used by the parquet decoder
 ///
-/// The basic algorithm for constructing the `RowFilter` is as follows
-///     1. Recursively break conjunctions into separate predicates. An expression like `a = 1 AND (b = 2 AND c = 3)` would be
-///        separated into the expressions `a = 1`, `b = 2`, and `c = 3`.
-///     2. Determine whether each predicate is suitable as an `ArrowPredicate`. As long as the predicate does not reference any projected columns
-///        or columns with non-primitive types, then it is considered suitable.
-///     3. Determine, for each predicate, the total compressed size of all columns required to evaluate the predicate.
-///     4. Determine, for each predicate, whether all columns required to evaluate the expression are sorted.
-///     5. Re-order the predicate by total size (from step 3).
-///     6. Partition the predicates according to whether they are sorted (from step 4)
-///     7. "Compile" each predicate `Expr` to a `DatafusionArrowPredicate`.
-///     8. Build the `RowFilter` with the sorted predicates followed by the unsorted predicates. Within each partition
-///        the predicates will still be sorted by size.
-
-/// A predicate which can be passed to `ParquetRecordBatchStream` to perform row-level
-/// filtering during parquet decoding.
+/// An expression can be evaluated as a `DatafusionArrowPredicate` if it:
+/// * Does not reference any projected columns
+/// * Does not reference columns with non-primitive types (e.g. structs / lists)
 #[derive(Debug)]
 pub(crate) struct DatafusionArrowPredicate {
+    /// the filter expression
     physical_expr: Arc<dyn PhysicalExpr>,
+    /// Path to the columns in the parquet schema required to evaluate the
+    /// expression
     projection_mask: ProjectionMask,
+    /// Columns required to evaluate the expression in the arrow schema
     projection: Vec<usize>,
     /// how many rows were filtered out by this predicate
     rows_filtered: metrics::Count,
@@ -85,6 +112,7 @@ pub(crate) struct DatafusionArrowPredicate {
 }
 
 impl DatafusionArrowPredicate {
+    /// Create a new `DatafusionArrowPredicate` from a `FilterCandidate`
     pub fn try_new(
         candidate: FilterCandidate,
         schema: &Schema,
@@ -152,9 +180,12 @@ impl ArrowPredicate for DatafusionArrowPredicate {
     }
 }
 
-/// A candidate expression for creating a `RowFilter` contains the
-/// expression as well as data to estimate the cost of evaluating
-/// the resulting expression.
+/// A candidate expression for creating a `RowFilter`.
+///
+/// Each candidate contains the expression as well as data to estimate the cost
+/// of evaluating the resulting expression.
+///
+/// See the module level documentation for more information.
 pub(crate) struct FilterCandidate {
     expr: Arc<dyn PhysicalExpr>,
     required_bytes: usize,
@@ -162,19 +193,55 @@ pub(crate) struct FilterCandidate {
     projection: Vec<usize>,
 }
 
-/// Helper to build a `FilterCandidate`. This will do several things
+/// Helper to build a `FilterCandidate`.
+///
+/// This will do several things
 /// 1. Determine the columns required to evaluate the expression
 /// 2. Calculate data required to estimate the cost of evaluating the filter
-/// 3. Rewrite column expressions in the predicate which reference columns not in the particular file schema.
-///    This is relevant in the case where we have determined the table schema by merging all individual file schemas
-///    and any given file may or may not contain all columns in the merged schema. If a particular column is not present
-///    we replace the column expression with a literal expression that produces a null value.
+/// 3. Rewrite column expressions in the predicate which reference columns not
+///    in the particular file schema.
+///
+/// # Schema Rewrite
+///
+/// When parquet files are read in the context of "schema evolution" there are
+/// potentially wo schemas:
+///
+/// 1. The table schema (the columns of the table that the parquet file is part of)
+/// 2. The file schema (the columns actually in the parquet file)
+///
+/// There are times when the table schema contains columns that are not in the
+/// file schema, such as when new columns have been added in new parquet files
+/// but old files do not have the columns.
+///
+/// When a file is missing a column from the table schema, the value of the
+/// missing column is filled in with `NULL`  via a `SchemaAdapter`.
+///
+/// When a predicate is pushed down to the parquet reader, the predicate is
+/// evaluated in the context of the file schema. If the predicate references a
+/// column that is in the table schema but not in the file schema, the column
+/// reference must be rewritten to a literal expression that represents the
+/// `NULL` value that would be produced by the `SchemaAdapter`.
+///
+/// For example, if:
+/// * The table schema is `id, name, address`
+/// * The file schema is  `id, name` (missing the `address` column)
+/// * predicate is `address = 'foo'`
+///
+/// When evaluating the predicate as a filter on the parquet file, the predicate
+/// must be rewritten to `NULL = 'foo'` as the `address` column will be filled
+/// in with `NULL` values during the rest of the evaluation.
 struct FilterCandidateBuilder<'a> {
     expr: Arc<dyn PhysicalExpr>,
+    /// The schema of this parquet file
     file_schema: &'a Schema,
+    /// The schema of the table (merged schema) -- columns may be in different
+    /// order than in the file and have columns that are not in the file schema
     table_schema: &'a Schema,
     required_column_indices: BTreeSet<usize>,
+    /// Does the expression require any non-primitive columns (like structs)?
     non_primitive_columns: bool,
+    /// Does the expression reference any columns that are in the table
+    /// schema but not in the file schema?
     projected_columns: bool,
 }
 
@@ -194,6 +261,13 @@ impl<'a> FilterCandidateBuilder<'a> {
         }
     }
 
+    /// Attempt to build a `FilterCandidate` from the expression
+    ///
+    /// # Return values
+    ///
+    /// * `Ok(Some(candidate))` if the expression can be used as an ArrowFilter
+    /// * `Ok(None)` if the expression cannot be used as an ArrowFilter
+    /// * `Err(e)` if an error occurs while building the candidate
     pub fn build(
         mut self,
         metadata: &ParquetMetaData,
@@ -217,9 +291,13 @@ impl<'a> FilterCandidateBuilder<'a> {
     }
 }
 
+/// Implement the `TreeNodeRewriter` trait for `FilterCandidateBuilder` that
+/// walks the expression tree and rewrites it in preparation of becoming
+/// `FilterCandidate`.
 impl<'a> TreeNodeRewriter for FilterCandidateBuilder<'a> {
     type Node = Arc<dyn PhysicalExpr>;
 
+    /// Called before visiting each child
     fn f_down(
         &mut self,
         node: Arc<dyn PhysicalExpr>,
@@ -243,13 +321,19 @@ impl<'a> TreeNodeRewriter for FilterCandidateBuilder<'a> {
         Ok(Transformed::no(node))
     }
 
+    /// After visiting all children, rewrite column references to nulls if
+    /// they are not in the file schema
     fn f_up(
         &mut self,
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+        // if the expression is a column, is it in the file schema?
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             if self.file_schema.field_with_name(column.name()).is_err() {
-                // the column expr must be in the table schema
+                // Replace the column reference with a NULL (using the type from the table schema)
+                // e.g. `column = 'foo'` is rewritten be transformed to `NULL = 'foo'`
+                //
+                // See comments on `FilterCandidateBuilder` for more information
                 return match self.table_schema.field_with_name(column.name()) {
                     Ok(field) => {
                         // return the null value corresponding to the data type
@@ -294,9 +378,11 @@ fn remap_projection(src: &[usize]) -> Vec<usize> {
     projection
 }
 
-/// Calculate the total compressed size of all `Column's required for
-/// predicate `Expr`. This should represent the total amount of file IO
-/// required to evaluate the predicate.
+/// Calculate the total compressed size of all `Column`'s required for
+/// predicate `Expr`.
+///
+/// This value represents the total amount of IO required to evaluate the
+/// predicate.
 fn size_of_columns(
     columns: &BTreeSet<usize>,
     metadata: &ParquetMetaData,
@@ -312,8 +398,10 @@ fn size_of_columns(
     Ok(total_size)
 }
 
-/// For a given set of `Column`s required for predicate `Expr` determine whether all
-/// columns are sorted. Sorted columns may be queried more efficiently in the presence of
+/// For a given set of `Column`s required for predicate `Expr` determine whether
+/// all columns are sorted.
+///
+/// Sorted columns may be queried more efficiently in the presence of
 /// a PageIndex.
 fn columns_sorted(
     _columns: &BTreeSet<usize>,
@@ -323,7 +411,20 @@ fn columns_sorted(
     Ok(false)
 }
 
-/// Build a [`RowFilter`] from the given predicate `Expr`
+/// Build a [`RowFilter`] from the given predicate `Expr` if possible
+///
+/// # returns
+/// * `Ok(Some(row_filter))` if the expression can be used as RowFilter
+/// * `Ok(None)` if the expression cannot be used as an RowFilter
+/// * `Err(e)` if an error occurs while building the filter
+///
+/// Note that the returned `RowFilter` may not contains all conjuncts in the
+/// original expression. This is because some conjuncts may not be able to be
+/// evaluated as an `ArrowPredicate` and will be ignored.
+///
+/// For example, if the expression is `a = 1 AND b = 2 AND c = 3` and `b = 2`
+/// can not be evaluated for some reason, the returned `RowFilter` will contain
+/// `a = 1` and `c = 3`.
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
@@ -336,8 +437,11 @@ pub fn build_row_filter(
     let rows_filtered = &file_metrics.pushdown_rows_filtered;
     let time = &file_metrics.pushdown_eval_time;
 
+    // Split into conjuncts:
+    // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
     let predicates = split_conjunction(expr);
 
+    // Determine which conjuncts can be evaluated as ArrowPredicates, if any
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .flat_map(|expr| {
@@ -347,9 +451,11 @@ pub fn build_row_filter(
         })
         .collect();
 
+    // no candidates
     if candidates.is_empty() {
         Ok(None)
     } else if reorder_predicates {
+        // attempt to reorder the predicates by size and whether they are sorted
         candidates.sort_by_key(|c| c.required_bytes);
 
         let (indexed_candidates, other_candidates): (Vec<_>, Vec<_>) =
@@ -385,6 +491,8 @@ pub fn build_row_filter(
 
         Ok(Some(RowFilter::new(filters)))
     } else {
+        // otherwise evaluate the predicates in the order the appeared in the
+        // original expressions
         let mut filters: Vec<Box<dyn ArrowPredicate>> = vec![];
         for candidate in candidates {
             let filter = DatafusionArrowPredicate::try_new(

@@ -318,10 +318,14 @@ impl PhysicalExpr for BinaryExpr {
         // Attempt to use special kernels if one input is scalar and the other is an array
         let scalar_result = match (&lhs, &rhs) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
-                // if left is array and right is literal - use scalar operations
-                self.evaluate_array_scalar(array, scalar.clone())?.map(|r| {
-                    r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
-                })
+                // if left is array and right is literal(not NULL) - use scalar operations
+                if scalar.is_null() {
+                    None
+                } else {
+                    self.evaluate_array_scalar(array, scalar.clone())?.map(|r| {
+                        r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
+                    })
+                }
             }
             (_, _) => None, // default to array implementation
         };

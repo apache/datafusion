@@ -40,8 +40,6 @@ impl fmt::Display for BuiltInWindowFunction {
 /// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter)]
 pub enum BuiltInWindowFunction {
-    /// number of the current row within its partition, counting from 1
-    RowNumber,
     /// rank of the current row with gaps; same as row_number of its first peer
     Rank,
     /// rank of the current row without gaps; this function counts peer groups
@@ -74,7 +72,6 @@ impl BuiltInWindowFunction {
     pub fn name(&self) -> &str {
         use BuiltInWindowFunction::*;
         match self {
-            RowNumber => "ROW_NUMBER",
             Rank => "RANK",
             DenseRank => "DENSE_RANK",
             PercentRank => "PERCENT_RANK",
@@ -93,7 +90,6 @@ impl FromStr for BuiltInWindowFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltInWindowFunction> {
         Ok(match name.to_uppercase().as_str() {
-            "ROW_NUMBER" => BuiltInWindowFunction::RowNumber,
             "RANK" => BuiltInWindowFunction::Rank,
             "DENSE_RANK" => BuiltInWindowFunction::DenseRank,
             "PERCENT_RANK" => BuiltInWindowFunction::PercentRank,
@@ -131,8 +127,7 @@ impl BuiltInWindowFunction {
             })?;
 
         match self {
-            BuiltInWindowFunction::RowNumber
-            | BuiltInWindowFunction::Rank
+            BuiltInWindowFunction::Rank
             | BuiltInWindowFunction::DenseRank
             | BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
             BuiltInWindowFunction::PercentRank | BuiltInWindowFunction::CumeDist => {
@@ -150,8 +145,7 @@ impl BuiltInWindowFunction {
     pub fn signature(&self) -> Signature {
         // note: the physical expression must accept the type returned by this function or the execution panics.
         match self {
-            BuiltInWindowFunction::RowNumber
-            | BuiltInWindowFunction::Rank
+            BuiltInWindowFunction::Rank
             | BuiltInWindowFunction::DenseRank
             | BuiltInWindowFunction::PercentRank
             | BuiltInWindowFunction::CumeDist => Signature::any(0, Volatility::Immutable),
