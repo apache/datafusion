@@ -5804,7 +5804,7 @@ select generate_series(5),
 ----
 [0, 1, 2, 3, 4, 5] [2, 3, 4, 5] [2, 5, 8] [1, 2, 3, 4, 5] [5, 4, 3, 2, 1] [10, 7, 4] [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01, 1993-03-01] [1993-02-01, 1993-01-31, 1993-01-30, 1993-01-29, 1993-01-28, 1993-01-27, 1993-01-26, 1993-01-25, 1993-01-24, 1993-01-23, 1993-01-22, 1993-01-21, 1993-01-20, 1993-01-19, 1993-01-18, 1993-01-17, 1993-01-16, 1993-01-15, 1993-01-14, 1993-01-13, 1993-01-12, 1993-01-11, 1993-01-10, 1993-01-09, 1993-01-08, 1993-01-07, 1993-01-06, 1993-01-05, 1993-01-04, 1993-01-03, 1993-01-02, 1993-01-01] [1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
 
-query error DataFusion error: Execution error: unsupported type for range. Expected Int64 or Date32, got: Timestamp\(Nanosecond, None\)
+query error DataFusion error: Execution error: Cannot generate date range less than 1 day\.
 select generate_series('2021-01-01'::timestamp, '2021-01-02'::timestamp, INTERVAL '1' HOUR);
 
 ## should return NULL
@@ -5936,11 +5936,12 @@ select generate_series(start, '1993-03-01'::date, INTERVAL '1 year') from date_t
 
 
 # https://github.com/apache/datafusion/issues/11922
-query error
+query ?
 select generate_series(start, '1993-03-01', INTERVAL '1 year') from date_table;
 ----
-DataFusion error: Internal error: could not cast value to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::Date32Type>.
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+[1992-01-01, 1993-01-01]
+[1993-02-01]
+[1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
 
 
 ## array_except
