@@ -1045,15 +1045,11 @@ impl GroupedHashAggregateStream {
             && matches!(self.mode, AggregateMode::Partial)
             && self.update_memory_reservation().is_err()
         {
-            if !self.enable_blocked_group_states {
-                let n = self.group_values.len() / self.batch_size * self.batch_size;
-                let batch = self.emit(EmitTo::First(n), false)?;
-                self.exec_state = ExecutionState::ProducingOutput(batch);
-            } else {
-                let blocks = self.group_values.len() / self.group_states_block_size;
-                self.exec_state = ExecutionState::ProducingBlocks(Some(blocks));
-            }
+            let n = self.group_values.len() / self.batch_size * self.batch_size;
+            let batch = self.emit(EmitTo::First(n), false)?;
+            self.exec_state = ExecutionState::ProducingOutput(batch);
         }
+
         Ok(())
     }
 

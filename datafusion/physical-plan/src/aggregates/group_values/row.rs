@@ -256,39 +256,16 @@ impl GroupValues for GroupValuesRows {
         let mut group_values = mem::take(&mut self.group_values);
 
         let mut output = match emit_to {
-            EmitTo::All => match self.mode {
-                GroupStatesMode::Flat => {
-                    let blk = group_values.pop_first_block().unwrap();
-                    let output = self.row_converter.convert_rows(blk.into_iter())?;
-                    output
-                }
-                GroupStatesMode::Blocked(_) => {
-                    let mut total_rows_num = 0;
-                    let mut total_buffer_size = 0;
-                    group_values.iter().for_each(|rows| {
-                        let rows_num = rows.num_rows();
-                        let rows_buffer_size = rows_buffer_size(rows);
-                        total_rows_num += rows_num;
-                        total_buffer_size += rows_buffer_size;
-                    });
+            EmitTo::All => {
+                debug_assert!(matches!(self.mode, GroupStatesMode::Flat));
 
-                    let mut total_rows = self
-                        .row_converter
-                        .empty_rows(total_rows_num, total_buffer_size);
-                    for rows in group_values.iter() {
-                        for row in rows.into_iter() {
-                            total_rows.push(row);
-                        }
-                    }
-
-                    group_values.clear();
-
-                    let output =
-                        self.row_converter.convert_rows(total_rows.into_iter())?;
-                    output
-                }
-            },
+                let blk = group_values.pop_first_block().unwrap();
+                let output = self.row_converter.convert_rows(blk.into_iter())?;
+                output
+            }
             EmitTo::First(n) => {
+                debug_assert!(matches!(self.mode, GroupStatesMode::Flat));
+
                 let blk = group_values.current_mut().unwrap();
                 let groups_rows = blk.iter().take(n);
                 let output = self.row_converter.convert_rows(groups_rows)?;
@@ -315,6 +292,8 @@ impl GroupValues for GroupValuesRows {
                 output
             }
             EmitTo::NextBlock(true) => {
+                debug_assert!(matches!(self.mode, GroupStatesMode::Blocked(_)));
+
                 let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
                 unsafe {
@@ -339,6 +318,8 @@ impl GroupValues for GroupValuesRows {
                 output
             }
             EmitTo::NextBlock(false) => {
+                debug_assert!(matches!(self.mode, GroupStatesMode::Blocked(_)));
+
                 let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
                 output

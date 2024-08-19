@@ -579,33 +579,18 @@ impl BlockedNullState {
         }
 
         let nulls = match emit_to {
-            EmitTo::All => match self.mode {
-                GroupStatesMode::Flat => {
-                    self.seen_values_blocks.current_mut().unwrap().finish()
-                }
-                GroupStatesMode::Blocked(blk_size) => {
-                    let total_num = (self.seen_values_blocks.num_blocks() - 1) * blk_size
-                        + self.seen_values_blocks.current().unwrap().len();
-                    let mut total_buffer = BooleanBufferBuilder::new(total_num);
-
-                    for blk in self.seen_values_blocks.iter_mut() {
-                        let nulls = blk.finish();
-                        for seen in nulls.iter() {
-                            total_buffer.append(seen);
-                        }
-                    }
-
-                    total_buffer.finish()
-                }
-            },
+            EmitTo::All => {
+                debug_assert!(matches!(self.mode, GroupStatesMode::Flat));
+                self.seen_values_blocks.current_mut().unwrap().finish()
+            }
             EmitTo::First(n) => {
-                assert!(matches!(self.mode, GroupStatesMode::Flat));
+                debug_assert!(matches!(self.mode, GroupStatesMode::Flat));
 
-                let blk = self.seen_values_blocks.current_mut().unwrap();
                 // split off the first N values in seen_values
                 //
                 // TODO make this more efficient rather than two
                 // copies and bitwise manipulation
+                let blk = self.seen_values_blocks.current_mut().unwrap();
                 let nulls = blk.finish();
                 let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
                 // reset the existing seen buffer
@@ -615,6 +600,7 @@ impl BlockedNullState {
                 first_n_null
             }
             EmitTo::NextBlock(_) => {
+                debug_assert!(matches!(self.mode, GroupStatesMode::Blocked(_)));
                 let mut cur_blk = self.seen_values_blocks.pop_first_block().unwrap();
                 cur_blk.finish()
             }

@@ -90,32 +90,26 @@ impl EmitTo {
         mode: GroupStatesMode,
     ) -> Vec<T> {
         match self {
-            Self::All => match mode {
-                GroupStatesMode::Flat => blocks.pop_first_block().unwrap(),
-                GroupStatesMode::Blocked(_) => {
-                    unreachable!("can't support Emit::All in blocked mode accumulator");
-                }
-            },
-            Self::First(n) => {
-                match mode {
-                    GroupStatesMode::Flat => {
-                        let block = blocks.current_mut().unwrap();
-                        let split_at = min(block.len(), *n);
-
-                        // get end n+1,.. values into t
-                        let mut t = block.split_off(split_at);
-                        // leave n+1,.. in v
-                        std::mem::swap(block, &mut t);
-                        t
-                    }
-                    GroupStatesMode::Blocked(_) => {
-                        unreachable!(
-                            "can't support Emit::First in blocked mode accumulator"
-                        );
-                    }
-                }
+            Self::All => {
+                debug_assert!(matches!(mode, GroupStatesMode::Flat));
+                blocks.pop_first_block().unwrap()
             }
-            Self::NextBlock(_) => blocks.pop_first_block().unwrap(),
+            Self::First(n) => {
+                debug_assert!(matches!(mode, GroupStatesMode::Flat));
+
+                let block = blocks.current_mut().unwrap();
+                let split_at = min(block.len(), *n);
+
+                // get end n+1,.. values into t
+                let mut t = block.split_off(split_at);
+                // leave n+1,.. in v
+                std::mem::swap(block, &mut t);
+                t
+            }
+            Self::NextBlock(_) => {
+                debug_assert!(matches!(mode, GroupStatesMode::Blocked(_)));
+                blocks.pop_first_block().unwrap()
+            }
         }
     }
 }
