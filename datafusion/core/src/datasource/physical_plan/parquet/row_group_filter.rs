@@ -908,16 +908,29 @@ mod tests {
                 false,
             )],
         );
+        let rgm5 = get_row_group_meta_data(
+            &schema_descr,
+            // [2, None]
+            // c1 > 5, this row group must be included
+            // (the min value is 2, but the max value is unknown, so it may have values greater than 5)
+            vec![ParquetStatistics::int32(
+                Some(2),
+                None,
+                None,
+                Some(0),
+                false,
+            )],
+        );
         let metrics = parquet_file_metrics();
-        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(4));
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(5));
         row_groups.prune_by_statistics(
             &schema,
             &schema_descr,
-            &[rgm1, rgm2, rgm3, rgm4],
+            &[rgm1, rgm2, rgm3, rgm4, rgm5],
             &pruning_predicate,
             &metrics,
         );
-        assert_pruned(row_groups, ExpectedPruning::Some(vec![0, 1]));
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![0, 1, 4]));
     }
     #[test]
     fn row_group_pruning_predicate_decimal_type3() {
