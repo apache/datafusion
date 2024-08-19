@@ -260,8 +260,7 @@ impl GroupValues for GroupValuesRows {
                 debug_assert!(matches!(self.mode, GroupStatesMode::Flat));
 
                 let blk = group_values.pop_first_block().unwrap();
-                let output = self.row_converter.convert_rows(blk.into_iter())?;
-                output
+                self.row_converter.convert_rows(blk.into_iter())?
             }
             EmitTo::First(n) => {
                 debug_assert!(matches!(self.mode, GroupStatesMode::Flat));
@@ -321,8 +320,7 @@ impl GroupValues for GroupValuesRows {
                 debug_assert!(matches!(self.mode, GroupStatesMode::Blocked(_)));
 
                 let cur_blk = group_values.pop_first_block().unwrap();
-                let output = self.row_converter.convert_rows(cur_blk.iter())?;
-                output
+                self.row_converter.convert_rows(cur_blk.iter())?
             }
         };
 

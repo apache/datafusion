@@ -46,9 +46,9 @@ pub enum EmitTo {
     ///
     /// The flag's meaning:
     /// - `true` represents it will be added new groups again,
-    /// we don't need to shift the values down.
+    ///   we don't need to shift the values down.
     /// - `false` represents new groups still be possible to be
-    /// added, and we need to shift the values down.
+    ///   added, and we need to shift the values down.
     NextBlock(bool),
 }
 
@@ -83,7 +83,7 @@ impl EmitTo {
     /// The detailed behavior in different emissions:
     ///   - For Emit::CurrentBlock, the first block will be taken and return.
     ///   - For Emit::All and Emit::First, it will be only supported in `GroupStatesMode::Flat`,
-    ///  similar as `take_needed`.
+    ///     similar as `take_needed`.
     pub fn take_needed_from_blocks<T>(
         &self,
         blocks: &mut VecBlocks<T>,
@@ -118,12 +118,12 @@ impl EmitTo {
 ///
 /// Their meanings:
 ///   - Flat, the values in them will be managed with a single `Vec`.
-///   It will grow constantly when more and more values are inserted,
-///   that leads to a considerable amount of copying, and finally a bad performance.
+///     It will grow constantly when more and more values are inserted,
+///     that leads to a considerable amount of copying, and finally a bad performance.
 ///
 ///   - Blocked, the values in them will be managed with multiple `Vec`s.
-///   When the block is large enough, a new block will be allocated and used
-///   for inserting. Obviously, this strategy can avoid copying and get a good performance.
+///     When the block is large enough, a new block will be allocated and used
+///     for inserting. Obviously, this strategy can avoid copying and get a good performance.
 #[derive(Debug, Clone, Copy)]
 pub enum GroupStatesMode {
     Flat,
