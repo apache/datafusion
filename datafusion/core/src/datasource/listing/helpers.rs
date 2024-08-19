@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use super::ListingTableUrl;
 use super::PartitionedFile;
+use crate::datasource::physical_plan::parquet::would_column_prevent_pushdown;
 use crate::execution::context::SessionState;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{BinaryExpr, Operator};
@@ -77,18 +78,18 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
             | Expr::Negative(_)
-            | Expr::Cast { .. }
-            | Expr::TryCast { .. }
-            | Expr::BinaryExpr { .. }
-            | Expr::Between { .. }
-            | Expr::Like { .. }
-            | Expr::SimilarTo { .. }
-            | Expr::InList { .. }
-            | Expr::Exists { .. }
+            | Expr::Cast(_)
+            | Expr::TryCast(_)
+            | Expr::BinaryExpr(_)
+            | Expr::Between(_)
+            | Expr::Like(_)
+            | Expr::SimilarTo(_)
+            | Expr::InList(_)
+            | Expr::Exists(_)
             | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::GroupingSet(_)
-            | Expr::Case { .. } => Ok(TreeNodeRecursion::Continue),
+            | Expr::Case(_) => Ok(TreeNodeRecursion::Continue),
 
             Expr::ScalarFunction(scalar_function) => {
                 match scalar_function.func.signature().volatility {
@@ -513,12 +514,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Not;
-
     use futures::StreamExt;
 
     use crate::test::object_store::make_test_store_and_state;
-    use datafusion_expr::{case, col, lit, Expr};
+    use datafusion_expr::{col, lit, Expr};
 
     use super::*;
 

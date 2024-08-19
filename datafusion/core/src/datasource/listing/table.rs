@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
-use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
+use super::helpers::{expr_applicable_for_schemas, pruned_partition_list, split_files};
 use super::PartitionedFile;
 
 use super::ListingTableUrl;
@@ -836,7 +836,6 @@ impl TableProvider for ListingTable {
                         .iter()
                         .map(|x| x.0.as_str())
                         .collect::<Vec<_>>(),
-                    filter,
                 ) {
                     // if filter can be handled by partition pruning, it is exact
                     TableProviderFilterPushDown::Exact
