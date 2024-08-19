@@ -30,7 +30,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-use crate::utils::{make_scalar_function, optimized_utf8_to_str_type, utf8_to_str_type};
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct SubstrFunc {
@@ -79,7 +79,7 @@ impl ScalarUDFImpl for SubstrFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types[0] == DataType::Utf8View {
-            optimized_utf8_to_str_type(&arg_types[0], "substr")
+            Ok(DataType::Utf8View)
         } else {
             utf8_to_str_type(&arg_types[0], "substr")
         }
