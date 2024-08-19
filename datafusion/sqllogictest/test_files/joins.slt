@@ -4096,3 +4096,8 @@ physical_plan
 09)--------------FilterExec: currency_to@2 = USD
 10)----------------MemoryExec: partitions=1, partition_sizes=[0]
 
+statement ok
+DROP TABLE sales_global;
+
+statement ok
+DROP TABLE exchange_rates;
