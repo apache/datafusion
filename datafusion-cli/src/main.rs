@@ -49,7 +49,7 @@ struct Args {
         short = 'p',
         long,
         help = "Path to your data, default to current directory",
-        validator(is_valid_data_dir)
+        value_parser(parse_valid_data_dir)
     )]
     data_path: Option<String>,
 
@@ -57,16 +57,16 @@ struct Args {
         short = 'b',
         long,
         help = "The batch size of each query, or use DataFusion default",
-        validator(is_valid_batch_size)
+        value_parser(parse_batch_size)
     )]
     batch_size: Option<usize>,
 
     #[clap(
         short = 'c',
         long,
-        multiple_values = true,
+        num_args = 0..,
         help = "Execute the given command string(s), then exit. Commands are expected to be non empty.",
-        validator(is_valid_command)
+        value_parser(parse_command)
     )]
     command: Vec<String>,
 
@@ -74,30 +74,30 @@ struct Args {
         short = 'm',
         long,
         help = "The memory pool limitation (e.g. '10g'), default to None (no limit)",
-        validator(is_valid_memory_pool_size)
+        value_parser(extract_memory_pool_size)
     )]
-    memory_limit: Option<String>,
+    memory_limit: Option<usize>,
 
     #[clap(
         short,
         long,
-        multiple_values = true,
+        num_args = 0..,
         help = "Execute commands from file(s), then exit",
-        validator(is_valid_file)
+        value_parser(parse_valid_file)
     )]
     file: Vec<String>,
 
     #[clap(
         short = 'r',
         long,
-        multiple_values = true,
+        num_args = 0..,
         help = "Run the provided files on startup instead of ~/.datafusionrc",
-        validator(is_valid_file),
+        value_parser(parse_valid_file),
         conflicts_with = "file"
     )]
     rc: Option<Vec<String>>,
 
-    #[clap(long, arg_enum, default_value_t = PrintFormat::Automatic)]
+    #[clap(long, value_enum, default_value_t = PrintFormat::Automatic)]
     format: PrintFormat,
 
     #[clap(
@@ -160,8 +160,6 @@ async fn main_inner() -> Result<()> {
     let rt_config =
         // set memory pool size
         if let Some(memory_limit) = args.memory_limit {
-            // unwrap is safe here because is_valid_memory_pool_size already checked the value
-            let memory_limit = extract_memory_pool_size(&memory_limit).unwrap();
             // set memory pool type
             match args.mem_pool_type {
                 PoolType::Fair => rt_config
@@ -235,39 +233,32 @@ fn create_runtime_env(rn_config: RuntimeConfig) -> Result<RuntimeEnv> {
     RuntimeEnv::new(rn_config)
 }
 
-fn is_valid_file(dir: &str) -> Result<(), String> {
+fn parse_valid_file(dir: &str) -> Result<String, String> {
     if Path::new(dir).is_file() {
-        Ok(())
+        Ok(dir.to_string())
     } else {
         Err(format!("Invalid file '{}'", dir))
     }
 }
 
-fn is_valid_data_dir(dir: &str) -> Result<(), String> {
+fn parse_valid_data_dir(dir: &str) -> Result<String, String> {
     if Path::new(dir).is_dir() {
-        Ok(())
+        Ok(dir.to_string())
     } else {
         Err(format!("Invalid data directory '{}'", dir))
     }
 }
 
-fn is_valid_batch_size(size: &str) -> Result<(), String> {
+fn parse_batch_size(size: &str) -> Result<usize, String> {
     match size.parse::<usize>() {
-        Ok(size) if size > 0 => Ok(()),
+        Ok(size) if size > 0 => Ok(size),
         _ => Err(format!("Invalid batch size '{}'", size)),
     }
 }
 
-fn is_valid_memory_pool_size(size: &str) -> Result<(), String> {
-    match extract_memory_pool_size(size) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(e),
-    }
-}
-
-fn is_valid_command(command: &str) -> Result<(), String> {
+fn parse_command(command: &str) -> Result<String, String> {
     if !command.is_empty() {
-        Ok(())
+        Ok(command.to_string())
     } else {
         Err("-c flag expects only non empty commands".to_string())
     }
