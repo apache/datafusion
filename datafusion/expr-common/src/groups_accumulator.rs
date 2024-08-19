@@ -20,7 +20,7 @@
 use std::{
     cmp::min,
     collections::VecDeque,
-    iter, mem,
+    iter,
     ops::{Index, IndexMut},
 };
 
