@@ -3898,6 +3898,7 @@ SELECT * FROM (
 ) as lhs RIGHT JOIN (
     SELECT * from right_table_no_nulls
     ORDER BY b
+    LIMIT 10
 ) AS rhs ON lhs.b=rhs.b
 ----
 11 1 21 1
@@ -3911,6 +3912,7 @@ EXPLAIN SELECT * FROM (
 ) as lhs RIGHT JOIN (
     SELECT * from right_table_no_nulls
     ORDER BY b
+    LIMIT 10
 ) AS rhs ON lhs.b=rhs.b
 ----
 logical_plan
@@ -3918,14 +3920,15 @@ logical_plan
 02)--SubqueryAlias: lhs
 03)----TableScan: left_table_no_nulls projection=[a, b]
 04)--SubqueryAlias: rhs
-05)----Sort: right_table_no_nulls.b ASC NULLS LAST
+05)----Sort: right_table_no_nulls.b ASC NULLS LAST, fetch=10
 06)------TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3
 02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+04)----SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
 05)------MemoryExec: partitions=1, partition_sizes=[1]
+
 
 
 # Missing probe index in the middle of the batch:
@@ -3953,6 +3956,7 @@ SELECT * FROM (
 ) as lhs RIGHT JOIN (
     SELECT * from right_table_missing_probe
     ORDER BY b
+    LIMIT 10
 ) AS rhs ON lhs.b=rhs.b
 ----
 11 1 21 1
@@ -3974,14 +3978,12 @@ logical_plan
 02)--SubqueryAlias: lhs
 03)----TableScan: left_table_no_nulls projection=[a, b]
 04)--SubqueryAlias: rhs
-05)----Sort: right_table_no_nulls.b ASC NULLS LAST
-06)------TableScan: right_table_no_nulls projection=[a, b]
+05)----TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3
 02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)------MemoryExec: partitions=1, partition_sizes=[1]
+04)----MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # Null build indices:
@@ -4009,6 +4011,7 @@ SELECT * FROM (
 ) as lhs RIGHT JOIN (
     SELECT * from right_table_append_null_build
     ORDER BY b
+    LIMIT 10
 ) AS rhs ON lhs.b=rhs.b
 ----
 NULL NULL 21 4
@@ -4025,6 +4028,7 @@ EXPLAIN SELECT * FROM (
 ) as lhs RIGHT JOIN (
     SELECT * from right_table_no_nulls
     ORDER BY b
+    LIMIT 10
 ) AS rhs ON lhs.b=rhs.b
 ----
 logical_plan
@@ -4032,11 +4036,11 @@ logical_plan
 02)--SubqueryAlias: lhs
 03)----TableScan: left_table_no_nulls projection=[a, b]
 04)--SubqueryAlias: rhs
-05)----Sort: right_table_no_nulls.b ASC NULLS LAST
+05)----Sort: right_table_no_nulls.b ASC NULLS LAST, fetch=10
 06)------TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3
 02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
 03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+04)----SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
 05)------MemoryExec: partitions=1, partition_sizes=[1]

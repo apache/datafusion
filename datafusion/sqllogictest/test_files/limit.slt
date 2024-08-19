@@ -550,5 +550,18 @@ logical_plan
 physical_plan StreamingTableExec: partition_sizes=1, projection=[column1, column2], infinite_source=true, fetch=3, output_ordering=[column1@0 ASC NULLS LAST, column2@1 ASC NULLS LAST]
 
 
+# Do not remove limit with Sort when skip is used
+query TT
+explain SELECT * FROM data ORDER BY column1 LIMIT 3,3;
+----
+logical_plan
+01)Limit: skip=3, fetch=3
+02)--Sort: data.column1 ASC NULLS LAST, fetch=6
+03)----TableScan: data projection=[column1, column2]
+physical_plan
+01)GlobalLimitExec: skip=3, fetch=3
+02)--StreamingTableExec: partition_sizes=1, projection=[column1, column2], infinite_source=true, fetch=6, output_ordering=[column1@0 ASC NULLS LAST, column2@1 ASC NULLS LAST]
+
+
 statement ok
 drop table data;
