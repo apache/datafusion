@@ -207,27 +207,25 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
 /// Returns plan with expressions coerced to types compatible with
 /// schema types
 pub fn coerce_plan_expr_for_schema(
-    plan: &LogicalPlan,
+    plan: LogicalPlan,
     schema: &DFSchema,
 ) -> Result<LogicalPlan> {
     match plan {
         // special case Projection to avoid adding multiple projections
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
-            let new_exprs =
-                coerce_exprs_for_schema(expr.clone(), input.schema(), schema)?;
-            let projection = Projection::try_new(new_exprs, Arc::clone(input))?;
+            let new_exprs = coerce_exprs_for_schema(expr, input.schema(), schema)?;
+            let projection = Projection::try_new(new_exprs, input)?;
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {
             let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
-
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
             let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
             if add_project {
-                let projection = Projection::try_new(new_exprs, Arc::new(plan.clone()))?;
+                let projection = Projection::try_new(new_exprs, Arc::new(plan))?;
                 Ok(LogicalPlan::Projection(projection))
             } else {
-                Ok(plan.clone())
+                Ok(plan)
             }
         }
     }
