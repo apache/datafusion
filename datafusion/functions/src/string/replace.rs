@@ -18,10 +18,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
 use arrow::datatypes::DataType;
 
-use datafusion_common::cast::as_generic_string_array;
+use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Volatility};
@@ -45,7 +45,11 @@ impl ReplaceFunc {
         use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![Exact(vec![Utf8, Utf8, Utf8])],
+                vec![
+                    Exact(vec![Utf8View, Utf8View, Utf8View]),
+                    Exact(vec![Utf8, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -73,6 +77,7 @@ impl ScalarUDFImpl for ReplaceFunc {
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(replace::<i32>, vec![])(args),
             DataType::LargeUtf8 => make_scalar_function(replace::<i64>, vec![])(args),
+            DataType::Utf8View => make_scalar_function(replace_view, vec![])(args),
             other => {
                 exec_err!("Unsupported data type {other:?} for function replace")
             }
@@ -80,6 +85,23 @@ impl ScalarUDFImpl for ReplaceFunc {
     }
 }
 
+fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_string_view_array(&args[0])?;
+    let from_array = as_string_view_array(&args[1])?;
+    let to_array = as_string_view_array(&args[2])?;
+
+    let result = string_array
+        .iter()
+        .zip(from_array.iter())
+        .zip(to_array.iter())
+        .map(|((string, from), to)| match (string, from, to) {
+            (Some(string), Some(from), Some(to)) => Some(string.replace(from, to)),
+            _ => None,
+        })
+        .collect::<StringArray>();
+
+    Ok(Arc::new(result) as ArrayRef)
+}
 /// Replaces all occurrences in string of substring from with substring to.
 /// replace('abcdefabcdef', 'cd', 'XX') = 'abXXefabXXef'
 fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -100,4 +122,60 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
-mod test {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::test::test_function;
+    use arrow::array::Array;
+    use arrow::array::LargeStringArray;
+    use arrow::array::StringArray;
+    use arrow::datatypes::DataType::{LargeUtf8, Utf8};
+    use datafusion_common::ScalarValue;
+    #[test]
+    fn test_functions() -> Result<()> {
+        test_function!(
+            ReplaceFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("aabbdqcbb")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("bb")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ccc")))),
+            ],
+            Ok(Some("aacccdqcccc")),
+            &str,
+            Utf8,
+            StringArray
+        );
+
+        test_function!(
+            ReplaceFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
+                    "aabbb"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("bbb")))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("cc")))),
+            ],
+            Ok(Some("aacc")),
+            &str,
+            LargeUtf8,
+            LargeStringArray
+        );
+
+        test_function!(
+            ReplaceFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "aabbbcw"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("bb")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("cc")))),
+            ],
+            Ok(Some("aaccbcw")),
+            &str,
+            Utf8,
+            StringArray
+        );
+
+        Ok(())
+    }
+}
