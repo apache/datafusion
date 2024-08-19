@@ -402,7 +402,7 @@ pub trait GroupsAccumulator: Send {
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
         if matches!(&mode, GroupStatesMode::Blocked(_)) {
             return Err(DataFusionError::NotImplemented(
-                "only flat mode accumulator is supported yet".to_string(),
+                "this accumulator doesn't support blocked mode yet".to_string(),
             ));
         }
 

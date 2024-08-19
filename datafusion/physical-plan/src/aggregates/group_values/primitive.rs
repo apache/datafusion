@@ -208,7 +208,7 @@ where
             }
             EmitTo::NextBlock(_) => {
                 return Err(DataFusionError::NotImplemented(
-                    "blocked group values is not supported yet".to_string(),
+                    "this group values doesn't support blocked mode yet".to_string(),
                 ))
             }
         };
