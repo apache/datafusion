@@ -998,17 +998,15 @@ ORDER BY c_str
 limit 5;
 ----
 logical_plan
-01)Limit: skip=0, fetch=5
-02)--Sort: c_str ASC NULLS LAST, fetch=5
-03)----Projection: CAST(ordered_table.c AS Utf8) AS c_str
-04)------TableScan: ordered_table projection=[c]
+01)Sort: c_str ASC NULLS LAST, fetch=5
+02)--Projection: CAST(ordered_table.c AS Utf8) AS c_str
+03)----TableScan: ordered_table projection=[c]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
-02)--SortPreservingMergeExec: [c_str@0 ASC NULLS LAST], fetch=5
-03)----SortExec: TopK(fetch=5), expr=[c_str@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------ProjectionExec: expr=[CAST(c@0 AS Utf8) as c_str]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [c_str@0 ASC NULLS LAST], fetch=5
+02)--SortExec: TopK(fetch=5), expr=[c_str@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[CAST(c@0 AS Utf8) as c_str]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
 
 
 # Casting from numeric to numeric types preserves the ordering
@@ -1031,17 +1029,14 @@ ORDER BY c_bigint
 limit 5;
 ----
 logical_plan
-01)Limit: skip=0, fetch=5
-02)--Sort: c_bigint ASC NULLS LAST, fetch=5
-03)----Projection: CAST(ordered_table.c AS Int64) AS c_bigint
-04)------TableScan: ordered_table projection=[c]
+01)Sort: c_bigint ASC NULLS LAST, fetch=5
+02)--Projection: CAST(ordered_table.c AS Int64) AS c_bigint
+03)----TableScan: ordered_table projection=[c]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
-02)--SortPreservingMergeExec: [c_bigint@0 ASC NULLS LAST], fetch=5
-03)----ProjectionExec: expr=[CAST(c@0 AS Int64) as c_bigint]
-04)------LocalLimitExec: fetch=5
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [c_bigint@0 ASC NULLS LAST], fetch=5
+02)--ProjectionExec: expr=[CAST(c@0 AS Int64) as c_bigint]
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
 
 statement ok
 drop table ordered_table; 
@@ -1069,17 +1064,15 @@ ORDER BY abs_c
 limit 5;
 ----
 logical_plan
-01)Limit: skip=0, fetch=5
-02)--Sort: abs_c ASC NULLS LAST, fetch=5
-03)----Projection: abs(ordered_table.c) AS abs_c
-04)------TableScan: ordered_table projection=[c]
+01)Sort: abs_c ASC NULLS LAST, fetch=5
+02)--Projection: abs(ordered_table.c) AS abs_c
+03)----TableScan: ordered_table projection=[c]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
-02)--SortPreservingMergeExec: [abs_c@0 ASC NULLS LAST], fetch=5
-03)----SortExec: TopK(fetch=5), expr=[abs_c@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------ProjectionExec: expr=[abs(c@0) as abs_c]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [abs_c@0 ASC NULLS LAST], fetch=5
+02)--SortExec: TopK(fetch=5), expr=[abs_c@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[abs(c@0) as abs_c]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
 
 statement ok
 drop table ordered_table; 
@@ -1106,17 +1099,14 @@ ORDER BY abs_c
 limit 5;
 ----
 logical_plan
-01)Limit: skip=0, fetch=5
-02)--Sort: abs_c ASC NULLS LAST, fetch=5
-03)----Projection: abs(ordered_table.c) AS abs_c
-04)------TableScan: ordered_table projection=[c]
+01)Sort: abs_c ASC NULLS LAST, fetch=5
+02)--Projection: abs(ordered_table.c) AS abs_c
+03)----TableScan: ordered_table projection=[c]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
-02)--SortPreservingMergeExec: [abs_c@0 ASC NULLS LAST], fetch=5
-03)----ProjectionExec: expr=[abs(c@0) as abs_c]
-04)------LocalLimitExec: fetch=5
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+01)SortPreservingMergeExec: [abs_c@0 ASC NULLS LAST], fetch=5
+02)--ProjectionExec: expr=[abs(c@0) as abs_c]
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
 
 # Boolean to integer casts preserve the order.
 statement ok
@@ -1151,6 +1141,23 @@ SELECT (SELECT c from ordered_table ORDER BY c LIMIT 1) UNION ALL (SELECT 23 as 
 0
 23
 
+# Do not increase partition number after fetch 1. As this will be unnecessary.
+query TT
+EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
+  FROM ordered_table
+  ORDER BY a ASC LIMIT 1
+);
+----
+logical_plan
+01)Projection: ordered_table.a + ordered_table.b AS sum1
+02)--Sort: ordered_table.a ASC NULLS LAST, fetch=1
+03)----TableScan: ordered_table projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[a@0 + b@1 as sum1]
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
+
 statement ok
 set datafusion.execution.use_row_number_estimates_to_optimize_partitioning = true;
 
@@ -1163,9 +1170,8 @@ EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
 ----
 logical_plan
 01)Projection: ordered_table.a + ordered_table.b AS sum1
-02)--Limit: skip=0, fetch=1
-03)----Sort: ordered_table.a ASC NULLS LAST, fetch=1
-04)------TableScan: ordered_table projection=[a, b]
+02)--Sort: ordered_table.a ASC NULLS LAST, fetch=1
+03)----TableScan: ordered_table projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
 02)--SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -1183,9 +1189,8 @@ EXPLAIN SELECT a + b as sum1 FROM (SELECT a, b
 ----
 logical_plan
 01)Projection: ordered_table.a + ordered_table.b AS sum1
-02)--Limit: skip=0, fetch=1
-03)----Sort: ordered_table.a ASC NULLS LAST, fetch=1
-04)------TableScan: ordered_table projection=[a, b]
+02)--Sort: ordered_table.a ASC NULLS LAST, fetch=1
+03)----TableScan: ordered_table projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
