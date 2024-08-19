@@ -63,6 +63,15 @@ pub(crate) enum ExecutionState {
     /// When producing output, the remaining rows to output are stored
     /// here and are sliced off as needed in batch_size chunks
     ProducingOutput(RecordBatch),
+    /// Producing output block by block.
+    ///
+    /// It is the blocked version `ProducingOutput` and will be used
+    /// when blocked optimization is enabled.
+    ///
+    /// An optional `blocks num` exists in it:
+    ///   - `Some(n)` represents `n` blocks should be produced.
+    ///   - `None` represents we should produce blocks until exhausted.
+    ///
     ProducingBlocks(Option<usize>),
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
