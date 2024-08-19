@@ -318,10 +318,14 @@ impl PhysicalExpr for BinaryExpr {
         // Attempt to use special kernels if one input is scalar and the other is an array
         let scalar_result = match (&lhs, &rhs) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
-                // if left is array and right is literal - use scalar operations
-                self.evaluate_array_scalar(array, scalar.clone())?.map(|r| {
-                    r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
-                })
+                // if left is array and right is literal(not NULL) - use scalar operations
+                if scalar.is_null() {
+                    None
+                } else {
+                    self.evaluate_array_scalar(array, scalar.clone())?.map(|r| {
+                        r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
+                    })
+                }
             }
             (_, _) => None, // default to array implementation
         };
@@ -2494,6 +2498,111 @@ mod tests {
             None,
         ]);
         apply_logic_op(&Arc::new(schema), &a, &b, Operator::And, expected)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn regex_with_nulls() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let a = Arc::new(StringArray::from(vec![
+            Some("abc"),
+            None,
+            Some("abc"),
+            None,
+            Some("abc"),
+        ])) as ArrayRef;
+        let b = Arc::new(StringArray::from(vec![
+            Some("^a"),
+            Some("^A"),
+            None,
+            None,
+            Some("^(b|c)"),
+        ])) as ArrayRef;
+
+        let regex_expected =
+            BooleanArray::from(vec![Some(true), None, None, None, Some(false)]);
+        let regex_not_expected =
+            BooleanArray::from(vec![Some(false), None, None, None, Some(true)]);
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexMatch,
+            regex_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexIMatch,
+            regex_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexNotMatch,
+            regex_not_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema),
+            &a,
+            &b,
+            Operator::RegexNotIMatch,
+            regex_not_expected.clone(),
+        )?;
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::LargeUtf8, true),
+            Field::new("b", DataType::LargeUtf8, true),
+        ]);
+        let a = Arc::new(LargeStringArray::from(vec![
+            Some("abc"),
+            None,
+            Some("abc"),
+            None,
+            Some("abc"),
+        ])) as ArrayRef;
+        let b = Arc::new(LargeStringArray::from(vec![
+            Some("^a"),
+            Some("^A"),
+            None,
+            None,
+            Some("^(b|c)"),
+        ])) as ArrayRef;
+
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexMatch,
+            regex_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexIMatch,
+            regex_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexNotMatch,
+            regex_not_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema),
+            &a,
+            &b,
+            Operator::RegexNotIMatch,
+            regex_not_expected.clone(),
+        )?;
 
         Ok(())
     }

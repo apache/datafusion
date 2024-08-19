@@ -98,7 +98,8 @@ NULL three
 
 statement ok
 CREATE EXTERNAL TABLE test (c1 int, c2 bigint, c3 boolean)
-STORED AS CSV LOCATION '../core/tests/data/partitioned_csv';
+STORED AS CSV LOCATION '../core/tests/data/partitioned_csv'
+OPTIONS('format.has_header' 'false');
 
 # Demonstrate types
 query TTT
@@ -463,7 +464,8 @@ CREATE EXTERNAL TABLE csv_with_timestamps (
 )
 STORED AS CSV
 WITH ORDER (ts ASC NULLS LAST)
-LOCATION '../core/tests/data/timestamps.csv';
+LOCATION '../core/tests/data/timestamps.csv'
+OPTIONS('format.has_header' 'false');
 
 query TT
 EXPLAIN SELECT DATE_BIN(INTERVAL '15 minutes', ts, TIMESTAMP '2022-08-03 14:40:00Z') as db15

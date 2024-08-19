@@ -1881,6 +1881,12 @@ SELECT MIN(c1), MIN(c2) FROM test
 ----
 0 1
 
+query error min/max was called with 2 arguments. It requires only 1.
+SELECT MIN(c1, c2) FROM test
+
+query error min/max was called with 2 arguments. It requires only 1.
+SELECT MAX(c1, c2) FROM test
+
 # aggregate_grouped
 query II
 SELECT c1, SUM(c2) FROM test GROUP BY c1 order by c1
@@ -3723,6 +3729,51 @@ query BBBBBBBB
 SELECT bool_or(distinct c1), bool_or(distinct c2), bool_or(distinct c3), bool_or(distinct c4), bool_or(distinct c5), bool_or(distinct c6), bool_or(distinct c7), bool_or(distinct c8) FROM bool_aggregate_functions
 ----
 true true true false true true false NULL
+
+# Test issue: https://github.com/apache/datafusion/issues/11846
+statement ok
+create table t1(v1 int, v2 boolean);
+
+statement ok
+insert into t1 values (1, true), (1, true);
+
+statement ok
+insert into t1 values (3, null), (3, true);
+
+statement ok
+insert into t1 values (2, false), (2, true);
+
+statement ok
+insert into t1 values (6, false), (6, false);
+
+statement ok
+insert into t1 values (4, null), (4, null);
+
+statement ok
+insert into t1 values (5, false), (5, null);
+
+query IB
+select v1, bool_and(v2) from t1 group by v1 order by v1;
+----
+1 true
+2 false
+3 true
+4 NULL
+5 false
+6 false
+
+query IB
+select v1, bool_or(v2) from t1 group by v1 order by v1;
+----
+1 true
+2 true
+3 true
+4 NULL
+5 false
+6 false
+
+statement ok
+drop table t1;
 
 # All supported timestamp types
 

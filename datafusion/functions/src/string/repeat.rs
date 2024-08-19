@@ -18,15 +18,20 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{
+    ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
+    OffsetSizeTrait, StringViewArray,
+};
 use arrow::datatypes::DataType;
+use arrow::datatypes::DataType::{Int64, LargeUtf8, Utf8, Utf8View};
 
-use datafusion_common::cast::{as_generic_string_array, as_int64_array};
+use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
+use crate::string::common::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
@@ -42,10 +47,16 @@ impl Default for RepeatFunc {
 
 impl RepeatFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![Exact(vec![Utf8, Int64]), Exact(vec![LargeUtf8, Int64])],
+                vec![
+                    // Planner attempts coercion to the target type starting with the most preferred candidate.
+                    // For example, given input `(Utf8View, Int64)`, it first tries coercing to `(Utf8View, Int64)`.
+                    // If that fails, it proceeds to `(Utf8, Int64)`.
+                    Exact(vec![Utf8View, Int64]),
+                    Exact(vec![Utf8, Int64]),
+                    Exact(vec![LargeUtf8, Int64]),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -70,33 +81,53 @@ impl ScalarUDFImpl for RepeatFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(repeat::<i32>, vec![])(args),
-            DataType::LargeUtf8 => make_scalar_function(repeat::<i64>, vec![])(args),
-            other => exec_err!("Unsupported data type {other:?} for function repeat"),
-        }
+        make_scalar_function(repeat, vec![])(args)
     }
 }
 
 /// Repeats string the specified number of times.
 /// repeat('Pg', 4) = 'PgPgPgPg'
-fn repeat<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = as_generic_string_array::<T>(&args[0])?;
+fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     let number_array = as_int64_array(&args[1])?;
+    match args[0].data_type() {
+        Utf8View => {
+            let string_view_array = args[0].as_string_view();
+            repeat_impl::<i32, &StringViewArray>(string_view_array, number_array)
+        }
+        Utf8 => {
+            let string_array = args[0].as_string::<i32>();
+            repeat_impl::<i32, &GenericStringArray<i32>>(string_array, number_array)
+        }
+        LargeUtf8 => {
+            let string_array = args[0].as_string::<i64>();
+            repeat_impl::<i64, &GenericStringArray<i64>>(string_array, number_array)
+        }
+        other => exec_err!(
+            "Unsupported data type {other:?} for function repeat. \
+        Expected Utf8, Utf8View or LargeUtf8."
+        ),
+    }
+}
 
-    let result = string_array
+fn repeat_impl<'a, T, S>(string_array: S, number_array: &Int64Array) -> Result<ArrayRef>
+where
+    T: OffsetSizeTrait,
+    S: StringArrayType<'a>,
+{
+    let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+    string_array
         .iter()
         .zip(number_array.iter())
-        .map(|(string, number)| match (string, number) {
+        .for_each(|(string, number)| match (string, number) {
             (Some(string), Some(number)) if number >= 0 => {
-                Some(string.repeat(number as usize))
+                builder.append_value(string.repeat(number as usize))
             }
-            (Some(_), Some(_)) => Some("".to_string()),
-            _ => None,
-        })
-        .collect::<GenericStringArray<T>>();
+            (Some(_), Some(_)) => builder.append_value(""),
+            _ => builder.append_null(),
+        });
+    let array = builder.finish();
 
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(Arc::new(array) as ArrayRef)
 }
 
 #[cfg(test)]
@@ -124,7 +155,6 @@ mod tests {
             Utf8,
             StringArray
         );
-
         test_function!(
             RepeatFunc::new(),
             &[
@@ -140,6 +170,40 @@ mod tests {
             RepeatFunc::new(),
             &[
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("Pg")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(None)),
+            ],
+            Ok(None),
+            &str,
+            Utf8,
+            StringArray
+        );
+
+        test_function!(
+            RepeatFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("Pg")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+            ],
+            Ok(Some("PgPgPgPg")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            RepeatFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+            ],
+            Ok(None),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            RepeatFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("Pg")))),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
             Ok(None),

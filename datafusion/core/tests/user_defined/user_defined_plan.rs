@@ -113,7 +113,11 @@ async fn exec_sql(ctx: &SessionContext, sql: &str) -> Result<String> {
 
 /// Create a test table.
 async fn setup_table(ctx: SessionContext) -> Result<SessionContext> {
-    let sql = "CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT) STORED AS CSV location 'tests/data/customer.csv'";
+    let sql = "
+        CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT)
+        STORED AS CSV location 'tests/data/customer.csv'
+        OPTIONS('format.has_header' 'false')
+    ";
 
     let expected = vec!["++", "++"];
 
@@ -125,8 +129,11 @@ async fn setup_table(ctx: SessionContext) -> Result<SessionContext> {
 }
 
 async fn setup_table_without_schemas(ctx: SessionContext) -> Result<SessionContext> {
-    let sql =
-        "CREATE EXTERNAL TABLE sales STORED AS CSV location 'tests/data/customer.csv'";
+    let sql = "
+        CREATE EXTERNAL TABLE sales
+        STORED AS CSV location 'tests/data/customer.csv'
+        OPTIONS('format.has_header' 'false')
+    ";
 
     let expected = vec!["++", "++"];
 
