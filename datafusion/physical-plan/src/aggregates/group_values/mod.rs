@@ -53,10 +53,14 @@ pub trait GroupValues: Send {
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, batch: &RecordBatch);
 
+    /// Returns `true` if this group values supports blocked mode.
     fn supports_blocked_mode(&self) -> bool {
         false
     }
 
+    /// Switch the group values to flat or blocked mode.
+    ///
+    /// After switching mode, all data in previous mode will be cleared.
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
         if matches!(&mode, GroupStatesMode::Blocked(_)) {
             return Err(DataFusionError::NotImplemented(

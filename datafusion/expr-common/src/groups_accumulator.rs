@@ -28,6 +28,9 @@ use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use std::fmt;
 
+const BLOCKED_INDEX_HIGH_32_BITS_MASK: u64 = 0xffffffff00000000;
+const BLOCKED_INDEX_LOW_32_BITS_MASK: u64 = 0x00000000ffffffff;
+
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy)]
 pub enum EmitTo {
@@ -78,14 +81,9 @@ impl EmitTo {
     /// returning a `Vec` with elements taken.
     ///
     /// The detailed behavior in different emissions:
-    ///   - For Emit::All, the groups in blocks will be merged into
-    ///  single block and returned.
-    ///
-    ///   - For Emit::First, it will be only supported in the flat,
-    ///  similar as `take_needed`.
-    ///
     ///   - For Emit::CurrentBlock, the first block will be taken and return.
-    ///
+    ///   - For Emit::All and Emit::First, it will be only supported in `GroupStatesMode::Flat`,
+    ///  similar as `take_needed`.
     pub fn take_needed_from_blocks<T>(
         &self,
         blocks: &mut VecBlocks<T>,
@@ -95,8 +93,7 @@ impl EmitTo {
             Self::All => match mode {
                 GroupStatesMode::Flat => blocks.pop_first_block().unwrap(),
                 GroupStatesMode::Blocked(_) => {
-                    let blocks = mem::take(blocks);
-                    blocks.into_to_vec()
+                    unreachable!("can't support Emit::All in blocked mode accumulator");
                 }
             },
             Self::First(n) => {
@@ -129,6 +126,11 @@ pub enum GroupStatesMode {
     Blocked(usize),
 }
 
+/// Blocked style group index used in blocked mode group values and accumulators
+///
+/// Parts in index:
+///   - High 32 bits represent `block_id`
+///   - Low 32 bits represent `block_offset`
 #[derive(Debug, Clone, Copy)]
 pub struct BlockedGroupIndex {
     pub block_id: usize,
@@ -137,8 +139,10 @@ pub struct BlockedGroupIndex {
 
 impl BlockedGroupIndex {
     pub fn new(group_index: usize) -> Self {
-        let block_id = ((group_index as u64 >> 32) & 0x00000000ffffffff) as usize;
-        let block_offset = ((group_index as u64) & 0x00000000ffffffff) as usize;
+        let block_id =
+            ((group_index as u64 >> 32) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
+        let block_offset =
+            ((group_index as u64) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
 
         Self {
             block_id,
@@ -154,8 +158,9 @@ impl BlockedGroupIndex {
     }
 
     pub fn as_packed_index(&self) -> usize {
-        ((((self.block_id as u64) << 32) & 0xffffffff00000000)
-            | (self.block_offset as u64 & 0x00000000ffffffff)) as usize
+        ((((self.block_id as u64) << 32) & BLOCKED_INDEX_HIGH_32_BITS_MASK)
+            | (self.block_offset as u64 & BLOCKED_INDEX_LOW_32_BITS_MASK))
+            as usize
     }
 }
 
@@ -165,7 +170,7 @@ pub struct Blocks<T> {
     /// when next block is pushed
     current: Option<T>,
 
-    /// The
+    /// Previous blocks pushed before `current`
     previous: VecDeque<T>,
 }
 
@@ -297,20 +302,6 @@ impl<T> Default for Blocks<T> {
 pub type VecBlocks<T> = Blocks<Vec<T>>;
 
 impl<T> VecBlocks<T> {
-    pub fn into_to_vec(mut self) -> Vec<T> {
-        if self.current.is_none() {
-            return Vec::new();
-        }
-
-        if self.previous.is_empty() {
-            self.current.unwrap()
-        } else {
-            self.iter_mut()
-                .flat_map(|blk| std::mem::take(blk).into_iter())
-                .collect::<Vec<_>>()
-        }
-    }
-
     pub fn capacity(&self) -> usize {
         let cur_cap = self.current.as_ref().map(|blk| blk.capacity()).unwrap_or(0);
         let prev_cap = self.previous.iter().map(|p| p.capacity()).sum::<usize>();
@@ -406,10 +397,14 @@ pub trait GroupsAccumulator: Send {
     /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
+    /// Returns `true` if this accumulator supports blocked mode.
     fn supports_blocked_mode(&self) -> bool {
         false
     }
 
+    /// Switch the accumulator to flat or blocked mode.
+    ///
+    /// After switching mode, all data in previous mode will be cleared.
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
         if matches!(&mode, GroupStatesMode::Blocked(_)) {
             return Err(DataFusionError::NotImplemented(
