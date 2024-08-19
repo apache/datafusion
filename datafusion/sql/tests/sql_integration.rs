@@ -3106,7 +3106,7 @@ fn join_on_complex_condition() {
 #[test]
 fn lateral_constant() {
     let sql = "SELECT * FROM j1, LATERAL (SELECT 1) AS j2";
-    let expected = "Projection: j1.j1_id, j1.j1_string, j2.Int64(1)\
+    let expected = "Projection: *\
             \n  CrossJoin:\
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
@@ -3126,7 +3126,7 @@ fn lateral_comma_join() {
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
             \n      Subquery:\
-            \n        Projection: j2.j2_id, j2.j2_string\
+            \n        Projection: *\
             \n          Filter: outer_ref(j1.j1_id) < j2.j2_id\
             \n            TableScan: j2";
     quick_test(sql, expected);
@@ -3137,7 +3137,7 @@ fn lateral_comma_join_referencing_join_rhs() {
     let sql = "SELECT * FROM\
             \n  j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id),\
             \n  LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4;";
-    let expected = "Projection: j1.j1_id, j1.j1_string, j2.j2_id, j2.j2_string, j3.j3_id, j3.j3_string, j4.j3_id, j4.j3_string\
+    let expected = "Projection: *\
             \n  CrossJoin:\
             \n    Inner Join:  Filter: j1.j1_id = j2.j2_id\
             \n      TableScan: j1\
@@ -3146,7 +3146,7 @@ fn lateral_comma_join_referencing_join_rhs() {
             \n        TableScan: j3\
             \n    SubqueryAlias: j4\
             \n      Subquery:\
-            \n        Projection: j3.j3_id, j3.j3_string\
+            \n        Projection: *\
             \n          Filter: j3.j3_string = outer_ref(j2.j2_string)\
             \n            TableScan: j3";
     quick_test(sql, expected);
@@ -3161,17 +3161,17 @@ fn lateral_comma_join_with_shadowing() {
                 SELECT * FROM j2 WHERE j1_id = j2_id\
               ) as j2\
             ) as j2;";
-    let expected = "Projection: j1.j1_id, j1.j1_string, j2.j1_id, j2.j1_string, j2.j2_id, j2.j2_string\
+    let expected = "Projection: *\
             \n  CrossJoin:\
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
             \n      Subquery:\
-            \n        Projection: j1.j1_id, j1.j1_string, j2.j2_id, j2.j2_string\
+            \n        Projection: *\
             \n          CrossJoin:\
             \n            TableScan: j1\
             \n            SubqueryAlias: j2\
             \n              Subquery:\
-            \n                Projection: j2.j2_id, j2.j2_string\
+            \n                Projection: *\
             \n                  Filter: outer_ref(j1.j1_id) = j2.j2_id\
             \n                    TableScan: j2";
     quick_test(sql, expected);
@@ -3187,7 +3187,7 @@ fn lateral_left_join() {
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
             \n      Subquery:\
-            \n        Projection: j2.j2_id, j2.j2_string\
+            \n        Projection: *\
             \n          Filter: outer_ref(j1.j1_id) < j2.j2_id\
             \n            TableScan: j2";
     quick_test(sql, expected);
@@ -3198,14 +3198,14 @@ fn lateral_nested_left_join() {
     let sql = "SELECT * FROM 
             j1, \
             (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true))";
-    let expected = "Projection: j1.j1_id, j1.j1_string, j2.j2_id, j2.j2_string, j3.j3_id, j3.j3_string\
+    let expected = "Projection: *\
             \n  CrossJoin:\
             \n    TableScan: j1\
             \n    Left Join:  Filter: Boolean(true)\
             \n      TableScan: j2\
             \n      SubqueryAlias: j3\
             \n        Subquery:\
-            \n          Projection: j3.j3_id, j3.j3_string\
+            \n          Projection: *\
             \n            Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id\
             \n              TableScan: j3";
     quick_test(sql, expected);
