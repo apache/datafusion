@@ -36,9 +36,9 @@ use crate::utils::{
     split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
-    CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
-    TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
+    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Expr,
+    ExprSchemable, LogicalPlanBuilder, Operator, TableProviderFilterPushDown,
+    TableSource, WindowFunctionDefinition,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -2214,18 +2214,14 @@ impl Window {
             .enumerate()
             .filter_map(|(idx, expr)| {
                 if let Expr::WindowFunction(WindowFunction {
-                    // Function is ROW_NUMBER
-                    fun:
-                        WindowFunctionDefinition::BuiltInWindowFunction(
-                            BuiltInWindowFunction::RowNumber,
-                        ),
+                    fun: WindowFunctionDefinition::WindowUDF(udwf),
                     partition_by,
                     ..
                 }) = expr
                 {
                     // When there is no PARTITION BY, row number will be unique
                     // across the entire table.
-                    if partition_by.is_empty() {
+                    if udwf.name() == "row_number" && partition_by.is_empty() {
                         return Some(idx + input_len);
                     }
                 }

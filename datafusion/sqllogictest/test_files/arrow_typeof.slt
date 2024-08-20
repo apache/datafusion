@@ -102,7 +102,7 @@ query error Error unrecognized word: unknown
 SELECT arrow_cast('1', 'unknown')
 
 # Round Trip tests:
-query TTTTTTTTTTTTTTTTTTTTTTT
+query TTTTTTTTTTTTTTTTTTTTTTTT
 SELECT
   arrow_typeof(arrow_cast(1, 'Int8')) as col_i8,
   arrow_typeof(arrow_cast(1, 'Int16')) as col_i16,
@@ -112,8 +112,7 @@ SELECT
   arrow_typeof(arrow_cast(1, 'UInt16')) as col_u16,
   arrow_typeof(arrow_cast(1, 'UInt32')) as col_u32,
   arrow_typeof(arrow_cast(1, 'UInt64')) as col_u64,
-  -- can't seem to cast to Float16 for some reason
-  -- arrow_typeof(arrow_cast(1, 'Float16')) as col_f16,
+  arrow_typeof(arrow_cast(1, 'Float16')) as col_f16,
   arrow_typeof(arrow_cast(1, 'Float32')) as col_f32,
   arrow_typeof(arrow_cast(1, 'Float64')) as col_f64,
   arrow_typeof(arrow_cast('foo', 'Utf8')) as col_utf8,
@@ -130,7 +129,7 @@ SELECT
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, Some("+08:00"))')) as col_tstz_ns,
   arrow_typeof(arrow_cast('foo', 'Dictionary(Int32, Utf8)')) as col_dict
 ----
-Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Utf8 LargeUtf8 Binary LargeBinary Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None) Timestamp(Second, Some("+08:00")) Timestamp(Millisecond, Some("+08:00")) Timestamp(Microsecond, Some("+08:00")) Timestamp(Nanosecond, Some("+08:00")) Dictionary(Int32, Utf8)
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float16 Float32 Float64 Utf8 LargeUtf8 Binary LargeBinary Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None) Timestamp(Second, Some("+08:00")) Timestamp(Millisecond, Some("+08:00")) Timestamp(Microsecond, Some("+08:00")) Timestamp(Nanosecond, Some("+08:00")) Dictionary(Int32, Utf8)
 
 
 
@@ -147,15 +146,14 @@ create table foo as select
   arrow_cast(1, 'UInt16') as col_u16,
   arrow_cast(1, 'UInt32') as col_u32,
   arrow_cast(1, 'UInt64') as col_u64,
-  -- can't seem to cast to Float16 for some reason
-  -- arrow_cast(1.0, 'Float16') as col_f16,
+  arrow_cast(1.0, 'Float16') as col_f16,
   arrow_cast(1.0, 'Float32') as col_f32,
   arrow_cast(1.0, 'Float64') as col_f64
 ;
 
 ## Ensure each column in the table has the expected type
 
-query TTTTTTTTTT
+query TTTTTTTTTTT
 SELECT
   arrow_typeof(col_i8),
   arrow_typeof(col_i16),
@@ -165,12 +163,12 @@ SELECT
   arrow_typeof(col_u16),
   arrow_typeof(col_u32),
   arrow_typeof(col_u64),
-  -- arrow_typeof(col_f16),
+  arrow_typeof(col_f16),
   arrow_typeof(col_f32),
   arrow_typeof(col_f64)
   FROM foo;
 ----
-Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float16 Float32 Float64
 
 
 statement ok
@@ -424,7 +422,7 @@ select arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)');
 [1, 2, 3]
 
 # Tests for Utf8View
-query ?T
+query TT
 select arrow_cast('MyAwesomeString', 'Utf8View'), arrow_typeof(arrow_cast('MyAwesomeString', 'Utf8View'))
 ----
 MyAwesomeString Utf8View

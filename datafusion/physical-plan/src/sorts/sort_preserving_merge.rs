@@ -163,6 +163,21 @@ impl ExecutionPlan for SortPreservingMergeExec {
         &self.cache
     }
 
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
+    /// Sets the number of rows to fetch
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(Self {
+            input: Arc::clone(&self.input),
+            expr: self.expr.clone(),
+            metrics: self.metrics.clone(),
+            fetch: limit,
+            cache: self.cache.clone(),
+        }))
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
     }

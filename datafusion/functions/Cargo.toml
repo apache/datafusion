@@ -151,3 +151,8 @@ required-features = ["string_expressions"]
 harness = false
 name = "pad"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "repeat"
+required-features = ["string_expressions"]

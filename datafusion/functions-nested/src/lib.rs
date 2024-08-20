@@ -42,6 +42,7 @@ pub mod flatten;
 pub mod length;
 pub mod make_array;
 pub mod map;
+pub mod map_extract;
 pub mod planner;
 pub mod position;
 pub mod range;
@@ -81,6 +82,7 @@ pub mod expr_fn {
     pub use super::flatten::flatten;
     pub use super::length::array_length;
     pub use super::make_array::make_array;
+    pub use super::map_extract::map_extract;
     pub use super::position::array_position;
     pub use super::position::array_positions;
     pub use super::range::gen_series;
@@ -143,6 +145,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         replace::array_replace_all_udf(),
         replace::array_replace_udf(),
         map::map_udf(),
+        map_extract::map_extract_udf(),
     ]
 }
 
