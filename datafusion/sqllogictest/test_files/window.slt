@@ -4869,7 +4869,7 @@ DROP TABLE t1;
 statement ok
 CREATE TABLE t1(v1 BIGINT);
 
-query error DataFusion error: Execution error: Expected a signed integer literal for the second argument of nth_value
+query error DataFusion error: Execution error: Expected a signed integer literal for the second argument of nth_value, got v1@0
 SELECT NTH_VALUE('+Inf'::Double, v1) OVER (PARTITION BY v1) FROM t1;
 
 statement ok

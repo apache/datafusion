@@ -285,7 +285,7 @@ fn create_built_in_window_expr(
                     .downcast_ref::<Literal>()
                     .ok_or_else(|| {
                         DataFusionError::Execution(
-                            "Expected a signed integer literal for the second argument of nth_value".to_string(),
+                            format!("Expected a signed integer literal for the second argument of nth_value, got {}", args[1]),
                         )
                     })?
                     .value()
