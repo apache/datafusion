@@ -136,7 +136,7 @@ impl LogicalPlanBuilder {
     /// Convert a regular plan into a recursive query.
     /// `is_distinct` indicates whether the recursive term should be de-duplicated (`UNION`) after each iteration or not (`UNION ALL`).
     pub fn to_recursive_query(
-        &self,
+        self,
         name: String,
         recursive_term: LogicalPlan,
         is_distinct: bool,
@@ -161,7 +161,7 @@ impl LogicalPlanBuilder {
             coerce_plan_expr_for_schema(recursive_term, self.plan.schema())?;
         Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
             name,
-            static_term: Arc::clone(&self.plan),
+            static_term: self.plan,
             recursive_term: Arc::new(coerced_recursive_term),
             is_distinct,
         })))
