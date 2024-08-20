@@ -35,9 +35,7 @@ use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
 };
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
-use datafusion_expr::utils::{
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
-};
+use datafusion_expr::utils::{expr_as_column_expr, expr_to_columns, exprlist_to_fields, find_aggregate_exprs, find_window_exprs};
 use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
     GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
@@ -750,12 +748,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
             .collect::<Result<Vec<Expr>>>()?;
 
+        let wildcard_exprs = select_exprs_post_aggr.iter().filter(|expr| matches!(expr, Expr::Wildcard { .. })).collect::<Vec<_>>();
+        let wildcard_fields = exprlist_to_fields(wildcard_exprs, input)?;
+
         // finally, we have some validation that the re-written projection can be resolved
         // from the aggregate output columns
         check_columns_satisfy_exprs(
             &column_exprs_post_aggr,
             &select_exprs_post_aggr,
-            input,
+            &wildcard_fields,
             "Projection references non-aggregate values",
         )?;
 
@@ -768,7 +769,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
                 &[having_expr_post_aggr.clone()],
-                input,
+                &wildcard_fields,
                 "HAVING clause references non-aggregate values",
             )?;
             Some(having_expr_post_aggr)

@@ -18,10 +18,8 @@
 //! SQL Utility Functions
 
 use std::collections::HashMap;
-
-use arrow_schema::{
-    DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
-};
+use std::sync::Arc;
+use arrow_schema::{DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -32,7 +30,7 @@ use datafusion_common::{
 use datafusion_expr::builder::get_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
 use datafusion_expr::utils::{
-    expr_as_column_expr, exprlist_to_fields, find_column_exprs,
+    expr_as_column_expr, find_column_exprs,
 };
 use datafusion_expr::{expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
 use sqlparser::ast::{Ident, Value};
@@ -93,7 +91,7 @@ pub(crate) fn rebase_expr(
 pub(crate) fn check_columns_satisfy_exprs(
     columns: &[Expr],
     exprs: &[Expr],
-    input: &LogicalPlan,
+    wildcard_fields: &[(Option<TableReference>, Arc<Field>)],
     message_prefix: &str,
 ) -> Result<()> {
     columns.iter().try_for_each(|c| match c {
@@ -127,27 +125,24 @@ pub(crate) fn check_columns_satisfy_exprs(
         .iter()
         .map(|c| format!("{}", c.schema_name()))
         .collect::<Vec<_>>();
-    for e in exprs {
-        if let Expr::Wildcard { .. } = e {
-            exprlist_to_fields(vec![e], input)?.into_iter().try_for_each(|(table, field)| {
-                let column_name = qualified_name(table, field.name());
-                if !column_names.iter().any(|c| c == &column_name) {
-                    plan_err!(
-                        "{}: Wildcard column {} could not be resolved from available columns: {}",
-                        message_prefix,
-                        column_name,
-                        expr_vec_fmt!(columns)
-                    )
-                } else {
-                    Ok(())
-                }
-            })?;
-        };
-    }
+
+    wildcard_fields.into_iter().try_for_each(|(table, field)| {
+        let column_name = qualified_name(table, field.name());
+        if !column_names.iter().any(|c| c == &column_name) {
+            plan_err!(
+                "{}: Wildcard column {} could not be resolved from available columns: {}",
+                message_prefix,
+                column_name,
+                expr_vec_fmt!(columns)
+            )
+        } else {
+            Ok(())
+        }
+    })?;
     Ok(())
 }
 
-fn qualified_name(qualifier: Option<TableReference>, name: &str) -> String {
+fn qualified_name(qualifier: &Option<TableReference>, name: &str) -> String {
     match qualifier {
         Some(q) => format!("{}.{}", q, name),
         None => name.to_string(),
