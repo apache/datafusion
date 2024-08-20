@@ -571,7 +571,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         None
     }
 
-    /// Returns default value of the function given the input is Null
+    /// Returns default value of the function given the input is all `null`.
+    ///
     /// Most of the aggregate function return Null if input is Null,
     /// while `count` returns 0 if input is Null
     fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
