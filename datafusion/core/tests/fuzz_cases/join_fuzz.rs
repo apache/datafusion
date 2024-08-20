@@ -248,20 +248,22 @@ async fn test_anti_join_1k() {
 }
 
 #[tokio::test]
-#[ignore]
+//#[ignore]
 // flaky test giving 1 rows difference sometimes
 // https://github.com/apache/datafusion/issues/11555
 async fn test_anti_join_1k_filtered() {
     // NLJ vs HJ gives wrong result
     // Tracked in https://github.com/apache/datafusion/issues/11537
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::LeftAnti,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[JoinTestType::HjSmj], false)
-    .await
+    for i in 0..1000 {
+        JoinFuzzTestCase::new(
+            make_staggered_batches(1000),
+            make_staggered_batches(1000),
+            JoinType::LeftAnti,
+            Some(Box::new(col_lt_col_filter)),
+        )
+            .run_test(&[JoinTestType::HjSmj], false)
+            .await
+    }
 }
 
 type JoinFilterBuilder = Box<dyn Fn(Arc<Schema>, Arc<Schema>) -> JoinFilter>;
