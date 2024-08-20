@@ -194,167 +194,54 @@ mod tests {
     }
 
     #[test]
-    fn test_strpos_type_consitency() {
-        test_strpos!("foo", "bar" -> 0; Utf8 Utf8 i32 Int32 Int32Array);
-        test_strpos!("foobar", "foo" -> 1; Utf8 Utf8 i32 Int32 Int32Array);
-        test_strpos!("foobar", "bar" -> 4; Utf8 Utf8 i32 Int32 Int32Array);
-
-        test_strpos!("foo", "bar" -> 0; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
-        test_strpos!("foobar", "foo" -> 1; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
-        test_strpos!("foobar", "bar" -> 4; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
-
-        test_strpos!("foo", "bar" -> 0; Utf8 LargeUtf8 i32 Int32 Int32Array);
-        test_strpos!("foobar", "foo" -> 1; Utf8 LargeUtf8 i32 Int32 Int32Array);
-        test_strpos!("foobar", "bar" -> 4; Utf8 LargeUtf8 i32 Int32 Int32Array);
-
-        test_strpos!("foo", "bar" -> 0; LargeUtf8 Utf8 i64 Int64 Int64Array);
-        test_strpos!("foobar", "foo" -> 1; LargeUtf8 Utf8 i64 Int64 Int64Array);
-        test_strpos!("foobar", "bar" -> 4; LargeUtf8 Utf8 i64 Int64 Int64Array);
-    }
-
-    #[test]
     fn test_strpos_functions() {
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ph")))),
-            ],
-            Ok(Some(3)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a")))),
-            ],
-            Ok(Some(1)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("z")))),
-            ],
-            Ok(Some(0)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
-            ],
-            Ok(Some(1)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a")))),
-            ],
-            Ok(Some(0)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a")))),
-            ],
-            Ok(None),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
-                    "alphabet"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("ph")))),
-            ],
-            Ok(Some(3)),
-            i64,
-            Int64,
-            Int64Array
-        );
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
-                    "alphabet"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("z")))),
-            ],
-            Ok(Some(0)),
-            i64,
-            Int64,
-            Int64Array
-        );
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "alphabet"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("ph")))),
-            ],
-            Ok(Some(3)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "alphabet"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ph")))),
-            ],
-            Ok(Some(3)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "alphabet"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("z")))),
-            ],
-            Ok(Some(0)),
-            i32,
-            Int32,
-            Int32Array
-        );
-        test_function!(
-            StrposFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("a")))),
-            ],
-            Ok(Some(0)),
-            i32,
-            Int32,
-            Int32Array
-        );
+        // Utf8 and Utf8 combinations
+        test_strpos!("alphabet", "ph" -> 3; Utf8 Utf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "a" -> 1; Utf8 Utf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "z" -> 0; Utf8 Utf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "" -> 1; Utf8 Utf8 i32 Int32 Int32Array);
+        test_strpos!("", "a" -> 0; Utf8 Utf8 i32 Int32 Int32Array);
+
+        // LargeUtf8 and LargeUtf8 combinations
+        test_strpos!("alphabet", "ph" -> 3; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
+        test_strpos!("alphabet", "a" -> 1; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
+        test_strpos!("alphabet", "z" -> 0; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
+        test_strpos!("alphabet", "" -> 1; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
+        test_strpos!("", "a" -> 0; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
+
+        // Utf8 and LargeUtf8 combinations
+        test_strpos!("alphabet", "ph" -> 3; Utf8 LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "a" -> 1; Utf8 LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "z" -> 0; Utf8 LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "" -> 1; Utf8 LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("", "a" -> 0; Utf8 LargeUtf8 i32 Int32 Int32Array);
+
+        // LargeUtf8 and Utf8 combinations
+        test_strpos!("alphabet", "ph" -> 3; LargeUtf8 Utf8 i64 Int64 Int64Array);
+        test_strpos!("alphabet", "a" -> 1; LargeUtf8 Utf8 i64 Int64 Int64Array);
+        test_strpos!("alphabet", "z" -> 0; LargeUtf8 Utf8 i64 Int64 Int64Array);
+        test_strpos!("alphabet", "" -> 1; LargeUtf8 Utf8 i64 Int64 Int64Array);
+        test_strpos!("", "a" -> 0; LargeUtf8 Utf8 i64 Int64 Int64Array);
+
+        // Utf8View and Utf8View combinations
+        test_strpos!("alphabet", "ph" -> 3; Utf8View Utf8View i32 Int32 Int32Array);
+        test_strpos!("alphabet", "a" -> 1; Utf8View Utf8View i32 Int32 Int32Array);
+        test_strpos!("alphabet", "z" -> 0; Utf8View Utf8View i32 Int32 Int32Array);
+        test_strpos!("alphabet", "" -> 1; Utf8View Utf8View i32 Int32 Int32Array);
+        test_strpos!("", "a" -> 0; Utf8View Utf8View i32 Int32 Int32Array);
+
+        // Utf8View and Utf8 combinations
+        test_strpos!("alphabet", "ph" -> 3; Utf8View Utf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "a" -> 1; Utf8View Utf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "z" -> 0; Utf8View Utf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "" -> 1; Utf8View Utf8 i32 Int32 Int32Array);
+        test_strpos!("", "a" -> 0; Utf8View Utf8 i32 Int32 Int32Array);
+
+        // Utf8View and LargeUtf8 combinations
+        test_strpos!("alphabet", "ph" -> 3; Utf8View LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "a" -> 1; Utf8View LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "z" -> 0; Utf8View LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("alphabet", "" -> 1; Utf8View LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("", "a" -> 0; Utf8View LargeUtf8 i32 Int32 Int32Array);
     }
 }
