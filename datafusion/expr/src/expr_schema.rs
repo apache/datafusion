@@ -338,10 +338,14 @@ impl ExprSchemable for Expr {
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 Ok(func.is_nullable(args, input_schema))
             }
-            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
-                Ok(func.is_nullable())
+            Expr::AggregateFunction(AggregateFunction { func, args, .. }) => {
+                let nullables = args
+                    .iter()
+                    .map(|e| e.nullable(input_schema))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(func.is_nullable(&nullables))
             }
-            Expr::WindowFunction(WindowFunction { fun, .. }) => match fun {
+            Expr::WindowFunction(WindowFunction { fun, args, .. }) => match fun {
                 WindowFunctionDefinition::BuiltInWindowFunction(func) => {
                     if func.name() == "RANK"
                         || func.name() == "NTILE"
@@ -352,7 +356,13 @@ impl ExprSchemable for Expr {
                         Ok(true)
                     }
                 }
-                WindowFunctionDefinition::AggregateUDF(func) => Ok(func.is_nullable()),
+                WindowFunctionDefinition::AggregateUDF(func) => {
+                    let nullables = args
+                        .iter()
+                        .map(|e| e.nullable(input_schema))
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(func.is_nullable(&nullables))
+                }
                 WindowFunctionDefinition::WindowUDF(udwf) => Ok(udwf.nullable()),
             },
             Expr::ScalarVariable(_, _)

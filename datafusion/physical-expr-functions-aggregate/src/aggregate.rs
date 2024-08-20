@@ -56,12 +56,10 @@ pub struct AggregateExprBuilder {
     is_distinct: bool,
     /// Whether the expression is reversed
     is_reversed: bool,
-    is_nullable: bool,
 }
 
 impl AggregateExprBuilder {
     pub fn new(fun: Arc<AggregateUDF>, args: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        let is_nullable = fun.is_nullable();
         Self {
             fun,
             args,
@@ -71,7 +69,6 @@ impl AggregateExprBuilder {
             ignore_nulls: false,
             is_distinct: false,
             is_reversed: false,
-            is_nullable,
         }
     }
 
@@ -85,7 +82,6 @@ impl AggregateExprBuilder {
             ignore_nulls,
             is_distinct,
             is_reversed,
-            is_nullable,
         } = self;
         if args.is_empty() {
             return internal_err!("args should not be empty");
@@ -107,6 +103,11 @@ impl AggregateExprBuilder {
             .map(|arg| arg.data_type(&schema))
             .collect::<Result<Vec<_>>>()?;
 
+        let input_nullables = args
+            .iter()
+            .map(|arg| arg.nullable(&schema))
+            .collect::<Result<Vec<_>>>()?;
+
         check_arg_count(
             fun.name(),
             &input_exprs_types,
@@ -114,6 +115,7 @@ impl AggregateExprBuilder {
         )?;
 
         let data_type = fun.return_type(&input_exprs_types)?;
+        let is_nullable = fun.is_nullable(&input_nullables);
         let name = match alias {
             // TODO: Ideally, we should build the name from physical expressions
             None => create_function_physical_name(fun.name(), is_distinct, &[], None)?,

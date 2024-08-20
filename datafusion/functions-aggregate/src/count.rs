@@ -121,7 +121,8 @@ impl AggregateUDFImpl for Count {
         Ok(DataType::Int64)
     }
 
-    fn is_nullable(&self) -> bool {
+    // Count is always nullable regardless of the input nullability
+    fn is_nullable(&self, _nullables: &[bool]) -> bool {
         false
     }
 
