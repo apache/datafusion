@@ -216,6 +216,197 @@ impl AggregateFunctionExpr {
     pub fn is_reversed(&self) -> bool {
         self.is_reversed
     }
+
+    pub fn state_fields(&self) -> Result<Vec<Field>> {
+        let args = StateFieldsArgs {
+            name: &self.name,
+            input_types: &self.input_types,
+            return_type: &self.data_type,
+            ordering_fields: &self.ordering_fields,
+            is_distinct: self.is_distinct,
+        };
+
+        self.fun.state_fields(args)
+    }
+
+    // TODO remove Result
+    pub fn field(&self) -> Result<Field> {
+        Ok(Field::new(&self.name, self.data_type.clone(), true))
+    }
+
+    pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        let acc_args = AccumulatorArgs {
+            return_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            ordering_req: &self.ordering_req,
+            is_distinct: self.is_distinct,
+            name: &self.name,
+            is_reversed: self.is_reversed,
+            exprs: &self.args,
+        };
+
+        self.fun.accumulator(acc_args)
+    }
+
+    pub fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        let args = AccumulatorArgs {
+            return_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            ordering_req: &self.ordering_req,
+            is_distinct: self.is_distinct,
+            name: &self.name,
+            is_reversed: self.is_reversed,
+            exprs: &self.args,
+        };
+
+        let accumulator = self.fun.create_sliding_accumulator(args)?;
+
+        // Accumulators that have window frame startings different
+        // than `UNBOUNDED PRECEDING`, such as `1 PRECEDING`, need to
+        // implement retract_batch method in order to run correctly
+        // currently in DataFusion.
+        //
+        // If this `retract_batches` is not present, there is no way
+        // to calculate result correctly. For example, the query
+        //
+        // ```sql
+        // SELECT
+        //  SUM(a) OVER(ORDER BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS sum_a
+        // FROM
+        //  t
+        // ```
+        //
+        // 1. First sum value will be the sum of rows between `[0, 1)`,
+        //
+        // 2. Second sum value will be the sum of rows between `[0, 2)`
+        //
+        // 3. Third sum value will be the sum of rows between `[1, 3)`, etc.
+        //
+        // Since the accumulator keeps the running sum:
+        //
+        // 1. First sum we add to the state sum value between `[0, 1)`
+        //
+        // 2. Second sum we add to the state sum value between `[1, 2)`
+        // (`[0, 1)` is already in the state sum, hence running sum will
+        // cover `[0, 2)` range)
+        //
+        // 3. Third sum we add to the state sum value between `[2, 3)`
+        // (`[0, 2)` is already in the state sum).  Also we need to
+        // retract values between `[0, 1)` by this way we can obtain sum
+        // between [1, 3) which is indeed the appropriate range.
+        //
+        // When we use `UNBOUNDED PRECEDING` in the query starting
+        // index will always be 0 for the desired range, and hence the
+        // `retract_batch` method will not be called. In this case
+        // having retract_batch is not a requirement.
+        //
+        // This approach is a a bit different than window function
+        // approach. In window function (when they use a window frame)
+        // they get all the desired range during evaluation.
+        if !accumulator.supports_retract_batch() {
+            return not_impl_err!(
+                "Aggregate can not be used as a sliding accumulator because \
+                     `retract_batch` is not implemented: {}",
+                self.name
+            );
+        }
+        Ok(accumulator)
+    }
+
+    pub fn groups_accumulator_supported(&self) -> bool {
+        let args = AccumulatorArgs {
+            return_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            ordering_req: &self.ordering_req,
+            is_distinct: self.is_distinct,
+            name: &self.name,
+            is_reversed: self.is_reversed,
+            exprs: &self.args,
+        };
+        self.fun.groups_accumulator_supported(args)
+    }
+
+    pub fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+        if self.ordering_req.is_empty() {
+            return None;
+        }
+
+        if !self.order_sensitivity().is_insensitive() {
+            return Some(&self.ordering_req);
+        }
+
+        None
+    }
+
+    pub fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        if !self.ordering_req.is_empty() {
+            // If there is requirement, use the sensitivity of the implementation
+            self.fun.order_sensitivity()
+        } else {
+            // If no requirement, aggregator is order insensitive
+            AggregateOrderSensitivity::Insensitive
+        }
+    }
+
+    pub fn with_beneficial_ordering(
+        self: Arc<Self>,
+        beneficial_ordering: bool,
+    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
+        let Some(updated_fn) = self
+            .fun
+            .clone()
+            .with_beneficial_ordering(beneficial_ordering)?
+            else {
+                return Ok(None);
+            };
+
+        AggregateExprBuilder::new(Arc::new(updated_fn), self.args.to_vec())
+            .order_by(self.ordering_req.to_vec())
+            .schema(Arc::new(self.schema.clone()))
+            .alias(self.name().to_string())
+            .with_ignore_nulls(self.ignore_nulls)
+            .with_distinct(self.is_distinct)
+            .with_reversed(self.is_reversed)
+            .build()
+            .map(Some)
+    }
+
+    pub fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        match self.fun.reverse_udf() {
+            ReversedUDAF::NotSupported => None,
+            ReversedUDAF::Identical => Some(Arc::new(self.clone())),
+            ReversedUDAF::Reversed(reverse_udf) => {
+                let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
+                let mut name = self.name().to_string();
+                // If the function is changed, we need to reverse order_by clause as well
+                // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
+                if self.fun().name() == reverse_udf.name() {
+                } else {
+                    replace_order_by_clause(&mut name);
+                }
+                replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
+
+                AggregateExprBuilder::new(reverse_udf, self.args.to_vec())
+                    .order_by(reverse_ordering_req.to_vec())
+                    .schema(Arc::new(self.schema.clone()))
+                    .alias(name)
+                    .with_ignore_nulls(self.ignore_nulls)
+                    .with_distinct(self.is_distinct)
+                    .with_reversed(!self.is_reversed)
+                    .build()
+                    .ok()
+            }
+        }
+    }
+
+    pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        self.fun
+            .is_descending()
+            .and_then(|flag| self.field().ok().map(|f| (f, flag)))
+    }
 }
 
 impl AggregateExpr for AggregateFunctionExpr {
