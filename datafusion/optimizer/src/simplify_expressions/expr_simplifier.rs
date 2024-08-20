@@ -28,13 +28,13 @@ use arrow::{
 };
 
 // use datafusion_common::logical::eq::LogicallyEq;
+use datafusion_common::logical::equality::LogicallyEq;
 use datafusion_common::{cast::as_large_list_array, exec_datafusion_err};
 use datafusion_common::{
     cast::as_list_array,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_common::logical::eq::LogicallyEq;
 use datafusion_expr::expr::{InList, InSubquery, WindowFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{

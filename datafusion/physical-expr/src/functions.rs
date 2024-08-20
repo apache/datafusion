@@ -69,9 +69,9 @@ where
     make_scalar_function_with_hints(inner, vec![])
 }
 
-/// Just like [`make_scalar_function`], decorates the given function to handle both [`ScalarValue`]s and arrays.
+/// Just like [`make_scalar_function`], decorates the given function to handle both [`Scalar`]s and arrays.
 /// Additionally can receive a `hints` vector which can be used to control the output arrays when generating them
-/// from [`ScalarValue`]s.
+/// from [`Scalar`]s.
 ///
 /// Each element of the `hints` vector gets mapped to the corresponding argument of the function. The number of hints
 /// can be less or greater than the number of arguments (for functions with variable number of arguments). Each unmapped

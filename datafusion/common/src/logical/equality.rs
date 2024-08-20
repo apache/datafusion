@@ -31,8 +31,12 @@ impl LogicallyEq for DataType {
             | (Binary | LargeBinary | BinaryView, Binary | LargeBinary | BinaryView) => {
                 true
             }
+            (Dictionary(_, left), Dictionary(_, right)) => left.logically_eq(right),
             (Dictionary(_, inner), other) | (other, Dictionary(_, inner)) => {
                 other.logically_eq(inner)
+            }
+            (RunEndEncoded(_, left), RunEndEncoded(_, right)) => {
+                left.data_type().logically_eq(right.data_type())
             }
             (RunEndEncoded(_, inner), other) | (other, RunEndEncoded(_, inner)) => {
                 other.logically_eq(inner.data_type())
