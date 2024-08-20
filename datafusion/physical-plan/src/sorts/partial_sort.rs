@@ -238,6 +238,10 @@ impl ExecutionPlan for PartialSortExec {
         &self.cache
     }
 
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.preserve_partitioning {
             vec![Distribution::UnspecifiedDistribution]

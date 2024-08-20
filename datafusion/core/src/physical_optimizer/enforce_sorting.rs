@@ -62,7 +62,7 @@ use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::{Partitioning, PhysicalSortExpr, PhysicalSortRequirement};
-use datafusion_physical_plan::limit::LocalLimitExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
@@ -405,7 +405,16 @@ fn analyze_immediate_sort_removal(
                 node.children = node.children.swap_remove(0).children;
                 if let Some(fetch) = sort_exec.fetch() {
                     // If the sort has a fetch, we need to add a limit:
-                    Arc::new(LocalLimitExec::new(sort_input.clone(), fetch))
+                    if sort_exec
+                        .properties()
+                        .output_partitioning()
+                        .partition_count()
+                        == 1
+                    {
+                        Arc::new(GlobalLimitExec::new(sort_input.clone(), 0, Some(fetch)))
+                    } else {
+                        Arc::new(LocalLimitExec::new(sort_input.clone(), fetch))
+                    }
                 } else {
                     sort_input.clone()
                 }
@@ -1124,7 +1133,7 @@ mod tests {
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         let expected_optimized = [
-            "LocalLimitExec: fetch=2",
+            "GlobalLimitExec: skip=0, fetch=2",
             "  SortExec: expr=[non_nullable_col@1 ASC,nullable_col@0 ASC], preserve_partitioning=[false]",
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];

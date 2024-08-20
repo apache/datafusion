@@ -260,6 +260,10 @@ impl ExecutionPlan for UnionExec {
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false; self.children().len()]
     }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
 }
 
 /// Combines multiple input streams by interleaving them.

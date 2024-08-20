@@ -428,7 +428,10 @@ impl TableRelationBuilder {
                 None => return Err(Into::into(UninitializedFieldError::from("name"))),
             },
             alias: self.alias.clone(),
-            args: self.args.clone(),
+            args: self.args.clone().map(|args| ast::TableFunctionArgs {
+                args,
+                settings: None,
+            }),
             with_hints: self.with_hints.clone(),
             version: self.version.clone(),
             partitions: self.partitions.clone(),
