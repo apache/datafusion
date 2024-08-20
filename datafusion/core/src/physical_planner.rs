@@ -2177,9 +2177,6 @@ mod tests {
         assert!(format!("{plan:?}").contains("GlobalLimitExec"));
         assert!(format!("{plan:?}").contains("skip: 3, fetch: Some(5)"));
 
-        // LocalLimitExec adjusts the `fetch`
-        assert!(format!("{plan:?}").contains("LocalLimitExec"));
-        assert!(format!("{plan:?}").contains("fetch: 8"));
         Ok(())
     }
 

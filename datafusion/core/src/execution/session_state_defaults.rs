@@ -29,12 +29,12 @@ use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::context::SessionState;
 #[cfg(feature = "nested_expressions")]
 use crate::functions_nested;
-use crate::{functions, functions_aggregate};
+use crate::{functions, functions_aggregate, functions_window};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, ScalarUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
@@ -110,6 +110,11 @@ impl SessionStateDefaults {
     /// returns the list of default [`AggregateUDF']'s
     pub fn default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         functions_aggregate::all_default_aggregate_functions()
+    }
+
+    /// returns the list of default [`WindowUDF']'s
+    pub fn default_window_functions() -> Vec<Arc<WindowUDF>> {
+        functions_window::all_default_window_functions()
     }
 
     /// returns the list of default [`FileFormatFactory']'s

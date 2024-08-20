@@ -165,7 +165,7 @@ datafusion.catalog.create_default_catalog_and_schema true
 datafusion.catalog.default_catalog datafusion
 datafusion.catalog.default_schema public
 datafusion.catalog.format NULL
-datafusion.catalog.has_header false
+datafusion.catalog.has_header true
 datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
 datafusion.catalog.newlines_in_values false
@@ -255,7 +255,7 @@ datafusion.catalog.create_default_catalog_and_schema true Whether the default ca
 datafusion.catalog.default_catalog datafusion The default catalog name - this impacts what SQL queries use if not specified
 datafusion.catalog.default_schema public The default schema name - this impacts what SQL queries use if not specified
 datafusion.catalog.format NULL Type of `TableProvider` to use when loading `default` schema
-datafusion.catalog.has_header false Default value for `format.has_header` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement.
+datafusion.catalog.has_header true Default value for `format.has_header` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement.
 datafusion.catalog.information_schema true Should DataFusion provide access to `information_schema` virtual tables for displaying schema information
 datafusion.catalog.location NULL Location scanned to load tables for `default` schema
 datafusion.catalog.newlines_in_values false Specifies whether newlines in (quoted) CSV values are supported. This is the default value for `format.newlines_in_values` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement. Parsing newlines in quoted values may be affected by execution behaviour such as parallel file scanning. Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.

@@ -17,3 +17,5 @@
 
 mod aggregate_statistics;
 mod limit_pushdown;
+mod limited_distinct_aggregation;
+mod test_util;

@@ -438,7 +438,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             SQLDataType::Bytea => Ok(DataType::Binary),
             SQLDataType::Interval => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
-            SQLDataType::Struct(fields) => {
+            SQLDataType::Struct(fields, _) => {
                 let fields = fields
                     .iter()
                     .enumerate()
@@ -513,6 +513,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Union(_)
             | SQLDataType::Nullable(_)
             | SQLDataType::LowCardinality(_)
+            | SQLDataType::Trigger
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),
