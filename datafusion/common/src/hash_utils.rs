@@ -488,9 +488,6 @@ pub fn create_row_hashes_v2<'a>(
     random_state: &RandomState,
     hashes_buffer: &'a mut Vec<u64>,
 ) -> Result<&'a mut Vec<u64>> {
-    for hash in hashes_buffer.iter_mut() {
-        *hash = 0
-    }
     for (i, hash) in hashes_buffer.iter_mut().enumerate() {
         *hash = random_state.hash_one(rows.row(i));
     }
