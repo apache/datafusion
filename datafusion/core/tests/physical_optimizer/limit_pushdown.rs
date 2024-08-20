@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use datafusion::physical_optimizer::limit_pushdown::LimitPushdown;
+use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
 use datafusion_common::config::ConfigOptions;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::expressions::{col, lit};
 use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -31,8 +32,10 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
+use datafusion_physical_plan::{get_plan_string, ExecutionPlan, ExecutionPlanProperties};
 use std::sync::Arc;
 
 struct DummyStreamPartition {
@@ -202,6 +205,52 @@ fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batc
 }
 
 #[test]
+fn pushes_global_limit_into_multiple_fetch_plans() -> datafusion_common::Result<()> {
+    let schema = create_schema();
+    let streaming_table = streaming_table_exec(schema.clone()).unwrap();
+    let coalesce_batches = coalesce_batches_exec(streaming_table);
+    let projection = projection_exec(schema.clone(), coalesce_batches)?;
+    let repartition = repartition_exec(projection)?;
+    let sort = sort_exec(
+        vec![PhysicalSortExpr {
+            expr: col("c1", &schema)?,
+            options: SortOptions::default(),
+        }],
+        repartition,
+    );
+    let spm = sort_preserving_merge_exec(sort.output_ordering().unwrap().to_vec(), sort);
+    let global_limit = global_limit_exec(spm, 0, Some(5));
+
+    let initial = get_plan_string(&global_limit);
+    let expected_initial = [
+        "GlobalLimitExec: skip=0, fetch=5",
+        "  SortPreservingMergeExec: [c1@0 ASC]",
+        "    SortExec: expr=[c1@0 ASC], preserve_partitioning=[false]",
+        "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "        ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+        "          CoalesceBatchesExec: target_batch_size=8192",
+        "            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+    ];
+
+    assert_eq!(initial, expected_initial);
+
+    let after_optimize =
+        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    let expected = [
+        "SortPreservingMergeExec: [c1@0 ASC], fetch=5",
+        "  SortExec: TopK(fetch=5), expr=[c1@0 ASC], preserve_partitioning=[false]",
+        "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "      ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+        "        CoalesceBatchesExec: target_batch_size=8192",
+        "          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+    ];
+    assert_eq!(get_plan_string(&after_optimize), expected);
+
+    Ok(())
+}
+
+#[test]
 fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions(
 ) -> datafusion_common::Result<()> {
     let schema = create_schema();
@@ -227,10 +276,9 @@ fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions(
     let expected = [
         "GlobalLimitExec: skip=0, fetch=5",
         "  CoalescePartitionsExec",
-        "    LocalLimitExec: fetch=5",
-        "      FilterExec: c3@2 > 0",
-        "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-        "          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+        "    FilterExec: c3@2 > 0",
+        "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
     ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
@@ -256,7 +304,7 @@ fn merges_local_limit_with_local_limit() -> datafusion_common::Result<()> {
     let after_optimize =
         LimitPushdown::new().optimize(parent_local_limit, &ConfigOptions::new())?;
 
-    let expected = ["LocalLimitExec: fetch=10", "  EmptyExec"];
+    let expected = ["GlobalLimitExec: skip=0, fetch=10", "  EmptyExec"];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
     Ok(())
@@ -373,6 +421,22 @@ fn local_limit_exec(
     fetch: usize,
 ) -> Arc<dyn ExecutionPlan> {
     Arc::new(LocalLimitExec::new(input, fetch))
+}
+
+fn sort_exec(
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+    Arc::new(SortExec::new(sort_exprs, input))
+}
+
+fn sort_preserving_merge_exec(
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+    Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
 }
 
 fn projection_exec(

@@ -117,14 +117,14 @@ CREATE TABLE src_table_2 (
 
 query I
 COPY  src_table_1 TO 'test_files/scratch/csv_files/csv_partitions/1.csv'
-STORED AS CSV;
+STORED AS CSV OPTIONS ('format.has_header' 'false');
 ----
 4
 
 
 query I
 COPY  src_table_2 TO 'test_files/scratch/csv_files/csv_partitions/2.csv'
-STORED AS CSV;
+STORED AS CSV OPTIONS ('format.has_header' 'false');
 ----
 4
 
@@ -210,7 +210,7 @@ COPY (VALUES
   ('#second line is a comment'),
   ('2,3'))
 TO 'test_files/scratch/csv_files/file_with_comments.csv'
-OPTIONS ('format.delimiter' '|');
+OPTIONS ('format.delimiter' '|', 'format.has_header' 'false');
 
 statement ok
 CREATE EXTERNAL TABLE stored_table_with_comments (
@@ -219,7 +219,8 @@ CREATE EXTERNAL TABLE stored_table_with_comments (
 ) STORED AS CSV
 LOCATION 'test_files/scratch/csv_files/file_with_comments.csv'
 OPTIONS ('format.comment' '#',
-         'format.delimiter' ',');
+         'format.delimiter' ',',
+         'format.has_header' 'false');
 
 query TT
 SELECT * from stored_table_with_comments;
@@ -315,7 +316,7 @@ col1 TEXT,
 col2 TEXT
 ) STORED AS CSV
 LOCATION '../core/tests/data/newlines_in_values.csv'
-OPTIONS ('format.newlines_in_values' 'true');
+OPTIONS ('format.newlines_in_values' 'true', 'format.has_header' 'false');
 
 query TT
 select * from stored_table_with_newlines_in_values_safe;
