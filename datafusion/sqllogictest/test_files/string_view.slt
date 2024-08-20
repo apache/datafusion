@@ -1066,9 +1066,8 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: strpos(__common_expr_1, Utf8("f")) AS c, strpos(__common_expr_1, CAST(test.column2_utf8view AS Utf8)) AS c2
-02)--Projection: CAST(test.column1_utf8view AS Utf8) AS __common_expr_1, test.column2_utf8view
-03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+01)Projection: strpos(test.column1_utf8view, Utf8("f")) AS c, strpos(test.column1_utf8view, test.column2_utf8view) AS c2
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for SUBSTR
 ## TODO file ticket

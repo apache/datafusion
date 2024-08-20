@@ -19,11 +19,10 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, ArrowPrimitiveType, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
+    ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 
-use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -52,6 +51,9 @@ impl StrposFunc {
                     Exact(vec![Utf8, LargeUtf8]),
                     Exact(vec![LargeUtf8, Utf8]),
                     Exact(vec![LargeUtf8, LargeUtf8]),
+                    Exact(vec![Utf8View, Utf8View]),
+                    Exact(vec![Utf8View, Utf8]),
+                    Exact(vec![Utf8View, LargeUtf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -78,13 +80,7 @@ impl ScalarUDFImpl for StrposFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(strpos::<Int32Type>, vec![])(args),
-            DataType::LargeUtf8 => {
-                make_scalar_function(strpos::<Int64Type>, vec![])(args)
-            }
-            other => exec_err!("Unsupported data type {other:?} for function strpos"),
-        }
+        make_scalar_function(strpos, vec![])(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -92,26 +88,56 @@ impl ScalarUDFImpl for StrposFunc {
     }
 }
 
+fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::Utf8 => {
+            let string_array = args[0].as_string::<i32>();
+            let substring_array = args[1].as_string::<i32>();
+            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+        }
+        DataType::LargeUtf8 => {
+            let string_array = args[0].as_string::<i64>();
+            let substring_array = args[1].as_string::<i64>();
+            calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
+        }
+        DataType::Utf8View => {
+            let string_array = args[0].as_string_view();
+            match args[1].data_type() {
+                DataType::Utf8View => {
+                    let substring_array = args[1].as_string_view();
+                    calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+                }
+                DataType::Utf8 | DataType::LargeUtf8 => {
+                    let substring_array = args[1].as_string::<i32>();
+                    calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+                }
+                other => exec_err!("Unsupported data type {other:?} for the second argument in function strpos"),
+            }
+        }
+        other => exec_err!("Unsupported data type {other:?} for function strpos"),
+    }
+}
+
 /// Returns starting index of specified substring within string, or zero if it's not present. (Same as position(substring in string), but note the reversed argument order.)
 /// strpos('high', 'ig') = 2
 /// The implementation uses UTF-8 code points as characters
-fn strpos<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
+fn calculate_strpos<'a, V1, V2, T: ArrowPrimitiveType>(
+    string_array: V1,
+    substring_array: V2,
+) -> Result<ArrayRef>
 where
-    T::Native: OffsetSizeTrait,
+    V1: ArrayAccessor<Item = &'a str>,
+    V2: ArrayAccessor<Item = &'a str>,
 {
-    let string_array: &GenericStringArray<T::Native> =
-        as_generic_string_array::<T::Native>(&args[0])?;
+    let string_iter = ArrayIter::new(string_array);
+    let substring_iter = ArrayIter::new(substring_array);
 
-    let substring_array: &GenericStringArray<T::Native> =
-        as_generic_string_array::<T::Native>(&args[1])?;
-
-    let result = string_array
-        .iter()
-        .zip(substring_array.iter())
+    let result = string_iter
+        .zip(substring_iter)
         .map(|(string, substring)| match (string, substring) {
             (Some(string), Some(substring)) => {
-                // the find method returns the byte index of the substring
-                // Next, we count the number of the chars until that byte
+                // The `find` method returns the byte index of the substring.
+                // We count the number of chars up to that byte index.
                 T::Native::from_usize(
                     string
                         .find(substring)
@@ -124,4 +150,162 @@ where
         .collect::<PrimitiveArray<T>>();
 
     Ok(Arc::new(result) as ArrayRef)
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Array, Int32Array, Int64Array};
+    use arrow::datatypes::DataType::{Int32, Int64};
+
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    use crate::unicode::strpos::StrposFunc;
+    use crate::utils::test::test_function;
+
+    #[test]
+    fn test_strpos_functions() {
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ph")))),
+            ],
+            Ok(Some(3)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a")))),
+            ],
+            Ok(Some(1)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("z")))),
+            ],
+            Ok(Some(0)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+            ],
+            Ok(Some(1)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a")))),
+            ],
+            Ok(Some(0)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a")))),
+            ],
+            Ok(None),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("ph")))),
+            ],
+            Ok(Some(3)),
+            i64,
+            Int64,
+            Int64Array
+        );
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("z")))),
+            ],
+            Ok(Some(0)),
+            i64,
+            Int64,
+            Int64Array
+        );
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("ph")))),
+            ],
+            Ok(Some(3)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ph")))),
+            ],
+            Ok(Some(3)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("z")))),
+            ],
+            Ok(Some(0)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            StrposFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("a")))),
+            ],
+            Ok(Some(0)),
+            i32,
+            Int32,
+            Int32Array
+        );
+    }
 }
