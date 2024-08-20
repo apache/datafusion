@@ -43,6 +43,7 @@ use crate::variation_const::{
     UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
+use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::{
     exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
     substrait_err, DFSchemaRef, ToDFSchema,
@@ -58,8 +59,8 @@ use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
 use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
-    user_defined, IntervalDayToSecond, IntervalYearToMonth, List, Map,
-    PrecisionTimestamp, Struct, UserDefined,
+    IntervalCompound, IntervalDayToSecond, IntervalYearToMonth, List, Map,
+    PrecisionTimestamp, Struct,
 };
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
@@ -1489,16 +1490,14 @@ fn to_substrait_type(
                     })),
                 }),
                 IntervalUnit::MonthDayNano => {
-                    // Substrait doesn't currently support this type, so we represent it as a UDT
                     Ok(substrait::proto::Type {
-                        kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
-                            type_reference: extensions.register_type(
-                                INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string(),
-                            ),
-                            type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                            nullability,
-                            type_parameters: vec![],
-                        })),
+                        kind: Some(r#type::Kind::IntervalCompound(
+                            r#type::IntervalCompound {
+                                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                                nullability,
+                                precision: 9, // nanos
+                            },
+                        )),
                     })
                 }
             }
@@ -1892,23 +1891,21 @@ fn to_substrait_literal(
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
-        ScalarValue::IntervalMonthDayNano(Some(i)) => {
-            // IntervalMonthDayNano is internally represented as a 128-bit integer, containing
-            // months (32bit), days (32bit), and nanoseconds (64bit)
-            let bytes = i.to_byte_slice();
-            (
-                LiteralType::UserDefined(UserDefined {
-                    type_reference: extensions
-                        .register_type(INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string()),
-                    type_parameters: vec![],
-                    val: Some(user_defined::Val::Value(ProtoAny {
-                        type_url: INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string(),
-                        value: bytes.to_vec().into(),
-                    })),
+        ScalarValue::IntervalMonthDayNano(Some(i)) => (
+            LiteralType::IntervalCompound(IntervalCompound {
+                interval_year_to_month: Some(IntervalYearToMonth {
+                    years: i.months / 12,
+                    months: i.months % 12,
                 }),
-                DEFAULT_TYPE_VARIATION_REF,
-            )
-        }
+                interval_day_to_second: Some(IntervalDayToSecond {
+                    days: i.days,
+                    seconds: (i.nanoseconds / NANOSECONDS) as i32,
+                    subseconds: i.nanoseconds % NANOSECONDS,
+                    precision_mode: Some(PrecisionMode::Precision(9)), // nanoseconds
+                }),
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
         ScalarValue::IntervalDayTime(Some(i)) => (
             LiteralType::IntervalDayToSecond(IntervalDayToSecond {
                 days: i.days,
@@ -2311,39 +2308,6 @@ mod test {
     }
 
     #[test]
-    fn custom_type_literal_extensions() -> Result<()> {
-        let mut extensions = Extensions::default();
-        // IntervalMonthDayNano is represented as a custom type in Substrait
-        let scalar = ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::new(
-            17, 25, 1234567890,
-        )));
-        let substrait_literal = to_substrait_literal(&scalar, &mut extensions)?;
-        let roundtrip_scalar =
-            from_substrait_literal_without_names(&substrait_literal, &extensions)?;
-        assert_eq!(scalar, roundtrip_scalar);
-
-        assert_eq!(
-            extensions,
-            Extensions {
-                functions: HashMap::new(),
-                types: HashMap::from([(
-                    0,
-                    INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string()
-                )]),
-                type_variations: HashMap::new(),
-            }
-        );
-
-        // Check we fail if we don't propagate extensions
-        assert!(from_substrait_literal_without_names(
-            &substrait_literal,
-            &Extensions::default()
-        )
-        .is_err());
-        Ok(())
-    }
-
-    #[test]
     fn round_trip_types() -> Result<()> {
         round_trip_type(DataType::Boolean)?;
         round_trip_type(DataType::Int8)?;
@@ -2421,37 +2385,6 @@ mod test {
         let substrait = to_substrait_type(&dt, true, &mut extensions)?;
         let roundtrip_dt = from_substrait_type_without_names(&substrait, &extensions)?;
         assert_eq!(dt, roundtrip_dt);
-        Ok(())
-    }
-
-    #[test]
-    fn custom_type_extensions() -> Result<()> {
-        let mut extensions = Extensions::default();
-        // IntervalMonthDayNano is represented as a custom type in Substrait
-        let dt = DataType::Interval(IntervalUnit::MonthDayNano);
-
-        let substrait = to_substrait_type(&dt, true, &mut extensions)?;
-        let roundtrip_dt = from_substrait_type_without_names(&substrait, &extensions)?;
-        assert_eq!(dt, roundtrip_dt);
-
-        assert_eq!(
-            extensions,
-            Extensions {
-                functions: HashMap::new(),
-                types: HashMap::from([(
-                    0,
-                    INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string()
-                )]),
-                type_variations: HashMap::new(),
-            }
-        );
-
-        // Check we fail if we don't propagate extensions
-        assert!(
-            from_substrait_type_without_names(&substrait, &Extensions::default())
-                .is_err()
-        );
-
         Ok(())
     }
 

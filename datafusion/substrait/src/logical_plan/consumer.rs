@@ -42,17 +42,18 @@ use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 #[allow(deprecated)]
 use crate::variation_const::{
-    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
-    INTERVAL_YEAR_MONTH_TYPE_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
-    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF,
+    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
+    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
+    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
+    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{new_empty_array, AsArray};
+use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::expr::InList;
@@ -71,10 +72,10 @@ use datafusion::{
 use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
-use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::literal::{
-    IntervalDayToSecond, IntervalYearToMonth, UserDefined,
+    interval_day_to_second, IntervalCompound, IntervalDayToSecond, IntervalYearToMonth,
+    UserDefined,
 };
 use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{self, FieldReference, Literal, ScalarFunction};
@@ -1831,8 +1832,13 @@ fn from_substrait_type(
                 Ok(DataType::Interval(IntervalUnit::YearMonth))
             }
             r#type::Kind::IntervalDay(_) => Ok(DataType::Interval(IntervalUnit::DayTime)),
+            r#type::Kind::IntervalCompound(_) => {
+                Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+            }
             r#type::Kind::UserDefined(u) => {
+                // Kept for backwards compatibility, use IntervalCompound instead
                 if let Some(name) = extensions.types.get(&u.type_reference) {
+                    #[allow(deprecated)]
                     match name.as_ref() {
                         INTERVAL_MONTH_DAY_NANO_TYPE_NAME => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
                             _ => not_impl_err!(
@@ -1842,7 +1848,7 @@ fn from_substrait_type(
                             ),
                     }
                 } else {
-                    // Kept for backwards compatibility, new plans should include the extension instead
+                    // Kept for backwards compatibility, use IntervalCompound instead
                     #[allow(deprecated)]
                     match u.type_reference {
                         // Kept for backwards compatibility, use IntervalYear instead
@@ -2275,6 +2281,7 @@ fn from_substrait_literal(
             subseconds,
             precision_mode,
         })) => {
+            use interval_day_to_second::PrecisionMode;
             // DF only supports millisecond precision, so for any more granular type we lose precision
             let milliseconds = match precision_mode {
                 Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
@@ -2299,6 +2306,35 @@ fn from_substrait_literal(
         Some(LiteralType::IntervalYearToMonth(IntervalYearToMonth { years, months })) => {
             ScalarValue::new_interval_ym(*years, *months)
         }
+        Some(LiteralType::IntervalCompound(IntervalCompound {
+            interval_year_to_month,
+            interval_day_to_second,
+        })) => match (interval_year_to_month, interval_day_to_second) {
+            (
+                Some(IntervalYearToMonth { years, months }),
+                Some(IntervalDayToSecond {
+                    days,
+                    seconds,
+                    subseconds,
+                    precision_mode:
+                        Some(interval_day_to_second::PrecisionMode::Precision(p)),
+                }),
+            ) => {
+                if *p < 0 || *p > 9 {
+                    return plan_err!(
+                        "Unsupported Substrait interval day to second precision: {}",
+                        p
+                    );
+                }
+                let nanos = *subseconds * i64::pow(10, (*p - 9) as u32);
+                ScalarValue::new_interval_mdn(
+                    *years * 12 + months,
+                    *days,
+                    *seconds as i64 * NANOSECONDS + nanos,
+                )
+            }
+            _ => return plan_err!("Substrait compound interval missing components"),
+        },
         Some(LiteralType::FixedChar(c)) => ScalarValue::Utf8(Some(c.clone())),
         Some(LiteralType::UserDefined(user_defined)) => {
             // Helper function to prevent duplicating this code - can be inlined once the non-extension path is removed
@@ -2329,6 +2365,8 @@ fn from_substrait_literal(
 
             if let Some(name) = extensions.types.get(&user_defined.type_reference) {
                 match name.as_ref() {
+                    // Kept for backwards compatibility - new plans should use IntervalCompound instead
+                    #[allow(deprecated)]
                     INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
                         interval_month_day_nano(user_defined)?
                     }
@@ -2379,6 +2417,7 @@ fn from_substrait_literal(
                             milliseconds,
                         }))
                     }
+                    // Kept for backwards compatibility, use IntervalCompound instead
                     INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
                         interval_month_day_nano(user_defined)?
                     }

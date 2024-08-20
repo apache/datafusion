@@ -231,23 +231,6 @@ async fn select_with_reused_functions() -> Result<()> {
 }
 
 #[tokio::test]
-async fn roundtrip_udt_extensions() -> Result<()> {
-    let ctx = create_context().await?;
-    let proto =
-        roundtrip_with_ctx("SELECT INTERVAL '1 YEAR 1 DAY 1 SECOND' FROM data", ctx)
-            .await?;
-    let expected_type = SimpleExtensionDeclaration {
-        mapping_type: Some(MappingType::ExtensionType(ExtensionType {
-            extension_uri_reference: u32::MAX,
-            type_anchor: 0,
-            name: "interval-month-day-nano".to_string(),
-        })),
-    };
-    assert_eq!(proto.extensions, vec![expected_type]);
-    Ok(())
-}
-
-#[tokio::test]
 async fn select_with_filter_date() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE c > CAST('2020-01-01' AS DATE)").await
 }
