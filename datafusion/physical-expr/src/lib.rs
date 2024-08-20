@@ -67,9 +67,7 @@ pub mod execution_props {
 
 pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
-pub use datafusion_functions_aggregate_common::aggregate::{
-    AggregateExpr, AggregatePhysicalExpressions,
-};
+pub use datafusion_functions_aggregate_common::aggregate::AggregateExpr;
 pub use equivalence::{calculate_union, ConstExpr, EquivalenceProperties};
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
