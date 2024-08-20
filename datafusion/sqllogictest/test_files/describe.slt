@@ -57,15 +57,11 @@ statement ok
 DROP TABLE aggregate_simple;
 
 ##########
-# Describe file
+# Describe file (we can only describe file if the default catalog is `DynamicFileCatalog`)
 ##########
 
-query TTT
+statement error Error during planning: table 'datafusion.public.../core/tests/data/aggregate_simple.csv' not found
 DESCRIBE '../core/tests/data/aggregate_simple.csv';
-----
-c1 Float64 YES
-c2 Float64 YES
-c3 Boolean YES
 
 ##########
 # Describe command
