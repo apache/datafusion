@@ -305,12 +305,6 @@ fn regex_iter_count<'a>(
                     return Ok(0);
                 }
 
-                if regex.contains('g') {
-                    return Err(ArrowError::ComputeError(
-                        "regexp_count() does not support global flag".to_string(),
-                    ));
-                }
-
                 if start <= 0 {
                     return Err(ArrowError::ComputeError(
                         "regexp_count() requires start to be 1 based".to_string(),
@@ -326,6 +320,12 @@ fn regex_iter_count<'a>(
                 let pattern = if let Some(Some(flags)) =
                     flags.map(|x| if x.is_empty() { None } else { Some(x) })
                 {
+                    if flags.contains('g') {
+                        return Err(ArrowError::ComputeError(
+                            "regexp_count() does not support global flag".to_string(),
+                        ));
+                    }
+
                     format!("(?{flags}){regex}")
                 } else {
                     regex.to_string()
