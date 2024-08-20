@@ -1239,7 +1239,7 @@ impl SMJStream {
                     .collect::<Vec<_>>();
 
                 let buffered_indices = UInt64Array::from_iter_values(
-                    buffered_indices.iter().map(|&index| index as u64),
+                    buffered_indices.iter().map(|&index| index),
                 );
 
                 if let Some(record_batch) = produce_buffered_null_batch(
