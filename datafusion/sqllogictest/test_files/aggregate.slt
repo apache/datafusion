@@ -5729,6 +5729,9 @@ select * from having_test group by v1 having max(v1) = 3
 statement ok
 drop table having_test
 
+statement ok
+drop table join_table
+
 # test min/max Float16 without group expression
 query RRTT
 WITH data AS (
