@@ -46,6 +46,7 @@ use datafusion_physical_expr::{
     LexRequirement, PhysicalExpr, PhysicalSortRequirement,
 };
 
+use datafusion_physical_expr_functions_aggregate::aggregate::AggregateFunctionExpr;
 use itertools::Itertools;
 
 pub mod group_values;
@@ -817,7 +818,16 @@ fn create_schema(
         | AggregateMode::SinglePartitioned => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
-                fields.push(expr.field()?)
+                let aggregte_func_expr =
+                    expr.as_any().downcast_ref::<AggregateFunctionExpr>();
+                // count should not be nullable
+                if aggregte_func_expr.is_some()
+                    && aggregte_func_expr.unwrap().fun().name() == "count"
+                {
+                    fields.push(expr.field()?.with_nullable(false))
+                } else {
+                    fields.push(expr.field()?)
+                }
             }
         }
     }

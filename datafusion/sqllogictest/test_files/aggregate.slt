@@ -5364,6 +5364,11 @@ SELECT MAX(col0) FROM empty WHERE col0=1;
 ----
 NULL
 
+query I
+select distinct count() from empty;
+----
+0
+
 query TT
 EXPLAIN SELECT MIN(col0) FROM empty;
 ----
