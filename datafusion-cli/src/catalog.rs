@@ -20,9 +20,7 @@ use std::sync::{Arc, Weak};
 
 use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
 
-use datafusion::catalog::{
-    substitute_tilde, CatalogProvider, CatalogProviderList, SchemaProvider,
-};
+use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 
 use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::listing::ListingTableUrl;
@@ -32,6 +30,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 
 use async_trait::async_trait;
+use dirs::home_dir;
 use parking_lot::RwLock;
 
 /// Wraps another catalog, automatically register require object stores for the file locations
@@ -215,6 +214,16 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
     }
 }
 
+pub fn substitute_tilde(cur: String) -> String {
+    if let Some(usr_dir_path) = home_dir() {
+        if let Some(usr_dir) = usr_dir_path.to_str() {
+            if cur.starts_with('~') && !usr_dir.is_empty() {
+                return cur.replacen('~', usr_dir, 1);
+            }
+        }
+    }
+    cur
+}
 #[cfg(test)]
 mod tests {
 
@@ -320,5 +329,43 @@ mod tests {
         let (_ctx, schema) = setup_context();
 
         assert!(schema.table(location).await.is_err());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_substitute_tilde() {
+        use std::env;
+        use std::path::MAIN_SEPARATOR;
+        let original_home = home_dir();
+        let test_home_path = if cfg!(windows) {
+            "C:\\Users\\user"
+        } else {
+            "/home/user"
+        };
+        env::set_var(
+            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+            test_home_path,
+        );
+        let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
+        let expected = format!(
+            "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
+            test_home_path,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR
+        );
+        let actual = substitute_tilde(input.to_string());
+        assert_eq!(actual, expected);
+        match original_home {
+            Some(home_path) => env::set_var(
+                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+                home_path.to_str().unwrap(),
+            ),
+            None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
+        }
     }
 }

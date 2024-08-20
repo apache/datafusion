@@ -20,8 +20,6 @@
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use async_trait::async_trait;
-#[cfg(feature = "home_dir")]
-use dirs::home_dir;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -175,25 +173,6 @@ impl SchemaProvider for DynamicFileSchemaProvider {
     }
 }
 
-/// Substitute the tilde character in the file path with the user home directory.
-#[cfg(feature = "home_dir")]
-pub fn substitute_tilde(cur: String) -> String {
-    if let Some(usr_dir_path) = home_dir() {
-        if let Some(usr_dir) = usr_dir_path.to_str() {
-            if cur.starts_with('~') && !usr_dir.is_empty() {
-                return cur.replacen('~', usr_dir, 1);
-            }
-        }
-    }
-    cur
-}
-
-/// Do nothing if the feature "home_dir" is disabled.
-#[cfg(not(feature = "home_dir"))]
-pub fn substitute_tilde(cur: String) -> String {
-    cur
-}
-
 /// [UrlTableFactory] is a factory that can create a table provider from the given url.
 #[async_trait]
 pub trait UrlTableFactory: Sync + Send {
@@ -202,49 +181,4 @@ pub trait UrlTableFactory: Sync + Send {
         &self,
         url: &str,
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>>;
-}
-
-#[cfg(all(not(target_os = "windows"), feature = "home_dir"))]
-#[cfg(test)]
-mod tests {
-    use crate::dynamic_file::catalog::substitute_tilde;
-    #[cfg(feature = "home_dir")]
-    use dirs::home_dir;
-
-    #[test]
-    fn test_substitute_tilde() {
-        use std::env;
-        use std::path::MAIN_SEPARATOR;
-        let original_home = home_dir();
-        let test_home_path = if cfg!(windows) {
-            "C:\\Users\\user"
-        } else {
-            "/home/user"
-        };
-        env::set_var(
-            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-            test_home_path,
-        );
-        let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
-        let expected = format!(
-            "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
-            test_home_path,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR
-        );
-        let actual = substitute_tilde(input.to_string());
-        assert_eq!(actual, expected);
-        match original_home {
-            Some(home_path) => env::set_var(
-                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-                home_path.to_str().unwrap(),
-            ),
-            None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
-        }
-    }
 }

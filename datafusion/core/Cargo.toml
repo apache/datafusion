@@ -77,7 +77,6 @@ unicode_expressions = [
     "datafusion-sql/unicode_expressions",
     "datafusion-functions/unicode_expressions",
 ]
-home_dir = ["datafusion-catalog/home_dir"]
 
 [dependencies]
 ahash = { workspace = true }
