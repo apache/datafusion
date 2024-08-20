@@ -305,11 +305,7 @@ impl RunOpt {
             .config()
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
-        config
-            .options_mut()
-            .execution
-            .parquet
-            .schema_force_view_types = self.common.force_view_types;
+
         let ctx = SessionContext::new_with_config(config);
 
         // register tables
