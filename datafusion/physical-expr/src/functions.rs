@@ -46,7 +46,7 @@ pub fn columnar_values_to_array(args: &[ColumnarValue]) -> Result<Vec<ArrayRef>>
     ColumnarValue::values_to_arrays(args)
 }
 
-/// Decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
+/// Decorates a function to handle [`Scalar`]s by converting them to arrays before calling the function
 /// and vice-versa after evaluation.
 /// Note that this function makes a scalar function with no arguments or all scalar inputs return a scalar.
 /// That's said its output will be same for all input rows in a batch.

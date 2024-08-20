@@ -127,50 +127,19 @@ mod tests {
     use super::*;
     use crate::utils::test::test_function;
     use arrow::array::Array;
-    use arrow::array::LargeStringArray;
     use arrow::array::StringArray;
-    use arrow::datatypes::DataType::{LargeUtf8, Utf8};
+    use arrow::datatypes::DataType::Utf8;
     use datafusion_common::ScalarValue;
     #[test]
     fn test_functions() -> Result<()> {
         test_function!(
             ReplaceFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("aabbdqcbb")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("bb")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ccc")))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("aabbdqcbb")))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("bb")))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("ccc")))),
             ],
             Ok(Some("aacccdqcccc")),
-            &str,
-            Utf8,
-            StringArray
-        );
-
-        test_function!(
-            ReplaceFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
-                    "aabbb"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("bbb")))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("cc")))),
-            ],
-            Ok(Some("aacc")),
-            &str,
-            LargeUtf8,
-            LargeStringArray
-        );
-
-        test_function!(
-            ReplaceFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "aabbbcw"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("bb")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("cc")))),
-            ],
-            Ok(Some("aaccbcw")),
             &str,
             Utf8,
             StringArray

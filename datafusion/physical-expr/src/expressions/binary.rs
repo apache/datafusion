@@ -323,9 +323,11 @@ impl PhysicalExpr for BinaryExpr {
                     None
                 } else {
                     self.evaluate_array_scalar(array, scalar.clone().into_value())?
-                    .map(|r| {
-                        r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
-                    })
+                        .map(|r| {
+                            r.and_then(|a| {
+                                to_result_type_array(&self.op, a, &result_type)
+                            })
+                        })
                 }
             }
             (_, _) => None, // default to array implementation
