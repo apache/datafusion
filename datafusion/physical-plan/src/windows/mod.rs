@@ -283,7 +283,11 @@ fn create_built_in_window_expr(
                 args[1]
                     .as_any()
                     .downcast_ref::<Literal>()
-                    .unwrap()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution(
+                            "Expected a signed integer literal for the second argument of nth_value".to_string(),
+                        )
+                    })?
                     .value()
                     .clone(),
             )?;

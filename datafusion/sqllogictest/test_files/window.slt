@@ -4861,3 +4861,16 @@ select a, row_number(a) over (order by b) as rn from t;
 
 statement ok
 drop table t;
+
+statement ok
+DROP TABLE t1;
+
+# https://github.com/apache/datafusion/issues/12073
+statement ok
+CREATE TABLE t1(v1 BIGINT);
+
+query error DataFusion error: Execution error: Expected a signed integer literal for the second argument of nth_value
+SELECT NTH_VALUE('+Inf'::Double, v1) OVER (PARTITION BY v1) FROM t1;
+
+statement ok
+DROP TABLE t1;
