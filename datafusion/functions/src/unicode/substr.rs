@@ -24,13 +24,13 @@ use arrow::array::{
     OffsetSizeTrait, StringViewArray, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
-
+use arrow_data::ByteView;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-use crate::utils::{make_scalar_function, optimized_utf8_to_str_type, utf8_to_str_type};
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct SubstrFunc {
@@ -79,7 +79,7 @@ impl ScalarUDFImpl for SubstrFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types[0] == DataType::Utf8View {
-            optimized_utf8_to_str_type(&arg_types[0], "substr")
+            Ok(DataType::Utf8View)
         } else {
             utf8_to_str_type(&arg_types[0], "substr")
         }
@@ -147,12 +147,12 @@ fn get_true_start_count(input: &str, start: usize, count: i64) -> (usize, usize)
 // The decoding process refs the trait at: arrow/arrow-data/src/byte_view.rs:44
 // From<u128> for ByteView
 fn string_view_substr(
-    string_array: &StringViewArray,
+    string_view_array: &StringViewArray,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let mut builder = StringViewBuilder::new();
     // Copy all blocks from input
-    for block in string_array.data_buffers() {
+    for block in string_view_array.data_buffers() {
         builder.append_block(block.clone());
     }
 
@@ -160,7 +160,7 @@ fn string_view_substr(
 
     match args.len() {
         1 => {
-            for (idx, (raw, start)) in string_array
+            for (idx, (raw, start)) in string_view_array
                 .views()
                 .iter()
                 .zip(start_array.iter())
@@ -174,18 +174,18 @@ fn string_view_substr(
                     if length == 0 {
                         builder.append_null();
                     } else if length > 12 {
-                        let buffer_index = (*raw >> 64) as u32;
-                        let offset = (*raw >> 96) as u32;
+                        let view = ByteView::from(*raw);
+
                         // Safety:
                         // 1. idx < string_array.views.size()
                         // 2. builder is guaranteed to have corresponding blocks
                         unsafe {
-                            let str = string_array.value_unchecked(idx);
+                            let str = string_view_array.value_unchecked(idx);
                             let (start, end) =
                                 get_true_start_count(str, start as usize, -1);
                             builder.append_view_unchecked(
-                                buffer_index,
-                                offset + start as u32,
+                                view.buffer_index,
+                                view.offset + start as u32,
                                 // guarantee that end-offset >= 0 for end <= str.len()
                                 (end - start) as u32,
                             );
@@ -212,7 +212,7 @@ fn string_view_substr(
         }
         2 => {
             let count_array = as_int64_array(&args[1])?;
-            for (idx, ((raw, start), count)) in string_array
+            for (idx, ((raw, start), count)) in string_view_array
                 .views()
                 .iter()
                 .zip(start_array.iter())
@@ -231,18 +231,18 @@ fn string_view_substr(
                         if length == 0 {
                             builder.append_null();
                         } else if length > 12 {
-                            let buffer_index = (*raw >> 64) as u32;
-                            let offset = (*raw >> 96) as u32;
+                            let view = ByteView::from(*raw);
+
                             // Safety:
                             // 1. idx < string_array.views.size()
                             // 2. builder is guaranteed to have corresponding blocks
                             unsafe {
-                                let str = string_array.value_unchecked(idx);
+                                let str = string_view_array.value_unchecked(idx);
                                 let (start, end) =
                                     get_true_start_count(str, start, count as i64);
                                 builder.append_view_unchecked(
-                                    buffer_index,
-                                    offset + start as u32,
+                                    view.buffer_index,
+                                    view.offset + start as u32,
                                     // guarantee that end-offset >= 0 for end <= str.len()
                                     (end - start) as u32,
                                 );
