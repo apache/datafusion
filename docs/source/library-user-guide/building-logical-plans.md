@@ -206,10 +206,11 @@ MemoryExec: partitions=0, partition_sizes=[]
 
 ## Table Sources
 
-The previous example used a [LogicalTableSource], which is used for tests and documentation in DataFusion, and is also
-suitable if you are using DataFusion to build logical plans but do not use DataFusion's physical planner. However, if you
-want to use a [TableSource] that can be executed in DataFusion then you will need to use [DefaultTableSource], which is a
-wrapper for a [TableProvider].
+The previous examples use a [LogicalTableSource], which is used for tests and documentation in DataFusion, and is also
+suitable if you are using DataFusion to build logical plans but do not use DataFusion's physical planner. 
+
+However, it is more common to use a [TableProvider]. To get a  [TableSource] from a 
+[TableProvider], use [provider_as_source] or [DefaultTableSource].
 
 [query planning and execution overview]: https://docs.rs/datafusion/latest/datafusion/index.html#query-planning-and-execution-overview
 [architecture guide]: https://docs.rs/datafusion/latest/datafusion/index.html#architecture
@@ -218,6 +219,7 @@ wrapper for a [TableProvider].
 [dataframe]: using-the-dataframe-api.md
 [logicaltablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalTableSource.html
 [defaulttablesource]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
+[provider_as_source]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/fn.provider_as_source.html
 [tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html
 [tablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/trait.TableSource.html
 [`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
