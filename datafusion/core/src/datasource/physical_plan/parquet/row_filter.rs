@@ -262,7 +262,7 @@ impl<'a> FilterCandidateBuilder<'a> {
     /// * `Ok(None)` if the expression cannot be used as an ArrowFilter
     /// * `Err(e)` if an error occurs while building the candidate
     pub fn build(self, metadata: &ParquetMetaData) -> Result<Option<FilterCandidate>> {
-        let Some(projection) = non_pushdown_columns(
+        let Some((projection, rewritten_expr)) = non_pushdown_columns(
             Arc::clone(&self.expr),
             self.file_schema,
             self.table_schema,
@@ -275,7 +275,7 @@ impl<'a> FilterCandidateBuilder<'a> {
         let can_use_index = columns_sorted(&self.required_column_indices, metadata)?;
 
         Ok(Some(FilterCandidate {
-            expr: self.expr,
+            expr: rewritten_expr,
             required_bytes,
             can_use_index,
             projection,
@@ -360,6 +360,8 @@ impl<'schema> TreeNodeRewriter for PushdownChecker<'schema> {
     }
 }
 
+type ProjectionAndExpr = (Vec<usize>, Arc<dyn PhysicalExpr>);
+
 // Checks if a given expression can be pushed down into `ParquetExec` as opposed to being evaluated
 // post-parquet-scan in a `FilterExec`. If it can be pushed down, this returns None. If it can't be
 // pushed down, this returns the content of [`PushdownChecker::required_column_indices`],
@@ -368,7 +370,7 @@ pub fn non_pushdown_columns(
     expr: Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
     table_schema: &Schema,
-) -> Result<Option<Vec<usize>>> {
+) -> Result<Option<ProjectionAndExpr>> {
     let mut checker = PushdownChecker {
         non_primitive_columns: false,
         projected_columns: false,
@@ -377,11 +379,11 @@ pub fn non_pushdown_columns(
         table_schema,
     };
 
-    expr.rewrite(&mut checker).data()?;
+    let expr = expr.rewrite(&mut checker).data()?;
 
     Ok(
         (!checker.non_primitive_columns && !checker.projected_columns)
-            .then(|| checker.required_column_indices.into_iter().collect()),
+            .then(|| (checker.required_column_indices.into_iter().collect(), expr)),
     )
 }
 
@@ -405,7 +407,7 @@ pub fn would_column_prevent_pushdown(
     // the return of this is only used for [`PushdownChecker::f_down()`], so we can safely ignore
     // it here. I'm just verifying we know the return type of this so nobody accidentally changes
     // the return type of this fn and it gets implicitly ignored here.
-    let (Some(TreeNodeRecursion::Jump) | _) = checker.check_single_column(column_name);
+    let _: Option<TreeNodeRecursion> = checker.check_single_column(column_name);
 
     // and then return a value based on the state of the checker
     checker.non_primitive_columns || checker.projected_columns
