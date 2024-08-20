@@ -50,7 +50,7 @@ fn main() -> Result<(), DataFusionError> {
         Field::new("name", DataType::Utf8, true),
     ]);
     let table_source = LogicalTableSource::new(SchemaRef::new(schema));
-    
+
     // create a TableScan plan
     let projection = None; // optional projection
     let filters = vec![]; // optional filters to push down
@@ -61,13 +61,13 @@ fn main() -> Result<(), DataFusionError> {
         projection,
         filters,
         fetch,
-        )? 
+        )?
     );
-    
+
     // create a Filter plan that evaluates `id > 500` that wraps the TableScan
     let filter_expr = col("id").gt(lit(500));
     let plan = LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(table_scan)) ? );
-    
+
     // print the plan
     println!("{}", plan.display_indent_schema());
     Ok(())
@@ -123,7 +123,7 @@ fn main() -> Result<(), DataFusionError> {
         Field::new("name", DataType::Utf8, true),
     ]);
     let table_source = LogicalTableSource::new(SchemaRef::new(schema));
-    
+
     // optional projection
     let projection = None;
 
@@ -151,7 +151,7 @@ Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]
 ## Translating Logical Plan to Physical Plan
 
 Logical plans can not be directly executed. They must be "compiled" into an
-[`ExecutionPlan`], which is often referred to as a "physical plan". 
+[`ExecutionPlan`], which is often referred to as a "physical plan".
 
 Compared to `LogicalPlan`s `ExecutionPlans` have many more details such as
 specific algorithms and detailed optimizations compared to. Given a
@@ -177,7 +177,7 @@ async fn main() -> Result<(), DataFusionError> {
         Field::new("id", DataType::Int32, true),
         Field::new("name", DataType::Utf8, true),
     ]);
-    // To create an ExecutionPlan we must provide an actual 
+    // To create an ExecutionPlan we must provide an actual
     // TableProvider. For this example, we don't provide any data
     // but in production code, this would have `RecordBatch`es with
     // in memory data
@@ -220,5 +220,5 @@ wrapper for a [TableProvider].
 [defaulttablesource]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
 [tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html
 [tablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/trait.TableSource.html
-[`ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
-[`SessionState::create_physical_plan`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.create_physical_plan
+[`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
+[`sessionstate::create_physical_plan`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.create_physical_plan
