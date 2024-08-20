@@ -34,7 +34,7 @@ use datafusion_common::Result;
 /// * [`CatalogProviderList`]: a collection of `CatalogProvider`s
 /// * [`CatalogProvider`]: a collection of `SchemaProvider`s (sometimes called a "database" in other systems)
 /// * [`SchemaProvider`]:  a collection of `TableProvider`s (often called a "schema" in other systems)
-/// * [`TableProvider]`:  individual tables
+/// * [`TableProvider`]:  individual tables
 ///
 /// # Implementing Catalogs
 ///
