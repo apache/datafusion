@@ -194,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn strpos() {
+    fn test_strpos_type_consitency() {
         test_strpos!("foo", "bar" -> 0; Utf8 Utf8 i32 Int32 Int32Array);
         test_strpos!("foobar", "foo" -> 1; Utf8 Utf8 i32 Int32 Int32Array);
         test_strpos!("foobar", "bar" -> 4; Utf8 Utf8 i32 Int32 Int32Array);
