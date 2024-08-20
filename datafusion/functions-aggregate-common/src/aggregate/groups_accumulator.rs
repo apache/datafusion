@@ -447,7 +447,7 @@ pub fn ensure_enough_room_for_values<T: Clone>(
                 .unwrap()
                 .resize(total_num_groups, default_value);
         }
-        // It blocked mode, we ensure the blks are enough first,
+        // In blocked mode, we ensure the blks are enough first,
         // and then ensure slots in blks are enough.
         GroupStatesMode::Blocked(blk_size) => {
             let (mut cur_blk_idx, exist_slots) = if values.num_blocks() > 0 {

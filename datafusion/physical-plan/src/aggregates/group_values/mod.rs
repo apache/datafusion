@@ -59,6 +59,7 @@ pub trait GroupValues: Send {
     }
 
     /// Switch the group values to flat or blocked mode.
+    /// You can see detail about the mode on [GroupStatesMode].
     ///
     /// After switching mode, all data in previous mode will be cleared.
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {

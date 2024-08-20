@@ -45,10 +45,10 @@ pub enum EmitTo {
     /// Emit next block in the blocked managed groups
     ///
     /// The flag's meaning:
-    /// - `true` represents it will be added new groups again,
-    ///   we don't need to shift the values down.
-    /// - `false` represents new groups still be possible to be
-    ///   added, and we need to shift the values down.
+    ///   - `true` represents new groups still will be added,
+    ///     and we need to shift the values down.
+    ///   - `false` represents no new groups will be added again,
+    ///     and we don't need to shift the values down.
     NextBlock(bool),
 }
 
@@ -121,9 +121,10 @@ impl EmitTo {
 ///     It will grow constantly when more and more values are inserted,
 ///     that leads to a considerable amount of copying, and finally a bad performance.
 ///
-///   - Blocked, the values in them will be managed with multiple `Vec`s.
-///     When the block is large enough, a new block will be allocated and used
-///     for inserting. Obviously, this strategy can avoid copying and get a good performance.
+///   - Blocked(block_size), the values in them will be managed with multiple `Vec`s.
+///     When the block is large enough(reach block_size), a new block will be allocated
+///     and used for inserting.
+///     Obviously, this strategy can avoid copying and get a good performance.
 #[derive(Debug, Clone, Copy)]
 pub enum GroupStatesMode {
     Flat,
@@ -407,6 +408,7 @@ pub trait GroupsAccumulator: Send {
     }
 
     /// Switch the accumulator to flat or blocked mode.
+    /// You can see detail about the mode on [GroupStatesMode].
     ///
     /// After switching mode, all data in previous mode will be cleared.
     fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {

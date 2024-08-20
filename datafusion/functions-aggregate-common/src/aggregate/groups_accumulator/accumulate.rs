@@ -356,7 +356,7 @@ impl NullState {
     }
 }
 
-/// Similar as the [NullState] but supported the blocked version accumulator
+/// Similar as the [NullState] but designed for blocked version accumulator
 #[derive(Debug)]
 pub struct BlockedNullState {
     /// Have we seen any non-filtered input values for `group_index`?
@@ -717,7 +717,7 @@ fn initialize_builder(
     builder
 }
 
-/// Similar as the [initialize_builder] but supported the blocked version accumulator
+/// Similar as the [initialize_builder] but designed for the blocked version accumulator
 fn ensure_enough_room_for_nulls(
     builder_blocks: &mut Blocks<BooleanBufferBuilder>,
     mode: GroupStatesMode,
@@ -741,7 +741,7 @@ fn ensure_enough_room_for_nulls(
                 builder.append_n(new_groups, default_value);
             }
         }
-        // It blocked mode, we ensure the blks are enough first,
+        // In blocked mode, we ensure the blks are enough first,
         // and then ensure slots in blks are enough.
         GroupStatesMode::Blocked(blk_size) => {
             let (mut cur_blk_idx, exist_slots) = if builder_blocks.num_blocks() > 0 {
