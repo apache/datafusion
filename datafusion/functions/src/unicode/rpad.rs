@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::sync::Arc;
-use std::fmt::Write;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
 use arrow::datatypes::DataType;
@@ -28,6 +25,9 @@ use datafusion_common::DataFusionError;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use std::any::Any;
+use std::fmt::Write;
+use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug)]
@@ -143,7 +143,8 @@ macro_rules! process_rpad {
                                 $builder.append_value(graphemes[..length].concat());
                             } else {
                                 $builder.write_str(string)?;
-                                $builder.write_str(&" ".repeat(length - graphemes.len()))?;
+                                $builder
+                                    .write_str(&" ".repeat(length - graphemes.len()))?;
                                 $builder.append_value("");
                             }
                         }
