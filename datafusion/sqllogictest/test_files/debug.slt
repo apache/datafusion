@@ -1,66 +1,21 @@
-
-
-
-query I
-select unnest(unnest(unnest([[[1]]])))
-----
-
-query I
-select unnest(unnest([struct(1,2,3)]))
-----
-
 statement ok
-CREATE TABLE recursive_unnest_table
-AS VALUES 
-    (struct([1], 'a'), [[[1],[2]],[[1,1]]], [struct([1],[[1,2]])]),
-    (struct([2], 'b'), [[[3,4],[5]],[[null,6],null,[7,8]]], [struct([2],[[3],[4]])])
-;
+CREATE TABLE temp
+AS VALUES
+    ([1,2,3],1,[9,10]),
+    ([1,2,3],2,[11,12]),
+    ([4,5,6],2,[13,14])
 
 query TT
-explain select unnest(unnest(unnest(column2))) from recursive_unnest_table;
+explain select unnest(column1) c1 from temp group by unnest(column1);
 ----
-logical_plan
-01)Unnest: lists[unnest_placeholder(recursive_unnest_table.column2)|depth=3] structs[]
-02)--Projection: recursive_unnest_table.column2 AS unnest_placeholder(recursive_unnest_table.column2)
-03)----TableScan: recursive_unnest_table projection=[column2]
-physical_plan
-01)UnnestExec
-02)--ProjectionExec: expr=[column2@0 as unnest_placeholder(recursive_unnest_table.column2)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 query TT
-explain select unnest(unnest(column2)) from recursive_unnest_table;
+explain select unnest(column1) c1 from temp group by unnest(column1);
 ----
-logical_plan
-01)Unnest: lists[unnest_placeholder(recursive_unnest_table.column2)|depth=2] structs[]
-02)--Projection: recursive_unnest_table.column2 AS unnest_placeholder(recursive_unnest_table.column2)
-03)----TableScan: recursive_unnest_table projection=[column2]
-physical_plan
-01)UnnestExec
-02)--ProjectionExec: expr=[column2@0 as unnest_placeholder(recursive_unnest_table.column2)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
 
-query I????
-select unnest(unnest(unnest(column3)['c1'])), unnest(unnest(column3)['c1']), column3,column1, column1['c0']  from recursive_unnest_table;
+query TT
+explain select unnest(column1) c1 from temp group by c1;
 ----
-1 [1, 2] [{c0: [1], c1: [[1, 2]]}] {c0: [1], c1: a} [1]
-2 NULL [{c0: [1], c1: [[1, 2]]}] {c0: [1], c1: a} [1]
-3 [3] [{c0: [2], c1: [[3], [4]]}] {c0: [2], c1: b} [2]
-NULL [4] [{c0: [2], c1: [[3], [4]]}] {c0: [2], c1: b} [2]
-4 [3] [{c0: [2], c1: [[3], [4]]}] {c0: [2], c1: b} [2]
-NULL [4] [{c0: [2], c1: [[3], [4]]}] {c0: [2], c1: b} [2]
-
-query I
-select unnest(unnest([[1,2,3]])) + unnest([4,5]);
-----
-5
-7
-NULL
-
-
-query I
-select unnest(unnest([[1,2,3]])) + unnest(unnest([[1,2,3]]));
-----
-2
-4
-6
+1 1
+1 2
+1 3

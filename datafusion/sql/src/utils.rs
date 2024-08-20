@@ -291,7 +291,7 @@ pub(crate) fn value_to_string(value: &Value) -> Option<String> {
     }
 }
 
-pub(crate) fn transform_bottom_unnests(
+pub(crate) fn group_bottom_most_consecutive_unnests(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
     inner_projection_exprs: &mut Vec<Expr>,
@@ -301,7 +301,7 @@ pub(crate) fn transform_bottom_unnests(
     Ok(original_exprs
         .iter()
         .map(|expr| {
-            transform_bottom_unnest(
+            group_bottom_most_consecutive_unnest(
                 input,
                 unnest_placeholder_columns,
                 inner_projection_exprs,
@@ -315,7 +315,7 @@ pub(crate) fn transform_bottom_unnests(
         .collect::<Vec<_>>())
 }
 
-/// Explain me
+/// TODO: maybe renamed into transform_bottom_most_consecutive_unnests
 /// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
 /// Given an expression which contains unnest expr as one of its children,
 /// Try transform depends on unnest type
@@ -325,7 +325,7 @@ pub(crate) fn transform_bottom_unnests(
 /// The transformed exprs will be used in the outer projection
 /// If along the path from root to bottom, there are multiple unnest expressions, the transformation
 /// is done only for the bottom expression
-pub(crate) fn transform_bottom_unnest(
+pub(crate) fn group_bottom_most_consecutive_unnest(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
     inner_projection_exprs: &mut Vec<Expr>,
@@ -373,14 +373,13 @@ pub(crate) fn transform_bottom_unnest(
             | DataType::FixedSizeList(_, _)
             | DataType::LargeList(_) => {
                 // TODO: this memo only needs to be a hashset
-                let (already_projected, transformed_cols) =
-                    match memo.get_mut(&inner_expr_name) {
-                        Some(vec) => (true, vec),
-                        _ => {
-                            memo.insert(inner_expr_name.clone(), vec![]);
-                            (false, memo.get_mut(&inner_expr_name).unwrap())
-                        }
-                    };
+                let (already_projected, _) = match memo.get_mut(&inner_expr_name) {
+                    Some(vec) => (true, vec),
+                    _ => {
+                        memo.insert(inner_expr_name.clone(), vec![]);
+                        (false, memo.get_mut(&inner_expr_name).unwrap())
+                    }
+                };
                 if !already_projected {
                     inner_projection_exprs
                         .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
@@ -400,7 +399,7 @@ pub(crate) fn transform_bottom_unnest(
                             }]),
                         ));
                     }
-                    Some((col, unnesting)) => match unnesting {
+                    Some((_, unnesting)) => match unnesting {
                         ColumnUnnestType::List(list) => {
                             let unnesting = ColumnUnnestList {
                                 output_column: post_unnest_column.clone(),
@@ -611,7 +610,9 @@ mod tests {
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
 
-    use crate::utils::{resolve_positions_to_exprs, transform_bottom_unnest};
+    use crate::utils::{
+        group_bottom_most_consecutive_unnest, resolve_positions_to_exprs,
+    };
     fn column_unnests_eq(l: Vec<&str>, r: &[(Column, ColumnUnnestType)]) {
         let formatted: Vec<String> =
             r.iter().map(|i| format!("{}|{}", i.0, i.1)).collect();
@@ -675,7 +676,7 @@ mod tests {
             .add(unnest(unnest(col("3d_col"))))
             .add(col("i64_col"));
         let mut memo = HashMap::new();
-        let transformed_exprs = transform_bottom_unnest(
+        let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -709,7 +710,7 @@ mod tests {
 
         // unnest(3d_col) as 2d_col
         let original_expr_2 = unnest(col("3d_col")).alias("2d_col");
-        let transformed_exprs = transform_bottom_unnest(
+        let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -743,7 +744,7 @@ mod tests {
         let original_expr_3 =
             unnest(unnest(unnest(col("struct_arr_col")).field("field1")))
                 .alias("fully_unnested_struct_arr");
-        let transformed_exprs = transform_bottom_unnest(
+        let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -818,7 +819,7 @@ mod tests {
             .add(unnest(unnest(col("3d_col"))))
             .add(col("i64_col"));
         let mut memo = HashMap::new();
-        let transformed_exprs = transform_bottom_unnest(
+        let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -852,7 +853,7 @@ mod tests {
 
         // unnest(3d_col) as 2d_col
         let original_expr_2 = unnest(col("3d_col")).alias("2d_col");
-        let transformed_exprs = transform_bottom_unnest(
+        let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -921,7 +922,7 @@ mod tests {
         let mut memo = HashMap::new();
         // unnest(struct_col)
         let original_expr = unnest(col("struct_col"));
-        let transformed_exprs = transform_bottom_unnest(
+        let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -949,7 +950,7 @@ mod tests {
         memo.clear();
         // unnest(array_col) + 1
         let original_expr = unnest(col("array_col")).add(lit(1i64));
-        let transformed_exprs = transform_bottom_unnest(
+        let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -1015,7 +1016,7 @@ mod tests {
 
         // An expr with multiple unnest
         let original_expr = unnest(unnest(col("struct_col").field("matrix")));
-        let transformed_exprs = transform_bottom_unnest(
+        let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,

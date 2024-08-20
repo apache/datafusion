@@ -1576,9 +1576,7 @@ pub fn get_unnested_columns(
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type {
-        DataType::List(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => {
+        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
             let data_type = get_unnested_list_column_recursive(data_type, depth)?;
             let new_field = Arc::new(Field::new(
                 col_name.clone(),
