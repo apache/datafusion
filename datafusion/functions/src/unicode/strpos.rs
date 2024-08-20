@@ -89,32 +89,46 @@ impl ScalarUDFImpl for StrposFunc {
 }
 
 fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::Utf8 => {
+    match (args[0].data_type(), args[1].data_type()) {
+        (DataType::Utf8, DataType::Utf8) => {
             let string_array = args[0].as_string::<i32>();
             let substring_array = args[1].as_string::<i32>();
             calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
         }
-        DataType::LargeUtf8 => {
+        (DataType::Utf8, DataType::LargeUtf8) => {
+            let string_array = args[0].as_string::<i32>();
+            let substring_array = args[1].as_string::<i64>();
+            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+        }
+        (DataType::LargeUtf8, DataType::Utf8) => {
+            let string_array = args[0].as_string::<i64>();
+            let substring_array = args[1].as_string::<i32>();
+            calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
+        }
+        (DataType::LargeUtf8, DataType::LargeUtf8) => {
             let string_array = args[0].as_string::<i64>();
             let substring_array = args[1].as_string::<i64>();
             calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
         }
-        DataType::Utf8View => {
+        (DataType::Utf8View, DataType::Utf8View) => {
             let string_array = args[0].as_string_view();
-            match args[1].data_type() {
-                DataType::Utf8View => {
-                    let substring_array = args[1].as_string_view();
-                    calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
-                }
-                DataType::Utf8 | DataType::LargeUtf8 => {
-                    let substring_array = args[1].as_string::<i32>();
-                    calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
-                }
-                other => exec_err!("Unsupported data type {other:?} for the second argument in function strpos"),
-            }
+            let substring_array = args[1].as_string_view();
+            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
         }
-        other => exec_err!("Unsupported data type {other:?} for function strpos"),
+        (DataType::Utf8View, DataType::Utf8) => {
+            let string_array = args[0].as_string_view();
+            let substring_array = args[1].as_string::<i32>();
+            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+        }
+        (DataType::Utf8View, DataType::LargeUtf8) => {
+            let string_array = args[0].as_string_view();
+            let substring_array = args[1].as_string::<i64>();
+            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+        }
+
+        other => {
+            exec_err!("Unsupported data type combination {other:?} for function strpos")
+        }
     }
 }
 
@@ -162,6 +176,41 @@ mod tests {
 
     use crate::unicode::strpos::StrposFunc;
     use crate::utils::test::test_function;
+
+    macro_rules! test_strpos {
+        ($lhs:literal, $rhs:literal -> $result:literal; $t1:ident $t2:ident $t3:ident $t4:ident $t5:ident) => {
+            test_function!(
+                StrposFunc::new(),
+                &[
+                    ColumnarValue::Scalar(ScalarValue::$t1(Some($lhs.to_owned()))),
+                    ColumnarValue::Scalar(ScalarValue::$t2(Some($rhs.to_owned()))),
+                ],
+                Ok(Some($result)),
+                $t3,
+                $t4,
+                $t5
+            )
+        };
+    }
+
+    #[test]
+    fn strpos() {
+        test_strpos!("foo", "bar" -> 0; Utf8 Utf8 i32 Int32 Int32Array);
+        test_strpos!("foobar", "foo" -> 1; Utf8 Utf8 i32 Int32 Int32Array);
+        test_strpos!("foobar", "bar" -> 4; Utf8 Utf8 i32 Int32 Int32Array);
+
+        test_strpos!("foo", "bar" -> 0; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
+        test_strpos!("foobar", "foo" -> 1; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
+        test_strpos!("foobar", "bar" -> 4; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
+
+        test_strpos!("foo", "bar" -> 0; Utf8 LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("foobar", "foo" -> 1; Utf8 LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("foobar", "bar" -> 4; Utf8 LargeUtf8 i32 Int32 Int32Array);
+
+        test_strpos!("foo", "bar" -> 0; LargeUtf8 Utf8 i64 Int64 Int64Array);
+        test_strpos!("foobar", "foo" -> 1; LargeUtf8 Utf8 i64 Int64 Int64Array);
+        test_strpos!("foobar", "bar" -> 4; LargeUtf8 Utf8 i64 Int64 Int64Array);
+    }
 
     #[test]
     fn test_strpos_functions() {
