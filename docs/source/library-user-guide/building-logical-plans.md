@@ -31,44 +31,52 @@ explained in more detail in the [Query Planning and Execution Overview] section 
 DataFusion's [LogicalPlan] is an enum containing variants representing all the supported operators, and also
 contains an `Extension` variant that allows projects building on DataFusion to add custom logical operators.
 
-It is possible to create logical plans by directly creating instances of the [LogicalPlan] enum as follows, but is is
+It is possible to create logical plans by directly creating instances of the [LogicalPlan] enum as shown, but it is
 much easier to use the [LogicalPlanBuilder], which is described in the next section.
 
 Here is an example of building a logical plan directly:
 
-<!-- source for this example is in datafusion_docs::library_logical_plan::plan_1 -->
-
 ```rust
-// create a logical table source
-let schema = Schema::new(vec![
-    Field::new("id", DataType::Int32, true),
-    Field::new("name", DataType::Utf8, true),
-]);
-let table_source = LogicalTableSource::new(SchemaRef::new(schema));
+use datafusion::common::DataFusionError;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::logical_expr::{Filter, LogicalPlan, TableScan, LogicalTableSource};
+use datafusion::prelude::*;
+use std::sync::Arc;
 
-// create a TableScan plan
-let projection = None; // optional projection
-let filters = vec![]; // optional filters to push down
-let fetch = None; // optional LIMIT
-let table_scan = LogicalPlan::TableScan(TableScan::try_new(
-    "person",
-    Arc::new(table_source),
-    projection,
-    filters,
-    fetch,
-)?);
-
-// create a Filter plan that evaluates `id > 500` that wraps the TableScan
-let filter_expr = col("id").gt(lit(500));
-let plan = LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(table_scan))?);
-
-// print the plan
-println!("{}", plan.display_indent_schema());
+fn main() -> Result<(), DataFusionError> {
+    // create a logical table source
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("name", DataType::Utf8, true),
+    ]);
+    let table_source = LogicalTableSource::new(SchemaRef::new(schema));
+    
+    // create a TableScan plan
+    let projection = None; // optional projection
+    let filters = vec![]; // optional filters to push down
+    let fetch = None; // optional LIMIT
+    let table_scan = LogicalPlan::TableScan(TableScan::try_new(
+        "person",
+        Arc::new(table_source),
+        projection,
+        filters,
+        fetch,
+        )? 
+    );
+    
+    // create a Filter plan that evaluates `id > 500` that wraps the TableScan
+    let filter_expr = col("id").gt(lit(500));
+    let plan = LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(table_scan)) ? );
+    
+    // print the plan
+    println!("{}", plan.display_indent_schema());
+    Ok(())
+}
 ```
 
 This example produces the following plan:
 
-```
+```text
 Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]
   TableScan: person [id:Int32;N, name:Utf8;N]
 ```
