@@ -407,11 +407,11 @@ query TT
 explain SELECT * from test where column2 = '1';
 ----
 logical_plan
-01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
+01)Filter: test.column2 = CAST(Utf8("1") AS Dictionary(Int32, Utf8))
 02)--TableScan: test projection=[column1, column2]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column2@1 = 1
+02)--FilterExec: column2@1 = CAST(1 AS Dictionary(Int32, Utf8))
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 # try literal = col to verify order doesn't matter
@@ -420,11 +420,11 @@ query TT
 explain SELECT * from test where '1' = column2
 ----
 logical_plan
-01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
+01)Filter: CAST(Utf8("1") AS Dictionary(Int32, Utf8)) = test.column2
 02)--TableScan: test projection=[column1, column2]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column2@1 = 1
+02)--FilterExec: CAST(1 AS Dictionary(Int32, Utf8)) = column2@1
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 
@@ -438,9 +438,9 @@ query TT
 explain SELECT * from test where column2 = 1;
 ----
 logical_plan
-01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
+01)Filter: CAST(test.column2 AS Utf8) = Utf8("1")
 02)--TableScan: test projection=[column1, column2]
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column2@1 = 1
+02)--FilterExec: CAST(column2@1 AS Utf8) = 1
 03)----MemoryExec: partitions=1, partition_sizes=[1]
