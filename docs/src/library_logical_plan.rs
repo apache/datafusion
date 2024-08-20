@@ -16,12 +16,9 @@
 // under the License.
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::datasource::{DefaultTableSource, MemTable};
 use datafusion::error::Result;
 use datafusion::logical_expr::builder::LogicalTableSource;
 use datafusion::logical_expr::{Filter, LogicalPlan, LogicalPlanBuilder, TableScan};
-use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use datafusion::prelude::*;
 use std::sync::Arc;
 
@@ -76,35 +73,6 @@ fn plan_builder_1() -> Result<()> {
 
     // print the plan
     println!("{}", plan.display_indent_schema());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn translate_logical_to_physical() -> Result<()> {
-    // create a default table source
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Int32, true),
-        Field::new("name", DataType::Utf8, true),
-    ]);
-    let table_provider = Arc::new(MemTable::try_new(Arc::new(schema), vec![])?);
-    let table_source = Arc::new(DefaultTableSource::new(table_provider));
-
-    // create a LogicalPlanBuilder for a table scan without projection or filters
-    let logical_plan = LogicalPlanBuilder::scan("person", table_source, None)?.build()?;
-
-    // create a physical plan using the default physical planner
-    let ctx = SessionContext::new();
-    let planner = DefaultPhysicalPlanner::default();
-    let physical_plan = planner
-        .create_physical_plan(&logical_plan, &ctx.state())
-        .await?;
-
-    // print the plan
-    println!(
-        "{}",
-        DisplayableExecutionPlan::new(physical_plan.as_ref()).indent(true)
-    );
 
     Ok(())
 }
