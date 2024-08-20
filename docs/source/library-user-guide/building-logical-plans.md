@@ -207,9 +207,9 @@ MemoryExec: partitions=0, partition_sizes=[]
 ## Table Sources
 
 The previous examples use a [LogicalTableSource], which is used for tests and documentation in DataFusion, and is also
-suitable if you are using DataFusion to build logical plans but do not use DataFusion's physical planner. 
+suitable if you are using DataFusion to build logical plans but do not use DataFusion's physical planner.
 
-However, it is more common to use a [TableProvider]. To get a  [TableSource] from a 
+However, it is more common to use a [TableProvider]. To get a [TableSource] from a
 [TableProvider], use [provider_as_source] or [DefaultTableSource].
 
 [query planning and execution overview]: https://docs.rs/datafusion/latest/datafusion/index.html#query-planning-and-execution-overview
