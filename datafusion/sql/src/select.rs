@@ -36,8 +36,7 @@ use datafusion_expr::expr_rewriter::{
 };
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::utils::{
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_column_exprs,
-    find_window_exprs,
+    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
@@ -756,6 +755,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         check_columns_satisfy_exprs(
             &column_exprs_post_aggr,
             &select_exprs_post_aggr,
+            input,
             "Projection references non-aggregate values",
         )?;
 
@@ -768,25 +768,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
                 &[having_expr_post_aggr.clone()],
+                input,
                 "HAVING clause references non-aggregate values",
             )?;
-
-            // If the select items only contain scalar expressions, we don't need to check
-            // the column used by the HAVING clause.
-            //
-            // For example, the following query is valid:
-            // SELECT 1 FROM t1 HAVING MAX(t1.v1) = 3;
-            if !check_contain_scalar_only(&select_exprs_post_aggr) {
-                // the column used by the HAVING clause must appear in the GROUP BY clause or
-                // must be part of an aggregate function.
-                let having_columns = find_column_exprs(&[having_expr.clone()]);
-                check_columns_satisfy_exprs(
-                    &column_exprs_post_aggr,
-                    &having_columns,
-                    "HAVING clause references non-aggregate values",
-                )?;
-            }
-
             Some(having_expr_post_aggr)
         } else {
             None

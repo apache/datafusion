@@ -5647,7 +5647,14 @@ statement ok
 create table having_test(v1 int, v2 int)
 
 statement ok
+create table join_table(v1 int, v2 int)
+
+statement ok
 insert into having_test values (1, 2), (2, 3), (3, 4)
+
+statement ok
+insert into join_table values (1, 2), (2, 3), (3, 4)
+
 
 query II
 select * from having_test group by v1, v2 having max(v1) = 3
@@ -5674,8 +5681,37 @@ physical_plan
 09)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
-query error DataFusion error: Error during planning: HAVING clause references non-aggregate values: Expression having_test\.v1 could not be resolved from available columns: max\(having_test\.v1\)
+query error DataFusion error: Error during planning: Projection references non-aggregate values: Wildcard column having_test\.v1 could not be resolved from available columns: max\(having_test\.v1\)
 select * from having_test having max(v1) = 3
+
+query I
+select max(v1) from having_test having max(v1) = 3
+----
+3
+
+query I
+select max(v1), * exclude (v1, v2) from having_test having max(v1) = 3
+----
+3
+
+# because v1, v2 is not in the group by clause, the sql is invalid
+query III
+select max(v1), * replace ('v1' as v3) from having_test group by v1, v2 having max(v1) = 3
+----
+3 3 4
+
+query III
+select max(v1), t.* from having_test t group by v1, v2 having max(v1) = 3
+----
+3 3 4
+
+query error DataFusion error: Error during planning: Projection references non-aggregate values: Wildcard column j\.v1 could not be resolved from available columns: t\.v1, t\.v2, max\(t\.v1\)
+select max(t.v1), j.* from having_test t join join_table j on t.v1 = j.v1 group by t.v1, t.v2 having max(t.v1) = 3
+
+query III
+select max(t.v1), j.* from having_test t join join_table j on t.v1 = j.v1 group by j.v1, j.v2 having max(t.v1) = 3
+----
+3 3 4
 
 # If the select items only contain scalar expressions, the having clause is valid.
 query P
@@ -5687,8 +5723,7 @@ query I
 select 0 from having_test having max(v1) = 4
 ----
 
-# because v2 is not in the group by clause, the sql is invalid
-query error
+query error DataFusion error: Error during planning: Projection references non-aggregate values: Wildcard column having_test\.v2 could not be resolved from available columns: having_test\.v1, max\(having_test\.v1\)
 select * from having_test group by v1 having max(v1) = 3
 
 statement ok
