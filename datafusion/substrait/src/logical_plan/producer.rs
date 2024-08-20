@@ -53,10 +53,11 @@ use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Opera
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
+use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
-    user_defined, IntervalDayToSecond, IntervalYearToMonth, List, Map, PrecisionTimestamp,
-    Struct, UserDefined,
+    user_defined, IntervalDayToSecond, IntervalYearToMonth, List, Map,
+    PrecisionTimestamp, Struct, UserDefined,
 };
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
@@ -656,8 +657,8 @@ fn to_substrait_jointype(join_type: JoinType) -> join_rel::JoinType {
         JoinType::Left => join_rel::JoinType::Left,
         JoinType::Right => join_rel::JoinType::Right,
         JoinType::Full => join_rel::JoinType::Outer,
-        JoinType::LeftAnti => join_rel::JoinType::Anti,
-        JoinType::LeftSemi => join_rel::JoinType::Semi,
+        JoinType::LeftAnti => join_rel::JoinType::LeftAnti,
+        JoinType::LeftSemi => join_rel::JoinType::LeftSemi,
         JoinType::RightAnti | JoinType::RightSemi => unimplemented!(),
     }
 }
@@ -1424,6 +1425,7 @@ fn to_substrait_type(
                     kind: Some(r#type::Kind::IntervalDay(r#type::IntervalDay {
                         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                         nullability,
+                        precision: Some(3), // DayTime precision is always milliseconds
                     })),
                 }),
                 IntervalUnit::MonthDayNano => {
@@ -1810,28 +1812,28 @@ fn to_substrait_literal(
         ScalarValue::TimestampSecond(Some(t), None) => (
             LiteralType::PrecisionTimestamp(PrecisionTimestamp {
                 precision: 0,
-                value: *t as u64,
+                value: *t,
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
         ScalarValue::TimestampMillisecond(Some(t), None) => (
             LiteralType::PrecisionTimestamp(PrecisionTimestamp {
                 precision: 3,
-                value: *t as u64,
+                value: *t,
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
         ScalarValue::TimestampMicrosecond(Some(t), None) => (
             LiteralType::PrecisionTimestamp(PrecisionTimestamp {
                 precision: 6,
-                value: *t as u64,
+                value: *t,
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
         ScalarValue::TimestampNanosecond(Some(t), None) => (
             LiteralType::PrecisionTimestamp(PrecisionTimestamp {
                 precision: 9,
-                value: *t as u64,
+                value: *t,
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
@@ -1841,28 +1843,28 @@ fn to_substrait_literal(
         ScalarValue::TimestampSecond(Some(t), Some(_)) => (
             LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
                 precision: 0,
-                value: *t as u64,
+                value: *t,
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
         ScalarValue::TimestampMillisecond(Some(t), Some(_)) => (
             LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
                 precision: 3,
-                value: *t as u64,
+                value: *t,
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
         ScalarValue::TimestampMicrosecond(Some(t), Some(_)) => (
             LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
                 precision: 6,
-                value: *t as u64,
+                value: *t,
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
         ScalarValue::TimestampNanosecond(Some(t), Some(_)) => (
             LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
                 precision: 9,
-                value: *t as u64,
+                value: *t,
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
@@ -1899,7 +1901,8 @@ fn to_substrait_literal(
             LiteralType::IntervalDayToSecond(IntervalDayToSecond {
                 days: i.days,
                 seconds: i.milliseconds / 1000,
-                microseconds: (i.milliseconds % 1000) * 1000,
+                subseconds: (i.milliseconds % 1000) as i64,
+                precision_mode: Some(PrecisionMode::Precision(3)), // 3 for milliseconds
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),

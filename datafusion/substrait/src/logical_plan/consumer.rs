@@ -69,6 +69,7 @@ use datafusion::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
+use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::literal::{
     IntervalDayToSecond, IntervalYearToMonth, UserDefined,
@@ -884,8 +885,8 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::Left => Ok(JoinType::Left),
             join_rel::JoinType::Right => Ok(JoinType::Right),
             join_rel::JoinType::Outer => Ok(JoinType::Full),
-            join_rel::JoinType::Anti => Ok(JoinType::LeftAnti),
-            join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
+            join_rel::JoinType::LeftAnti => Ok(JoinType::LeftAnti),
+            join_rel::JoinType::LeftSemi => Ok(JoinType::LeftSemi),
             _ => plan_err!("unsupported join type {substrait_join_type:?}"),
         }
     } else {
@@ -1500,10 +1501,10 @@ fn from_substrait_type(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
-            r#type::Kind::IntervalYear(i) => {
+            r#type::Kind::IntervalYear(_) => {
                 Ok(DataType::Interval(IntervalUnit::YearMonth))
             }
-            r#type::Kind::IntervalDay(i) => Ok(DataType::Interval(IntervalUnit::DayTime)),
+            r#type::Kind::IntervalDay(_) => Ok(DataType::Interval(IntervalUnit::DayTime)),
             r#type::Kind::UserDefined(u) => {
                 if let Some(name) = extensions.types.get(&u.type_reference) {
                     match name.as_ref() {
@@ -1721,10 +1722,10 @@ fn from_substrait_literal(
             }
         }
         Some(LiteralType::PrecisionTimestamp(pt)) => match pt.precision {
-            0 => ScalarValue::TimestampSecond(Some(pt.value as i64), None),
-            3 => ScalarValue::TimestampMillisecond(Some(pt.value as i64), None),
-            6 => ScalarValue::TimestampMicrosecond(Some(pt.value as i64), None),
-            9 => ScalarValue::TimestampNanosecond(Some(pt.value as i64), None),
+            0 => ScalarValue::TimestampSecond(Some(pt.value), None),
+            3 => ScalarValue::TimestampMillisecond(Some(pt.value), None),
+            6 => ScalarValue::TimestampMicrosecond(Some(pt.value), None),
+            9 => ScalarValue::TimestampNanosecond(Some(pt.value), None),
             p => {
                 return not_impl_err!(
                     "Unsupported Substrait precision {p} for PrecisionTimestamp"
@@ -1733,19 +1734,19 @@ fn from_substrait_literal(
         },
         Some(LiteralType::PrecisionTimestampTz(pt)) => match pt.precision {
             0 => ScalarValue::TimestampSecond(
-                Some(pt.value as i64),
+                Some(pt.value),
                 Some(DEFAULT_TIMEZONE.into()),
             ),
             3 => ScalarValue::TimestampMillisecond(
-                Some(pt.value as i64),
+                Some(pt.value),
                 Some(DEFAULT_TIMEZONE.into()),
             ),
             6 => ScalarValue::TimestampMicrosecond(
-                Some(pt.value as i64),
+                Some(pt.value),
                 Some(DEFAULT_TIMEZONE.into()),
             ),
             9 => ScalarValue::TimestampNanosecond(
-                Some(pt.value as i64),
+                Some(pt.value),
                 Some(DEFAULT_TIMEZONE.into()),
             ),
             p => {
@@ -1942,10 +1943,24 @@ fn from_substrait_literal(
         Some(LiteralType::IntervalDayToSecond(IntervalDayToSecond {
             days,
             seconds,
-            microseconds,
+            subseconds,
+            precision_mode,
         })) => {
-            // DF only supports millisecond precision, so we lose the micros here
-            ScalarValue::new_interval_dt(*days, (seconds * 1000) + (microseconds / 1000))
+            // DF only supports millisecond precision, so for any more granular type we lose precision
+            let milliseconds = match precision_mode {
+                Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
+                Some(PrecisionMode::Precision(0)) => *subseconds as i32 * 1000,
+                Some(PrecisionMode::Precision(3)) => *subseconds as i32,
+                Some(PrecisionMode::Precision(6)) => (subseconds / 1000) as i32,
+                Some(PrecisionMode::Precision(9)) => (subseconds / 1000 / 1000) as i32,
+                _ => {
+                    return not_impl_err!(
+                        "Unsupported Substrait interval day to second precision mode"
+                    )
+                }
+            };
+
+            ScalarValue::new_interval_dt(*days, (seconds * 1000) + milliseconds)
         }
         Some(LiteralType::IntervalYearToMonth(IntervalYearToMonth { years, months })) => {
             ScalarValue::new_interval_ym(*years, *months)
