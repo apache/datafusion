@@ -38,9 +38,6 @@ use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::ipc::reader::FileReader;
 use arrow_array::types::UInt64Type;
-use futures::{Stream, StreamExt};
-use hashbrown::HashSet;
-
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType,
     Result,
@@ -51,6 +48,9 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
+use futures::{Stream, StreamExt};
+use hashbrown::HashSet;
+use itertools::Itertools;
 
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
@@ -730,6 +730,8 @@ impl Stream for SMJStream {
                         match self.current_ordering {
                             Ordering::Less | Ordering::Equal => {
                                 if !streamed_exhausted {
+                                    //dbg!(streamed_exhausted);
+                                    //dbg!(buffered_exhausted);
                                     self.streamed_joined = false;
                                     self.streamed_state = StreamedState::Init;
                                 }
@@ -777,7 +779,9 @@ impl Stream for SMJStream {
                     self.join_partial()?;
 
                     if self.output_size < self.batch_size {
+                        //println!("scanning_finished:{} output_size:{} batch_size:{}", self.buffered_data.scanning_finished(), self.output_size, self.batch_size);
                         if self.buffered_data.scanning_finished() {
+                            //dbg!("reset");
                             self.buffered_data.scanning_reset();
                             self.state = SMJState::Init;
                         }
@@ -854,14 +858,17 @@ impl SMJStream {
     /// Poll next streamed row
     fn poll_streamed_row(&mut self, cx: &mut Context) -> Poll<Option<Result<()>>> {
         loop {
+            //dbg!(&self.streamed_state);
             match &self.streamed_state {
                 StreamedState::Init => {
                     if self.streamed_batch.idx + 1 < self.streamed_batch.batch.num_rows()
                     {
                         self.streamed_batch.idx += 1;
+                        //dbg!("inc streamed_batch.idx");
                         self.streamed_state = StreamedState::Ready;
                         return Poll::Ready(Some(Ok(())));
                     } else {
+                        //dbg!("streamed_batch polling");
                         self.streamed_state = StreamedState::Polling;
                     }
                 }
@@ -987,6 +994,9 @@ impl SMJStream {
                     Poll::Ready(Some(batch)) => {
                         self.join_metrics.input_batches.add(1);
                         self.join_metrics.input_rows.add(batch.num_rows());
+                        //self.buffered_data.current_scanning_batch = 0;
+                        //dbg!("Polling First");
+                        //dbg!(&batch);
 
                         if batch.num_rows() > 0 {
                             let buffered_batch =
@@ -1028,6 +1038,9 @@ impl SMJStream {
                                 // Polling batches coming concurrently as multiple partitions
                                 self.join_metrics.input_batches.add(1);
                                 self.join_metrics.input_rows.add(batch.num_rows());
+                                //dbg!("Polling Rest");
+                                //dbg!(&batch);
+
                                 if batch.num_rows() > 0 {
                                     let buffered_batch = BufferedBatch::new(
                                         batch,
@@ -1059,19 +1072,20 @@ impl SMJStream {
             return Ok(Ordering::Less);
         }
 
-        return compare_join_arrays(
+        compare_join_arrays(
             &self.streamed_batch.join_arrays,
             self.streamed_batch.idx,
             &self.buffered_data.head_batch().join_arrays,
             self.buffered_data.head_batch().range.start,
             &self.sort_options,
             self.null_equals_null,
-        );
+        )
     }
 
     /// Produce join and fill output buffer until reaching target batch size
     /// or the join is finished
     fn join_partial(&mut self) -> Result<()> {
+        //dbg!("join_partial()");
         // Whether to join streamed rows
         let mut join_streamed = false;
         // Whether to join buffered rows
@@ -1135,6 +1149,8 @@ impl SMJStream {
         }
         if !join_streamed && !join_buffered {
             // no joined data
+            //dbg!("no joined data");
+            //self.buffered_data.current_scanning_batch = 0;
             self.buffered_data.scanning_finish();
             return Ok(());
         }
@@ -1145,8 +1161,14 @@ impl SMJStream {
                 && self.output_size < self.batch_size
             {
                 let scanning_idx = self.buffered_data.scanning_idx();
+                //dbg!(&scanning_idx);
+                //dbg!(self.buffered_data.scanning_batch_idx);
+                //dbg!(self.buffered_data.batches.len());
+                //dbg!(self.buffered_data.scanning_batch());
+                //dbg!(join_streamed);
                 if join_streamed {
                     // Join streamed row and buffered row
+                    //dbg!("append_output_pair()");
                     self.streamed_batch.append_output_pair(
                         Some(self.buffered_data.scanning_batch_idx),
                         Some(scanning_idx),
@@ -1251,7 +1273,21 @@ impl SMJStream {
     // Produces and stages record batch for all output indices found
     // for current streamed batch and clears staged output indices.
     fn freeze_streamed(&mut self) -> Result<()> {
+        //println!("\nfreeze_streamed()");
+
+        // Sometimes buffered batches assigned to the stream row with different join key
+        let matched_batches = self
+            .buffered_data
+            .batches
+            .iter()
+            .enumerate()
+            .filter(|(i, b)| {
+                (b.range.start > 0 && b.range.end > 0) || (b.range.start == 0 && i == &0)
+            })
+            .count();
+
         for chunk in self.streamed_batch.output_indices.iter_mut() {
+            //dbg!("chunk");
             // The row indices of joined streamed batch
             let streamed_indices = chunk.streamed_indices.finish();
 
@@ -1318,7 +1354,7 @@ impl SMJStream {
             };
 
             let columns = if matches!(self.join_type, JoinType::Right) {
-                buffered_columns.extend(streamed_columns.clone());
+                buffered_columns.extend(streamed_columns);
                 buffered_columns
             } else {
                 streamed_columns.extend(buffered_columns);
@@ -1334,7 +1370,7 @@ impl SMJStream {
                     // Construct batch with only filter columns
                     let filter_batch = RecordBatch::try_new(
                         Arc::new(f.schema().clone()),
-                        filter_columns,
+                        filter_columns.clone(),
                     )?;
 
                     let filter_result = f
@@ -1356,15 +1392,81 @@ impl SMJStream {
                         pre_mask.clone()
                     };
 
+                    // Try to calculate if the buffered batch we scan is the last one for specific stream row and join key
+                    // for Batchsize == 1 self.buffered_data.scanning_finished() works well
+                    // For other scenarios its an attempt to figure out there is no more rows matching the same join key
+                    let last_batch = if self.batch_size == 1 {
+                        self.buffered_data.scanning_finished()
+                    } else if matched_batches > 1 {
+                        self.buffered_data.current_scanning_batch >= matched_batches - 1
+                    } else {
+                        self.buffered_data.scanning_offset == 0
+                    };
                     // For certain join types, we need to adjust the initial mask to handle the join filter.
                     let maybe_filtered_join_mask: Option<(BooleanArray, Vec<u64>)> =
                         get_filtered_join_mask(
                             self.join_type,
                             &streamed_indices,
+                            &buffered_indices,
                             &mask,
                             &self.streamed_batch.join_filter_matched_idxs,
-                            &self.buffered_data.scanning_offset,
+                            last_batch,
                         );
+
+                    let a = columns
+                        .get(0)
+                        .unwrap()
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap();
+                    let b = columns
+                        .get(1)
+                        .unwrap()
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap();
+
+                    if a.iter().contains(&Some(95))
+                        && b.iter().contains(&Some(46))
+                        && false
+                    {
+                        println!("++++++++++++++++++++++++ START BATCH SIZE {} ++++++++++++++++++++++++++++++++++", self.batch_size);
+                        dbg!(last_batch);
+                        dbg!(matched_batches);
+                        //dbg!(&columns);
+                        dbg!(&self.streamed_batch.idx);
+                        //dbg!(&self.streamed_batch.batch.num_rows());
+                        //dbg!(&self.streamed_batch.batch);
+                        //dbg!(&columns);
+                        dbg!(&filter_columns);
+                        dbg!(&mask);
+                        dbg!(&maybe_filtered_join_mask);
+                        //dbg!(&pre_mask);
+                        dbg!(&self.buffered_data.scanning_offset);
+                        dbg!(&self.buffered_data.scanning_batch_idx);
+                        dbg!(self.buffered_data.current_scanning_batch);
+
+                        //dbg!(&self.buffered_data.scanning_batch_finished());
+                        //dbg!(&self.buffered_data.scanning_finished());
+                        dbg!(&buffered_indices);
+                        dbg!(&streamed_indices);
+                        //dbg!(&buffered_indices.is_empty());
+                        //dbg!(&buffered_indices.is_nullable());
+                        //dbg!(&self.streamed_batch.join_filter_matched_idxs);
+                        dbg!(&self.streamed_batch.buffered_batch_idx);
+                        dbg!(&self.buffered_data.batches.len());
+                        dbg!(&self.buffered_data.batches);
+                        dbg!(&chunk.buffered_batch_idx);
+                        dbg!(&chunk.streamed_indices.len());
+
+                        dbg!(self.output_size);
+                        //dbg!(&self.buffered_data.scanning_idx());
+                        //self.scanning_batch_idx == self.batches.len()
+                        //dbg!(i);
+                        //dbg!(streamed_output_indices);
+
+                        println!("++++++++++++++++++++++++ END BATCH SIZE {} ++++++++++++++++++++++++++++++++++", self.batch_size);
+                    }
 
                     let mask =
                         if let Some(ref filtered_join_mask) = maybe_filtered_join_mask {
@@ -1400,9 +1502,10 @@ impl SMJStream {
                             // The masking behavior is like LeftAnti join.
                             JoinType::LeftAnti,
                             &streamed_indices,
+                            &buffered_indices,
                             mask,
                             &self.streamed_batch.join_filter_matched_idxs,
-                            &self.buffered_data.scanning_offset,
+                            true,
                         )
                         .unwrap()
                         .0;
@@ -1486,14 +1589,21 @@ impl SMJStream {
             } else {
                 self.output_record_batches.push(output_batch);
             }
+            if self.buffered_data.batches.len() > 1
+                && self.buffered_data.current_scanning_batch < matched_batches - 1
+            {
+                self.buffered_data.current_scanning_batch += 1;
+            } else {
+                self.buffered_data.current_scanning_batch = 0
+            };
         }
-
         self.streamed_batch.output_indices.clear();
 
         Ok(())
     }
 
     fn output_record_batch_and_reset(&mut self) -> Result<RecordBatch> {
+        //dbg!("output_record_batch_and_reset");
         let record_batch = concat_batches(&self.schema, &self.output_record_batches)?;
         self.join_metrics.output_batches.add(1);
         self.join_metrics.output_rows.add(record_batch.num_rows());
@@ -1633,9 +1743,10 @@ fn get_buffered_columns_from_batch(
 fn get_filtered_join_mask(
     join_type: JoinType,
     streamed_indices: &UInt64Array,
+    buffered_indices: &UInt64Array,
     mask: &BooleanArray,
     matched_indices: &HashSet<u64>,
-    scanning_buffered_offset: &usize,
+    last_buffered_batch: bool,
 ) -> Option<(BooleanArray, Vec<u64>)> {
     let mut seen_as_true: bool = false;
     let streamed_indices_length = streamed_indices.len();
@@ -1675,17 +1786,14 @@ fn get_filtered_join_mask(
             }
             Some((corrected_mask.finish(), filter_matched_indices))
         }
-        // LeftAnti semantics: return true if for every x in the collection the join matching filter is false.
+        // LeftAnti semantics: return true if for every element in the collection the join matching filter is false.
         // `filter_matched_indices` needs to be set once per streaming index
         // to prevent duplicates in the output
         JoinType::LeftAnti => {
             // have we seen a filter match for a streaming index before
             for i in 0..streamed_indices_length {
                 let streamed_idx = streamed_indices.value(i);
-                if mask.value(i)
-                    && !seen_as_true
-                    && !matched_indices.contains(&streamed_idx)
-                {
+                if mask.value(i) && !seen_as_true {
                     seen_as_true = true;
                     filter_matched_indices.push(streamed_idx);
                 }
@@ -1695,8 +1803,8 @@ fn get_filtered_join_mask(
                 // - if it is at the end of the all buffered batches for the given streaming index, 0 index comes last
                 if (i < streamed_indices_length - 1
                     && streamed_idx != streamed_indices.value(i + 1))
-                    || (i == streamed_indices_length - 1
-                        && *scanning_buffered_offset == 0)
+                    || (i == streamed_indices_length - 1 && last_buffered_batch)
+                    || buffered_indices.is_null(i)
                 {
                     corrected_mask.append_value(
                         !matched_indices.contains(&streamed_idx) && !seen_as_true,
@@ -1722,6 +1830,8 @@ struct BufferedData {
     pub scanning_batch_idx: usize,
     /// current scanning offset used in join_partial()
     pub scanning_offset: usize,
+    ///
+    pub current_scanning_batch: usize,
 }
 
 impl BufferedData {
@@ -1742,6 +1852,7 @@ impl BufferedData {
     }
 
     pub fn scanning_reset(&mut self) {
+        //dbg!("scanning_reset");
         self.scanning_batch_idx = 0;
         self.scanning_offset = 0;
     }
@@ -1749,6 +1860,7 @@ impl BufferedData {
     pub fn scanning_advance(&mut self) {
         self.scanning_offset += 1;
         while !self.scanning_finished() && self.scanning_batch_finished() {
+            //dbg!("scanning_advance");
             self.scanning_batch_idx += 1;
             self.scanning_offset = 0;
         }
@@ -1775,6 +1887,7 @@ impl BufferedData {
     }
 
     pub fn scanning_finish(&mut self) {
+        //dbg!("scanning_finish");
         self.scanning_batch_idx = self.batches.len();
         self.scanning_offset = 0;
     }
