@@ -26,8 +26,7 @@ pub mod tree_node;
 
 pub use builder::{
     build_join_schema, table_scan, union, wrap_projection_for_join_if_necessary,
-    LogicalPlanBuilder, UNNAMED_TABLE,
-    LogicalTableSource,
+    LogicalPlanBuilder, LogicalTableSource, UNNAMED_TABLE,
 };
 pub use ddl::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
