@@ -351,7 +351,11 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// the arguments
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
-    /// Whether the aggregate function is nullable
+    /// Whether the aggregate function is nullable.
+    ///
+    /// Nullable means that that the function could return `null` for any inputs.
+    /// For example, aggregate functions like `COUNT` always return a non null value
+    /// but others like `MIN` will return `NULL` if there is no non null input.
     fn is_nullable(&self) -> bool {
         true
     }
