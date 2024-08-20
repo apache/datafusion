@@ -635,7 +635,6 @@ impl BinaryExpr {
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            // StringConcat => binary_string_array_op!(left, right, concat_elements), // FIXME: Can we remove binary_string_array_op
             StringConcat => concat_elements(left, right),
             AtArrow | ArrowAt => {
                 unreachable!("ArrowAt and AtArrow should be rewritten to function")
