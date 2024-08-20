@@ -137,15 +137,18 @@ pub fn concat_elements_utf8view(
     left: &StringViewArray,
     right: &StringViewArray,
 ) -> std::result::Result<StringViewArray, ArrowError> {
-    let mut result = StringViewBuilder::new();
-    for (l, r) in left.iter().zip(right.iter()) {
-        match (l, r) {
-            (None, None) => {
-                result.append_null();
-            }
+    let capacity = left
+        .data_buffers()
+        .iter()
+        .zip(right.data_buffers().iter())
+        .map(|(b1, b2)| b1.len() + b2.len())
+        .sum();
+    let mut result = StringViewBuilder::with_capacity(capacity);
+    for (left, right) in left.iter().zip(right.iter()) {
+        match (left, right) {
+            (None, None) => result.append_null(),
             _ => {
-                let concat_val = format!("{}{}", l.unwrap_or(""), r.unwrap_or(""));
-                result.append_value(concat_val);
+                result.append_value(left.unwrap_or("").to_string() + right.unwrap_or(""))
             }
         }
     }
