@@ -449,6 +449,10 @@ where
         opt_filter: Option<&array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
+        if total_num_groups == 0 {
+            return Ok(());
+        }
+
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
@@ -461,43 +465,44 @@ where
             T::default_value(),
         );
 
-        self.null_state.accumulate(
-            group_indices,
-            values,
-            opt_filter,
-            total_num_groups,
-            |group_index, new_value| {
-                let sum = match self.mode {
-                    GroupStatesMode::Flat => self
-                        .sums
-                        .current_mut()
-                        .unwrap()
-                        .get_mut(group_index)
-                        .unwrap(),
-                    GroupStatesMode::Blocked(_) => {
-                        let blocked_index = BlockedGroupIndex::new(group_index);
-                        &mut self.sums[blocked_index.block_id][blocked_index.block_offset]
-                    }
-                };
+        match self.mode {
+            GroupStatesMode::Flat => {
+                let sum_block = self.sums.current_mut().unwrap();
+                let count_block = self.counts.current_mut().unwrap();
 
-                let count = match self.mode {
-                    GroupStatesMode::Flat => self
-                        .counts
-                        .current_mut()
-                        .unwrap()
-                        .get_mut(group_index)
-                        .unwrap(),
-                    GroupStatesMode::Blocked(_) => {
-                        let blocked_index = BlockedGroupIndex::new(group_index);
-                        &mut self.counts[blocked_index.block_id]
-                            [blocked_index.block_offset]
-                    }
-                };
+                self.null_state.accumulate(
+                    group_indices,
+                    values,
+                    opt_filter,
+                    total_num_groups,
+                    |group_index, new_value| {
+                        let sum = sum_block.get_mut(group_index).unwrap();
+                        let count = count_block.get_mut(group_index).unwrap();
 
-                *sum = sum.add_wrapping(new_value);
-                *count += 1;
-            },
-        );
+                        *sum = sum.add_wrapping(new_value);
+                        *count += 1;
+                    },
+                );
+            }
+            GroupStatesMode::Blocked(_) => {
+                self.null_state.accumulate(
+                    group_indices,
+                    values,
+                    opt_filter,
+                    total_num_groups,
+                    |group_index, new_value| {
+                        let blocked_index = BlockedGroupIndex::new(group_index);
+                        let sum = &mut self.sums[blocked_index.block_id]
+                            [blocked_index.block_offset];
+                        let count = &mut self.counts[blocked_index.block_id]
+                            [blocked_index.block_offset];
+
+                        *sum = sum.add_wrapping(new_value);
+                        *count += 1;
+                    },
+                );
+            }
+        }
 
         Ok(())
     }
@@ -563,64 +568,81 @@ where
         opt_filter: Option<&array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
+        if total_num_groups == 0 {
+            return Ok(());
+        }
+
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
         // first batch is counts, second is partial sums
         let partial_counts = values[0].as_primitive::<UInt64Type>();
         let partial_sums = values[1].as_primitive::<T>();
 
-        // update counts with partial counts
         ensure_enough_room_for_values(&mut self.counts, self.mode, total_num_groups, 0);
-        self.null_state.accumulate(
-            group_indices,
-            partial_counts,
-            opt_filter,
-            total_num_groups,
-            |group_index, partial_count| {
-                let count = match self.mode {
-                    GroupStatesMode::Flat => self
-                        .counts
-                        .current_mut()
-                        .unwrap()
-                        .get_mut(group_index)
-                        .unwrap(),
-                    GroupStatesMode::Blocked(_) => {
-                        let blocked_index = BlockedGroupIndex::new(group_index);
-                        &mut self.counts[blocked_index.block_id]
-                            [blocked_index.block_offset]
-                    }
-                };
-                *count += partial_count;
-            },
-        );
-
-        // update sums
         ensure_enough_room_for_values(
             &mut self.sums,
             self.mode,
             total_num_groups,
             T::default_value(),
         );
-        self.null_state.accumulate(
-            group_indices,
-            partial_sums,
-            opt_filter,
-            total_num_groups,
-            |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
-                let sum = match self.mode {
-                    GroupStatesMode::Flat => self
-                        .sums
-                        .current_mut()
-                        .unwrap()
-                        .get_mut(group_index)
-                        .unwrap(),
-                    GroupStatesMode::Blocked(_) => {
+
+        match self.mode {
+            GroupStatesMode::Flat => {
+                // update counts with partial counts
+                let count_block = self.counts.current_mut().unwrap();
+                self.null_state.accumulate(
+                    group_indices,
+                    partial_counts,
+                    opt_filter,
+                    total_num_groups,
+                    |group_index, partial_count| {
+                        let count = count_block.get_mut(group_index).unwrap();
+                        *count += partial_count;
+                    },
+                );
+
+                // update sums
+                let sum_block = self.sums.current_mut().unwrap();
+                self.null_state.accumulate(
+                    group_indices,
+                    partial_sums,
+                    opt_filter,
+                    total_num_groups,
+                    |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
+                        let sum = sum_block.get_mut(group_index).unwrap();
+                        *sum = sum.add_wrapping(new_value);
+                    },
+                );
+            }
+            GroupStatesMode::Blocked(_) => {
+                // update counts with partial counts
+                self.null_state.accumulate(
+                    group_indices,
+                    partial_counts,
+                    opt_filter,
+                    total_num_groups,
+                    |group_index, partial_count| {
                         let blocked_index = BlockedGroupIndex::new(group_index);
-                        &mut self.sums[blocked_index.block_id][blocked_index.block_offset]
-                    }
-                };
-                *sum = sum.add_wrapping(new_value);
-            },
-        );
+                        let count = &mut self.counts[blocked_index.block_id]
+                            [blocked_index.block_offset];
+                        *count += partial_count;
+                    },
+                );
+
+                // update sums
+                self.null_state.accumulate(
+                    group_indices,
+                    partial_sums,
+                    opt_filter,
+                    total_num_groups,
+                    |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
+                        let blocked_index = BlockedGroupIndex::new(group_index);
+                        let sum = &mut self.sums[blocked_index.block_id]
+                            [blocked_index.block_offset];
+                        *sum = sum.add_wrapping(new_value);
+                    },
+                );
+            }
+        }
 
         Ok(())
     }

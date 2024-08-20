@@ -98,6 +98,10 @@ where
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
+        if total_num_groups == 0 {
+            return Ok(());
+        }
+
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
@@ -110,28 +114,33 @@ where
         );
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
-        self.null_state.accumulate(
-            group_indices,
-            values,
-            opt_filter,
-            total_num_groups,
-            |group_index, new_value| {
-                let value = match self.mode {
-                    GroupStatesMode::Flat => self
-                        .values_blocks
-                        .current_mut()
-                        .unwrap()
-                        .get_mut(group_index)
-                        .unwrap(),
-                    GroupStatesMode::Blocked(_) => {
-                        let blocked_index = BlockedGroupIndex::new(group_index);
-                        &mut self.values_blocks[blocked_index.block_id]
-                            [blocked_index.block_offset]
-                    }
-                };
-                (self.prim_fn)(value, new_value);
-            },
-        );
+        match self.mode {
+            GroupStatesMode::Flat => {
+                let block = self.values_blocks.current_mut().unwrap();
+                self.null_state.accumulate(
+                    group_indices,
+                    values,
+                    opt_filter,
+                    total_num_groups,
+                    |group_index, new_value| {
+                        let value = block.get_mut(group_index).unwrap();
+                        (self.prim_fn)(value, new_value);
+                    },
+                );
+            }
+            GroupStatesMode::Blocked(_) => self.null_state.accumulate(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                |group_index, new_value| {
+                    let blocked_index = BlockedGroupIndex::new(group_index);
+                    let value = &mut self.values_blocks[blocked_index.block_id]
+                        [blocked_index.block_offset];
+                    (self.prim_fn)(value, new_value);
+                },
+            ),
+        }
 
         Ok(())
     }

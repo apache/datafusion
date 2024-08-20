@@ -401,13 +401,16 @@ impl BlockedNullState {
         values: &PrimitiveArray<T>,
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
-        mut value_fn: F,
+        value_fn: F,
     ) where
         T: ArrowPrimitiveType + Send,
         F: FnMut(usize, T::Native) + Send,
     {
-        let data: &[T::Native] = values.values();
-        assert_eq!(data.len(), group_indices.len());
+        if total_num_groups == 0 {
+            return;
+        }
+
+        assert_eq!(values.values().len(), group_indices.len());
 
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
@@ -417,158 +420,33 @@ impl BlockedNullState {
             total_num_groups,
             false,
         );
+
         let seen_values_blocks = &mut self.seen_values_blocks;
 
-        match (values.null_count() > 0, opt_filter) {
-            // no nulls, no filter,
-            (false, None) => {
-                let iter = group_indices.iter().zip(data.iter());
-                for (&group_index, &new_value) in iter {
-                    match self.mode {
-                        GroupStatesMode::Flat => seen_values_blocks
-                            .current_mut()
-                            .unwrap()
-                            .set_bit(group_index, true),
-                        GroupStatesMode::Blocked(_) => {
-                            let blocked_index = BlockedGroupIndex::new(group_index);
-                            // dbg!(seen_values_blocks.len());
-                            // dbg!(blocked_index.block_id);
-                            // dbg!(blk_size);
-                            seen_values_blocks[blocked_index.block_id]
-                                .set_bit(blocked_index.block_offset, true);
-                        }
-                    }
-                    value_fn(group_index, new_value);
-                }
+        match self.mode {
+            GroupStatesMode::Flat => {
+                let block = seen_values_blocks.current_mut().unwrap();
+                accumulate_internal(
+                    group_indices,
+                    values,
+                    opt_filter,
+                    value_fn,
+                    |group_index| {
+                        block.set_bit(group_index, true);
+                    },
+                )
             }
-            // nulls, no filter
-            (true, None) => {
-                let nulls = values.nulls().unwrap();
-                // This is based on (ahem, COPY/PASTE) arrow::compute::aggregate::sum
-                // iterate over in chunks of 64 bits for more efficient null checking
-                let group_indices_chunks = group_indices.chunks_exact(64);
-                let data_chunks = data.chunks_exact(64);
-                let bit_chunks = nulls.inner().bit_chunks();
-
-                let group_indices_remainder = group_indices_chunks.remainder();
-                let data_remainder = data_chunks.remainder();
-
-                group_indices_chunks
-                    .zip(data_chunks)
-                    .zip(bit_chunks.iter())
-                    .for_each(|((group_index_chunk, data_chunk), mask)| {
-                        // index_mask has value 1 << i in the loop
-                        let mut index_mask = 1;
-                        group_index_chunk.iter().zip(data_chunk.iter()).for_each(
-                            |(&group_index, &new_value)| {
-                                // valid bit was set, real value
-                                let is_valid = (mask & index_mask) != 0;
-                                if is_valid {
-                                    match self.mode {
-                                        GroupStatesMode::Flat => seen_values_blocks
-                                            .current_mut()
-                                            .unwrap()
-                                            .set_bit(group_index, true),
-                                        GroupStatesMode::Blocked(_) => {
-                                            let blocked_index =
-                                                BlockedGroupIndex::new(group_index);
-                                            seen_values_blocks[blocked_index.block_id]
-                                                .set_bit(
-                                                    blocked_index.block_offset,
-                                                    true,
-                                                );
-                                        }
-                                    }
-                                    value_fn(group_index, new_value);
-                                }
-                                index_mask <<= 1;
-                            },
-                        )
-                    });
-
-                // handle any remaining bits (after the initial 64)
-                let remainder_bits = bit_chunks.remainder_bits();
-                group_indices_remainder
-                    .iter()
-                    .zip(data_remainder.iter())
-                    .enumerate()
-                    .for_each(|(i, (&group_index, &new_value))| {
-                        let is_valid = remainder_bits & (1 << i) != 0;
-                        if is_valid {
-                            match self.mode {
-                                GroupStatesMode::Flat => seen_values_blocks
-                                    .current_mut()
-                                    .unwrap()
-                                    .set_bit(group_index, true),
-                                GroupStatesMode::Blocked(_) => {
-                                    let blocked_index =
-                                        BlockedGroupIndex::new(group_index);
-                                    seen_values_blocks[blocked_index.block_id]
-                                        .set_bit(blocked_index.block_offset, true);
-                                }
-                            }
-                            value_fn(group_index, new_value);
-                        }
-                    });
-            }
-            // no nulls, but a filter
-            (false, Some(filter)) => {
-                assert_eq!(filter.len(), group_indices.len());
-                // The performance with a filter could be improved by
-                // iterating over the filter in chunks, rather than a single
-                // iterator. TODO file a ticket
-                group_indices
-                    .iter()
-                    .zip(data.iter())
-                    .zip(filter.iter())
-                    .for_each(|((&group_index, &new_value), filter_value)| {
-                        if let Some(true) = filter_value {
-                            match self.mode {
-                                GroupStatesMode::Flat => seen_values_blocks
-                                    .current_mut()
-                                    .unwrap()
-                                    .set_bit(group_index, true),
-                                GroupStatesMode::Blocked(_) => {
-                                    let blocked_index =
-                                        BlockedGroupIndex::new(group_index);
-                                    seen_values_blocks[blocked_index.block_id]
-                                        .set_bit(blocked_index.block_offset, true);
-                                }
-                            }
-                            value_fn(group_index, new_value);
-                        }
-                    })
-            }
-            // both null values and filters
-            (true, Some(filter)) => {
-                assert_eq!(filter.len(), group_indices.len());
-                // The performance with a filter could be improved by
-                // iterating over the filter in chunks, rather than using
-                // iterators. TODO file a ticket
-                filter
-                    .iter()
-                    .zip(group_indices.iter())
-                    .zip(values.iter())
-                    .for_each(|((filter_value, &group_index), new_value)| {
-                        if let Some(true) = filter_value {
-                            if let Some(new_value) = new_value {
-                                match self.mode {
-                                    GroupStatesMode::Flat => seen_values_blocks
-                                        .current_mut()
-                                        .unwrap()
-                                        .set_bit(group_index, true),
-                                    GroupStatesMode::Blocked(_) => {
-                                        let blocked_index =
-                                            BlockedGroupIndex::new(group_index);
-                                        seen_values_blocks[blocked_index.block_id]
-                                            .set_bit(blocked_index.block_offset, true);
-                                    }
-                                }
-                                value_fn(group_index, new_value)
-                            }
-                        }
-                    })
-            }
+            GroupStatesMode::Blocked(_) => accumulate_internal(
+                group_indices,
+                values,
+                opt_filter,
+                value_fn,
+                |group_index| {
+                    let blocked_index = BlockedGroupIndex::new(group_index);
+                    seen_values_blocks[blocked_index.block_id]
+                        .set_bit(blocked_index.block_offset, true);
+                },
+            ),
         }
     }
 
@@ -695,6 +573,112 @@ pub fn accumulate_indices<F>(
                 .for_each(|((filter_value, &group_index), is_valid)| {
                     if let (Some(true), true) = (filter_value, is_valid) {
                         index_fn(group_index)
+                    }
+                })
+        }
+    }
+}
+
+fn accumulate_internal<T, F1, F2>(
+    group_indices: &[usize],
+    values: &PrimitiveArray<T>,
+    opt_filter: Option<&BooleanArray>,
+    mut value_fn: F1,
+    mut set_valid_fn: F2,
+) where
+    T: ArrowPrimitiveType + Send,
+    F1: FnMut(usize, T::Native) + Send,
+    F2: FnMut(usize) + Send,
+{
+    let data: &[T::Native] = values.values();
+
+    match (values.null_count() > 0, opt_filter) {
+        // no nulls, no filter,
+        (false, None) => {
+            let iter = group_indices.iter().zip(data.iter());
+            for (&group_index, &new_value) in iter {
+                set_valid_fn(group_index);
+                value_fn(group_index, new_value);
+            }
+        }
+        // nulls, no filter
+        (true, None) => {
+            let nulls = values.nulls().unwrap();
+            // This is based on (ahem, COPY/PASTE) arrow::compute::aggregate::sum
+            // iterate over in chunks of 64 bits for more efficient null checking
+            let group_indices_chunks = group_indices.chunks_exact(64);
+            let data_chunks = data.chunks_exact(64);
+            let bit_chunks = nulls.inner().bit_chunks();
+
+            let group_indices_remainder = group_indices_chunks.remainder();
+            let data_remainder = data_chunks.remainder();
+
+            group_indices_chunks
+                .zip(data_chunks)
+                .zip(bit_chunks.iter())
+                .for_each(|((group_index_chunk, data_chunk), mask)| {
+                    // index_mask has value 1 << i in the loop
+                    let mut index_mask = 1;
+                    group_index_chunk.iter().zip(data_chunk.iter()).for_each(
+                        |(&group_index, &new_value)| {
+                            // valid bit was set, real value
+                            let is_valid = (mask & index_mask) != 0;
+                            if is_valid {
+                                set_valid_fn(group_index);
+                                value_fn(group_index, new_value);
+                            }
+                            index_mask <<= 1;
+                        },
+                    )
+                });
+
+            // handle any remaining bits (after the initial 64)
+            let remainder_bits = bit_chunks.remainder_bits();
+            group_indices_remainder
+                .iter()
+                .zip(data_remainder.iter())
+                .enumerate()
+                .for_each(|(i, (&group_index, &new_value))| {
+                    let is_valid = remainder_bits & (1 << i) != 0;
+                    if is_valid {
+                        set_valid_fn(group_index);
+                        value_fn(group_index, new_value);
+                    }
+                });
+        }
+        // no nulls, but a filter
+        (false, Some(filter)) => {
+            assert_eq!(filter.len(), group_indices.len());
+            // The performance with a filter could be improved by
+            // iterating over the filter in chunks, rather than a single
+            // iterator. TODO file a ticket
+            group_indices
+                .iter()
+                .zip(data.iter())
+                .zip(filter.iter())
+                .for_each(|((&group_index, &new_value), filter_value)| {
+                    if let Some(true) = filter_value {
+                        set_valid_fn(group_index);
+                        value_fn(group_index, new_value);
+                    }
+                })
+        }
+        // both null values and filters
+        (true, Some(filter)) => {
+            assert_eq!(filter.len(), group_indices.len());
+            // The performance with a filter could be improved by
+            // iterating over the filter in chunks, rather than using
+            // iterators. TODO file a ticket
+            filter
+                .iter()
+                .zip(group_indices.iter())
+                .zip(values.iter())
+                .for_each(|((filter_value, &group_index), new_value)| {
+                    if let Some(true) = filter_value {
+                        if let Some(new_value) = new_value {
+                            set_valid_fn(group_index);
+                            value_fn(group_index, new_value)
+                        }
                     }
                 })
         }
