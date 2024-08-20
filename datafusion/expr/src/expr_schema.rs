@@ -22,7 +22,7 @@ use crate::expr::{
 };
 use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::{
-    data_types_with_aggregate_udf, data_types_with_scalar_udf,
+    data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
 };
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
@@ -189,6 +189,21 @@ impl ExprSchemable for Expr {
                                 )
                             )
                         })?;
+                        Ok(fun.return_type(&new_types, &nullability)?)
+                    }
+                    WindowFunctionDefinition::WindowUDF(udwf) => {
+                        let new_types = data_types_with_window_udf(&data_types, udwf)
+                            .map_err(|err| {
+                                plan_datafusion_err!(
+                                    "{} {}",
+                                    err,
+                                    utils::generate_signature_error_msg(
+                                        fun.name(),
+                                        fun.signature().clone(),
+                                        &data_types
+                                    )
+                                )
+                            })?;
                         Ok(fun.return_type(&new_types, &nullability)?)
                     }
                     _ => fun.return_type(&data_types, &nullability),

@@ -49,6 +49,51 @@ true
 true
 
 query B
+SELECT str ~ NULL FROM t;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query B
+select str ~ right('foo', NULL) FROM t;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query B
+select right('foo', NULL) !~ str FROM t;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query B
 SELECT regexp_like('foobarbequebaz', '');
 ----
 true
@@ -395,6 +440,25 @@ SELECT 'foo\nbar\nbaz' LIKE '%bar%';
 ----
 true
 
+query B
+SELECT NULL LIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL iLIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL not LIKE NULL;
+----
+NULL
+
+query B
+SELECT NULL not iLIKE NULL;
+----
+NULL
 
 # regexp_count tests
 

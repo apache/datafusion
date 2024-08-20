@@ -54,7 +54,7 @@ use datafusion_expr::EmitTo;
 /// `0..12` can be emitted. Note that `13` can not yet be emitted as
 /// there may be more values in the next batch with the same group_id.
 #[derive(Debug)]
-pub(crate) struct GroupOrderingFull {
+pub struct GroupOrderingFull {
     state: State,
 }
 
@@ -140,5 +140,11 @@ impl GroupOrderingFull {
 
     pub(crate) fn size(&self) -> usize {
         std::mem::size_of::<Self>()
+    }
+}
+
+impl Default for GroupOrderingFull {
+    fn default() -> Self {
+        Self::new()
     }
 }

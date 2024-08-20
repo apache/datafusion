@@ -198,8 +198,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match statement {
             Statement::ExplainTable {
                 describe_alias: DescribeAlias::Describe, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
-                hive_format: _,
                 table_name,
+                ..
             } => self.describe_table_to_plan(table_name),
             Statement::Explain {
                 verbose,

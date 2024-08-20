@@ -16,6 +16,22 @@
 # under the License.
 
 statement ok
+CREATE TABLE map_array_table_1
+AS VALUES
+  (MAP {1: [1, NULL, 3], 2: [4, NULL, 6], 3: [7, 8, 9]}, 1, 1.0, '1'),
+  (MAP {4: [1, NULL, 3], 5: [4, NULL, 6], 6: [7, 8, 9]}, 5, 5.0, '5'),
+  (MAP {7: [1, NULL, 3], 8: [9, NULL, 6], 9: [7, 8, 9]}, 4, 4.0, '4')
+;
+
+statement ok
+CREATE TABLE map_array_table_2
+AS VALUES
+  (MAP {'1': [1, NULL, 3], '2': [4, NULL, 6], '3': [7, 8, 9]}, 1, 1.0, '1'),
+  (MAP {'4': [1, NULL, 3], '5': [4, NULL, 6], '6': [7, 8, 9]}, 5, 5.0, '5'),
+  (MAP {'7': [1, NULL, 3], '8': [9, NULL, 6], '9': [7, 8, 9]}, 4, 4.0, '4')
+;
+
+statement ok
 CREATE EXTERNAL TABLE data
 STORED AS PARQUET
 LOCATION '../core/tests/data/parquet_map.parquet';
@@ -493,3 +509,68 @@ select cardinality(map([1, 2, 3], ['a', 'b', 'c'])), cardinality(MAP {'a': 1, 'b
        cardinality(MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} });
 ----
 3 2 0 2
+
+# map_extract
+# key is string
+query ????
+select map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a'), map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'b'),
+       map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'c'), map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'd');
+----
+[1] [] [3] []
+
+# key is integer
+query ????
+select map_extract(MAP {1: 1, 2: NULL, 3:3}, 1), map_extract(MAP {1: 1, 2: NULL, 3:3}, 2),
+       map_extract(MAP {1: 1, 2: NULL, 3:3}, 3), map_extract(MAP {1: 1, 2: NULL, 3:3}, 4);
+----
+[1] [] [3] []
+
+# value is list
+query ????
+select map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 1), map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 2),
+       map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 3), map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 4);
+----
+[[1, 2]] [] [[3]] []
+
+# key in map and query key are different types
+query ?????
+select map_extract(MAP {1: 1, 2: 2, 3:3}, '1'), map_extract(MAP {1: 1, 2: 2, 3:3}, 1.0),
+       map_extract(MAP {1.0: 1, 2: 2, 3:3}, '1'), map_extract(MAP {'1': 1, '2': 2, '3':3}, 1.0),
+       map_extract(MAP {arrow_cast('1', 'Utf8View'): 1, arrow_cast('2', 'Utf8View'): 2, arrow_cast('3', 'Utf8View'):3}, '1');
+----
+[1] [1] [1] [] [1]
+
+# map_extract with columns
+query ???
+select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7) from map_array_table_1;
+----
+[[1, , 3]] [] []
+[] [[4, , 6]] []
+[] [] [[1, , 3]]
+
+query ???
+select map_extract(column1, column2), map_extract(column1, column3), map_extract(column1, column4) from map_array_table_1;
+----
+[[1, , 3]] [[1, , 3]] [[1, , 3]]
+[[4, , 6]] [[4, , 6]] [[4, , 6]]
+[] [] []
+
+query ???
+select map_extract(column1, column2), map_extract(column1, column3), map_extract(column1, column4) from map_array_table_2;
+----
+[[1, , 3]] [] [[1, , 3]]
+[[4, , 6]] [] [[4, , 6]]
+[] [] []
+
+query ???
+select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7) from map_array_table_2;
+----
+[[1, , 3]] [] []
+[] [[4, , 6]] []
+[] [] [[1, , 3]]
+
+statement ok
+drop table map_array_table_1;
+
+statement ok
+drop table map_array_table_2;
