@@ -119,7 +119,7 @@ fn regexp_count_func(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Utf8 => regexp_count::<i32>(args),
         DataType::LargeUtf8 => regexp_count::<i64>(args),
         other => {
-            internal_err!("Unsupported data type {other:?} for function regexp_like")
+            internal_err!("Unsupported data type {other:?} for function regexp_count")
         }
     }
 }

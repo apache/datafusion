@@ -503,6 +503,10 @@ statement error
 External error: query failed: DataFusion error: Arrow error: Compute error: regexp_count() requires start to be 1 based
 SELECT regexp_count('123123123123', '123', -3);
 
+statement error
+External error: statement failed: DataFusion error: Arrow error: Compute error: regexp_count() does not support global flag
+SELECT regexp_count('123123123123', '123', 1, 'g');
+
 query I
 SELECT regexp_count(str, '\w') from t;
 ----
