@@ -17,18 +17,18 @@
 
 use std::any::Any;
 use std::sync::Arc;
-
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use std::fmt::Write;
+use crate::utils::{make_scalar_function, utf8_to_str_type};
+use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
-use unicode_segmentation::UnicodeSegmentation;
-
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use datafusion_common::DataFusionError;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug)]
 pub struct RPadFunc {
@@ -121,67 +121,79 @@ impl ScalarUDFImpl for RPadFunc {
 
 macro_rules! process_rpad {
     // For the two-argument case
-    ($string_array:expr, $length_array:expr) => {{
+    ($string_array:expr, $length_array:expr, $builder:expr) => {{
         $string_array
             .iter()
             .zip($length_array.iter())
-            .map(|(string, length)| match (string, length) {
-                (Some(string), Some(length)) => {
-                    if length > i32::MAX as i64 {
-                        return exec_err!("rpad requested length {} too large", length);
-                    }
-
-                    let length = if length < 0 { 0 } else { length as usize };
-                    if length == 0 {
-                        Ok(Some("".to_string()))
-                    } else {
-                        let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                        if length < graphemes.len() {
-                            Ok(Some(graphemes[..length].concat()))
+            .try_for_each(|(string, length)| -> Result<(), DataFusionError> {
+                match (string, length) {
+                    (Some(string), Some(length)) => {
+                        if length > i32::MAX as i64 {
+                            return exec_err!(
+                                "rpad requested length {} too large",
+                                length
+                            );
+                        }
+                        let length = if length < 0 { 0 } else { length as usize };
+                        if length == 0 {
+                            $builder.append_value("");
                         } else {
-                            let mut s = string.to_string();
-                            s.push_str(" ".repeat(length - graphemes.len()).as_str());
-                            Ok(Some(s))
+                            let graphemes = string.graphemes(true).collect::<Vec<&str>>();
+                            if length < graphemes.len() {
+                                $builder.append_value(graphemes[..length].concat());
+                            } else {
+                                $builder.write_str(string)?;
+                                $builder.write_str(&" ".repeat(length - graphemes.len()))?;
+                                $builder.append_value("");
+                            }
                         }
                     }
+                    _ => $builder.append_null(),
                 }
-                _ => Ok(None),
-            })
-            .collect::<Result<GenericStringArray<StringArrayLen>>>()
+                Ok(())
+            })?;
+        Ok(Arc::new($builder.finish()) as ArrayRef)
     }};
 
     // For the three-argument case
-    ($string_array:expr, $length_array:expr, $fill_array:expr) => {{
+    ($string_array:expr, $length_array:expr, $fill_array:expr, $builder:expr) => {{
         $string_array
             .iter()
             .zip($length_array.iter())
             .zip($fill_array.iter())
-            .map(|((string, length), fill)| match (string, length, fill) {
-                (Some(string), Some(length), Some(fill)) => {
-                    if length > i32::MAX as i64 {
-                        return exec_err!("rpad requested length {} too large", length);
-                    }
+            .try_for_each(|((string, length), fill)| -> Result<(), DataFusionError> {
+                match (string, length, fill) {
+                    (Some(string), Some(length), Some(fill)) => {
+                        if length > i32::MAX as i64 {
+                            return exec_err!(
+                                "rpad requested length {} too large",
+                                length
+                            );
+                        }
+                        let length = if length < 0 { 0 } else { length as usize };
+                        let graphemes = string.graphemes(true).collect::<Vec<&str>>();
+                        let fill_chars = fill.chars().collect::<Vec<char>>();
 
-                    let length = if length < 0 { 0 } else { length as usize };
-                    let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                    let fill_chars = fill.chars().collect::<Vec<char>>();
-
-                    if length < graphemes.len() {
-                        Ok(Some(graphemes[..length].concat()))
-                    } else if fill_chars.is_empty() {
-                        Ok(Some(string.to_string()))
-                    } else {
-                        let mut s = string.to_string();
-                        let char_vector: Vec<char> = (0..length - graphemes.len())
-                            .map(|l| fill_chars[l % fill_chars.len()])
-                            .collect();
-                        s.push_str(&char_vector.iter().collect::<String>());
-                        Ok(Some(s))
+                        if length < graphemes.len() {
+                            $builder.append_value(graphemes[..length].concat());
+                        } else if fill_chars.is_empty() {
+                            $builder.append_value(string);
+                        } else {
+                            $builder.write_str(string)?;
+                            let fill_str = fill_chars
+                                .iter()
+                                .cycle()
+                                .take(length - graphemes.len())
+                                .collect::<String>();
+                            $builder.write_str(&fill_str)?;
+                            $builder.append_value("");
+                        }
                     }
+                    _ => $builder.append_null(),
                 }
-                _ => Ok(None),
-            })
-            .collect::<Result<GenericStringArray<StringArrayLen>>>()
+                Ok(())
+            })?;
+        Ok(Arc::new($builder.finish()) as ArrayRef)
     }};
 }
 
@@ -190,20 +202,19 @@ macro_rules! process_rpad {
 pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
+    let mut builder: GenericStringBuilder<StringArrayLen> = GenericStringBuilder::new();
     match (args.len(), args[0].data_type()) {
         (2, DataType::Utf8View) => {
             let string_array = as_string_view_array(&args[0])?;
             let length_array = as_int64_array(&args[1])?;
 
-            let result = process_rpad!(string_array, length_array)?;
-            Ok(Arc::new(result) as ArrayRef)
+            process_rpad!(string_array, length_array, builder)
         }
         (2, _) => {
             let string_array = as_generic_string_array::<StringArrayLen>(&args[0])?;
             let length_array = as_int64_array(&args[1])?;
 
-            let result = process_rpad!(string_array, length_array)?;
-            Ok(Arc::new(result) as ArrayRef)
+            process_rpad!(string_array, length_array, builder)
         }
         (3, DataType::Utf8View) => {
             let string_array = as_string_view_array(&args[0])?;
@@ -211,13 +222,11 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
             match args[2].data_type() {
                 DataType::Utf8View => {
                     let fill_array = as_string_view_array(&args[2])?;
-                    let result = process_rpad!(string_array, length_array, fill_array)?;
-                    Ok(Arc::new(result) as ArrayRef)
+                    process_rpad!(string_array, length_array, fill_array, builder)
                 }
                 DataType::Utf8 | DataType::LargeUtf8 => {
                     let fill_array = as_generic_string_array::<FillArrayLen>(&args[2])?;
-                    let result = process_rpad!(string_array, length_array, fill_array)?;
-                    Ok(Arc::new(result) as ArrayRef)
+                    process_rpad!(string_array, length_array, fill_array, builder)
                 }
                 other_type => {
                     exec_err!("unsupported type for rpad's third operator: {}", other_type)
@@ -230,21 +239,21 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
             match args[2].data_type() {
                 DataType::Utf8View => {
                     let fill_array = as_string_view_array(&args[2])?;
-                    let result = process_rpad!(string_array, length_array, fill_array)?;
-                    Ok(Arc::new(result) as ArrayRef)
+                    process_rpad!(string_array, length_array, fill_array, builder)
                 }
                 DataType::Utf8 | DataType::LargeUtf8 => {
                     let fill_array = as_generic_string_array::<FillArrayLen>(&args[2])?;
-                    let result = process_rpad!(string_array, length_array, fill_array)?;
-                    Ok(Arc::new(result) as ArrayRef)
+                    process_rpad!(string_array, length_array, fill_array, builder)
                 }
                 other_type => {
                     exec_err!("unsupported type for rpad's third operator: {}", other_type)
                 }
             }
+
+            
         }
         (other, other_type) => exec_err!(
-            "rpad requires 2 or 3 arguments with corresponding types, but got {}. number of arguments with {}",
+            "rpad requires 2 or 3 arguments with corresponding types, but got {} arguments with type {}",
             other, other_type
         ),
     }
