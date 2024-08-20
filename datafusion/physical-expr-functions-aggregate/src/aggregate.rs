@@ -103,11 +103,6 @@ impl AggregateExprBuilder {
             .map(|arg| arg.data_type(&schema))
             .collect::<Result<Vec<_>>>()?;
 
-        let input_nullables = args
-            .iter()
-            .map(|arg| arg.nullable(&schema))
-            .collect::<Result<Vec<_>>>()?;
-
         check_arg_count(
             fun.name(),
             &input_exprs_types,
@@ -115,7 +110,7 @@ impl AggregateExprBuilder {
         )?;
 
         let data_type = fun.return_type(&input_exprs_types)?;
-        let is_nullable = fun.is_nullable(&input_nullables);
+        let is_nullable = fun.is_nullable();
         let name = match alias {
             // TODO: Ideally, we should build the name from physical expressions
             None => create_function_physical_name(fun.name(), is_distinct, &[], None)?,

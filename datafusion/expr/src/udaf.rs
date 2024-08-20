@@ -163,8 +163,8 @@ impl AggregateUDF {
         self.inner.name()
     }
 
-    pub fn is_nullable(&self, nullables: &[bool]) -> bool {
-        self.inner.is_nullable(nullables)
+    pub fn is_nullable(&self) -> bool {
+        self.inner.is_nullable()
     }
 
     /// Returns the aliases for this function.
@@ -356,7 +356,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Nullable means that that the function could return `null` for any inputs.
     /// For example, aggregate functions like `COUNT` always return a non null value
     /// but others like `MIN` will return `NULL` if there is nullable input.
-    fn is_nullable(&self, _nullables: &[bool]) -> bool {
+    fn is_nullable(&self) -> bool {
         true
     }
 
