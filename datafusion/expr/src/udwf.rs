@@ -17,6 +17,7 @@
 
 //! [`WindowUDF`]: User Defined Window Functions
 
+use arrow::compute::SortOptions;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
     any::Any,
@@ -26,7 +27,7 @@ use std::{
 
 use arrow::datatypes::DataType;
 
-use datafusion_common::Result;
+use datafusion_common::{not_impl_err, Result};
 
 use crate::expr::WindowFunction;
 use crate::{
@@ -176,6 +177,26 @@ impl WindowUDF {
     pub fn partition_evaluator_factory(&self) -> Result<Box<dyn PartitionEvaluator>> {
         self.inner.partition_evaluator()
     }
+
+    /// Returns if column values are nullable for this window function.
+    ///
+    /// See [`WindowUDFImpl::nullable`] for more details.
+    pub fn nullable(&self) -> bool {
+        self.inner.nullable()
+    }
+
+    /// Returns custom result ordering introduced by this window function
+    /// which is used to update ordering equivalences.
+    ///
+    /// See [`WindowUDFImpl::sort_options`] for more details.
+    pub fn sort_options(&self) -> Option<SortOptions> {
+        self.inner.sort_options()
+    }
+
+    /// See [`WindowUDFImpl::coerce_types`] for more details.
+    pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_types(arg_types)
+    }
 }
 
 impl<F> From<F> for WindowUDF
@@ -318,6 +339,47 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         self.name().hash(hasher);
         self.signature().hash(hasher);
         hasher.finish()
+    }
+
+    /// Allows customizing nullable of column for this window UDF.
+    ///
+    /// By default, the final result of evaluating the window UDF is
+    /// allowed to have null values. But if that is not the case then
+    /// it can be customized in the window UDF implementation.
+    fn nullable(&self) -> bool {
+        true
+    }
+
+    /// Allows the window UDF to define a custom result ordering.
+    ///
+    /// By default, a window UDF doesn't introduce an ordering.
+    /// But when specified by a window UDF this is used to update
+    /// ordering equivalences.
+    fn sort_options(&self) -> Option<SortOptions> {
+        None
+    }
+
+    /// Coerce arguments of a function call to types that the function can evaluate.
+    ///
+    /// This function is only called if [`WindowUDFImpl::signature`] returns [`crate::TypeSignature::UserDefined`]. Most
+    /// UDWFs should return one of the other variants of `TypeSignature` which handle common
+    /// cases
+    ///
+    /// See the [type coercion module](crate::type_coercion)
+    /// documentation for more details on type coercion
+    ///
+    /// For example, if your function requires a floating point arguments, but the user calls
+    /// it like `my_func(1::int)` (aka with `1` as an integer), coerce_types could return `[DataType::Float64]`
+    /// to ensure the argument was cast to `1::double`
+    ///
+    /// # Parameters
+    /// * `arg_types`: The argument types of the arguments  this function with
+    ///
+    /// # Return value
+    /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
+    /// arguments to these specific types.
+    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 }
 

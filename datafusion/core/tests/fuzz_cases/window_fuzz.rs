@@ -44,6 +44,7 @@ use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
+use datafusion::functions_window::row_number::row_number_udwf;
 use hashbrown::HashMap;
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
@@ -180,12 +181,10 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
         // )
         (
-            // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::RowNumber,
-            ),
+            // user-defined window function
+            WindowFunctionDefinition::WindowUDF(row_number_udwf()),
             // its name
-            "ROW_NUMBER",
+            "row_number",
             // no argument
             vec![],
             // Expected causality, for None cases causality will be determined from window frame boundaries
@@ -377,9 +376,7 @@ fn get_random_function(
         window_fn_map.insert(
             "row_number",
             (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::RowNumber,
-                ),
+                WindowFunctionDefinition::WindowUDF(row_number_udwf()),
                 vec![],
             ),
         );

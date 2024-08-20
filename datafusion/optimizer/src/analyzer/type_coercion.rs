@@ -181,9 +181,10 @@ impl<'a> TypeCoercionRewriter<'a> {
         let union_schema = Arc::new(coerce_union_schema(&union_plan.inputs)?);
         let new_inputs = union_plan
             .inputs
-            .iter()
+            .into_iter()
             .map(|p| {
-                let plan = coerce_plan_expr_for_schema(p, &union_schema)?;
+                let plan =
+                    coerce_plan_expr_for_schema(Arc::unwrap_or_clone(p), &union_schema)?;
                 match plan {
                     LogicalPlan::Projection(Projection { expr, input, .. }) => {
                         Ok(Arc::new(project_with_column_index(

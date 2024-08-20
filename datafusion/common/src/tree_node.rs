@@ -486,6 +486,9 @@ pub trait TreeNodeVisitor<'n>: Sized {
 /// A [Visitor](https://en.wikipedia.org/wiki/Visitor_pattern) for recursively
 /// rewriting [`TreeNode`]s via [`TreeNode::rewrite`].
 ///
+/// For example you can implement this trait on a struct to rewrite `Expr` or
+/// `LogicalPlan` that needs to track state during the rewrite.
+///
 /// See [`TreeNode`] for more details on available APIs
 ///
 /// When passed to [`TreeNode::rewrite`], [`TreeNodeRewriter::f_down`] and
