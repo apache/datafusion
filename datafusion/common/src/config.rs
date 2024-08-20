@@ -487,9 +487,13 @@ config_namespace! {
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
 
-        /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
-        /// and `Binary/BinaryLarge` with `BinaryView`.
-        pub schema_force_string_view: bool, default = false
+        /// (reading) If true (the default), parquet reader will read text and
+        /// binary columns using Arrow byte view types. DataFusion has
+        /// specialized proceessing using the Arrow `Utf8View` type for columns
+        /// that could also be read as `Utf8/Utf8Large` and using the Arrow
+        /// `BinaryView` type for columns that could also be read as
+        /// `Binary/BinaryLarge`.
+        pub schema_force_string_view: bool, default = true
     }
 }
 
