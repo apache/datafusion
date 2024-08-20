@@ -596,7 +596,7 @@ struct BufferedBatch {
     pub size_estimation: usize,
     /// The indices of buffered batch that failed the join filter.
     /// When dequeuing the buffered batch, we need to produce null joined rows for these indices.
-    pub join_filter_failed_idxs: HashSet<u64>,
+    pub join_filter_failed_map: HashMap<u64, bool>,
     /// Current buffered batch number of rows. Equal to batch.num_rows()
     /// but if batch is spilled to disk this property is preferable
     /// and less expensive
@@ -637,7 +637,7 @@ impl BufferedBatch {
             join_arrays,
             null_joined: vec![],
             size_estimation,
-            join_filter_failed_idxs: HashSet::new(),
+            join_filter_failed_map: HashMap::new(),
             num_rows,
             spill_file: None,
         }
@@ -1229,11 +1229,19 @@ impl SMJStream {
             }
             buffered_batch.null_joined.clear();
 
-            // For buffered rows which are joined with streamed side but doesn't satisfy the join filter
+            // For buffered row which is joined with streamed side rows but all joined rows
+            // don't satisfy the join filter
             if output_not_matched_filter {
+                let buffered_indices = buffered_batch
+                    .join_filter_failed_map
+                    .iter()
+                    .filter_map(|(idx, failed)| if *failed { Some(*idx) } else { None })
+                    .collect::<Vec<_>>();
+
                 let buffered_indices = UInt64Array::from_iter_values(
-                    buffered_batch.join_filter_failed_idxs.iter().copied(),
+                    buffered_indices.iter().map(|&index| index as u64),
                 );
+
                 if let Some(record_batch) = produce_buffered_null_batch(
                     &self.schema,
                     &self.streamed_schema,
@@ -1242,7 +1250,7 @@ impl SMJStream {
                 )? {
                     self.output_record_batches.push(record_batch);
                 }
-                buffered_batch.join_filter_failed_idxs.clear();
+                buffered_batch.join_filter_failed_map.clear();
             }
         }
         Ok(())
@@ -1459,33 +1467,20 @@ impl SMJStream {
                         // If it is joined with streamed side, but doesn't match the join filter,
                         // we need to output it with nulls as streamed side.
                         if matches!(self.join_type, JoinType::Full) {
-                            let mut buffered_indices_map: HashMap<u64, bool> =
-                                HashMap::new();
+                            let buffered_batch = &mut self.buffered_data.batches
+                                [chunk.buffered_batch_idx.unwrap()];
 
                             for i in 0..pre_mask.len() {
                                 let buffered_index = buffered_indices.value(i);
 
-                                buffered_indices_map.insert(
+                                buffered_batch.join_filter_failed_map.insert(
                                     buffered_index,
-                                    *buffered_indices_map
+                                    *buffered_batch
+                                        .join_filter_failed_map
                                         .get(&buffered_index)
                                         .unwrap_or(&true)
                                         && !pre_mask.value(i),
                                 );
-                            }
-
-                            let buffered_batch = &mut self.buffered_data.batches
-                                [chunk.buffered_batch_idx.unwrap()];
-                            for (buffered_index, failed_join_filter) in
-                                buffered_indices_map
-                            {
-                                if failed_join_filter {
-                                    // For a buffered row that is joined with streamed side rows but all joined rows don't
-                                    // satisfy the join filter,
-                                    buffered_batch
-                                        .join_filter_failed_idxs
-                                        .insert(buffered_index);
-                                }
                             }
                         }
                     }
