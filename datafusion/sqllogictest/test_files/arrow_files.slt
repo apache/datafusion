@@ -43,6 +43,10 @@ SELECT * FROM arrow_simple
 3 baz false
 4 NULL true
 
+# url table is only supported by DynamicFileCatalog
+statement error DataFusion error: Error during planning: table 'datafusion.public.../core/tests/data/example.arrow' not found
+SELECT * FROM '../core/tests/data/example.arrow';
+
 # ARROW partitioned table
 statement ok
 CREATE EXTERNAL TABLE arrow_partitioned (

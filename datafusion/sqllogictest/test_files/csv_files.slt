@@ -50,6 +50,10 @@ id7 value7
 id8 value8
 id9 value9
 
+# url table is only supported by DynamicFileCatalog
+statement error DataFusion error: Error during planning: table 'datafusion.public.../core/tests/data/quote.csv' not found
+select * from '../core/tests/data/quote.csv';
+
 query TT
 select * from csv_with_escape;
 ----

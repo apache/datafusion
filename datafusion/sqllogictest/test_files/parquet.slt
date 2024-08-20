@@ -202,6 +202,10 @@ SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
 0 0
 1 1
 
+# url table is only supported by DynamicFileCatalog
+statement error DataFusion error: Error during planning: table 'datafusion.public.../../parquet-testing/data/alltypes_plain.parquet' not found
+SELECT id, CAST(string_col AS varchar) FROM '../../parquet-testing/data/alltypes_plain.parquet';
+
 # Clean up
 statement ok
 DROP TABLE alltypes_plain;
