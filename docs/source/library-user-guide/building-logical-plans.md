@@ -86,7 +86,7 @@ Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]
 DataFusion logical plans can be created using the [LogicalPlanBuilder] struct. There is also a [DataFrame] API which is
 a higher-level API that delegates to [LogicalPlanBuilder].
 
-The following associated functions can be used to create a new builder:
+There are several functions that can can be used to create a new builder, such as
 
 - `empty` - create an empty plan with no fields
 - `values` - create a plan from a set of literal values
@@ -110,26 +110,35 @@ The following example demonstrates building the same simple query plan as the pr
 <!-- source for this example is in datafusion_docs::library_logical_plan::plan_builder_1 -->
 
 ```rust
-// create a logical table source
-let schema = Schema::new(vec![
-    Field::new("id", DataType::Int32, true),
-    Field::new("name", DataType::Utf8, true),
-]);
-let table_source = LogicalTableSource::new(SchemaRef::new(schema));
+use datafusion::common::DataFusionError;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::logical_expr::{LogicalPlanBuilder, LogicalTableSource};
+use datafusion::prelude::*;
+use std::sync::Arc;
 
-// optional projection
-let projection = None;
+fn main() -> Result<(), DataFusionError> {
+    // create a logical table source
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("name", DataType::Utf8, true),
+    ]);
+    let table_source = LogicalTableSource::new(SchemaRef::new(schema));
 
-// create a LogicalPlanBuilder for a table scan
-let builder = LogicalPlanBuilder::scan("person", Arc::new(table_source), projection)?;
+    // optional projection
+    let projection = None;
 
-// perform a filter operation and build the plan
-let plan = builder
-    .filter(col("id").gt(lit(500)))? // WHERE id > 500
-    .build()?;
+    // create a LogicalPlanBuilder for a table scan
+    let builder = LogicalPlanBuilder::scan("person", Arc::new(table_source), projection)?;
 
-// print the plan
-println!("{}", plan.display_indent_schema());
+    // perform a filter operation and build the plan
+    let plan = builder
+        .filter(col("id").gt(lit(500)))? // WHERE id > 500
+        .build()?;
+
+    // print the plan
+    println!("{}", plan.display_indent_schema());
+    Ok(())
+}
 ```
 
 This example produces the following plan:
