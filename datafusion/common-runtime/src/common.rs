@@ -60,16 +60,15 @@ impl<R: 'static> SpawnedTask<R> {
     }
 
     /// Joins the task and unwinds the panic if it happens.
-    pub async fn join_unwind(self) -> R {
-        self.join().await.unwrap_or_else(|e| {
+    pub async fn join_unwind(self) -> Result<R, JoinError> {
+        self.join().await.map_err(|e| {
             // `JoinError` can be caused either by panic or cancellation. We have to handle panics:
             if e.is_panic() {
                 std::panic::resume_unwind(e.into_panic());
+            } else if e.is_cancelled() {
+                log::warn!("SpawnedTask was polled during shutdown");
+                e
             } else {
-                // Cancellation may be caused by two reasons:
-                // 1. Abort is called, but since we consumed `self`, it's not our case (`JoinHandle` not accessible outside).
-                // 2. The runtime is shutting down.
-                // So we consider this branch as unreachable.
                 unreachable!("SpawnedTask was cancelled unexpectedly");
             }
         })
@@ -88,9 +87,6 @@ mod tests {
     use tokio::runtime::Runtime;
 
     #[tokio::test]
-    #[should_panic(
-        expected = "entered unreachable code: SpawnedTask was cancelled unexpectedly"
-    )]
     async fn runtime_shutdown() {
         // capture the panic message
         let panic_msg = Arc::new(Mutex::new(None));
@@ -108,7 +104,7 @@ mod tests {
                     fut.await;
                     unreachable!("should never return");
                 });
-                task.join_unwind().await;
+                let _ = task.join_unwind().await;
             });
 
             // caller shutdown their DF runtime (e.g. timeout, error in caller, etc)

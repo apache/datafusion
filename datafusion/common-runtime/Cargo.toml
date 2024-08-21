@@ -36,4 +36,5 @@ name = "datafusion_common_runtime"
 path = "src/lib.rs"
 
 [dependencies]
+log = { workspace = true }
 tokio = { workspace = true }

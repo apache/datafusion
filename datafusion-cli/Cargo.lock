@@ -1251,6 +1251,7 @@ dependencies = [
 name = "datafusion-common-runtime"
 version = "41.0.0"
 dependencies = [
+ "log",
  "tokio",
 ]
 
