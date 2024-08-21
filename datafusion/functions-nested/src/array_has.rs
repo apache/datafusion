@@ -259,6 +259,7 @@ pub enum ComparisonType {
     Single,
 }
 
+/// Public function for internal benchmark, avoid to use it in production
 pub fn general_array_has_dispatch<O: OffsetSizeTrait>(
     haystack: &ArrayRef,
     needle: &ArrayRef,
@@ -323,6 +324,7 @@ pub fn general_array_has_dispatch<O: OffsetSizeTrait>(
     Ok(Arc::new(boolean_builder.finish()))
 }
 
+/// Public function for internal benchmark, avoid to use it in production
 pub fn array_has_internal<O: OffsetSizeTrait>(
     haystack: &ArrayRef,
     needle: &ArrayRef,
@@ -390,28 +392,62 @@ fn general_array_has<O: OffsetSizeTrait>(
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::Int32Type;
-    use arrow_array::{Int32Array, ListArray, StringArray};
+    use std::vec;
+
+    use arrow_array::StringArray;
     use datafusion_common::utils::array_into_list_array;
+    use datafusion_expr::lit;
+    use rand::Rng;
+
+    use crate::make_array::make_array;
 
     use super::*;
 
+    fn generate_random_strings(n: usize, size: usize) -> Vec<String> {
+        let mut rng = rand::thread_rng();
+        let mut strings = Vec::with_capacity(n);
+
+        // Define the characters to use in the random strings
+        let charset: &[u8] =
+            b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+        for _ in 0..n {
+            // Generate a random string of the specified size or length 4
+            let random_string: String = if rng.gen_bool(0.5) {
+                (0..4)
+                    .map(|_| {
+                        let idx = rng.gen_range(0..charset.len());
+                        charset[idx] as char
+                    })
+                    .collect()
+            } else {
+                (0..size)
+                    .map(|_| {
+                        let idx = rng.gen_range(0..charset.len());
+                        charset[idx] as char
+                    })
+                    .collect()
+            };
+
+            strings.push(random_string);
+        }
+
+        strings
+    }
+
     #[test]
     fn test_array_has_internal() {
-        let data = vec![Some(
-            std::iter::repeat(Some(100))
-                .take(100000)
-                .collect::<Vec<Option<i32>>>(),
-        )];
-        let array =
-            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
-        let sub_array = Arc::new(Int32Array::from(vec![Some(100)])) as ArrayRef;
-
-        let result =
-            array_has_internal::<i32>(&array, &sub_array, ComparisonType::Single)
-                .unwrap();
-        let expected = Arc::new(BooleanArray::from(vec![true])) as ArrayRef;
-        assert_eq!(&result, &expected);
+        let data = generate_random_strings(4, 4);
+        let haystack_array = make_array(
+            (0..data.len())
+                .map(|i| lit(data[i].clone()))
+                .collect::<Vec<_>>(),
+        );
+        let element = lit(data[0].clone());
+        println!("haystack_array: {:?}", haystack_array);
+        println!("element: {:?}", element);
+        let result = array_has_udf().call(vec![haystack_array, element]);
+        assert_eq!(result, lit(true));
     }
 
     #[test]

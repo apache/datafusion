@@ -28,9 +28,10 @@ use rand::Rng;
 fn generate_random_strings(n: usize, size: usize) -> Vec<String> {
     let mut rng = rand::thread_rng();
     let mut strings = Vec::with_capacity(n);
-    
+
     // Define the characters to use in the random strings
-    let charset: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let charset: &[u8] =
+        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
     for _ in 0..n {
         // Generate a random string of the specified size or length 4
@@ -49,7 +50,7 @@ fn generate_random_strings(n: usize, size: usize) -> Vec<String> {
                 })
                 .collect()
         };
-        
+
         strings.push(random_string);
     }
 
@@ -57,24 +58,14 @@ fn generate_random_strings(n: usize, size: usize) -> Vec<String> {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    // let data = vec![Some(
-    //     std::iter::repeat(Some(100))
-    //         .take(100000)
-    //         .collect::<Vec<Option<i32>>>(),
-    // )];
-    // let array =
-    //     Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
-    // let sub_array = Arc::new(Int32Array::from(vec![Some(100)])) as ArrayRef;
-
     let expected = Arc::new(BooleanArray::from(vec![false])) as ArrayRef;
     let data = generate_random_strings(100000, 100);
-    let array =
-        Arc::new(StringArray::from(data)) as ArrayRef;
+    let array = Arc::new(StringArray::from(data)) as ArrayRef;
     let array = Arc::new(array_into_list_array(array, true)) as ArrayRef;
 
     let sub_array = Arc::new(StringArray::from(vec!["abcd"])) as ArrayRef;
 
-    c.bench_function("array_has new", |b| {
+    c.bench_function("array_has specialized approach", |b| {
         b.iter(|| {
             let is_contained = black_box(
                 array_has_internal::<i32>(&array, &sub_array, ComparisonType::Single)
@@ -84,7 +75,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     });
 
-    c.bench_function("array_has old", |b| {
+    c.bench_function("array_has general approach", |b| {
         b.iter(|| {
             let is_contained = black_box(
                 general_array_has_dispatch::<i32>(

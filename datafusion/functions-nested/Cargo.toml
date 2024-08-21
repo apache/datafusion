@@ -40,7 +40,6 @@ path = "src/lib.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ahash = { workspace = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
@@ -50,8 +49,6 @@ datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
-datafusion-physical-expr-common = { workspace = true }
-hashbrown = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 itertools = { version = "0.12", features = ["use_std"] }
 log = { workspace = true }

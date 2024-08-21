@@ -72,10 +72,6 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
             .insert_if_new(values, make_payload_fn, observe_payload_fn);
     }
 
-    pub fn contains(&mut self, values: &ArrayRef) -> Vec<bool> {
-        self.0.contains(values)
-    }
-
     /// Converts this set into a `StringArray`/`LargeStringArray` or
     /// `BinaryArray`/`LargeBinaryArray` containing each distinct value that
     /// was interned. This is done without copying the values.
@@ -330,27 +326,6 @@ where
         };
     }
 
-    pub fn contains(&mut self, values: &ArrayRef) -> Vec<bool> {
-        // Sanity array type
-        match self.output_type {
-            OutputType::Binary => {
-                assert!(matches!(
-                    values.data_type(),
-                    DataType::Binary | DataType::LargeBinary
-                ));
-                self.contains_inner::<GenericBinaryType<O>>(values)
-            }
-            OutputType::Utf8 => {
-                assert!(matches!(
-                    values.data_type(),
-                    DataType::Utf8 | DataType::LargeUtf8
-                ));
-                self.contains_inner::<GenericStringType<O>>(values)
-            }
-            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
-        }
-    }
-
     /// Generic version of [`Self::insert_if_new`] that handles `ByteArrayType`
     /// (both String and Binary)
     ///
@@ -498,86 +473,6 @@ where
                 type_name::<O>()
             );
         }
-    }
-
-    fn contains_inner<B>(&mut self, values: &ArrayRef) -> Vec<bool>
-    where
-        B: ByteArrayType,
-    {
-        // step 1: compute hashes
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(values.len(), 0);
-        create_hashes(&[values.clone()], &self.random_state, batch_hashes)
-            // hash is supported for all types and create_hashes only
-            // returns errors for unsupported types
-            .unwrap();
-
-        // step 2: insert each value into the set, if not already present
-        let values = values.as_bytes::<B>();
-
-        // Ensure lengths are equivalent
-        assert_eq!(values.len(), batch_hashes.len());
-
-        let mut result = vec![false; values.len()];
-        for (i, (value, &hash)) in values.iter().zip(batch_hashes.iter()).enumerate() {
-            // handle null value
-            let Some(value) = value else {
-                let is_in_set = if let Some(&(payload, _offset)) = self.null.as_ref() {
-                    true
-                } else {
-                    false
-                };
-                result[i] = is_in_set;
-                continue;
-            };
-
-            // get the value as bytes
-            let value: &[u8] = value.as_ref();
-            let value_len = O::usize_as(value.len());
-
-            // value is "small"
-            let is_in_set = if value.len() <= SHORT_VALUE_LEN {
-                let inline = value.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
-
-                // is value is already present in the set?
-                let entry = self.map.get_mut(hash, |header| {
-                    // TOOD: check hash first
-                    // if hash != header.hash {
-                    //     return false;
-                    // }
-
-                    // compare value if hashes match
-                    if header.len != value_len {
-                        return false;
-                    }
-                    // value is stored inline so no need to consult buffer
-                    // (this is the "small string optimization")
-                    inline == header.offset_or_inline
-                });
-
-                entry.is_some()
-            }
-            // value is not "small"
-            else {
-                // Check if the value is already present in the set
-                let entry = self.map.get_mut(hash, |header| {
-                    // compare value if hashes match
-                    if header.len != value_len {
-                        return false;
-                    }
-                    // Need to compare the bytes in the buffer
-                    // SAFETY: buffer is only appended to, and we correctly inserted values and offsets
-                    let existing_value =
-                        unsafe { self.buffer.as_slice().get_unchecked(header.range()) };
-                    value == existing_value
-                });
-
-                entry.is_some()
-            };
-            result[i] = is_in_set;
-        }
-        result
     }
 
     /// Converts this set into a `StringArray`, `LargeStringArray`,
