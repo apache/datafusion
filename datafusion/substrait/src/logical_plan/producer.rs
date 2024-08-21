@@ -2197,7 +2197,7 @@ mod test {
         round_trip_literal(ScalarValue::UInt64(Some(u64::MIN)))?;
         round_trip_literal(ScalarValue::UInt64(Some(u64::MAX)))?;
 
-        for (ts, tz) in vec![
+        for (ts, tz) in [
             (Some(12345), None),
             (None, None),
             (Some(12345), Some("UTC".into())),
@@ -2339,7 +2339,7 @@ mod test {
         round_trip_type(DataType::Float32)?;
         round_trip_type(DataType::Float64)?;
 
-        for tz in vec![None, Some("UTC".into())] {
+        for tz in [None, Some("UTC".into())] {
             round_trip_type(DataType::Timestamp(TimeUnit::Second, tz.clone()))?;
             round_trip_type(DataType::Timestamp(TimeUnit::Millisecond, tz.clone()))?;
             round_trip_type(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))?;
