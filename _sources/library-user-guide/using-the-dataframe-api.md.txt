@@ -188,8 +188,9 @@ async fn main() -> Result<()> {
     // read example.csv file into a DataFrame
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     // stream the contents of the DataFrame to the `example.parquet` file
+    let target_path = tempfile::tempdir()?.path().join("example.parquet");
     df.write_parquet(
-        "example.parquet",
+        target_path.to_str().unwrap(),
         DataFrameWriteOptions::new(),
         None, // writer_options
     ).await;
