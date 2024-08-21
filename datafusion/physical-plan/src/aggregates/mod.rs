@@ -1218,8 +1218,8 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use crate::common::collect;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::Literal;
-    use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)

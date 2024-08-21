@@ -82,7 +82,7 @@ pub mod windows;
 pub mod work_table;
 
 pub mod udaf {
-    pub use datafusion_physical_expr_functions_aggregate::aggregate::AggregateFunctionExpr;
+    pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 
 #[cfg(test)]

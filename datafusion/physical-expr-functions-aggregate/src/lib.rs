@@ -16,5 +16,3 @@
 // under the License.
 
 //! Technically, all aggregate functions that depend on `expr` crate should be included here.
-
-pub mod aggregate;

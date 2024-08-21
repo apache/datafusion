@@ -82,9 +82,9 @@ use datafusion_expr::{
     DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, StringifiedPlan,
     WindowFrame, WindowFrameBound, WriteOp,
 };
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 

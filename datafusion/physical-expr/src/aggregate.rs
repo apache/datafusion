@@ -15,6 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub(crate) mod groups_accumulator {
+    #[allow(unused_imports)]
+    pub(crate) mod accumulate {
+        pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+    }
+    pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+        accumulate::NullState, GroupsAccumulatorAdapter,
+    };
+}
+pub(crate) mod stats {
+    pub use datafusion_functions_aggregate_common::stats::StatsType;
+}
+pub mod utils {
+    pub use datafusion_functions_aggregate_common::utils::{
+        adjust_output_array, down_cast_any_ref, get_accum_scalar_values_as_arrays,
+        get_sort_options, ordering_fields, DecimalAverager, Hashable,
+    };
+}
+pub use datafusion_functions_aggregate_common::aggregate::AggregateExpr;
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::ScalarValue;
 use datafusion_common::{internal_err, not_impl_err, Result};
@@ -26,9 +46,8 @@ use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
 use datafusion_functions_aggregate_common::accumulator::AccumulatorArgs;
 use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
-use datafusion_functions_aggregate_common::aggregate::AggregateExpr;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
-use datafusion_functions_aggregate_common::utils::{self, down_cast_any_ref};
+use datafusion_functions_aggregate_common::utils::down_cast_any_ref;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::utils::reverse_order_bys;
@@ -95,7 +114,11 @@ impl AggregateExprBuilder {
                 .map(|e| e.expr.data_type(&schema))
                 .collect::<Result<Vec<_>>>()?;
 
-            ordering_fields = utils::ordering_fields(&ordering_req, &ordering_types);
+            ordering_fields =
+                datafusion_functions_aggregate_common::utils::ordering_fields(
+                    &ordering_req,
+                    &ordering_types,
+                );
         }
 
         let input_exprs_types = args
@@ -363,9 +386,9 @@ impl AggregateFunctionExpr {
             .fun
             .clone()
             .with_beneficial_ordering(beneficial_ordering)?
-            else {
-                return Ok(None);
-            };
+        else {
+            return Ok(None);
+        };
 
         AggregateExprBuilder::new(Arc::new(updated_fn), self.args.to_vec())
             .order_by(self.ordering_req.to_vec())
