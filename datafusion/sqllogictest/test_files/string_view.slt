@@ -1192,7 +1192,8 @@ SELECT
   column1_utf8view || column1_utf8view,
   column1_utf8 || column1_utf8,
   column1_large_utf8 || column1_large_utf8
-  -- TODO file ticket for dict || dict
+  -- Dictionary/Dictionary coercion doesn't work
+  -- https://github.com/apache/datafusion/issues/12101
   --column1_dict || column1_dict
 FROM test;
 ----
