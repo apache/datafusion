@@ -73,8 +73,7 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
-    self, create_function_physical_name, physical_name, AggregateFunction, Alias,
-    GroupingSet, WindowFunction,
+    self, physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -670,6 +669,12 @@ impl DefaultPhysicalPlanner {
                 let input_exec = children.one()?;
                 let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
+                let physical_input_schema_from_logical: Arc<Schema> =
+                    logical_input_schema.as_ref().clone().into();
+
+                if physical_input_schema != physical_input_schema_from_logical {
+                    return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
+                }
 
                 let groups = self.create_grouping_physical_expr(
                     group_expr,
@@ -1548,7 +1553,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
     logical_input_schema: &DFSchema,
-    _physical_input_schema: &Schema,
+    physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
     match e {
@@ -1563,12 +1568,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             let name = if let Some(name) = name {
                 name
             } else {
-                create_function_physical_name(
-                    func.name(),
-                    *distinct,
-                    args,
-                    order_by.as_ref(),
-                )?
+                physical_name(e)?
             };
 
             let physical_args =
@@ -1582,8 +1582,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 None => None,
             };
 
-            let ignore_nulls = null_treatment
-                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
+            let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
 
             let (agg_expr, filter, order_by) = {
@@ -1599,11 +1598,10 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 let ordering_reqs: Vec<PhysicalSortExpr> =
                     physical_sort_exprs.clone().unwrap_or(vec![]);
 
-                let schema: Schema = logical_input_schema.clone().into();
                 let agg_expr =
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
                         .order_by(ordering_reqs.to_vec())
-                        .schema(Arc::new(schema))
+                        .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
                         .with_ignore_nulls(ignore_nulls)
                         .with_distinct(*distinct)

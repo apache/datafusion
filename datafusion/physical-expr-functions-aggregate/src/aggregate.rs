@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::ScalarValue;
 use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_expr::expr::create_function_physical_name;
 use datafusion_expr::AggregateUDF;
 use datafusion_expr::ReversedUDAF;
 use datafusion_expr_common::accumulator::Accumulator;
@@ -109,9 +109,9 @@ impl AggregateExprBuilder {
         )?;
 
         let data_type = fun.return_type(&input_exprs_types)?;
+        let is_nullable = fun.is_nullable();
         let name = match alias {
-            // TODO: Ideally, we should build the name from physical expressions
-            None => create_function_physical_name(fun.name(), is_distinct, &[], None)?,
+            None => return internal_err!("alias should be provided"),
             Some(alias) => alias,
         };
 
@@ -127,6 +127,7 @@ impl AggregateExprBuilder {
             is_distinct,
             input_types: input_exprs_types,
             is_reversed,
+            is_nullable,
         }))
     }
 
@@ -194,6 +195,7 @@ pub struct AggregateFunctionExpr {
     is_distinct: bool,
     is_reversed: bool,
     input_types: Vec<DataType>,
+    is_nullable: bool,
 }
 
 impl AggregateFunctionExpr {
@@ -215,6 +217,10 @@ impl AggregateFunctionExpr {
     /// Return if the aggregation is reversed
     pub fn is_reversed(&self) -> bool {
         self.is_reversed
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        self.is_nullable
     }
 }
 
@@ -241,7 +247,11 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+        Ok(Field::new(
+            &self.name,
+            self.data_type.clone(),
+            self.is_nullable,
+        ))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
@@ -434,6 +444,10 @@ impl AggregateExpr for AggregateFunctionExpr {
         self.fun
             .is_descending()
             .and_then(|flag| self.field().ok().map(|f| (f, flag)))
+    }
+
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        self.fun.default_value(data_type)
     }
 }
 
