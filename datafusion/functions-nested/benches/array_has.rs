@@ -21,7 +21,7 @@ use arrow_array::{ArrayRef, BooleanArray, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::utils::array_into_list_array;
 use datafusion_functions_nested::{
-    array_has::ComparisonType, array_has_internal, general_array_has_dispatch,
+    array_has::ComparisonType, array_has_dispatch, general_array_has_dispatch,
 };
 use rand::Rng;
 
@@ -67,10 +67,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("array_has specialized approach", |b| {
         b.iter(|| {
-            let is_contained = black_box(
-                array_has_internal::<i32>(&array, &sub_array, ComparisonType::Single)
-                    .unwrap(),
-            );
+            let is_contained =
+                black_box(array_has_dispatch::<i32>(&array, &sub_array).unwrap());
             assert_eq!(&is_contained, &expected);
         });
     });
