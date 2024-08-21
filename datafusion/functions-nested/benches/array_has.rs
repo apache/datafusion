@@ -62,7 +62,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     let data = generate_random_strings(100000, 100);
     let array = Arc::new(StringArray::from(data)) as ArrayRef;
     let array = Arc::new(array_into_list_array(array, true)) as ArrayRef;
-
     let sub_array = Arc::new(StringArray::from(vec!["abcd"])) as ArrayRef;
 
     c.bench_function("array_has specialized approach", |b| {
