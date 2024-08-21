@@ -476,8 +476,8 @@ where
                     opt_filter,
                     total_num_groups,
                     |group_index, new_value| {
-                        let sum = sum_block.get_mut(group_index).unwrap();
-                        let count = count_block.get_mut(group_index).unwrap();
+                        let sum = &mut sum_block[group_index];
+                        let count = &mut count_block[group_index];
 
                         *sum = sum.add_wrapping(new_value);
                         *count += 1;
@@ -595,7 +595,7 @@ where
                     opt_filter,
                     total_num_groups,
                     |group_index, partial_count| {
-                        let count = count_block.get_mut(group_index).unwrap();
+                        let count = &mut count_block[group_index];
                         *count += partial_count;
                     },
                 );
@@ -608,7 +608,7 @@ where
                     opt_filter,
                     total_num_groups,
                     |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
-                        let sum = sum_block.get_mut(group_index).unwrap();
+                        let sum = &mut sum_block[group_index];
                         *sum = sum.add_wrapping(new_value);
                     },
                 );

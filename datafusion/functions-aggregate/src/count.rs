@@ -439,7 +439,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                     group_indices,
                     opt_filter,
                     |group_index, partial_count| {
-                        let count = block.get_mut(group_index).unwrap();
+                        let count = &mut block[group_index];
                         *count += partial_count;
                     },
                 )

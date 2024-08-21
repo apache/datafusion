@@ -406,11 +406,8 @@ impl BlockedNullState {
         T: ArrowPrimitiveType + Send,
         F: FnMut(usize, T::Native) + Send,
     {
-        if total_num_groups == 0 {
-            return;
-        }
-
-        assert_eq!(values.values().len(), group_indices.len());
+        debug_assert!(total_num_groups > 0);
+        debug_assert_eq!(values.values().len(), group_indices.len());
 
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
@@ -708,9 +705,7 @@ fn ensure_enough_room_for_nulls(
     total_num_groups: usize,
     default_value: bool,
 ) {
-    if total_num_groups == 0 {
-        return;
-    }
+    debug_assert!(total_num_groups > 0);
 
     match mode {
         // It flat mode, we just a single builder, and grow it constantly.

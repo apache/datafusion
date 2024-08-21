@@ -431,9 +431,7 @@ pub fn ensure_enough_room_for_values<T: Clone>(
     total_num_groups: usize,
     default_value: T,
 ) {
-    if total_num_groups == 0 {
-        return;
-    }
+    debug_assert!(total_num_groups > 0);
 
     match mode {
         // It flat mode, we just a single builder, and grow it constantly.

@@ -123,7 +123,7 @@ where
                     opt_filter,
                     total_num_groups,
                     |group_index, new_value| {
-                        let value = block.get_mut(group_index).unwrap();
+                        let value = &mut block[group_index];
                         (self.prim_fn)(value, new_value);
                     },
                 );
