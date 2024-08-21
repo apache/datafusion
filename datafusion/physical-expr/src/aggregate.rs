@@ -29,20 +29,18 @@ pub(crate) mod stats {
 }
 pub mod utils {
     pub use datafusion_functions_aggregate_common::utils::{
-        adjust_output_array, get_accum_scalar_values_as_arrays,
-        get_sort_options, ordering_fields, DecimalAverager, Hashable,
+        adjust_output_array, get_accum_scalar_values_as_arrays, get_sort_options,
+        ordering_fields, DecimalAverager, Hashable,
     };
-    pub use super::down_cast_any_ref;
 }
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::expr::create_function_physical_name;
 use datafusion_expr::AggregateUDF;
 use datafusion_expr::ReversedUDAF;
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
 use datafusion_functions_aggregate_common::accumulator::AccumulatorArgs;
 use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
@@ -51,167 +49,13 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::utils::reverse_order_bys;
 
+use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use std::fmt::Debug;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
-/// An aggregate expression that:
-/// * knows its resulting field
-/// * knows how to create its accumulator
-/// * knows its accumulator's state's field
-/// * knows the expressions from whose its accumulator will receive values
+/// Builder for physical [`AggregateFunctionExpr`]
 ///
-/// Any implementation of this trait also needs to implement the
-/// `PartialEq<dyn Any>` to allows comparing equality between the
-/// trait objects.
-pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
-    /// Returns the aggregate expression as [`Any`] so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
-    /// the field of the final result of this aggregation.
-    fn field(&self) -> Result<Field>;
-
-    /// the accumulator used to accumulate values from the expressions.
-    /// the accumulator expects the same number of arguments as `expressions` and must
-    /// return states with the same description as `state_fields`
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>>;
-
-    /// the fields that encapsulate the Accumulator's state
-    /// the number of fields here equals the number of states that the accumulator contains
-    fn state_fields(&self) -> Result<Vec<Field>>;
-
-    /// expressions that are passed to the Accumulator.
-    /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
-
-    /// Order by requirements for the aggregate function
-    /// By default it is `None` (there is no requirement)
-    /// Order-sensitive aggregators, such as `FIRST_VALUE(x ORDER BY y)` should implement this
-    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
-    /// Indicates whether aggregator can produce the correct result with any
-    /// arbitrary input ordering. By default, we assume that aggregate expressions
-    /// are order insensitive.
-    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        AggregateOrderSensitivity::Insensitive
-    }
-
-    /// Sets the indicator whether ordering requirements of the aggregator is
-    /// satisfied by its input. If this is not the case, aggregators with order
-    /// sensitivity `AggregateOrderSensitivity::Beneficial` can still produce
-    /// the correct result with possibly more work internally.
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(Some(updated_expr))` if the process completes successfully.
-    /// If the expression can benefit from existing input ordering, but does
-    /// not implement the method, returns an error. Order insensitive and hard
-    /// requirement aggregators return `Ok(None)`.
-    fn with_beneficial_ordering(
-        self: Arc<Self>,
-        _requirement_satisfied: bool,
-    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
-        if self.order_bys().is_some() && self.order_sensitivity().is_beneficial() {
-            return exec_err!(
-                "Should implement with satisfied for aggregator :{:?}",
-                self.name()
-            );
-        }
-        Ok(None)
-    }
-
-    /// Human readable name such as `"MIN(c2)"`. The default
-    /// implementation returns placeholder text.
-    fn name(&self) -> &str {
-        "AggregateExpr: default name"
-    }
-
-    /// If the aggregate expression has a specialized
-    /// [`GroupsAccumulator`] implementation. If this returns true,
-    /// `[Self::create_groups_accumulator`] will be called.
-    fn groups_accumulator_supported(&self) -> bool {
-        false
-    }
-
-    /// Return a specialized [`GroupsAccumulator`] that manages state
-    /// for all groups.
-    ///
-    /// For maximum performance, a [`GroupsAccumulator`] should be
-    /// implemented in addition to [`Accumulator`].
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
-    }
-
-    /// Construct an expression that calculates the aggregate in reverse.
-    /// Typically the "reverse" expression is itself (e.g. SUM, COUNT).
-    /// For aggregates that do not support calculation in reverse,
-    /// returns None (which is the default value).
-    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        None
-    }
-
-    /// Creates accumulator implementation that supports retract
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        not_impl_err!("Retractable Accumulator hasn't been implemented for {self:?} yet")
-    }
-
-    /// Returns all expressions used in the [`datafusion_functions_aggregate_common::aggregate::AggregateExpr`].
-    /// These expressions are  (1)function arguments, (2) order by expressions.
-    fn all_expressions(&self) -> AggregatePhysicalExpressions {
-        let args = self.expressions();
-        let order_bys = self.order_bys().unwrap_or(&[]);
-        let order_by_exprs = order_bys
-            .iter()
-            .map(|sort_expr| Arc::clone(&sort_expr.expr))
-            .collect::<Vec<_>>();
-        AggregatePhysicalExpressions {
-            args,
-            order_by_exprs,
-        }
-    }
-
-    /// Rewrites [`datafusion_functions_aggregate_common::aggregate::AggregateExpr`], with new expressions given. The argument should be consistent
-    /// with the return value of the [`datafusion_functions_aggregate_common::aggregate::AggregateExpr::all_expressions`] method.
-    /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
-    fn with_new_expressions(
-        &self,
-        _args: Vec<Arc<dyn PhysicalExpr>>,
-        _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
-    ) -> Option<Arc<dyn AggregateExpr>> {
-        None
-    }
-
-    /// If this function is max, return (output_field, true)
-    /// if the function is min, return (output_field, false)
-    /// otherwise return None (the default)
-    ///
-    /// output_field is the name of the column produced by this aggregate
-    ///
-    /// Note: this is used to use special aggregate implementations in certain conditions
-    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
-        None
-    }
-
-    /// Returns default value of the function given the input is Null
-    /// Most of the aggregate function return Null if input is Null,
-    /// while `count` returns 0 if input is Null
-    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue>;
-}
-
-/// Stores the physical expressions used inside the `AggregateExpr`.
-pub struct AggregatePhysicalExpressions {
-    /// Aggregate function arguments
-    pub args: Vec<Arc<dyn PhysicalExpr>>,
-    /// Order by expressions
-    pub order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
-}
-
-
-/// Builder for physical [`AggregateExpr`]
-///
-/// `AggregateExpr` contains the information necessary to call
+/// `AggregateFunctionExpr` contains the information necessary to call
 /// an aggregate expression.
 #[derive(Debug, Clone)]
 pub struct AggregateExprBuilder {
@@ -245,7 +89,7 @@ impl AggregateExprBuilder {
         }
     }
 
-    pub fn build(self) -> Result<Arc<dyn AggregateExpr>> {
+    pub fn build(self) -> Result<Arc<AggregateFunctionExpr>> {
         let Self {
             fun,
             args,
@@ -410,7 +254,6 @@ impl AggregateFunctionExpr {
         self.fun.state_fields(args)
     }
 
-    // TODO remove Result
     pub fn field(&self) -> Result<Field> {
         Ok(Field::new(&self.name, self.data_type.clone(), true))
     }
@@ -510,6 +353,20 @@ impl AggregateFunctionExpr {
         self.fun.groups_accumulator_supported(args)
     }
 
+    pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        let args = AccumulatorArgs {
+            return_type: &self.data_type,
+            schema: &self.schema,
+            ignore_nulls: self.ignore_nulls,
+            ordering_req: &self.ordering_req,
+            is_distinct: self.is_distinct,
+            name: &self.name,
+            is_reversed: self.is_reversed,
+            exprs: &self.args,
+        };
+        self.fun.create_groups_accumulator(args)
+    }
+
     pub fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         if self.ordering_req.is_empty() {
             return None;
@@ -535,7 +392,7 @@ impl AggregateFunctionExpr {
     pub fn with_beneficial_ordering(
         self: Arc<Self>,
         beneficial_ordering: bool,
-    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
+    ) -> Result<Option<Arc<AggregateFunctionExpr>>> {
         let Some(updated_fn) = self
             .fun
             .clone()
@@ -555,7 +412,7 @@ impl AggregateFunctionExpr {
             .map(Some)
     }
 
-    pub fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+    pub fn reverse_expr(&self) -> Option<Arc<AggregateFunctionExpr>> {
         match self.fun.reverse_udf() {
             ReversedUDAF::NotSupported => None,
             ReversedUDAF::Identical => Some(Arc::new(self.clone())),
@@ -564,7 +421,7 @@ impl AggregateFunctionExpr {
                 let mut name = self.name().to_string();
                 // If the function is changed, we need to reverse order_by clause as well
                 // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
-                if self.fun().name() == reverse_udf.name() {
+                if self.name() == reverse_udf.name() {
                 } else {
                     replace_order_by_clause(&mut name);
                 }
@@ -589,271 +446,34 @@ impl AggregateFunctionExpr {
             .and_then(|flag| self.field().ok().map(|f| (f, flag)))
     }
 
+    pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        self.fun.default_value(data_type)
+    }
+
     pub fn is_nullable(&self) -> bool {
         self.is_nullable
     }
-}
 
-impl AggregateExpr for AggregateFunctionExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    pub fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.args.clone()
     }
 
-    fn state_fields(&self) -> Result<Vec<Field>> {
-        let args = StateFieldsArgs {
-            name: &self.name,
-            input_types: &self.input_types,
-            return_type: &self.data_type,
-            ordering_fields: &self.ordering_fields,
-            is_distinct: self.is_distinct,
-        };
-
-        self.fun.state_fields(args)
-    }
-
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            self.data_type.clone(),
-            self.is_nullable,
-        ))
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let acc_args = AccumulatorArgs {
-            return_type: &self.data_type,
-            schema: &self.schema,
-            ignore_nulls: self.ignore_nulls,
-            ordering_req: &self.ordering_req,
-            is_distinct: self.is_distinct,
-            name: &self.name,
-            is_reversed: self.is_reversed,
-            exprs: &self.args,
-        };
-
-        self.fun.accumulator(acc_args)
-    }
-
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let args = AccumulatorArgs {
-            return_type: &self.data_type,
-            schema: &self.schema,
-            ignore_nulls: self.ignore_nulls,
-            ordering_req: &self.ordering_req,
-            is_distinct: self.is_distinct,
-            name: &self.name,
-            is_reversed: self.is_reversed,
-            exprs: &self.args,
-        };
-
-        let accumulator = self.fun.create_sliding_accumulator(args)?;
-
-        // Accumulators that have window frame startings different
-        // than `UNBOUNDED PRECEDING`, such as `1 PRECEDING`, need to
-        // implement retract_batch method in order to run correctly
-        // currently in DataFusion.
-        //
-        // If this `retract_batches` is not present, there is no way
-        // to calculate result correctly. For example, the query
-        //
-        // ```sql
-        // SELECT
-        //  SUM(a) OVER(ORDER BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS sum_a
-        // FROM
-        //  t
-        // ```
-        //
-        // 1. First sum value will be the sum of rows between `[0, 1)`,
-        //
-        // 2. Second sum value will be the sum of rows between `[0, 2)`
-        //
-        // 3. Third sum value will be the sum of rows between `[1, 3)`, etc.
-        //
-        // Since the accumulator keeps the running sum:
-        //
-        // 1. First sum we add to the state sum value between `[0, 1)`
-        //
-        // 2. Second sum we add to the state sum value between `[1, 2)`
-        // (`[0, 1)` is already in the state sum, hence running sum will
-        // cover `[0, 2)` range)
-        //
-        // 3. Third sum we add to the state sum value between `[2, 3)`
-        // (`[0, 2)` is already in the state sum).  Also we need to
-        // retract values between `[0, 1)` by this way we can obtain sum
-        // between [1, 3) which is indeed the appropriate range.
-        //
-        // When we use `UNBOUNDED PRECEDING` in the query starting
-        // index will always be 0 for the desired range, and hence the
-        // `retract_batch` method will not be called. In this case
-        // having retract_batch is not a requirement.
-        //
-        // This approach is a a bit different than window function
-        // approach. In window function (when they use a window frame)
-        // they get all the desired range during evaluation.
-        if !accumulator.supports_retract_batch() {
-            return not_impl_err!(
-                "Aggregate can not be used as a sliding accumulator because \
-                     `retract_batch` is not implemented: {}",
-                self.name
-            );
-        }
-        Ok(accumulator)
-    }
-
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
     }
-
-    fn groups_accumulator_supported(&self) -> bool {
-        let args = AccumulatorArgs {
-            return_type: &self.data_type,
-            schema: &self.schema,
-            ignore_nulls: self.ignore_nulls,
-            ordering_req: &self.ordering_req,
-            is_distinct: self.is_distinct,
-            name: &self.name,
-            is_reversed: self.is_reversed,
-            exprs: &self.args,
-        };
-        self.fun.groups_accumulator_supported(args)
-    }
-
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        let args = AccumulatorArgs {
-            return_type: &self.data_type,
-            schema: &self.schema,
-            ignore_nulls: self.ignore_nulls,
-            ordering_req: &self.ordering_req,
-            is_distinct: self.is_distinct,
-            name: &self.name,
-            is_reversed: self.is_reversed,
-            exprs: &self.args,
-        };
-        self.fun.create_groups_accumulator(args)
-    }
-
-    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.ordering_req.is_empty() {
-            return None;
-        }
-
-        if !self.order_sensitivity().is_insensitive() {
-            return Some(&self.ordering_req);
-        }
-
-        None
-    }
-
-    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        if !self.ordering_req.is_empty() {
-            // If there is requirement, use the sensitivity of the implementation
-            self.fun.order_sensitivity()
-        } else {
-            // If no requirement, aggregator is order insensitive
-            AggregateOrderSensitivity::Insensitive
-        }
-    }
-
-    fn with_beneficial_ordering(
-        self: Arc<Self>,
-        beneficial_ordering: bool,
-    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
-        let Some(updated_fn) = self
-            .fun
-            .clone()
-            .with_beneficial_ordering(beneficial_ordering)?
-        else {
-            return Ok(None);
-        };
-
-        AggregateExprBuilder::new(Arc::new(updated_fn), self.args.to_vec())
-            .order_by(self.ordering_req.to_vec())
-            .schema(Arc::new(self.schema.clone()))
-            .alias(self.name().to_string())
-            .with_ignore_nulls(self.ignore_nulls)
-            .with_distinct(self.is_distinct)
-            .with_reversed(self.is_reversed)
-            .build()
-            .map(Some)
-    }
-
-    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        match self.fun.reverse_udf() {
-            ReversedUDAF::NotSupported => None,
-            ReversedUDAF::Identical => Some(Arc::new(self.clone())),
-            ReversedUDAF::Reversed(reverse_udf) => {
-                let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
-                let mut name = self.name().to_string();
-                // If the function is changed, we need to reverse order_by clause as well
-                // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
-                if self.fun().name() == reverse_udf.name() {
-                } else {
-                    replace_order_by_clause(&mut name);
-                }
-                replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
-
-                AggregateExprBuilder::new(reverse_udf, self.args.to_vec())
-                    .order_by(reverse_ordering_req.to_vec())
-                    .schema(Arc::new(self.schema.clone()))
-                    .alias(name)
-                    .with_ignore_nulls(self.ignore_nulls)
-                    .with_distinct(self.is_distinct)
-                    .with_reversed(!self.is_reversed)
-                    .build()
-                    .ok()
-            }
-        }
-    }
-
-    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
-        self.fun
-            .is_descending()
-            .and_then(|flag| self.field().ok().map(|f| (f, flag)))
-    }
-
-    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
-        self.fun.default_value(data_type)
-    }
 }
 
-/// Downcast a `Box<dyn AggregateExpr>` or `Arc<dyn AggregateExpr>`
-/// and return the inner trait object as [`Any`] so
-/// that it can be downcast to a specific implementation.
-///
-/// This method is used when implementing the `PartialEq<dyn Any>`
-/// for [`AggregateExpr`] aggregation expressions and allows comparing the equality
-/// between the trait objects.
-pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
-    if let Some(obj) = any.downcast_ref::<Arc<dyn AggregateExpr>>() {
-        obj.as_any()
-    } else if let Some(obj) = any.downcast_ref::<Box<dyn AggregateExpr>>() {
-        obj.as_any()
-    } else {
-        any
-    }
-}
-
-impl PartialEq<dyn Any> for AggregateFunctionExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.data_type == x.data_type
-                    && self.fun == x.fun
-                    && self.args.len() == x.args.len()
-                    && self
-                        .args
-                        .iter()
-                        .zip(x.args.iter())
-                        .all(|(this_arg, other_arg)| this_arg.eq(other_arg))
-            })
-            .unwrap_or(false)
+impl PartialEq for AggregateFunctionExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.data_type == other.data_type
+            && self.fun == other.fun
+            && self.args.len() == other.args.len()
+            && self
+                .args
+                .iter()
+                .zip(other.args.iter())
+                .all(|(this_arg, other_arg)| this_arg.eq(other_arg))
     }
 }
 

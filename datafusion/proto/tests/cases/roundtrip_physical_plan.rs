@@ -46,7 +46,6 @@ use datafusion::datasource::physical_plan::{
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
-use datafusion::physical_expr::aggregate::utils::down_cast_any_ref;
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
@@ -69,13 +68,12 @@ use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
 };
-use datafusion::physical_plan::{
-    AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
-};
+use datafusion::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr, Statistics};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
@@ -361,7 +359,7 @@ fn rountrip_aggregate() -> Result<()> {
             .alias("NTH_VALUE(b, 1)")
             .build()?;
 
-    let test_cases: Vec<Vec<Arc<dyn AggregateExpr>>> = vec![
+    let test_cases: Vec<Vec<Arc<AggregateFunctionExpr>>> = vec![
         // AVG
         vec![avg_expr],
         // NTH_VALUE
@@ -394,7 +392,7 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> =
+    let aggregates: Vec<Arc<AggregateFunctionExpr>> =
         vec![
             AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
@@ -423,7 +421,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![AggregateExprBuilder::new(
+    let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![AggregateExprBuilder::new(
         approx_percentile_cont_udaf(),
         vec![col("b", &schema)?, lit(0.5)],
     )
@@ -458,7 +456,7 @@ fn rountrip_aggregate_with_sort() -> Result<()> {
         },
     }];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> =
+    let aggregates: Vec<Arc<AggregateFunctionExpr>> =
         vec![
             AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
@@ -525,7 +523,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> =
+    let aggregates: Vec<Arc<AggregateFunctionExpr>> =
         vec![
             AggregateExprBuilder::new(Arc::new(udaf), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
@@ -730,7 +728,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     }
     impl PartialEq<dyn Any> for CustomPredicateExpr {
         fn eq(&self, other: &dyn Any) -> bool {
-            down_cast_any_ref(other)
+            other
                 .downcast_ref::<Self>()
                 .map(|x| self.inner.eq(&x.inner))
                 .unwrap_or(false)

@@ -58,8 +58,8 @@ use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    displayable, windows, AggregateExpr, ExecutionPlan, ExecutionPlanProperties,
-    InputOrderMode, Partitioning, PhysicalExpr, WindowExpr,
+    displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
+    Partitioning, PhysicalExpr, WindowExpr,
 };
 
 use arrow::compute::SortOptions;
@@ -82,7 +82,7 @@ use datafusion_expr::{
     DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, StringifiedPlan,
     WindowFrame, WindowFrameBound, WriteOp,
 };
-use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
@@ -1542,7 +1542,7 @@ pub fn create_window_expr(
 }
 
 type AggregateExprWithOptionalArgs = (
-    Arc<dyn AggregateExpr>,
+    Arc<AggregateFunctionExpr>,
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
     // Ordering requirements, if any

@@ -48,13 +48,11 @@ use datafusion_common::TableReference;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_functions_aggregate::count::count_udaf;
-use datafusion_physical_expr::{
-    expressions, AggregateExpr, EquivalenceProperties, PhysicalExpr,
-};
+use datafusion_physical_expr::{expressions, EquivalenceProperties, PhysicalExpr};
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use futures::Stream;
 use tempfile::TempDir;
 // backwards compatibility
@@ -429,7 +427,7 @@ impl TestAggregate {
     }
 
     /// Return appropriate expr depending if COUNT is for col or table (*)
-    pub fn count_expr(&self, schema: &Schema) -> Arc<dyn AggregateExpr> {
+    pub fn count_expr(&self, schema: &Schema) -> Arc<AggregateFunctionExpr> {
         AggregateExprBuilder::new(count_udaf(), vec![self.column()])
             .schema(Arc::new(schema.clone()))
             .alias(self.column_name())
