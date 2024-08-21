@@ -398,20 +398,32 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         match self.mode {
             GroupStatesMode::Flat => {
                 let block = self.counts.current_mut().unwrap();
-                update_batch_internal(values, group_indices, opt_filter, |group_index| {
-                    let count = block.get_mut(group_index).unwrap();
-                    *count += 1;
-                })
+                accumulate_indices(
+                    group_indices,
+                    values.logical_nulls().as_ref(),
+                    opt_filter,
+                    |group_index| {
+                        let count = block.get_mut(group_index).unwrap();
+                        *count += 1;
+                    },
+                );
             }
             GroupStatesMode::Blocked(_) => {
-                update_batch_internal(values, group_indices, opt_filter, |group_index| {
-                    let blocked_index = BlockedGroupIndex::new(group_index);
-                    let count = &mut self.counts[blocked_index.block_id]
-                        [blocked_index.block_offset];
-                    *count += 1;
-                })
+                accumulate_indices(
+                    group_indices,
+                    values.logical_nulls().as_ref(),
+                    opt_filter,
+                    |group_index| {
+                        let blocked_index = BlockedGroupIndex::new(group_index);
+                        let count = &mut self.counts[blocked_index.block_id]
+                            [blocked_index.block_offset];
+                        *count += 1;
+                    },
+                );
             }
         }
+
+        Ok(())
     }
 
     fn merge_batch(
@@ -434,7 +446,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         match self.mode {
             GroupStatesMode::Flat => {
                 let block = self.counts.current_mut().unwrap();
-                merge_batch_internal(
+                do_count_merge_batch(
                     values,
                     group_indices,
                     opt_filter,
@@ -444,7 +456,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                     },
                 )
             }
-            GroupStatesMode::Blocked(_) => merge_batch_internal(
+            GroupStatesMode::Blocked(_) => do_count_merge_batch(
                 values,
                 group_indices,
                 opt_filter,
@@ -578,28 +590,10 @@ fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
     }
 }
 
-fn update_batch_internal<F>(
-    values: &ArrayRef,
-    group_indices: &[usize],
-    opt_filter: Option<&BooleanArray>,
-    mut update_group_fn: F,
-) -> Result<()>
-where
-    F: FnMut(usize) + Send,
-{
-    accumulate_indices(
-        group_indices,
-        values.logical_nulls().as_ref(),
-        opt_filter,
-        |group_index| {
-            update_group_fn(group_index);
-        },
-    );
-
-    Ok(())
-}
-
-fn merge_batch_internal<F>(
+/// The intermediate states merging function in count accumulator.
+/// It can support blocked and flat mode count accumulator through
+/// different `update_group_fn`s.
+fn do_count_merge_batch<F>(
     values: &ArrayRef,
     group_indices: &[usize],
     opt_filter: Option<&BooleanArray>,
