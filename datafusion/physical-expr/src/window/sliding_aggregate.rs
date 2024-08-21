@@ -63,7 +63,7 @@ impl SlidingAggregateWindowExpr {
         }
     }
 
-    /// Get the [AggregateExpr] of this object.
+    /// Get the [AggregateFunctionExpr] of this object.
     pub fn get_aggregate_expr(&self) -> &Arc<AggregateFunctionExpr> {
         &self.aggregate
     }

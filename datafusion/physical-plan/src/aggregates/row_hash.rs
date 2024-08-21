@@ -319,7 +319,7 @@ pub(crate) struct GroupedHashAggregateStream {
     input: SendableRecordBatchStream,
     mode: AggregateMode,
 
-    /// Accumulators, one for each `AggregateExpr` in the query
+    /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
     /// For example, if the query has aggregates, `SUM(x)`,
     /// `COUNT(y)`, there will be two accumulators, each one

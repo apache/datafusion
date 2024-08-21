@@ -118,7 +118,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
 ///
 /// # Parameters
 ///
-/// * `aggr_exprs` - A vector of `Arc<dyn AggregateExpr>` representing the
+/// * `aggr_exprs` - A vector of `Arc<AggregateFunctionExpr>` representing the
 ///   aggregate expressions to be optimized.
 /// * `prefix_requirement` - An array slice representing the ordering
 ///   requirements preceding the aggregate expressions.

@@ -15,8 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`AggregateExpr`] which defines the interface all aggregate expressions
-//! (built-in and custom) need to satisfy.
-
 pub mod count_distinct;
 pub mod groups_accumulator;

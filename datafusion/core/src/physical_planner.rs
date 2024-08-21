@@ -720,7 +720,7 @@ impl DefaultPhysicalPlanner {
                 // optimization purposes. For example, a FIRST_VALUE may turn
                 // into a LAST_VALUE with the reverse ordering requirement.
                 // To reflect such changes to subsequent stages, use the updated
-                // `AggregateExpr`/`PhysicalSortExpr` objects.
+                // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
                 let updated_aggregates = initial_aggr.aggr_expr().to_vec();
 
                 let next_partition_mode = if can_repartition {
