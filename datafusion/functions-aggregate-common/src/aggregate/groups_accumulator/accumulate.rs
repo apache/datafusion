@@ -799,42 +799,43 @@ mod test {
     use rand::{rngs::ThreadRng, Rng};
     use std::collections::HashSet;
 
+    /// Null state's behaviors needed in accumulate test
     trait TestNullState {
-        fn accumulate<T, F>(
+        fn accumulate<T>(
             &mut self,
             group_indices: &[usize],
             values: &PrimitiveArray<T>,
             opt_filter: Option<&BooleanArray>,
             total_num_groups: usize,
-            value_fn: F,
+            accumulated_values: &mut Vec<(usize, T::Native)>,
         ) where
-            T: ArrowPrimitiveType + Send,
-            F: FnMut(usize, T::Native) + Send;
+            T: ArrowPrimitiveType + Send;
 
         fn build_bool_buffer(&self) -> BooleanBuffer;
 
         fn build_null_buffer(&mut self) -> NullBuffer;
     }
 
-    // The original `NullState`
+    /// The original `NullState`
     impl TestNullState for NullState {
-        fn accumulate<T, F>(
+        fn accumulate<T>(
             &mut self,
             group_indices: &[usize],
             values: &PrimitiveArray<T>,
             opt_filter: Option<&BooleanArray>,
             total_num_groups: usize,
-            value_fn: F,
+            accumulated_values: &mut Vec<(usize, T::Native)>,
         ) where
             T: ArrowPrimitiveType + Send,
-            F: FnMut(usize, T::Native) + Send,
         {
             self.accumulate(
                 group_indices,
                 values,
                 opt_filter,
                 total_num_groups,
-                value_fn,
+                |group_index, value| {
+                    accumulated_values.push((group_index, value));
+                },
             );
         }
 
@@ -847,7 +848,7 @@ mod test {
         }
     }
 
-    // The new `BlockedNullState` in flat mode
+    /// The new `BlockedNullState` in flat mode
     struct BlockedNullStateInFlatMode(BlockedNullState);
 
     impl BlockedNullStateInFlatMode {
@@ -859,23 +860,24 @@ mod test {
     }
 
     impl TestNullState for BlockedNullStateInFlatMode {
-        fn accumulate<T, F>(
+        fn accumulate<T>(
             &mut self,
             group_indices: &[usize],
             values: &PrimitiveArray<T>,
             opt_filter: Option<&BooleanArray>,
             total_num_groups: usize,
-            value_fn: F,
+            accumulated_values: &mut Vec<(usize, T::Native)>,
         ) where
             T: ArrowPrimitiveType + Send,
-            F: FnMut(usize, T::Native) + Send,
         {
             self.0.accumulate_for_flat(
                 group_indices,
                 values,
                 opt_filter,
                 total_num_groups,
-                value_fn,
+                |group_index, value| {
+                    accumulated_values.push((group_index, value));
+                },
             );
         }
 
@@ -888,7 +890,7 @@ mod test {
         }
     }
 
-    // The new `BlockedNullState` in blocked mode
+    /// The new `BlockedNullState` in blocked mode
     struct BlockedNullStateInBlockedMode {
         null_state: BlockedNullState,
         block_size: usize,
@@ -906,24 +908,39 @@ mod test {
     }
 
     impl TestNullState for BlockedNullStateInBlockedMode {
-        fn accumulate<T, F>(
+        fn accumulate<T>(
             &mut self,
             group_indices: &[usize],
             values: &PrimitiveArray<T>,
             opt_filter: Option<&BooleanArray>,
             total_num_groups: usize,
-            value_fn: F,
+            accumulated_values: &mut Vec<(usize, T::Native)>,
         ) where
             T: ArrowPrimitiveType + Send,
-            F: FnMut(usize, T::Native) + Send,
         {
+            // Convert group indices to blocked style
+            let blocked_indices = group_indices
+                .iter()
+                .map(|idx| {
+                    let block_id = *idx / self.block_size;
+                    let block_offset = *idx % self.block_size;
+                    BlockedGroupIndex::new_from_parts(block_id, block_offset)
+                        .as_packed_index()
+                })
+                .collect::<Vec<_>>();
+
             self.null_state.accumulate_for_blocked(
-                group_indices,
+                &blocked_indices,
                 values,
                 opt_filter,
                 total_num_groups,
                 self.block_size,
-                value_fn,
+                |group_index, value| {
+                    let blocked_index = BlockedGroupIndex::new(group_index);
+                    let flat_index = blocked_index.block_id * self.block_size
+                        + blocked_index.block_offset;
+                    accumulated_values.push((flat_index, value));
+                },
             );
         }
 
@@ -939,20 +956,26 @@ mod test {
         }
 
         fn build_null_buffer(&mut self) -> NullBuffer {
-            let mut init_buffer = NullBuffer::new(BooleanBufferBuilder::new(0).finish());
+            let mut ret_builder = BooleanBufferBuilder::new(0);
             loop {
                 let blk = self.null_state.build(EmitTo::NextBlock(false));
                 if blk.is_empty() {
                     break;
                 }
 
-                init_buffer = NullBuffer::union(Some(&init_buffer), Some(&blk)).unwrap();
+                for seen in blk.iter() {
+                    ret_builder.append(seen);
+                }
             }
 
-            init_buffer
+            NullBuffer::new(ret_builder.finish())
         }
     }
 
+    /// Accumulate test mode
+    ///   - Original, test the original `NullState`
+    ///   - Flat, test the `BlockedNullState` in flat mode
+    ///   - Blocked, test the `BlockedNullState` in blocked mode
     #[derive(Debug, Clone, Copy)]
     enum AccumulateTest {
         Original,
@@ -1198,12 +1221,12 @@ mod test {
         /// Calls `NullState::accumulate` and `accumulate_indices` to
         /// ensure it generates the correct values.
         ///
-        fn accumulate_test<SV: TestNullState>(
+        fn accumulate_test<S: TestNullState>(
             group_indices: &[usize],
             values: &UInt32Array,
             opt_filter: Option<&BooleanArray>,
             total_num_groups: usize,
-            null_state_for_value_test: SV,
+            null_state_for_value_test: S,
         ) {
             Self::accumulate_values_test(
                 group_indices,
@@ -1219,6 +1242,8 @@ mod test {
             let avg: usize = values.iter().filter_map(|v| v.map(|v| v as usize)).sum();
             let boolean_values: BooleanArray =
                 values.iter().map(|v| v.map(|v| v as usize > avg)).collect();
+
+            // TODO: test the `BlockedNullState` after supporting `accumulate_boolean` in it
             Self::accumulate_boolean_test(
                 group_indices,
                 &boolean_values,
@@ -1243,9 +1268,7 @@ mod test {
                 values,
                 opt_filter,
                 total_num_groups,
-                |group_index, value| {
-                    accumulated_values.push((group_index, value));
-                },
+                &mut accumulated_values,
             );
 
             // Figure out the expected values
