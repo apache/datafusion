@@ -92,6 +92,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
+
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
         // See https://github.com/apache/datafusion/issues/9162
@@ -288,9 +289,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        let plan = self.order_by(plan, order_by_rex)?;
-
-        Ok(plan)
+        self.order_by(plan, order_by_rex)
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
@@ -519,8 +518,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     planner_context.set_outer_from_schema(left_schema);
                 }
                 planner_context.set_outer_from_schema(old_outer_from_schema);
-
-                Ok(left.build()?)
+                left.build()
             }
         }
     }

@@ -670,6 +670,12 @@ impl DefaultPhysicalPlanner {
                 let input_exec = children.one()?;
                 let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
+                let physical_input_schema_from_logical: Arc<Schema> =
+                    logical_input_schema.as_ref().clone().into();
+
+                if physical_input_schema != physical_input_schema_from_logical {
+                    return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
+                }
 
                 let groups = self.create_grouping_physical_expr(
                     group_expr,
@@ -1548,7 +1554,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
     logical_input_schema: &DFSchema,
-    _physical_input_schema: &Schema,
+    physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
     match e {
@@ -1599,11 +1605,10 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 let ordering_reqs: Vec<PhysicalSortExpr> =
                     physical_sort_exprs.clone().unwrap_or(vec![]);
 
-                let schema: Schema = logical_input_schema.clone().into();
                 let agg_expr =
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
                         .order_by(ordering_reqs.to_vec())
-                        .schema(Arc::new(schema))
+                        .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
                         .with_ignore_nulls(ignore_nulls)
                         .with_distinct(*distinct)
