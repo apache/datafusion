@@ -101,8 +101,9 @@ impl ScalarUDFImpl for ArrayHas {
 
         let array_type = args[0].data_type();
 
+        println!("args: {:?}", args);
         match array_type {
-            DataType::List(_) => general_array_has_dispatch::<i32>(
+            DataType::List(_) => array_has_internal::<i32>(
                 &args[0],
                 &args[1],
                 ComparisonType::Single,
@@ -252,7 +253,7 @@ impl ScalarUDFImpl for ArrayHasAny {
 
 /// Represents the type of comparison for array_has.
 #[derive(Debug, PartialEq)]
-enum ComparisonType {
+pub enum ComparisonType {
     // array_has_all
     All,
     // array_has_any
@@ -261,7 +262,7 @@ enum ComparisonType {
     Single,
 }
 
-fn general_array_has_dispatch<O: OffsetSizeTrait>(
+pub fn general_array_has_dispatch<O: OffsetSizeTrait>(
     haystack: &ArrayRef,
     needle: &ArrayRef,
     comparison_type: ComparisonType,
@@ -285,6 +286,7 @@ fn general_array_has_dispatch<O: OffsetSizeTrait>(
     } else {
         array
     };
+
     for (row_idx, (arr, sub_arr)) in array.iter().zip(sub_array.iter()).enumerate() {
         match (arr, sub_arr) {
             (Some(arr), Some(sub_arr)) => {
@@ -322,4 +324,51 @@ fn general_array_has_dispatch<O: OffsetSizeTrait>(
         }
     }
     Ok(Arc::new(boolean_builder.finish()))
+}
+
+pub fn array_has_internal<O: OffsetSizeTrait>(
+    haystack: &ArrayRef,
+    needle: &ArrayRef,
+    _comparison_type: ComparisonType,
+) -> Result<ArrayRef> {
+    let array = as_generic_list_array::<O>(haystack)?;
+    let mut boolean_builder = BooleanArray::builder(array.len());
+    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
+    let sub_arr_values = converter.convert_columns(&[Arc::clone(needle)])?;
+
+    for (row_idx, arr) in array.iter().enumerate() {
+        if let Some(arr) = arr {
+            let arr_values = converter.convert_columns(&[arr])?;
+            let res = arr_values
+                            .iter()
+                            .dedup()
+                            .any(|x| x == sub_arr_values.row(row_idx));
+            boolean_builder.append_value(res);
+        } else {
+            boolean_builder.append_null();
+        }
+    }
+
+    Ok(Arc::new(boolean_builder.finish()))
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::Int32Type;
+    use arrow_array::{Int32Array, ListArray};
+
+    use super::*;
+
+    #[test]
+    fn test_array_has_internal() {
+        let data = vec![
+            Some(std::iter::repeat(Some(100)).take(100000).collect::<Vec<Option<i32>>>()),
+         ];
+        let array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
+        let sub_array = Arc::new(Int32Array::from(vec![Some(100)])) as ArrayRef;
+
+        let result = array_has_internal::<i32>(&array, &sub_array, ComparisonType::Single).unwrap();
+        let expected = Arc::new(BooleanArray::from(vec![true])) as ArrayRef;
+        assert_eq!(&result, &expected);
+    }
 }
