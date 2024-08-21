@@ -1145,6 +1145,58 @@ FROM test;
 0
 NULL
 
+# || mixed types
+query TTTTTTTT
+SELECT
+  column1_utf8view || column2_utf8view,
+  column1_utf8 || column2_utf8view,
+  column1_large_utf8 || column2_utf8view,
+  column1_dict || column2_utf8view,
+  -- reverse argument order
+  column2_utf8view || column1_utf8view,
+  column2_utf8view || column1_utf8,
+  column2_utf8view || column1_large_utf8,
+  column2_utf8view || column1_dict
+FROM test;
+----
+AndrewX AndrewX AndrewX AndrewX XAndrew XAndrew XAndrew XAndrew
+XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng
+RaphaelR RaphaelR RaphaelR RaphaelR RRaphael RRaphael RRaphael RRaphael
+R R R R R R R R
+
+# || constants
+query TTTTTTTT
+SELECT
+  column1_utf8view || 'foo',
+  column1_utf8 || 'foo',
+  column1_large_utf8 || 'foo',
+  column1_dict || 'foo',
+  -- reverse argument order
+  'foo' || column1_utf8view,
+  'foo' || column1_utf8,
+  'foo' || column1_large_utf8,
+  'foo' || column1_dict
+FROM test;
+----
+Andrewfoo Andrewfoo Andrewfoo Andrewfoo fooAndrew fooAndrew fooAndrew fooAndrew
+Xiangpengfoo Xiangpengfoo Xiangpengfoo Xiangpengfoo fooXiangpeng fooXiangpeng fooXiangpeng fooXiangpeng
+Raphaelfoo Raphaelfoo Raphaelfoo Raphaelfoo fooRaphael fooRaphael fooRaphael fooRaphael
+foo NULL NULL NULL foo NULL NULL NULL
+
+
+
+
+# || same type (column1 has null, so also tests NULL || NULL)
+query error DataFusion error: Error during planning: Cannot infer common string type for string concat operation Dictionary\(Int32, Utf8\) \|\| Dictionary\(Int32, Utf8\)
+SELECT
+  column1_utf8view || column1_utf8view,
+  column1_utf8 || column1_utf8,
+  column1_large_utf8 || column1_large_utf8,
+  column1_dict || column1_dict
+FROM test;
+
+
+
 statement ok
 drop table test;
 
@@ -1168,10 +1220,18 @@ select t.dt from dates t where arrow_cast('2024-01-01', 'Utf8View') < t.dt;
 statement ok
 drop table dates;
 
+### Tests for `||` with Utf8View specifically
+
 statement ok
 create table temp as values
 ('value1', arrow_cast('rust', 'Utf8View'), arrow_cast('fast', 'Utf8View')),
 ('value2', arrow_cast('datafusion', 'Utf8View'), arrow_cast('cool', 'Utf8View'));
+
+query TTT
+select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from temp;
+----
+Utf8 Utf8View Utf8View
+Utf8 Utf8View Utf8View
 
 query T
 select column2||' is fast' from temp;
@@ -1192,7 +1252,7 @@ logical_plan
 01)Projection: temp.column2 || Utf8View("is") || temp.column3 AS temp.column2 || Utf8("is") || temp.column3
 02)--TableScan: temp projection=[column2, column3]
 
-
+# should not cast the column2 to utf8
 query TT
 explain select column2||' is fast' from temp;
 ----
