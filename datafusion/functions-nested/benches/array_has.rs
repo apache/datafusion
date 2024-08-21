@@ -17,30 +17,83 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::Int32Type;
-use arrow_array::{ArrayRef, BooleanArray, Int32Array, ListArray};
+use arrow_array::{ArrayRef, BooleanArray, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_functions_nested::{array_has::ComparisonType, array_has_internal, general_array_has_dispatch};
+use datafusion_common::utils::array_into_list_array;
+use datafusion_functions_nested::{
+    array_has::ComparisonType, array_has_internal, general_array_has_dispatch,
+};
+use rand::Rng;
+
+fn generate_random_strings(n: usize, size: usize) -> Vec<String> {
+    let mut rng = rand::thread_rng();
+    let mut strings = Vec::with_capacity(n);
+    
+    // Define the characters to use in the random strings
+    let charset: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+    for _ in 0..n {
+        // Generate a random string of the specified size or length 4
+        let random_string: String = if rng.gen_bool(0.5) {
+            (0..4)
+                .map(|_| {
+                    let idx = rng.gen_range(0..charset.len());
+                    charset[idx] as char
+                })
+                .collect()
+        } else {
+            (0..size)
+                .map(|_| {
+                    let idx = rng.gen_range(0..charset.len());
+                    charset[idx] as char
+                })
+                .collect()
+        };
+        
+        strings.push(random_string);
+    }
+
+    strings
+}
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let data = vec![
-        Some(std::iter::repeat(Some(100)).take(100000).collect::<Vec<Option<i32>>>()),
-        ];
-    let array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
-    let sub_array = Arc::new(Int32Array::from(vec![Some(100)])) as ArrayRef;
+    // let data = vec![Some(
+    //     std::iter::repeat(Some(100))
+    //         .take(100000)
+    //         .collect::<Vec<Option<i32>>>(),
+    // )];
+    // let array =
+    //     Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
+    // let sub_array = Arc::new(Int32Array::from(vec![Some(100)])) as ArrayRef;
 
-    let expected = Arc::new(BooleanArray::from(vec![true])) as ArrayRef;
+    let expected = Arc::new(BooleanArray::from(vec![false])) as ArrayRef;
+    let data = generate_random_strings(100000, 100);
+    let array =
+        Arc::new(StringArray::from(data)) as ArrayRef;
+    let array = Arc::new(array_into_list_array(array, true)) as ArrayRef;
+
+    let sub_array = Arc::new(StringArray::from(vec!["abcd"])) as ArrayRef;
 
     c.bench_function("array_has new", |b| {
         b.iter(|| {
-            let is_contained = black_box(array_has_internal::<i32>(&array, &sub_array, ComparisonType::Single).unwrap());
+            let is_contained = black_box(
+                array_has_internal::<i32>(&array, &sub_array, ComparisonType::Single)
+                    .unwrap(),
+            );
             assert_eq!(&is_contained, &expected);
         });
     });
 
     c.bench_function("array_has old", |b| {
         b.iter(|| {
-            let is_contained = black_box(general_array_has_dispatch::<i32>(&array, &sub_array, ComparisonType::Single).unwrap());
+            let is_contained = black_box(
+                general_array_has_dispatch::<i32>(
+                    &array,
+                    &sub_array,
+                    ComparisonType::Single,
+                )
+                .unwrap(),
+            );
             assert_eq!(&is_contained, &expected);
         })
     });

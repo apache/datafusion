@@ -17,7 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
-use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::as_generic_list_array;
@@ -101,14 +101,11 @@ impl ScalarUDFImpl for ArrayHas {
 
         let array_type = args[0].data_type();
 
-        println!("args: {:?}", args);
         match array_type {
-            DataType::List(_) => array_has_internal::<i32>(
-                &args[0],
-                &args[1],
-                ComparisonType::Single,
-            )
-            .map(ColumnarValue::Array),
+            DataType::List(_) => {
+                array_has_internal::<i32>(&args[0], &args[1], ComparisonType::Single)
+                    .map(ColumnarValue::Array)
+            }
             DataType::LargeList(_) => general_array_has_dispatch::<i64>(
                 &args[0],
                 &args[1],
@@ -331,6 +328,45 @@ pub fn array_has_internal<O: OffsetSizeTrait>(
     needle: &ArrayRef,
     _comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
+    let data_type = needle.data_type();
+    if *data_type == DataType::Utf8 {
+        return array_has_string_internal(haystack, needle);
+    }
+    general_array_has::<O>(haystack, needle)
+}
+
+fn array_has_string_internal(haystack: &ArrayRef, needle: &ArrayRef) -> Result<ArrayRef> {
+    let array = as_generic_list_array::<i32>(haystack)?;
+    let mut boolean_builder = BooleanArray::builder(array.len());
+    let needle_array = needle.as_string::<i32>();
+    for (arr, element) in array.iter().zip(needle_array.iter()) {
+        match (arr, element) {
+            (Some(arr), Some(element)) => {
+                let string_arr = arr.as_string::<i32>();
+                let mut res = false;
+                for sub_arr in string_arr.iter() {
+                    if let Some(sub_arr) = sub_arr {
+                        if sub_arr == element {
+                            res = true;
+                            break;
+                        }
+                    }
+                }
+                boolean_builder.append_value(res);
+            }
+            (_, _) => {
+                boolean_builder.append_null();
+            }
+        }
+    }
+
+    Ok(Arc::new(boolean_builder.finish()))
+}
+
+fn general_array_has<O: OffsetSizeTrait>(
+    haystack: &ArrayRef,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
     let array = as_generic_list_array::<O>(haystack)?;
     let mut boolean_builder = BooleanArray::builder(array.len());
     let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
@@ -340,9 +376,9 @@ pub fn array_has_internal<O: OffsetSizeTrait>(
         if let Some(arr) = arr {
             let arr_values = converter.convert_columns(&[arr])?;
             let res = arr_values
-                            .iter()
-                            .dedup()
-                            .any(|x| x == sub_arr_values.row(row_idx));
+                .iter()
+                .dedup()
+                .any(|x| x == sub_arr_values.row(row_idx));
             boolean_builder.append_value(res);
         } else {
             boolean_builder.append_null();
@@ -355,19 +391,40 @@ pub fn array_has_internal<O: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::Int32Type;
-    use arrow_array::{Int32Array, ListArray};
+    use arrow_array::{Int32Array, ListArray, StringArray};
+    use datafusion_common::utils::array_into_list_array;
 
     use super::*;
 
     #[test]
     fn test_array_has_internal() {
-        let data = vec![
-            Some(std::iter::repeat(Some(100)).take(100000).collect::<Vec<Option<i32>>>()),
-         ];
-        let array = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
+        let data = vec![Some(
+            std::iter::repeat(Some(100))
+                .take(100000)
+                .collect::<Vec<Option<i32>>>(),
+        )];
+        let array =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
         let sub_array = Arc::new(Int32Array::from(vec![Some(100)])) as ArrayRef;
 
-        let result = array_has_internal::<i32>(&array, &sub_array, ComparisonType::Single).unwrap();
+        let result =
+            array_has_internal::<i32>(&array, &sub_array, ComparisonType::Single)
+                .unwrap();
+        let expected = Arc::new(BooleanArray::from(vec![true])) as ArrayRef;
+        assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn test_array_has_string_internal() {
+        let array =
+            Arc::new(StringArray::from(vec!["abcd", "efgh", "ijkl", "mnop"])) as ArrayRef;
+        let array = Arc::new(array_into_list_array(array, true)) as ArrayRef;
+
+        let sub_array = Arc::new(StringArray::from(vec!["abcd"])) as ArrayRef;
+
+        let result =
+            array_has_internal::<i32>(&array, &sub_array, ComparisonType::Single)
+                .unwrap();
         let expected = Arc::new(BooleanArray::from(vec![true])) as ArrayRef;
         assert_eq!(&result, &expected);
     }
