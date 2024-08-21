@@ -118,7 +118,7 @@ impl PhysicalExpr for HourExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
         Ok(Arc::new(HourExpr::new(
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.timezone.clone(),
         )))
     }
@@ -212,7 +212,7 @@ impl PhysicalExpr for MinuteExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
         Ok(Arc::new(MinuteExpr::new(
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.timezone.clone(),
         )))
     }
@@ -306,7 +306,7 @@ impl PhysicalExpr for SecondExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
         Ok(Arc::new(SecondExpr::new(
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.timezone.clone(),
         )))
     }
@@ -393,8 +393,8 @@ impl PhysicalExpr for DateTruncExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
         Ok(Arc::new(DateTruncExpr::new(
-            children[0].clone(),
-            self.format.clone(),
+            Arc::clone(&children[0]),
+            Arc::clone(&self.format),
         )))
     }
 
@@ -518,8 +518,8 @@ impl PhysicalExpr for TimestampTruncExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
         Ok(Arc::new(TimestampTruncExpr::new(
-            children[0].clone(),
-            self.format.clone(),
+            Arc::clone(&children[0]),
+            Arc::clone(&self.format),
             self.timezone.clone(),
         )))
     }

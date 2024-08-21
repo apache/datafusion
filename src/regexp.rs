@@ -157,7 +157,7 @@ impl PhysicalExpr for RLike {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         assert!(children.len() == 1);
         Ok(Arc::new(RLike::try_new(
-            children[0].clone(),
+            Arc::clone(&children[0]),
             &self.pattern_str,
         )?))
     }

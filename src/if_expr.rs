@@ -60,9 +60,9 @@ impl IfExpr {
         false_expr: Arc<dyn PhysicalExpr>,
     ) -> Self {
         Self {
-            if_expr: if_expr.clone(),
-            true_expr: true_expr.clone(),
-            false_expr: false_expr.clone(),
+            if_expr: Arc::clone(&if_expr),
+            true_expr: Arc::clone(&true_expr),
+            false_expr: Arc::clone(&false_expr),
             case_expr: Arc::new(
                 CaseExpr::try_new(None, vec![(if_expr, true_expr)], Some(false_expr)).unwrap(),
             ),
@@ -102,9 +102,9 @@ impl PhysicalExpr for IfExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(IfExpr::new(
-            children[0].clone(),
-            children[1].clone(),
-            children[2].clone(),
+            Arc::clone(&children[0]),
+            Arc::clone(&children[1]),
+            Arc::clone(&children[2]),
         )))
     }
 

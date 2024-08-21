@@ -145,7 +145,7 @@ impl GetStructField {
 
     fn child_field(&self, input_schema: &Schema) -> DataFusionResult<Arc<Field>> {
         match self.child.data_type(input_schema)? {
-            DataType::Struct(fields) => Ok(fields[self.ordinal].clone()),
+            DataType::Struct(fields) => Ok(Arc::clone(&fields[self.ordinal])),
             data_type => Err(DataFusionError::Plan(format!(
                 "Expect struct field, got {:?}",
                 data_type
@@ -177,12 +177,12 @@ impl PhysicalExpr for GetStructField {
                     .downcast_ref::<StructArray>()
                     .expect("A struct is expected");
 
-                Ok(ColumnarValue::Array(
-                    struct_array.column(self.ordinal).clone(),
-                ))
+                Ok(ColumnarValue::Array(Arc::clone(
+                    struct_array.column(self.ordinal),
+                )))
             }
             ColumnarValue::Scalar(ScalarValue::Struct(struct_array)) => Ok(ColumnarValue::Array(
-                struct_array.column(self.ordinal).clone(),
+                Arc::clone(struct_array.column(self.ordinal)),
             )),
             value => Err(DataFusionError::Execution(format!(
                 "Expected a struct array, got {:?}",
@@ -200,7 +200,7 @@ impl PhysicalExpr for GetStructField {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(GetStructField::new(
-            children[0].clone(),
+            Arc::clone(&children[0]),
             self.ordinal,
         )))
     }

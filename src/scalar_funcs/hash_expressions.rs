@@ -44,7 +44,7 @@ pub fn spark_murmur3_hash(args: &[ColumnarValue]) -> Result<ColumnarValue, DataF
             let arrays = args[0..args.len() - 1]
                 .iter()
                 .map(|arg| match arg {
-                    ColumnarValue::Array(array) => array.clone(),
+                    ColumnarValue::Array(array) => Arc::clone(array),
                     ColumnarValue::Scalar(scalar) => {
                         scalar.clone().to_array_of_size(num_rows).unwrap()
                     }
@@ -88,7 +88,7 @@ pub fn spark_xxhash64(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusio
             let arrays = args[0..args.len() - 1]
                 .iter()
                 .map(|arg| match arg {
-                    ColumnarValue::Array(array) => array.clone(),
+                    ColumnarValue::Array(array) => Arc::clone(array),
                     ColumnarValue::Scalar(scalar) => {
                         scalar.clone().to_array_of_size(num_rows).unwrap()
                     }

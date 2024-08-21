@@ -619,7 +619,12 @@ fn cast_array(
 
             let casted_dictionary = DictionaryArray::<Int32Type>::new(
                 dict_array.keys().clone(),
-                cast_array(dict_array.values().clone(), to_type, eval_mode, timezone)?,
+                cast_array(
+                    Arc::clone(dict_array.values()),
+                    to_type,
+                    eval_mode,
+                    timezone,
+                )?,
             );
 
             let casted_result = match to_type {
@@ -1393,7 +1398,7 @@ impl PhysicalExpr for Cast {
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
         match children.len() {
             1 => Ok(Arc::new(Cast::new(
-                children[0].clone(),
+                Arc::clone(&children[0]),
                 self.data_type.clone(),
                 self.eval_mode,
                 self.timezone.clone(),
