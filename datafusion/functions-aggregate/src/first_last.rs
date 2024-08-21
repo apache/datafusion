@@ -150,7 +150,7 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn with_beneficial_ordering(
-        self: Arc<Self>,
+        &self,
         beneficial_ordering: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
         Ok(Some(Arc::new(
@@ -451,7 +451,7 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn with_beneficial_ordering(
-        self: Arc<Self>,
+        &self,
         beneficial_ordering: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
         Ok(Some(Arc::new(

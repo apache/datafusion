@@ -442,7 +442,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// not implement the method, returns an error. Order insensitive and hard
     /// requirement aggregators return `Ok(None)`.
     fn with_beneficial_ordering(
-        self: Arc<Self>,
+        &self,
         _beneficial_ordering: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
         if self.order_sensitivity().is_beneficial() {
@@ -608,6 +608,60 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         &self.aliases
     }
 
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        self.inner.state_fields(args)
+    }
+
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        self.inner.groups_accumulator_supported(args)
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        self.inner.create_groups_accumulator(args)
+    }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        self.inner.accumulator(args)
+    }
+
+    fn with_beneficial_ordering(
+        &self,
+        beneficial_ordering: bool,
+    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        self.inner
+            .with_beneficial_ordering(beneficial_ordering)
+            .map(|udf| {
+                udf.map(|udf| {
+                    Arc::new(AliasedAggregateUDFImpl {
+                        inner: udf,
+                        aliases: self.aliases.clone(),
+                    }) as Arc<dyn AggregateUDFImpl>
+                })
+            })
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        self.inner.order_sensitivity()
+    }
+
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        self.inner.simplify()
+    }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        self.inner.reverse_expr()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_types(arg_types)
+    }
+
     fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
         if let Some(other) = other.as_any().downcast_ref::<AliasedAggregateUDFImpl>() {
             self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
@@ -621,6 +675,10 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.hash_value().hash(hasher);
         self.aliases.hash(hasher);
         hasher.finish()
+    }
+
+    fn is_descending(&self) -> Option<bool> {
+        self.inner.is_descending()
     }
 }
 

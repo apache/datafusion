@@ -428,6 +428,10 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         &self.aliases
     }
 
+    fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        self.inner.simplify()
+    }
+
     fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
         if let Some(other) = other.as_any().downcast_ref::<AliasedWindowUDFImpl>() {
             self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
@@ -441,6 +445,18 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.hash_value().hash(hasher);
         self.aliases.hash(hasher);
         hasher.finish()
+    }
+
+    fn nullable(&self) -> bool {
+        self.inner.nullable()
+    }
+
+    fn sort_options(&self) -> Option<SortOptions> {
+        self.inner.sort_options()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_types(arg_types)
     }
 }
 
