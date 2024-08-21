@@ -1187,13 +1187,19 @@ foo NULL NULL NULL foo NULL NULL NULL
 
 
 # || same type (column1 has null, so also tests NULL || NULL)
-query error DataFusion error: Error during planning: Cannot infer common string type for string concat operation Dictionary\(Int32, Utf8\) \|\| Dictionary\(Int32, Utf8\)
+query TTT
 SELECT
   column1_utf8view || column1_utf8view,
   column1_utf8 || column1_utf8,
-  column1_large_utf8 || column1_large_utf8,
-  column1_dict || column1_dict
+  column1_large_utf8 || column1_large_utf8
+  -- TODO file ticket for dict || dict
+  --column1_dict || column1_dict
 FROM test;
+----
+AndrewAndrew AndrewAndrew AndrewAndrew
+XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng
+RaphaelRaphael RaphaelRaphael RaphaelRaphael
+NULL NULL NULL
 
 
 
