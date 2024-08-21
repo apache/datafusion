@@ -402,7 +402,8 @@ impl TableFunctionImpl for ParquetMetadataFunc {
                     stats_min_arr.push(min_val.clone());
                     stats_max_arr.push(max_val.clone());
                     stats_null_count_arr.push(s.null_count_opt().map(|c| c as i64));
-                    stats_distinct_count_arr.push(s.distinct_count().map(|c| c as i64));
+                    stats_distinct_count_arr
+                        .push(s.distinct_count_opt().map(|c| c as i64));
                     stats_min_value_arr.push(min_val);
                     stats_max_value_arr.push(max_val);
                 } else {
