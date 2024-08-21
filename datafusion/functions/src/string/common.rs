@@ -256,7 +256,7 @@ impl<'a> ColumnarValueRef<'a> {
 
 /// Abstracts iteration over different types of string arrays.
 ///
-/// This trait helps write generic code for string functions that can work with
+/// The [`StringArrayType`] trait helps write generic code for string functions that can work with
 /// different types of string arrays.
 ///
 /// Currently three types are supported:
