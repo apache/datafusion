@@ -176,9 +176,9 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
         value_slice: &[ArrayRef],
         accumulator: &mut Box<dyn Accumulator>,
     ) -> Result<ScalarValue> {
-        let value = if cur_range.start == cur_range.end {
-            // We produce None if the window is empty.
-            ScalarValue::try_from(self.aggregate.field()?.data_type())?
+        if cur_range.start == cur_range.end {
+            self.aggregate
+                .default_value(self.aggregate.field()?.data_type())
         } else {
             // Accumulate any new rows that have entered the window:
             let update_bound = cur_range.end - last_range.end;
@@ -193,8 +193,7 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
                     .collect();
                 accumulator.update_batch(&update)?
             }
-            accumulator.evaluate()?
-        };
-        Ok(value)
+            accumulator.evaluate()
+        }
     }
 }

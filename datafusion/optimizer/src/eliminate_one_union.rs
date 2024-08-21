@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn eliminate_one_union() -> Result<()> {
         let table_plan = coerce_plan_expr_for_schema(
-            &table_scan(Some("table"), &schema(), None)?.build()?,
+            table_scan(Some("table"), &schema(), None)?.build()?,
             &schema().to_dfschema()?,
         )?;
         let schema = Arc::clone(table_plan.schema());
