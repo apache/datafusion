@@ -3104,6 +3104,114 @@ fn join_on_complex_condition() {
 }
 
 #[test]
+fn lateral_constant() {
+    let sql = "SELECT * FROM j1, LATERAL (SELECT 1) AS j2";
+    let expected = "Projection: *\
+            \n  CrossJoin:\
+            \n    TableScan: j1\
+            \n    SubqueryAlias: j2\
+            \n      Subquery:\
+            \n        Projection: Int64(1)\
+            \n          EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_comma_join() {
+    let sql = "SELECT j1_string, j2_string FROM
+            j1, \
+            LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2";
+    let expected = "Projection: j1.j1_string, j2.j2_string\
+            \n  CrossJoin:\
+            \n    TableScan: j1\
+            \n    SubqueryAlias: j2\
+            \n      Subquery:\
+            \n        Projection: *\
+            \n          Filter: outer_ref(j1.j1_id) < j2.j2_id\
+            \n            TableScan: j2";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_comma_join_referencing_join_rhs() {
+    let sql = "SELECT * FROM\
+            \n  j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id),\
+            \n  LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4;";
+    let expected = "Projection: *\
+            \n  CrossJoin:\
+            \n    Inner Join:  Filter: j1.j1_id = j2.j2_id\
+            \n      TableScan: j1\
+            \n      Inner Join:  Filter: j2.j2_id = j3.j3_id - Int64(2)\
+            \n        TableScan: j2\
+            \n        TableScan: j3\
+            \n    SubqueryAlias: j4\
+            \n      Subquery:\
+            \n        Projection: *\
+            \n          Filter: j3.j3_string = outer_ref(j2.j2_string)\
+            \n            TableScan: j3";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_comma_join_with_shadowing() {
+    // The j1_id on line 3 references the (closest) j1 definition from line 2.
+    let sql = "\
+            SELECT * FROM j1, LATERAL (\
+              SELECT * FROM j1, LATERAL (\
+                SELECT * FROM j2 WHERE j1_id = j2_id\
+              ) as j2\
+            ) as j2;";
+    let expected = "Projection: *\
+            \n  CrossJoin:\
+            \n    TableScan: j1\
+            \n    SubqueryAlias: j2\
+            \n      Subquery:\
+            \n        Projection: *\
+            \n          CrossJoin:\
+            \n            TableScan: j1\
+            \n            SubqueryAlias: j2\
+            \n              Subquery:\
+            \n                Projection: *\
+            \n                  Filter: outer_ref(j1.j1_id) = j2.j2_id\
+            \n                    TableScan: j2";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_left_join() {
+    let sql = "SELECT j1_string, j2_string FROM \
+            j1 \
+            LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);";
+    let expected = "Projection: j1.j1_string, j2.j2_string\
+            \n  Left Join:  Filter: Boolean(true)\
+            \n    TableScan: j1\
+            \n    SubqueryAlias: j2\
+            \n      Subquery:\
+            \n        Projection: *\
+            \n          Filter: outer_ref(j1.j1_id) < j2.j2_id\
+            \n            TableScan: j2";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_nested_left_join() {
+    let sql = "SELECT * FROM 
+            j1, \
+            (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true))";
+    let expected = "Projection: *\
+            \n  CrossJoin:\
+            \n    TableScan: j1\
+            \n    Left Join:  Filter: Boolean(true)\
+            \n      TableScan: j2\
+            \n      SubqueryAlias: j3\
+            \n        Subquery:\
+            \n          Projection: *\
+            \n            Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id\
+            \n              TableScan: j3";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn hive_aggregate_with_filter() -> Result<()> {
     let dialect = &HiveDialect {};
     let sql = "SELECT sum(age) FILTER (WHERE age > 4) FROM person";

@@ -15,34 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    fmt::{self, Display, Formatter},
-    str::FromStr,
-};
+use arrow_schema::{Schema, SchemaBuilder};
+use datafusion_common::Result;
+use datafusion_physical_expr::window::WindowExpr;
+use std::sync::Arc;
 
-#[derive(PartialEq, Debug, Clone)]
-pub enum PoolType {
-    Greedy,
-    Fair,
-}
-
-impl FromStr for PoolType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Greedy" | "greedy" => Ok(PoolType::Greedy),
-            "Fair" | "fair" => Ok(PoolType::Fair),
-            _ => Err(format!("Invalid memory pool type '{}'", s)),
-        }
+pub(crate) fn create_schema(
+    input_schema: &Schema,
+    window_expr: &[Arc<dyn WindowExpr>],
+) -> Result<Schema> {
+    let capacity = input_schema.fields().len() + window_expr.len();
+    let mut builder = SchemaBuilder::with_capacity(capacity);
+    builder.extend(input_schema.fields().iter().cloned());
+    // append results to the schema
+    for expr in window_expr {
+        builder.push(expr.field()?);
     }
-}
-
-impl Display for PoolType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            PoolType::Greedy => write!(f, "greedy"),
-            PoolType::Fair => write!(f, "fair"),
-        }
-    }
+    Ok(builder.finish())
 }
