@@ -499,6 +499,12 @@ impl ExternalSorter {
         metrics: BaselineMetrics,
     ) -> Result<SendableRecordBatchStream> {
         assert_ne!(self.in_mem_batches.len(), 0);
+
+        // The elapsed compute timer is updated when the value is dropped.
+        // There is no need for an explicit call to drop.
+        let elapsed_compute = metrics.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer();
+
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.remove(0);
             let reservation = self.reservation.take();
