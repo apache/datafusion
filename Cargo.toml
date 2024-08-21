@@ -137,7 +137,7 @@ serde_json = "1"
 sqlparser = { version = "0.50.0", features = ["visitor"] }
 tempfile = "3"
 thiserror = "1.0.44"
-tokio = { version = "1.36", features = ["macros", "rt", "sync", "rt-multi-thread"] }
+tokio = { version = "1.36", features = ["macros", "rt", "sync"] }
 url = "2.2"
 
 [profile.release]
