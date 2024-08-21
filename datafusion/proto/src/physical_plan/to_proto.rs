@@ -56,7 +56,7 @@ pub fn serialize_physical_aggr_expr(
     let ordering_req = aggr_expr.order_bys().unwrap_or(&[]).to_vec();
     let ordering_req = serialize_physical_sort_exprs(ordering_req, codec)?;
 
-    let name = aggr_expr.name().to_string();
+    let name = aggr_expr.fun().name().to_string();
     let mut buf = Vec::new();
     codec.try_encode_udaf(aggr_expr.fun(), &mut buf)?;
     Ok(protobuf::PhysicalExprNode {
@@ -89,7 +89,7 @@ fn serialize_physical_window_aggr_expr(
     codec.try_encode_udaf(aggr_expr.fun(), &mut buf)?;
     Ok((
         physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
-            aggr_expr.name().to_string(),
+            aggr_expr.fun().name().to_string(),
         ),
         (!buf.is_empty()).then_some(buf),
     ))

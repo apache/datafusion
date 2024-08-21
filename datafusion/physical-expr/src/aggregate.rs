@@ -112,11 +112,7 @@ impl AggregateExprBuilder {
                 .map(|e| e.expr.data_type(&schema))
                 .collect::<Result<Vec<_>>>()?;
 
-            ordering_fields =
-                datafusion_functions_aggregate_common::utils::ordering_fields(
-                    &ordering_req,
-                    &ordering_types,
-                );
+            ordering_fields = utils::ordering_fields(&ordering_req, &ordering_types);
         }
 
         let input_exprs_types = args
