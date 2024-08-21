@@ -18,15 +18,13 @@
 //! SQL Utility Functions
 
 use arrow_schema::{
-    DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
-    DECIMAL_DEFAULT_SCALE,
+    DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
     exec_err, internal_err, plan_err, Column, DataFusionError, Result, ScalarValue,
-    TableReference,
 };
 use datafusion_expr::builder::get_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
@@ -34,7 +32,6 @@ use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
 use sqlparser::ast::{Ident, Value};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -89,12 +86,12 @@ pub(crate) fn rebase_expr(
 
 /// Determines if the set of `Expr`'s are a valid projection on the input
 /// `Expr::Column`'s.
+/// Return true if the expressions are valid and not empty.
 pub(crate) fn check_columns_satisfy_exprs(
     columns: &[Expr],
     exprs: &[Expr],
-    wildcard_fields: &[(Option<TableReference>, Arc<Field>)],
     message_prefix: &str,
-) -> Result<()> {
+) -> Result<bool> {
     columns.iter().try_for_each(|c| match c {
         Expr::Column(_) => Ok(()),
         _ => internal_err!("Expr::Column are required"),
@@ -122,32 +119,7 @@ pub(crate) fn check_columns_satisfy_exprs(
             _ => check_column_satisfies_expr(columns, e, message_prefix)?,
         }
     }
-    let column_names = columns
-        .iter()
-        .map(|c| c.schema_name().to_string())
-        .collect::<Vec<_>>();
-
-    wildcard_fields.iter().try_for_each(|(table, field)| {
-        let column_name = qualified_name(table, field.name());
-        if !column_names.iter().any(|c| c == &column_name) {
-            plan_err!(
-                "{}: Wildcard column {} could not be resolved from available columns: {}",
-                message_prefix,
-                column_name,
-                expr_vec_fmt!(columns)
-            )
-        } else {
-            Ok(())
-        }
-    })?;
-    Ok(())
-}
-
-fn qualified_name(qualifier: &Option<TableReference>, name: &str) -> String {
-    match qualifier {
-        Some(q) => format!("{}.{}", q, name),
-        None => name.to_string(),
-    }
+    Ok(!column_exprs.is_empty())
 }
 
 fn check_column_satisfies_expr(
