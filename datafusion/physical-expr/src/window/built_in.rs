@@ -17,6 +17,10 @@
 
 //! Physical exec for built-in window function expressions.
 
+use std::any::Any;
+use std::ops::Range;
+use std::sync::Arc;
+
 use super::{BuiltInWindowFunctionExpr, WindowExpr};
 use crate::expressions::PhysicalSortExpr;
 use crate::window::window_expr::{get_orderby_values, WindowFn};
@@ -30,9 +34,6 @@ use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
-use std::any::Any;
-use std::ops::Range;
-use std::sync::Arc;
 
 /// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
 #[derive(Debug)]

@@ -356,6 +356,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Nullable means that that the function could return `null` for any inputs.
     /// For example, aggregate functions like `COUNT` always return a non null value
     /// but others like `MIN` will return `NULL` if there is nullable input.
+    /// Note that if the function is declared as *not* nullable, make sure the [`AggregateUDFImpl::default_value`] is `non-null`
     fn is_nullable(&self) -> bool {
         true
     }

@@ -17,6 +17,11 @@
 
 //! Stream and channel implementations for window function expressions.
 
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use super::utils::create_schema;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -40,10 +45,6 @@ use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::{ready, Stream, StreamExt};
-use std::any::Any;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
 
 /// Window execution plan
 #[derive(Debug)]

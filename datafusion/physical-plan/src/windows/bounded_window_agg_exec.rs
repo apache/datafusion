@@ -20,6 +20,13 @@
 //! the input data seen so far), which makes it appropriate when processing
 //! infinite inputs.
 
+use std::any::Any;
+use std::cmp::{min, Ordering};
+use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use super::utils::create_schema;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -58,12 +65,6 @@ use futures::{ready, StreamExt};
 use hashbrown::raw::RawTable;
 use indexmap::IndexMap;
 use log::debug;
-use std::any::Any;
-use std::cmp::{min, Ordering};
-use std::collections::{HashMap, VecDeque};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
 
 /// Window execution plan
 #[derive(Debug)]
