@@ -51,6 +51,7 @@ pub struct ScalarFunctionExpr {
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
+    nullable: bool,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -77,6 +78,7 @@ impl ScalarFunctionExpr {
             name: name.to_owned(),
             args,
             return_type,
+            nullable: true,
         }
     }
 
@@ -99,6 +101,15 @@ impl ScalarFunctionExpr {
     pub fn return_type(&self) -> &DataType {
         &self.return_type
     }
+
+    pub fn with_nullable(mut self, nullable: bool) -> Self {
+        self.nullable = nullable;
+        self
+    }
+
+    pub fn nullable(&self) -> bool {
+        self.nullable
+    }
 }
 
 impl fmt::Display for ScalarFunctionExpr {
@@ -118,7 +129,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        Ok(true)
+        Ok(self.nullable)
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -151,12 +162,15 @@ impl PhysicalExpr for ScalarFunctionExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(ScalarFunctionExpr::new(
-            &self.name,
-            Arc::clone(&self.fun),
-            children,
-            self.return_type().clone(),
-        )))
+        Ok(Arc::new(
+            ScalarFunctionExpr::new(
+                &self.name,
+                Arc::clone(&self.fun),
+                children,
+                self.return_type().clone(),
+            )
+            .with_nullable(self.nullable),
+        ))
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
@@ -209,8 +223,6 @@ impl PartialEq<dyn Any> for ScalarFunctionExpr {
 }
 
 /// Create a physical expression for the UDF.
-///
-/// Arguments:
 pub fn create_physical_expr(
     fun: &ScalarUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
@@ -230,10 +242,13 @@ pub fn create_physical_expr(
     let return_type =
         fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
 
-    Ok(Arc::new(ScalarFunctionExpr::new(
-        fun.name(),
-        Arc::new(fun.clone()),
-        input_phy_exprs.to_vec(),
-        return_type,
-    )))
+    Ok(Arc::new(
+        ScalarFunctionExpr::new(
+            fun.name(),
+            Arc::new(fun.clone()),
+            input_phy_exprs.to_vec(),
+            return_type,
+        )
+        .with_nullable(fun.is_nullable(args, input_dfschema)),
+    ))
 }
