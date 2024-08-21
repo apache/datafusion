@@ -267,7 +267,7 @@ fn take_optimizable_max(
 // TODO: Move this check into AggregateUDFImpl
 // https://github.com/apache/datafusion/issues/11153
 fn is_non_distinct_count(agg_expr: &AggregateFunctionExpr) -> bool {
-    if agg_expr.name() == "count" && !agg_expr.is_distinct() {
+    if agg_expr.fun().name() == "count" && !agg_expr.is_distinct() {
         return true;
     }
     false
@@ -276,7 +276,7 @@ fn is_non_distinct_count(agg_expr: &AggregateFunctionExpr) -> bool {
 // TODO: Move this check into AggregateUDFImpl
 // https://github.com/apache/datafusion/issues/11153
 fn is_min(agg_expr: &AggregateFunctionExpr) -> bool {
-    if agg_expr.name().to_lowercase() == "min" {
+    if agg_expr.fun().name().to_lowercase() == "min" {
         return true;
     }
     false
@@ -285,7 +285,7 @@ fn is_min(agg_expr: &AggregateFunctionExpr) -> bool {
 // TODO: Move this check into AggregateUDFImpl
 // https://github.com/apache/datafusion/issues/11153
 fn is_max(agg_expr: &AggregateFunctionExpr) -> bool {
-    if agg_expr.name().to_lowercase() == "max" {
+    if agg_expr.fun().name().to_lowercase() == "max" {
         return true;
     }
     false
