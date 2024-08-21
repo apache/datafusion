@@ -552,7 +552,9 @@ impl ExternalSorter {
         let fetch = self.fetch;
         let expressions = Arc::clone(&self.expr);
         let stream = futures::stream::once(futures::future::lazy(move |_| {
+            let timer = metrics.elapsed_compute().timer();
             let sorted = sort_batch(&batch, &expressions, fetch)?;
+            timer.done();
             metrics.record_output(sorted.num_rows());
             drop(batch);
             drop(reservation);
