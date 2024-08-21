@@ -394,7 +394,7 @@ impl BlockedNullState {
             .sum::<usize>()
     }
 
-    /// Similar as [NullState::accumulate]  but supported the blocked version accumulator
+    /// Similar as [NullState::accumulate]
     pub fn accumulate_for_flat<T, F>(
         &mut self,
         group_indices: &[usize],
@@ -411,7 +411,7 @@ impl BlockedNullState {
 
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
-        ensure_enough_room_for_nulls_for_flat(
+        ensure_enough_room_for_flat_nulls(
             &mut self.seen_values_blocks,
             total_num_groups,
             false,
@@ -424,7 +424,7 @@ impl BlockedNullState {
         });
     }
 
-    /// Similar as [NullState::accumulate]  but supported the blocked version accumulator
+    /// Similar as [NullState::accumulate] but designed for blocked version accumulator
     pub fn accumulate_for_blocked<T, F>(
         &mut self,
         group_indices: &[usize],
@@ -442,7 +442,7 @@ impl BlockedNullState {
 
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
-        ensure_enough_room_for_nulls_for_blocked(
+        ensure_enough_room_for_blocked_nulls(
             &mut self.seen_values_blocks,
             total_num_groups,
             block_size,
@@ -708,8 +708,8 @@ fn initialize_builder(
     builder
 }
 
-/// Similar as the [initialize_builder] but designed for the blocked version accumulator
-fn ensure_enough_room_for_nulls_for_flat(
+/// Similar as the [initialize_builder]
+fn ensure_enough_room_for_flat_nulls(
     builder_blocks: &mut Blocks<BooleanBufferBuilder>,
     total_num_groups: usize,
     default_value: bool,
@@ -729,7 +729,7 @@ fn ensure_enough_room_for_nulls_for_flat(
 }
 
 /// Similar as the [initialize_builder] but designed for the blocked version accumulator
-fn ensure_enough_room_for_nulls_for_blocked(
+fn ensure_enough_room_for_blocked_nulls(
     builder_blocks: &mut Blocks<BooleanBufferBuilder>,
     total_num_groups: usize,
     block_size: usize,

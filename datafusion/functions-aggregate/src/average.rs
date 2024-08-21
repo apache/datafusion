@@ -458,9 +458,9 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
+        // increment counts, update sums
         match self.mode {
             GroupStatesMode::Flat => {
-                // increment counts, update sums
                 ensure_enough_room_for_flat_values(&mut self.counts, total_num_groups, 0);
                 ensure_enough_room_for_flat_values(
                     &mut self.sums,
@@ -588,10 +588,12 @@ where
         }
 
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
+
         // first batch is counts, second is partial sums
         let partial_counts = values[0].as_primitive::<UInt64Type>();
         let partial_sums = values[1].as_primitive::<T>();
 
+        // update counts with partial counts + update sums
         match self.mode {
             GroupStatesMode::Flat => {
                 ensure_enough_room_for_flat_values(&mut self.counts, total_num_groups, 0);
@@ -601,7 +603,6 @@ where
                     T::default_value(),
                 );
 
-                // update counts with partial counts
                 let count_block = self.counts.current_mut().unwrap();
                 self.null_state.accumulate_for_flat(
                     group_indices,
@@ -614,7 +615,6 @@ where
                     },
                 );
 
-                // update sums
                 let sum_block = self.sums.current_mut().unwrap();
                 self.null_state.accumulate_for_flat(
                     group_indices,
@@ -641,7 +641,6 @@ where
                     T::default_value(),
                 );
 
-                // update counts with partial counts
                 self.null_state.accumulate_for_blocked(
                     group_indices,
                     partial_counts,
@@ -656,7 +655,6 @@ where
                     },
                 );
 
-                // update sums
                 self.null_state.accumulate_for_blocked(
                     group_indices,
                     partial_sums,

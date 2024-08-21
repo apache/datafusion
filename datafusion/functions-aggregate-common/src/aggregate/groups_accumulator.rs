@@ -412,24 +412,22 @@ pub(crate) fn slice_and_maybe_filter(
     }
 }
 
-/// Expend blocked values to a big enough size for holding `total_num_groups` groups.
+/// Expend flat values to a big enough size for holding `total_num_groups` groups.
 ///
 /// For example,
 ///
 /// before expanding:
-///   values: [x, x, x], [x, x, x] (blocks=2, block_size=3)
+///   values: [x, x, x, x, x, x]
 ///   total_num_groups: 8
 ///
 /// After expanding:
-///   values: [x, x, x], [x, x, x], [default, default, default]
+///   values: [x, x, x, x, x, x, default, default]
 ///
 pub fn ensure_enough_room_for_flat_values<T: Clone>(
     values: &mut VecBlocks<T>,
     total_num_groups: usize,
     default_value: T,
 ) {
-    debug_assert!(total_num_groups > 0);
-
     // It flat mode, we just a single builder, and grow it constantly.
     if values.num_blocks() == 0 {
         values.push_block(Vec::new());
@@ -458,8 +456,6 @@ pub fn ensure_enough_room_for_blocked_values<T: Clone>(
     block_size: usize,
     default_value: T,
 ) {
-    debug_assert!(total_num_groups > 0);
-
     // In blocked mode, we ensure the blks are enough first,
     // and then ensure slots in blks are enough.
     let (mut cur_blk_idx, exist_slots) = if values.num_blocks() > 0 {
