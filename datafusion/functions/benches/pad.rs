@@ -127,11 +127,12 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
             b.iter(|| criterion::black_box(rpad().invoke(&args).unwrap()))
         });
-        //
-        // let args = create_args::<i32>(size, 32, true);
-        // group.bench_function(BenchmarkId::new("stringview type", size), |b| {
-        //     b.iter(|| criterion::black_box(rpad().invoke(&args).unwrap()))
-        // });
+
+        // rpad for stringview type
+        let args = create_args::<i32>(size, 32, true);
+        group.bench_function(BenchmarkId::new("stringview type", size), |b| {
+            b.iter(|| criterion::black_box(rpad().invoke(&args).unwrap()))
+        });
 
         group.finish();
     }
