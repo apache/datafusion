@@ -130,6 +130,8 @@ pub struct PlannerContext {
     /// Data types for numbered parameters ($1, $2, etc), if supplied
     /// in `PREPARE` statement
     prepare_param_data_types: Arc<Vec<DataType>>,
+    /// Column types for VALUES tuples during an INSERT.
+    values_column_data_types: Arc<Vec<DataType>>,
     /// Map of CTE name to logical plan of the WITH clause.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
@@ -151,6 +153,7 @@ impl PlannerContext {
     pub fn new() -> Self {
         Self {
             prepare_param_data_types: Arc::new(vec![]),
+            values_column_data_types: Arc::new(vec![]),
             ctes: HashMap::new(),
             outer_query_schema: None,
             outer_from_schema: None,
@@ -163,6 +166,14 @@ impl PlannerContext {
         prepare_param_data_types: Vec<DataType>,
     ) -> Self {
         self.prepare_param_data_types = prepare_param_data_types.into();
+        self
+    }
+
+    pub fn with_values_column_data_types(
+        mut self,
+        values_column_data_types: Vec<DataType>,
+    ) -> Self {
+        self.values_column_data_types = values_column_data_types.into();
         self
     }
 
@@ -207,6 +218,11 @@ impl PlannerContext {
     /// Return the types of parameters (`$1`, `$2`, etc) if known
     pub fn prepare_param_data_types(&self) -> &[DataType] {
         &self.prepare_param_data_types
+    }
+
+    /// Return the types of columns in VALUES tuples if known
+    pub fn values_column_data_types(&self) -> &[DataType] {
+        &self.values_column_data_types
     }
 
     /// returns true if there is a Common Table Expression (CTE) /

@@ -231,6 +231,67 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
+    /// Create a values list based relation using the provided column datatypes.
+    ///
+    /// By default, it assigns the names column1, column2, etc. to the columns of a VALUES table.
+    /// The column names are not specified by the SQL standard and different database systems do it differently,
+    /// so it's usually better to override the default names with a table alias list.
+    ///
+    /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
+    pub fn values_with_types(
+        mut values: Vec<Vec<Expr>>,
+        field_types: &[DataType],
+    ) -> Result<Self> {
+        if values.is_empty() {
+            return plan_err!("Values list cannot be empty");
+        }
+        let n_cols = values[0].len();
+        if n_cols == 0 {
+            return plan_err!("Values list cannot be zero length");
+        }
+        if n_cols != field_types.len() {
+            return plan_err!(
+                "Values list does not match the provided number of data types: got {} values but expected {}", n_cols,
+                field_types.len()
+            );
+        }
+        for (i, row) in values.iter().enumerate() {
+            if row.len() != n_cols {
+                return plan_err!(
+                    "Inconsistent data length across values list: got {} values in row {} but expected {}",
+                    row.len(),
+                    i,
+                    n_cols
+                );
+            }
+        }
+
+        let empty_schema = DFSchema::empty();
+        // wrap cast if data type is not same as common type.
+        for row in &mut values {
+            for (j, field_type) in field_types.iter().enumerate() {
+                if let Expr::Literal(ScalarValue::Null) = row[j] {
+                    row[j] = Expr::Literal(ScalarValue::try_from(field_type.clone())?);
+                } else {
+                    row[j] =
+                        std::mem::take(&mut row[j]).cast_to(field_type, &empty_schema)?;
+                }
+            }
+        }
+        let fields = field_types
+            .iter()
+            .enumerate()
+            .map(|(j, data_type)| {
+                // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
+                let name = &format!("column{}", j + 1);
+                Field::new(name, data_type.clone(), true)
+            })
+            .collect::<Vec<_>>();
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let schema = DFSchemaRef::new(dfschema);
+        Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
+    }
+
     /// Convert a table provider into a builder with a TableScan
     ///
     /// Note that if you pass a string as `table_name`, it is treated

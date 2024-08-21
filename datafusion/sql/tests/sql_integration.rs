@@ -3195,7 +3195,7 @@ fn lateral_left_join() {
 
 #[test]
 fn lateral_nested_left_join() {
-    let sql = "SELECT * FROM 
+    let sql = "SELECT * FROM
             j1, \
             (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true))";
     let expected = "Projection: *\

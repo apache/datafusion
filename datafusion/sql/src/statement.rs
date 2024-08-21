@@ -1468,10 +1468,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
         let prepare_param_data_types = prepare_param_data_types.into_values().collect();
+        let values_column_data_types = fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
 
         // Projection
-        let mut planner_context =
-            PlannerContext::new().with_prepare_param_data_types(prepare_param_data_types);
+        let mut planner_context = PlannerContext::new()
+            .with_prepare_param_data_types(prepare_param_data_types)
+            .with_values_column_data_types(values_column_data_types);
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if fields.len() != source.schema().fields().len() {
             plan_err!("Column count doesn't match insert query!")?;

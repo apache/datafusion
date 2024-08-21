@@ -41,6 +41,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()?;
-        LogicalPlanBuilder::values(values)?.build()
+        let column_types = planner_context.values_column_data_types();
+        if column_types.is_empty() {
+            LogicalPlanBuilder::values(values)?.build()
+        } else {
+            LogicalPlanBuilder::values_with_types(values, column_types)?.build()
+        }
     }
 }
