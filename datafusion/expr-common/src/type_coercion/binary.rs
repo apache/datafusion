@@ -912,11 +912,14 @@ fn dictionary_coercion(
 
 /// Coercion rules for string concat.
 /// This is a union of string coercion rules and specified rules:
-/// 1. At lease one side of lhs and rhs should be string type (Utf8 / LargeUtf8)
+/// 1. At least one side of lhs and rhs should be string type (Utf8 / LargeUtf8)
 /// 2. Data type of the other side should be able to cast to string type
 fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     string_coercion(lhs_type, rhs_type).or(match (lhs_type, rhs_type) {
+        (Utf8View, from_type) | (from_type, Utf8View) => {
+            string_concat_internal_coercion(from_type, &Utf8View)
+        }
         (Utf8, from_type) | (from_type, Utf8) => {
             string_concat_internal_coercion(from_type, &Utf8)
         }
@@ -935,6 +938,8 @@ fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> 
     }
 }
 
+/// If `from_type` can be casted to `to_type`, return `to_type`, otherwise
+/// return `None`.
 fn string_concat_internal_coercion(
     from_type: &DataType,
     to_type: &DataType,
@@ -960,6 +965,7 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
         }
         // Then, if LargeUtf8 is in any side, we coerce to LargeUtf8.
         (LargeUtf8, Utf8 | LargeUtf8) | (Utf8, LargeUtf8) => Some(LargeUtf8),
+        // Utf8 coerces to Utf8
         (Utf8, Utf8) => Some(Utf8),
         _ => None,
     }
