@@ -170,6 +170,21 @@ impl BlockedGroupIndex {
 }
 
 /// The basic data structure for blocked aggregation intermediate results
+///
+/// The reason why not use `VecDeque` directly:
+///
+/// `current` and `current_mut` will be called frequently,
+/// and if we use `VecDeque` directly, they will be mapped
+/// to `back` and `back_mut` in it.
+///
+/// `back` and `back_mut` are implemented using indexed operation
+/// which need some computation about address that will be a bit
+/// more expansive than we keep the latest element in `current`,
+/// and just return reference of it directly.
+///
+/// This small optimization can bring slight performance improvement
+/// in the single block case(e.g. when blocked optimization is disabled).
+///
 pub struct Blocks<T> {
     /// The current block, it should be pushed into `previous`
     /// when next block is pushed
