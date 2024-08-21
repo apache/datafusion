@@ -19,9 +19,8 @@
 //! (built-in and custom) need to satisfy.
 
 use crate::order::AggregateOrderSensitivity;
-use arrow::datatypes::Field;
-use datafusion_common::exec_err;
-use datafusion_common::{not_impl_err, Result};
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -171,6 +170,11 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     fn get_minmax_desc(&self) -> Option<(Field, bool)> {
         None
     }
+
+    /// Returns default value of the function given the input is Null
+    /// Most of the aggregate function return Null if input is Null,
+    /// while `count` returns 0 if input is Null
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue>;
 }
 
 /// Stores the physical expressions used inside the `AggregateExpr`.

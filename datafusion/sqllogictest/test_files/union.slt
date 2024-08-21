@@ -150,6 +150,21 @@ GROUP BY c1
 2 2
 3 3
 
+# This test goes through schema check in aggregate plan, if count's nullable is not matched, this test failed
+query II rowsort
+SELECT c1, SUM(c2) FROM (
+    SELECT 1 as c1, 1::int as c2
+    UNION
+    SELECT 2 as c1, 2::int as c2
+    UNION
+    SELECT 3 as c1, count(1) as c2
+) as a
+GROUP BY c1
+----
+1 1
+2 2
+3 1
+
 # union_all_with_count
 statement ok
 CREATE table t as SELECT 1 as a
