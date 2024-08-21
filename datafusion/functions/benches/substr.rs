@@ -25,7 +25,6 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingM
 use datafusion_expr::ColumnarValue;
 use datafusion_functions::unicode;
 use std::sync::Arc;
-use std::time::Duration;
 
 fn create_args_without_count<O: OffsetSizeTrait>(
     size: usize,
@@ -104,7 +103,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut group = c.benchmark_group("SHORTER THAN 12");
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
-        group.measurement_time(Duration::from_secs(10));
 
         let args = create_args_without_count::<i32>(size, len, true, true);
         group.bench_function(
@@ -132,7 +130,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut group = c.benchmark_group("LONGER THAN 12");
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
-        group.measurement_time(Duration::from_secs(10));
 
         let args = create_args_with_count::<i32>(size, len, count, true);
         group.bench_function(
@@ -169,7 +166,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut group = c.benchmark_group("SRC_LEN > 12, SUB_LEN < 12");
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
-        group.measurement_time(Duration::from_secs(10));
 
         let args = create_args_with_count::<i32>(size, len, count, true);
         group.bench_function(
