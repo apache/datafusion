@@ -16,7 +16,6 @@
 // under the License.
 
 use std::collections::HashSet;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::planner::{
@@ -35,7 +34,10 @@ use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
 };
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
-use datafusion_expr::utils::{expr_as_column_expr, expr_to_columns, exprlist_to_fields, find_aggregate_exprs, find_window_exprs};
+use datafusion_expr::utils::{
+    expr_as_column_expr, expr_to_columns, exprlist_to_fields, find_aggregate_exprs,
+    find_window_exprs,
+};
 use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
     GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
@@ -748,9 +750,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
             .collect::<Result<Vec<Expr>>>()?;
 
-        let wildcard_exprs = select_exprs_post_aggr.iter().filter(|expr| matches!(expr, Expr::Wildcard { .. })).collect::<Vec<_>>();
+        let wildcard_exprs = select_exprs_post_aggr
+            .iter()
+            .filter(|expr| matches!(expr, Expr::Wildcard { .. }))
+            .collect::<Vec<_>>();
         let wildcard_fields = exprlist_to_fields(wildcard_exprs, input)?;
-
         // finally, we have some validation that the re-written projection can be resolved
         // from the aggregate output columns
         check_columns_satisfy_exprs(
@@ -779,15 +783,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
-}
-
-fn check_contain_scalar_only(exprs: &[Expr]) -> bool {
-    exprs.iter().all(|expr| match expr {
-        Expr::ScalarFunction(_) => true,
-        Expr::Literal(_) => true,
-        Expr::Alias(alias) => check_contain_scalar_only(&[alias.expr.deref().clone()]),
-        _ => false,
-    })
 }
 
 // If there are any multiple-defined windows, we raise an error.

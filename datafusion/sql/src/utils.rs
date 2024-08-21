@@ -17,9 +17,10 @@
 
 //! SQL Utility Functions
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use arrow_schema::{DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
+use arrow_schema::{
+    DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DECIMAL_DEFAULT_SCALE,
+};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -29,11 +30,11 @@ use datafusion_common::{
 };
 use datafusion_expr::builder::get_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
-use datafusion_expr::utils::{
-    expr_as_column_expr, find_column_exprs,
-};
+use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
 use sqlparser::ast::{Ident, Value};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -123,10 +124,10 @@ pub(crate) fn check_columns_satisfy_exprs(
     }
     let column_names = columns
         .iter()
-        .map(|c| format!("{}", c.schema_name()))
+        .map(|c| c.schema_name().to_string())
         .collect::<Vec<_>>();
 
-    wildcard_fields.into_iter().try_for_each(|(table, field)| {
+    wildcard_fields.iter().try_for_each(|(table, field)| {
         let column_name = qualified_name(table, field.name());
         if !column_names.iter().any(|c| c == &column_name) {
             plan_err!(
