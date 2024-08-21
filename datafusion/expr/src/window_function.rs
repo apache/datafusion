@@ -19,14 +19,6 @@ use datafusion_common::ScalarValue;
 
 use crate::{expr::WindowFunction, BuiltInWindowFunction, Expr, Literal};
 
-/// Create an expression to represent the `row_number` window function
-pub fn row_number() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(
-        BuiltInWindowFunction::RowNumber,
-        vec![],
-    ))
-}
-
 /// Create an expression to represent the `rank` window function
 pub fn rank() -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::Rank, vec![]))

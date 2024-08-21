@@ -36,9 +36,9 @@ use crate::utils::{
     split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, BuiltInWindowFunction,
-    CreateMemoryTable, CreateView, Expr, ExprSchemable, LogicalPlanBuilder, Operator,
-    TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
+    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Expr,
+    ExprSchemable, LogicalPlanBuilder, Operator, TableProviderFilterPushDown,
+    TableSource, WindowFunctionDefinition,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -2015,10 +2015,9 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
-    let mut schema = DFSchema::new_with_metadata(
-        exprlist_to_fields(exprs, input)?,
-        input.schema().metadata().clone(),
-    )?;
+    let metadata = input.schema().metadata().clone();
+    let mut schema =
+        DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?;
     schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
         exprs, input,
     )?)?;
@@ -2214,18 +2213,14 @@ impl Window {
             .enumerate()
             .filter_map(|(idx, expr)| {
                 if let Expr::WindowFunction(WindowFunction {
-                    // Function is ROW_NUMBER
-                    fun:
-                        WindowFunctionDefinition::BuiltInWindowFunction(
-                            BuiltInWindowFunction::RowNumber,
-                        ),
+                    fun: WindowFunctionDefinition::WindowUDF(udwf),
                     partition_by,
                     ..
                 }) = expr
                 {
                     // When there is no PARTITION BY, row number will be unique
                     // across the entire table.
-                    if partition_by.is_empty() {
+                    if udwf.name() == "row_number" && partition_by.is_empty() {
                         return Some(idx + input_len);
                     }
                 }
@@ -2659,7 +2654,10 @@ impl Aggregate {
 
         qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
 
-        let schema = DFSchema::new_with_metadata(qualified_fields, HashMap::new())?;
+        let schema = DFSchema::new_with_metadata(
+            qualified_fields,
+            input.schema().metadata().clone(),
+        )?;
 
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }

@@ -603,6 +603,11 @@ pub mod functions_aggregate {
     pub use datafusion_functions_aggregate::*;
 }
 
+/// re-export of [`datafusion_functions_window`] crate
+pub mod functions_window {
+    pub use datafusion_functions_window::*;
+}
+
 #[cfg(test)]
 pub mod test;
 pub mod test_util;
@@ -671,6 +676,12 @@ doc_comment::doctest!(
 doc_comment::doctest!(
     "../../../docs/source/library-user-guide/using-the-sql-api.md",
     library_user_guide_sql_api
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/building-logical-plans.md",
+    library_user_guide_logical_plans
 );
 
 #[cfg(doctest)]
