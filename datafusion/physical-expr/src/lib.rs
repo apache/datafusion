@@ -45,11 +45,9 @@ pub mod execution_props {
     pub use datafusion_expr::var_provider::{VarProvider, VarType};
 }
 
+pub use aggregate::AggregateExpr;
 pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
-pub use datafusion_functions_aggregate_common::aggregate::{
-    AggregateExpr, AggregatePhysicalExpressions,
-};
 pub use equivalence::{calculate_union, ConstExpr, EquivalenceProperties};
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
