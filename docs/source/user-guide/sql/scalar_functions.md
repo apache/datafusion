@@ -1311,6 +1311,7 @@ The following regular expression functions are supported:
 [syntax]: https://docs.rs/regex/latest/regex/#syntax
 
 ### `regexp_count`
+
 Returns the number of matchs that a [regular expression] has in a string.
 
 ```
