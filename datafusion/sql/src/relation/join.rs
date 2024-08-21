@@ -18,7 +18,7 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{not_impl_err, Column, Result};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableWithJoins};
+use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableFactor, TableWithJoins};
 use std::collections::HashSet;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -27,10 +27,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         t: TableWithJoins,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let mut left = self.create_relation(t.relation, planner_context)?;
-        for join in t.joins.into_iter() {
+        let mut left = if is_lateral(&t.relation) {
+            self.create_relation_subquery(t.relation, planner_context)?
+        } else {
+            self.create_relation(t.relation, planner_context)?
+        };
+        let old_outer_from_schema = planner_context.outer_from_schema();
+        for join in t.joins {
+            planner_context.extend_outer_from_schema(left.schema())?;
             left = self.parse_relation_join(left, join, planner_context)?;
         }
+        planner_context.set_outer_from_schema(old_outer_from_schema);
         Ok(left)
     }
 
@@ -40,7 +47,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         join: Join,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let right = self.create_relation(join.relation, planner_context)?;
+        let right = if is_lateral_join(&join)? {
+            self.create_relation_subquery(join.relation, planner_context)?
+        } else {
+            self.create_relation(join.relation, planner_context)?
+        };
         match join.join_operator {
             JoinOperator::LeftOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Left, planner_context)
@@ -143,4 +154,34 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::None => not_impl_err!("NONE constraint is not supported"),
         }
     }
+}
+
+/// Return `true` iff the given [`TableFactor`] is lateral.
+pub(crate) fn is_lateral(factor: &TableFactor) -> bool {
+    match factor {
+        TableFactor::Derived { lateral, .. } => *lateral,
+        TableFactor::Function { lateral, .. } => *lateral,
+        _ => false,
+    }
+}
+
+/// Return `true` iff the given [`Join`] is lateral.
+pub(crate) fn is_lateral_join(join: &Join) -> Result<bool> {
+    let is_lateral_syntax = is_lateral(&join.relation);
+    let is_apply_syntax = match join.join_operator {
+        JoinOperator::FullOuter(..)
+        | JoinOperator::RightOuter(..)
+        | JoinOperator::RightAnti(..)
+        | JoinOperator::RightSemi(..)
+            if is_lateral_syntax =>
+        {
+            return not_impl_err!(
+                "LATERAL syntax is not supported for \
+                 FULL OUTER and RIGHT [OUTER | ANTI | SEMI] joins"
+            );
+        }
+        JoinOperator::CrossApply | JoinOperator::OuterApply => true,
+        _ => false,
+    };
+    Ok(is_lateral_syntax || is_apply_syntax)
 }

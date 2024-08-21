@@ -26,7 +26,9 @@ use datafusion_common::{
 };
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Expr, ExprSchemable, ScalarUDFImpl, Signature, Volatility,
+};
 
 /// Implements casting to arbitrary arrow types (rather than SQL types)
 ///
@@ -85,6 +87,10 @@ impl ScalarUDFImpl for ArrowCastFunc {
         // should be using return_type_from_exprs and not calling the default
         // implementation
         internal_err!("arrow_cast should return type from exprs")
+    }
+
+    fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
+        args.iter().any(|e| e.nullable(schema).ok().unwrap_or(true))
     }
 
     fn return_type_from_exprs(

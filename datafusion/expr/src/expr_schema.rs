@@ -335,18 +335,28 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
-            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
-                // TODO: UDF should be able to customize nullability
-                if func.name() == "count" {
-                    Ok(false)
-                } else {
-                    Ok(true)
-                }
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                Ok(func.is_nullable(args, input_schema))
             }
+            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
+                Ok(func.is_nullable())
+            }
+            Expr::WindowFunction(WindowFunction { fun, .. }) => match fun {
+                WindowFunctionDefinition::BuiltInWindowFunction(func) => {
+                    if func.name() == "RANK"
+                        || func.name() == "NTILE"
+                        || func.name() == "CUME_DIST"
+                    {
+                        Ok(false)
+                    } else {
+                        Ok(true)
+                    }
+                }
+                WindowFunctionDefinition::AggregateUDF(func) => Ok(func.is_nullable()),
+                WindowFunctionDefinition::WindowUDF(udwf) => Ok(udwf.nullable()),
+            },
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
-            | Expr::ScalarFunction(..)
-            | Expr::WindowFunction { .. }
             | Expr::Unnest(_)
             | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)

@@ -45,7 +45,6 @@ members = [
     "datafusion/substrait",
     "datafusion/wasmtest",
     "datafusion-examples",
-    "docs",
     "test-utils",
     "benchmarks",
 ]

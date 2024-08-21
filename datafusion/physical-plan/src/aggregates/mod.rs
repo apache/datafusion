@@ -2179,6 +2179,7 @@ mod tests {
             .map(|order_by_expr| {
                 let ordering_req = order_by_expr.unwrap_or_default();
                 AggregateExprBuilder::new(array_agg_udaf(), vec![Arc::clone(col_a)])
+                    .alias("a")
                     .order_by(ordering_req.to_vec())
                     .schema(Arc::clone(&test_schema))
                     .build()

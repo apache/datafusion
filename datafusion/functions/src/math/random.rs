@@ -69,8 +69,11 @@ impl ScalarUDFImpl for RandomFunc {
 
     fn invoke_no_args(&self, num_rows: usize) -> Result<ColumnarValue> {
         let mut rng = thread_rng();
-        let values = std::iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(num_rows);
-        let array = Float64Array::from_iter_values(values);
+        let mut values = vec![0.0; num_rows];
+        // Equivalent to set each element with rng.gen_range(0.0..1.0), but more efficient
+        rng.fill(&mut values[..]);
+        let array = Float64Array::from(values);
+
         Ok(ColumnarValue::Array(Arc::new(array)))
     }
 }

@@ -2015,10 +2015,9 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
-    let mut schema = DFSchema::new_with_metadata(
-        exprlist_to_fields(exprs, input)?,
-        input.schema().metadata().clone(),
-    )?;
+    let metadata = input.schema().metadata().clone();
+    let mut schema =
+        DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?;
     schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
         exprs, input,
     )?)?;
@@ -2655,7 +2654,10 @@ impl Aggregate {
 
         qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
 
-        let schema = DFSchema::new_with_metadata(qualified_fields, HashMap::new())?;
+        let schema = DFSchema::new_with_metadata(
+            qualified_fields,
+            input.schema().metadata().clone(),
+        )?;
 
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }

@@ -205,6 +205,10 @@ impl ScalarUDF {
         self.inner.invoke(args)
     }
 
+    pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
+        self.inner.is_nullable(args, schema)
+    }
+
     /// Invoke the function without `args` but number of rows, returning the appropriate result.
     ///
     /// See [`ScalarUDFImpl::invoke_no_args`] for more details.
@@ -414,6 +418,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         arg_types: &[DataType],
     ) -> Result<DataType> {
         self.return_type(arg_types)
+    }
+
+    fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
+        true
     }
 
     /// Invoke the function on `args`, returning the appropriate result
