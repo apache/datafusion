@@ -5387,6 +5387,18 @@ physical_plan
 statement ok
 DROP TABLE empty;
 
+# verify count aggregate function should not be nullable
+statement ok
+create table empty;
+
+query I
+select distinct count() from empty;
+----
+0
+
+statement ok
+DROP TABLE empty;
+
 statement ok
 CREATE TABLE t(col0 INTEGER) as VALUES(2);
 
