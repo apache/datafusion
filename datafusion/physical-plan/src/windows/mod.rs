@@ -46,6 +46,7 @@ use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilde
 use itertools::Itertools;
 
 mod bounded_window_agg_exec;
+mod utils;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
