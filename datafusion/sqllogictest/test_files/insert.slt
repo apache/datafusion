@@ -433,3 +433,17 @@ drop table test_column_defaults
 
 statement error DataFusion error: Error during planning: Column reference is not allowed in the DEFAULT expression : Schema error: No field named a.
 create table test_column_defaults(a int, b int default a+1)
+
+# test value casting
+statement ok
+create table test_column_insert_cast(
+  a BIGINT UNSIGNED
+);
+
+query I
+insert into test_column_insert_cast(a) values (0), (12775823699315690233);
+----
+2
+
+statement ok
+drop table test_column_insert_cast
