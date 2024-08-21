@@ -1,0 +1,149 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE EXTERNAL TABLE sink_table (
+        c1  VARCHAR NOT NULL,
+        c2  TINYINT NOT NULL,
+        c3  SMALLINT NOT NULL,
+        c4  SMALLINT NOT NULL,
+        c5  INTEGER NOT NULL,
+        c6  BIGINT NOT NULL,
+        c7  SMALLINT NOT NULL,
+        c8  INT NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
+        c11 FLOAT NOT NULL,
+        c12 DOUBLE NOT NULL,
+        c13 VARCHAR NOT NULL
+    )
+STORED AS CSV
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Remove the redundant ordering in the subquery
+
+query TT
+EXPLAIN SELECT c1 FROM (SELECT c1 FROM sink_table ORDER BY c2) AS ttt
+----
+logical_plan
+01)SubqueryAlias: ttt
+02)--TableScan: sink_table projection=[c1]
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
+
+query TT
+EXPLAIN SELECT c1 FROM (SELECT c1 FROM sink_table ORDER BY c2)
+----
+logical_plan TableScan: sink_table projection=[c1]
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
+
+
+# Do not remove ordering when it's with limit
+
+query TT
+EXPLAIN SELECT c1, c2 FROM (SELECT c1, c2, c3, c9 FROM sink_table ORDER BY c1 DESC, c3 LIMIT 2) AS t2 ORDER BY t2.c1, t2.c3, t2.c9;
+----
+logical_plan
+01)Projection: t2.c1, t2.c2
+02)--Sort: t2.c1 ASC NULLS LAST, t2.c3 ASC NULLS LAST, t2.c9 ASC NULLS LAST
+03)----SubqueryAlias: t2
+04)------Sort: sink_table.c1 DESC NULLS FIRST, sink_table.c3 ASC NULLS LAST, fetch=2
+05)--------TableScan: sink_table projection=[c1, c2, c3, c9]
+physical_plan
+01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
+02)--SortExec: expr=[c1@0 ASC NULLS LAST,c3@2 ASC NULLS LAST,c9@3 ASC NULLS LAST], preserve_partitioning=[false]
+03)----SortExec: TopK(fetch=2), expr=[c1@0 DESC,c3@2 ASC NULLS LAST], preserve_partitioning=[false]
+04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c9], has_header=true
+
+
+query TI
+SELECT c1, c2 FROM (SELECT c1, c2, c3, c9 FROM sink_table ORDER BY c1, c3 LIMIT 2) AS t2 ORDER BY t2.c1, t2.c3, t2.c9;
+----
+a 4
+a 5
+
+query TI
+SELECT c1, c2 FROM (SELECT c1, c2, c3, c9 FROM sink_table ORDER BY c1 DESC, c3 LIMIT 2) AS t2 ORDER BY t2.c1, t2.c3, t2.c9;
+----
+e 3
+e 5
+
+
+# Do not remove ordering when it's a part of an aggregation in subquery
+
+query TT
+EXPLAIN SELECT t2.c1, t2.r FROM (SELECT c1, RANK() OVER (ORDER BY c1 DESC) AS r, c3, c9 FROM sink_table ORDER BY c1, c3 LIMIT 2) AS t2 ORDER BY t2.c1, t2.c3, t2.c9;
+----
+logical_plan
+01)Projection: t2.c1, t2.r
+02)--Sort: t2.c1 ASC NULLS LAST, t2.c3 ASC NULLS LAST, t2.c9 ASC NULLS LAST
+03)----SubqueryAlias: t2
+04)------Sort: sink_table.c1 ASC NULLS LAST, sink_table.c3 ASC NULLS LAST, fetch=2
+05)--------Projection: sink_table.c1, RANK() ORDER BY [sink_table.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r, sink_table.c3, sink_table.c9
+06)----------WindowAggr: windowExpr=[[RANK() ORDER BY [sink_table.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+07)------------TableScan: sink_table projection=[c1, c3, c9]
+physical_plan
+01)ProjectionExec: expr=[c1@0 as c1, r@1 as r]
+02)--SortExec: TopK(fetch=2), expr=[c1@0 ASC NULLS LAST,c3@2 ASC NULLS LAST,c9@3 ASC NULLS LAST], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[c1@0 as c1, RANK() ORDER BY [sink_table.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as r, c3@1 as c3, c9@2 as c9]
+04)------BoundedWindowAggExec: wdw=[RANK() ORDER BY [sink_table.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "RANK() ORDER BY [sink_table.c1 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Utf8(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+05)--------SortExec: expr=[c1@0 DESC], preserve_partitioning=[false]
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3, c9], has_header=true
+
+
+query TT
+EXPLAIN SELECT c1, c2 FROM (SELECT DISTINCT ON (c1) c1, c2, c3, c9 FROM sink_table ORDER BY c1, c3 DESC, c9) AS t2 ORDER BY t2.c1, t2.c3 DESC, t2.c9
+----
+logical_plan
+01)Projection: t2.c1, t2.c2
+02)--Sort: t2.c1 ASC NULLS LAST, t2.c3 DESC NULLS FIRST, t2.c9 ASC NULLS LAST
+03)----SubqueryAlias: t2
+04)------Projection: first_value(sink_table.c1) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS c1, first_value(sink_table.c2) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS c2, first_value(sink_table.c3) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS c3, first_value(sink_table.c9) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST] AS c9
+05)--------Sort: sink_table.c1 ASC NULLS LAST
+06)----------Aggregate: groupBy=[[sink_table.c1]], aggr=[[first_value(sink_table.c1) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c2) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c3) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c9) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST]]]
+07)------------TableScan: sink_table projection=[c1, c2, c3, c9]
+physical_plan
+01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
+02)--SortPreservingMergeExec: [c1@0 ASC NULLS LAST,c3@2 DESC,c9@3 ASC NULLS LAST]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST,c3@2 DESC,c9@3 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[first_value(sink_table.c1) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST]@1 as c1, first_value(sink_table.c2) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST]@2 as c2, first_value(sink_table.c3) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST]@3 as c3, first_value(sink_table.c9) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST]@4 as c9]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[first_value(sink_table.c1) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c2) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c3) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c9) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST]]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
+08)--------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[first_value(sink_table.c1) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c2) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c3) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST], first_value(sink_table.c9) ORDER BY [sink_table.c1 ASC NULLS LAST, sink_table.c3 DESC NULLS FIRST, sink_table.c9 ASC NULLS LAST]]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c9], has_header=true
+
+
+query TI
+SELECT c1, c2 FROM (SELECT DISTINCT ON (c1) c1, c2, c3, c9 FROM sink_table ORDER BY c1, c3, c9) AS t2 ORDER BY t2.c1, t2.c3, t2.c9;
+----
+a 4
+b 4
+c 2
+d 1
+e 3
+
+
+query TI
+SELECT c1, c2 FROM (SELECT DISTINCT ON (c1) c1, c2, c3, c9 FROM sink_table ORDER BY c1, c3 DESC, c9) AS t2 ORDER BY t2.c1, t2.c3 DESC, t2.c9
+----
+a 1
+b 5
+c 4
+d 1
+e 1

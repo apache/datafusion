@@ -838,16 +838,38 @@ pub fn exprlist_len(
                 qualifier: Some(qualifier),
                 options,
             } => {
+                let related_wildcard_schema = wildcard_schema.as_ref().map_or_else(
+                    || Ok(Arc::clone(schema)),
+                    |schema| {
+                        // Eliminate the fields coming from other tables.
+                        let qualified_fields = schema
+                            .fields()
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(idx, field)| {
+                                let (maybe_table_ref, _) = schema.qualified_field(idx);
+                                if maybe_table_ref.map_or(true, |q| q == qualifier) {
+                                    Some((maybe_table_ref.cloned(), Arc::clone(field)))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        let metadata = schema.metadata().clone();
+                        DFSchema::new_with_metadata(qualified_fields, metadata)
+                            .map(Arc::new)
+                    },
+                )?;
                 let excluded = get_excluded_columns(
                     options.exclude.as_ref(),
                     options.except.as_ref(),
-                    wildcard_schema.unwrap_or(schema),
+                    related_wildcard_schema.as_ref(),
                     Some(qualifier),
                 )?
                 .into_iter()
                 .collect::<HashSet<Column>>();
                 Ok(
-                    get_exprs_except_skipped(wildcard_schema.unwrap_or(schema), excluded)
+                    get_exprs_except_skipped(related_wildcard_schema.as_ref(), excluded)
                         .len(),
                 )
             }

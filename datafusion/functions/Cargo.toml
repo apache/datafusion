@@ -162,3 +162,8 @@ required-features = ["string_expressions"]
 harness = false
 name = "substr"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "random"
+required-features = ["math_expressions"]

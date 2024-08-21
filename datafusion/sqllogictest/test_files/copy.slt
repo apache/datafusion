@@ -417,7 +417,7 @@ COPY source_table  to 'test_files/scratch/copy/table_csv' STORED AS CSV OPTIONS 
 
 # validate folder of csv files
 statement ok
-CREATE EXTERNAL TABLE validate_csv STORED AS csv LOCATION 'test_files/scratch/copy/table_csv' OPTIONS ('format.compression' 'gzip');
+CREATE EXTERNAL TABLE validate_csv STORED AS csv LOCATION 'test_files/scratch/copy/table_csv' OPTIONS ('format.has_header' false, 'format.compression' gzip);
 
 query IT
 select * from validate_csv;
@@ -427,7 +427,7 @@ select * from validate_csv;
 
 # Copy from table to single csv
 query I
-COPY source_table  to 'test_files/scratch/copy/table.csv';
+COPY source_table  to 'test_files/scratch/copy/table.csv' OPTIONS ('format.has_header' false);
 ----
 2
 
@@ -478,7 +478,7 @@ query I
 COPY source_table
 to 'test_files/scratch/copy/table_csv_with_options'
 STORED AS CSV OPTIONS (
-'format.has_header' false,
+'format.has_header' true,
 'format.compression' uncompressed,
 'format.datetime_format' '%FT%H:%M:%S.%9f',
 'format.delimiter' ';',
