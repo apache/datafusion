@@ -1146,6 +1146,7 @@ FROM test;
 NULL
 
 # || mixed types
+# expect all results to be the same for each row as they all have the same values
 query TTTTTTTT
 SELECT
   column1_utf8view || column2_utf8view,
@@ -1162,9 +1163,10 @@ FROM test;
 AndrewX AndrewX AndrewX AndrewX XAndrew XAndrew XAndrew XAndrew
 XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng
 RaphaelR RaphaelR RaphaelR RaphaelR RRaphael RRaphael RRaphael RRaphael
-R R R R R R R R
+NULL NULL NULL NULL NULL NULL NULL NULL
 
 # || constants
+# expect all results to be the same for each row as they all have the same values
 query TTTTTTTT
 SELECT
   column1_utf8view || 'foo',
@@ -1181,12 +1183,10 @@ FROM test;
 Andrewfoo Andrewfoo Andrewfoo Andrewfoo fooAndrew fooAndrew fooAndrew fooAndrew
 Xiangpengfoo Xiangpengfoo Xiangpengfoo Xiangpengfoo fooXiangpeng fooXiangpeng fooXiangpeng fooXiangpeng
 Raphaelfoo Raphaelfoo Raphaelfoo Raphaelfoo fooRaphael fooRaphael fooRaphael fooRaphael
-foo NULL NULL NULL foo NULL NULL NULL
-
-
-
+NULL NULL NULL NULL NULL NULL NULL NULL
 
 # || same type (column1 has null, so also tests NULL || NULL)
+# expect all results to be the same for each row as they all have the same values
 query TTT
 SELECT
   column1_utf8view || column1_utf8view,
@@ -1200,8 +1200,6 @@ AndrewAndrew AndrewAndrew AndrewAndrew
 XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng
 RaphaelRaphael RaphaelRaphael RaphaelRaphael
 NULL NULL NULL
-
-
 
 statement ok
 drop table test;

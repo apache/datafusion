@@ -144,12 +144,22 @@ pub fn concat_elements_utf8view(
         .map(|(b1, b2)| b1.len() + b2.len())
         .sum();
     let mut result = StringViewBuilder::with_capacity(capacity);
+
+    // Avoid reallocations by writing to a reused buffer (note we
+    // could be even more efficient r by creating the view directly
+    // here and avoid the buffer but that would be more complex)
+    let mut buffer = String::new();
+
     for (left, right) in left.iter().zip(right.iter()) {
-        match (left, right) {
-            (None, None) => result.append_null(),
-            _ => {
-                result.append_value(left.unwrap_or("").to_string() + right.unwrap_or(""))
-            }
+        if let (Some(left), Some(right)) = (left, right) {
+            use std::fmt::Write;
+            buffer.clear();
+            write!(&mut buffer, "{left}{right}")
+                .expect("writing into string buffer failed");
+            result.append_value(&buffer);
+        } else {
+            // at least one of the values is null, so the output is also null
+            result.append_null()
         }
     }
     Ok(result.finish())
