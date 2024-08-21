@@ -40,9 +40,11 @@ use datafusion_expr::{
 };
 
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::BlockedNullState;
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::ensure_enough_room_for_values;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
+};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+    ensure_enough_room_for_blocked_values, ensure_enough_room_for_flat_values,
 };
 
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
@@ -456,21 +458,20 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
-        // increment counts, update sums
-        ensure_enough_room_for_values(&mut self.counts, self.mode, total_num_groups, 0);
-        ensure_enough_room_for_values(
-            &mut self.sums,
-            self.mode,
-            total_num_groups,
-            T::default_value(),
-        );
-
         match self.mode {
             GroupStatesMode::Flat => {
+                // increment counts, update sums
+                ensure_enough_room_for_flat_values(&mut self.counts, total_num_groups, 0);
+                ensure_enough_room_for_flat_values(
+                    &mut self.sums,
+                    total_num_groups,
+                    T::default_value(),
+                );
+
                 let sum_block = self.sums.current_mut().unwrap();
                 let count_block = self.counts.current_mut().unwrap();
 
-                self.null_state.accumulate(
+                self.null_state.accumulate_for_flat(
                     group_indices,
                     values,
                     opt_filter,
@@ -484,12 +485,26 @@ where
                     },
                 );
             }
-            GroupStatesMode::Blocked(_) => {
-                self.null_state.accumulate(
+            GroupStatesMode::Blocked(blk_size) => {
+                ensure_enough_room_for_blocked_values(
+                    &mut self.counts,
+                    total_num_groups,
+                    blk_size,
+                    0,
+                );
+                ensure_enough_room_for_blocked_values(
+                    &mut self.sums,
+                    total_num_groups,
+                    blk_size,
+                    T::default_value(),
+                );
+
+                self.null_state.accumulate_for_blocked(
                     group_indices,
                     values,
                     opt_filter,
                     total_num_groups,
+                    blk_size,
                     |group_index, new_value| {
                         let blocked_index = BlockedGroupIndex::new(group_index);
                         let sum = &mut self.sums[blocked_index.block_id]
@@ -577,19 +592,18 @@ where
         let partial_counts = values[0].as_primitive::<UInt64Type>();
         let partial_sums = values[1].as_primitive::<T>();
 
-        ensure_enough_room_for_values(&mut self.counts, self.mode, total_num_groups, 0);
-        ensure_enough_room_for_values(
-            &mut self.sums,
-            self.mode,
-            total_num_groups,
-            T::default_value(),
-        );
-
         match self.mode {
             GroupStatesMode::Flat => {
+                ensure_enough_room_for_flat_values(&mut self.counts, total_num_groups, 0);
+                ensure_enough_room_for_flat_values(
+                    &mut self.sums,
+                    total_num_groups,
+                    T::default_value(),
+                );
+
                 // update counts with partial counts
                 let count_block = self.counts.current_mut().unwrap();
-                self.null_state.accumulate(
+                self.null_state.accumulate_for_flat(
                     group_indices,
                     partial_counts,
                     opt_filter,
@@ -602,7 +616,7 @@ where
 
                 // update sums
                 let sum_block = self.sums.current_mut().unwrap();
-                self.null_state.accumulate(
+                self.null_state.accumulate_for_flat(
                     group_indices,
                     partial_sums,
                     opt_filter,
@@ -613,13 +627,27 @@ where
                     },
                 );
             }
-            GroupStatesMode::Blocked(_) => {
+            GroupStatesMode::Blocked(blk_size) => {
+                ensure_enough_room_for_blocked_values(
+                    &mut self.counts,
+                    total_num_groups,
+                    blk_size,
+                    0,
+                );
+                ensure_enough_room_for_blocked_values(
+                    &mut self.sums,
+                    total_num_groups,
+                    blk_size,
+                    T::default_value(),
+                );
+
                 // update counts with partial counts
-                self.null_state.accumulate(
+                self.null_state.accumulate_for_blocked(
                     group_indices,
                     partial_counts,
                     opt_filter,
                     total_num_groups,
+                    blk_size,
                     |group_index, partial_count| {
                         let blocked_index = BlockedGroupIndex::new(group_index);
                         let count = &mut self.counts[blocked_index.block_id]
@@ -629,11 +657,12 @@ where
                 );
 
                 // update sums
-                self.null_state.accumulate(
+                self.null_state.accumulate_for_blocked(
                     group_indices,
                     partial_sums,
                     opt_filter,
                     total_num_groups,
+                    blk_size,
                     |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
                         let blocked_index = BlockedGroupIndex::new(group_index);
                         let sum = &mut self.sums[blocked_index.block_id]

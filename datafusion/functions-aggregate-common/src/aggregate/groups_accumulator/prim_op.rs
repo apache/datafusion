@@ -28,7 +28,9 @@ use datafusion_expr_common::groups_accumulator::{
 };
 
 use crate::aggregate::groups_accumulator::accumulate::BlockedNullState;
-use crate::aggregate::groups_accumulator::{ensure_enough_room_for_values, Blocks};
+use crate::aggregate::groups_accumulator::{
+    ensure_enough_room_for_blocked_values, ensure_enough_room_for_flat_values, Blocks,
+};
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -105,19 +107,18 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
-        // Ensure enough room in values
-        ensure_enough_room_for_values(
-            &mut self.values_blocks,
-            self.mode,
-            total_num_groups,
-            self.starting_value,
-        );
-
         // NullState dispatches / handles tracking nulls and groups that saw no values
         match self.mode {
             GroupStatesMode::Flat => {
+                // Ensure enough room in values
+                ensure_enough_room_for_flat_values(
+                    &mut self.values_blocks,
+                    total_num_groups,
+                    self.starting_value,
+                );
+
                 let block = self.values_blocks.current_mut().unwrap();
-                self.null_state.accumulate(
+                self.null_state.accumulate_for_flat(
                     group_indices,
                     values,
                     opt_filter,
@@ -128,18 +129,29 @@ where
                     },
                 );
             }
-            GroupStatesMode::Blocked(_) => self.null_state.accumulate(
-                group_indices,
-                values,
-                opt_filter,
-                total_num_groups,
-                |group_index, new_value| {
-                    let blocked_index = BlockedGroupIndex::new(group_index);
-                    let value = &mut self.values_blocks[blocked_index.block_id]
-                        [blocked_index.block_offset];
-                    (self.prim_fn)(value, new_value);
-                },
-            ),
+            GroupStatesMode::Blocked(blk_size) => {
+                // Ensure enough room in values
+                ensure_enough_room_for_blocked_values(
+                    &mut self.values_blocks,
+                    total_num_groups,
+                    blk_size,
+                    self.starting_value,
+                );
+
+                self.null_state.accumulate_for_blocked(
+                    group_indices,
+                    values,
+                    opt_filter,
+                    total_num_groups,
+                    blk_size,
+                    |group_index, new_value| {
+                        let blocked_index = BlockedGroupIndex::new(group_index);
+                        let value = &mut self.values_blocks[blocked_index.block_id]
+                            [blocked_index.block_offset];
+                        (self.prim_fn)(value, new_value);
+                    },
+                );
+            }
         }
 
         Ok(())

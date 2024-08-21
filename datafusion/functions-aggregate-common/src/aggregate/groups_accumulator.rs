@@ -34,11 +34,9 @@ use datafusion_common::{
     arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
     ScalarValue,
 };
+use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{
     Blocks, EmitTo, GroupsAccumulator, VecBlocks,
-};
-use datafusion_expr_common::{
-    accumulator::Accumulator, groups_accumulator::GroupStatesMode,
 };
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
@@ -425,87 +423,99 @@ pub(crate) fn slice_and_maybe_filter(
 /// After expanding:
 ///   values: [x, x, x], [x, x, x], [default, default, default]
 ///
-pub fn ensure_enough_room_for_values<T: Clone>(
+pub fn ensure_enough_room_for_flat_values<T: Clone>(
     values: &mut VecBlocks<T>,
-    mode: GroupStatesMode,
     total_num_groups: usize,
     default_value: T,
 ) {
     debug_assert!(total_num_groups > 0);
 
-    match mode {
-        // It flat mode, we just a single builder, and grow it constantly.
-        GroupStatesMode::Flat => {
-            if values.num_blocks() == 0 {
-                values.push_block(Vec::new());
-            }
+    // It flat mode, we just a single builder, and grow it constantly.
+    if values.num_blocks() == 0 {
+        values.push_block(Vec::new());
+    }
 
-            values
-                .current_mut()
-                .unwrap()
-                .resize(total_num_groups, default_value);
+    values
+        .current_mut()
+        .unwrap()
+        .resize(total_num_groups, default_value);
+}
+
+/// Expend blocked values to a big enough size for holding `total_num_groups` groups.
+///
+/// For example,
+///
+/// before expanding:
+///   values: [x, x, x], [x, x, x] (blocks=2, block_size=3)
+///   total_num_groups: 8
+///
+/// After expanding:
+///   values: [x, x, x], [x, x, x], [default, default, default]
+///
+pub fn ensure_enough_room_for_blocked_values<T: Clone>(
+    values: &mut VecBlocks<T>,
+    total_num_groups: usize,
+    block_size: usize,
+    default_value: T,
+) {
+    debug_assert!(total_num_groups > 0);
+
+    // In blocked mode, we ensure the blks are enough first,
+    // and then ensure slots in blks are enough.
+    let (mut cur_blk_idx, exist_slots) = if values.num_blocks() > 0 {
+        let cur_blk_idx = values.num_blocks() - 1;
+        let exist_slots =
+            (values.num_blocks() - 1) * block_size + values.current().unwrap().len();
+
+        (cur_blk_idx, exist_slots)
+    } else {
+        (0, 0)
+    };
+
+    // No new groups, don't need to expand, just return.
+    if exist_slots >= total_num_groups {
+        return;
+    }
+
+    // Ensure blks are enough.
+    let exist_blks = values.num_blocks();
+    let new_blks = (total_num_groups + block_size - 1) / block_size - exist_blks;
+    if new_blks > 0 {
+        for _ in 0..new_blks {
+            values.push_block(Vec::with_capacity(block_size));
         }
-        // In blocked mode, we ensure the blks are enough first,
-        // and then ensure slots in blks are enough.
-        GroupStatesMode::Blocked(blk_size) => {
-            let (mut cur_blk_idx, exist_slots) = if values.num_blocks() > 0 {
-                let cur_blk_idx = values.num_blocks() - 1;
-                let exist_slots = (values.num_blocks() - 1) * blk_size
-                    + values.current().unwrap().len();
+    }
 
-                (cur_blk_idx, exist_slots)
-            } else {
-                (0, 0)
-            };
+    // Ensure slots are enough.
+    let mut new_slots = total_num_groups - exist_slots;
 
-            // No new groups, don't need to expand, just return.
-            if exist_slots >= total_num_groups {
-                return;
-            }
+    // Expand current blk.
+    let cur_blk_rest_slots = block_size - values[cur_blk_idx].len();
+    if cur_blk_rest_slots >= new_slots {
+        // We just need to expand current blocks.
+        values[cur_blk_idx].extend(iter::repeat(default_value.clone()).take(new_slots));
+        return;
+    }
 
-            // Ensure blks are enough.
-            let exist_blks = values.num_blocks();
-            let new_blks = (total_num_groups + blk_size - 1) / blk_size - exist_blks;
-            if new_blks > 0 {
-                for _ in 0..new_blks {
-                    values.push_block(Vec::with_capacity(blk_size));
-                }
-            }
+    // Expand current blk to full, and expand next blks
+    values[cur_blk_idx]
+        .extend(iter::repeat(default_value.clone()).take(cur_blk_rest_slots));
+    new_slots -= cur_blk_rest_slots;
+    cur_blk_idx += 1;
 
-            // Ensure slots are enough.
-            let mut new_slots = total_num_groups - exist_slots;
+    // Expand whole blks
+    let expand_blks = new_slots / block_size;
+    for _ in 0..expand_blks {
+        values[cur_blk_idx].extend(iter::repeat(default_value.clone()).take(block_size));
+        cur_blk_idx += 1;
+    }
 
-            // Expand current blk.
-            let cur_blk_rest_slots = blk_size - values[cur_blk_idx].len();
-            if cur_blk_rest_slots >= new_slots {
-                // We just need to expand current blocks.
-                values[cur_blk_idx]
-                    .extend(iter::repeat(default_value.clone()).take(new_slots));
-                return;
-            }
-
-            // Expand current blk to full, and expand next blks
-            values[cur_blk_idx]
-                .extend(iter::repeat(default_value.clone()).take(cur_blk_rest_slots));
-            new_slots -= cur_blk_rest_slots;
-            cur_blk_idx += 1;
-
-            // Expand whole blks
-            let expand_blks = new_slots / blk_size;
-            for _ in 0..expand_blks {
-                values[cur_blk_idx]
-                    .extend(iter::repeat(default_value.clone()).take(blk_size));
-                cur_blk_idx += 1;
-            }
-
-            // Expand the last blk if needed
-            let last_expand_slots = new_slots % blk_size;
-            if last_expand_slots > 0 {
-                values
-                    .current_mut()
-                    .unwrap()
-                    .extend(iter::repeat(default_value.clone()).take(last_expand_slots));
-            }
-        }
+    // Expand the last blk if needed
+    let last_expand_slots = new_slots % block_size;
+    if last_expand_slots > 0 {
+        values
+            .current_mut()
+            .unwrap()
+            .extend(iter::repeat(default_value.clone()).take(last_expand_slots));
     }
 }

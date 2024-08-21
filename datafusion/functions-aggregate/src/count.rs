@@ -20,7 +20,9 @@ use datafusion_expr::groups_accumulator::{
     BlockedGroupIndex, Blocks, GroupStatesMode, VecBlocks,
 };
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::ensure_enough_room_for_values;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+    ensure_enough_room_for_blocked_values, ensure_enough_room_for_flat_values,
+};
 use std::collections::HashSet;
 use std::ops::BitAnd;
 use std::{fmt::Debug, sync::Arc};
@@ -393,10 +395,10 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
         // Add one to each group's counter for each non null, non
         // filtered value
-        ensure_enough_room_for_values(&mut self.counts, self.mode, total_num_groups, 0);
-
         match self.mode {
             GroupStatesMode::Flat => {
+                ensure_enough_room_for_flat_values(&mut self.counts, total_num_groups, 0);
+
                 let block = self.counts.current_mut().unwrap();
                 accumulate_indices(
                     group_indices,
@@ -408,7 +410,14 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                     },
                 );
             }
-            GroupStatesMode::Blocked(_) => {
+            GroupStatesMode::Blocked(blk_size) => {
+                ensure_enough_room_for_blocked_values(
+                    &mut self.counts,
+                    total_num_groups,
+                    blk_size,
+                    0,
+                );
+
                 accumulate_indices(
                     group_indices,
                     values.logical_nulls().as_ref(),
@@ -441,10 +450,10 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         let values = &values[0];
 
         // Adds the counts with the partial counts
-        ensure_enough_room_for_values(&mut self.counts, self.mode, total_num_groups, 0);
-
         match self.mode {
             GroupStatesMode::Flat => {
+                ensure_enough_room_for_flat_values(&mut self.counts, total_num_groups, 0);
+
                 let block = self.counts.current_mut().unwrap();
                 do_count_merge_batch(
                     values,
@@ -454,20 +463,31 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                         let count = &mut block[group_index];
                         *count += partial_count;
                     },
-                )
+                );
             }
-            GroupStatesMode::Blocked(_) => do_count_merge_batch(
-                values,
-                group_indices,
-                opt_filter,
-                |group_index, partial_count| {
-                    let blocked_index = BlockedGroupIndex::new(group_index);
-                    let count = &mut self.counts[blocked_index.block_id]
-                        [blocked_index.block_offset];
-                    *count += partial_count;
-                },
-            ),
+            GroupStatesMode::Blocked(blk_size) => {
+                ensure_enough_room_for_blocked_values(
+                    &mut self.counts,
+                    total_num_groups,
+                    blk_size,
+                    0,
+                );
+
+                do_count_merge_batch(
+                    values,
+                    group_indices,
+                    opt_filter,
+                    |group_index, partial_count| {
+                        let blocked_index = BlockedGroupIndex::new(group_index);
+                        let count = &mut self.counts[blocked_index.block_id]
+                            [blocked_index.block_offset];
+                        *count += partial_count;
+                    },
+                );
+            }
         }
+
+        Ok(())
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
@@ -598,8 +618,7 @@ fn do_count_merge_batch<F>(
     group_indices: &[usize],
     opt_filter: Option<&BooleanArray>,
     mut update_group_fn: F,
-) -> Result<()>
-where
+) where
     F: FnMut(usize, i64),
 {
     // first batch is counts, second is partial sums
@@ -625,8 +644,6 @@ where
             },
         ),
     }
-
-    Ok(())
 }
 
 /// General purpose distinct accumulator that works for any DataType by using
