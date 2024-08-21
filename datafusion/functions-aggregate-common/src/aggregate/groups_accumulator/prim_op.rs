@@ -24,12 +24,13 @@ use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{
-    BlockedGroupIndex, EmitTo, GroupStatesMode, GroupsAccumulator, VecBlocks,
+    EmitTo, GroupStatesMode, GroupsAccumulator,
 };
 
 use crate::aggregate::groups_accumulator::accumulate::BlockedNullState;
 use crate::aggregate::groups_accumulator::{
-    ensure_enough_room_for_blocked_values, ensure_enough_room_for_flat_values, Blocks,
+    ensure_enough_room_for_blocked_values, ensure_enough_room_for_flat_values,
+    BlockedGroupIndex, Blocks, EmitToExt, VecBlocks,
 };
 
 /// An accumulator that implements a single operation over

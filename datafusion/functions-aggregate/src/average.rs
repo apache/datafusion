@@ -29,9 +29,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::groups_accumulator::{
-    BlockedGroupIndex, Blocks, GroupStatesMode, VecBlocks,
-};
+use datafusion_expr::groups_accumulator::GroupStatesMode;
 use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
@@ -45,6 +43,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
     ensure_enough_room_for_blocked_values, ensure_enough_room_for_flat_values,
+    BlockedGroupIndex, Blocks, EmitToExt, VecBlocks,
 };
 
 use datafusion_functions_aggregate_common::utils::DecimalAverager;

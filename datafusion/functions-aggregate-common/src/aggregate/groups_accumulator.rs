@@ -23,7 +23,12 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
-use std::iter;
+use std::{
+    cmp::min,
+    collections::VecDeque,
+    fmt, iter,
+    ops::{Index, IndexMut},
+};
 
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
@@ -34,10 +39,13 @@ use datafusion_common::{
     arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::groups_accumulator::{
-    Blocks, EmitTo, GroupsAccumulator, VecBlocks,
+use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::{
+    accumulator::Accumulator, groups_accumulator::GroupStatesMode,
 };
+
+const BLOCKED_INDEX_HIGH_32_BITS_MASK: u64 = 0xffffffff00000000;
+const BLOCKED_INDEX_LOW_32_BITS_MASK: u64 = 0x00000000ffffffff;
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -368,6 +376,277 @@ impl<T> VecAllocExt for Vec<T> {
     type T = T;
     fn allocated_size(&self) -> usize {
         std::mem::size_of::<T>() * self.capacity()
+    }
+}
+
+pub trait EmitToExt {
+    /// Removes the number of rows from `v` required to emit the right
+    /// number of rows, returning a `Vec` with elements taken, and the
+    /// remaining values in `v`.
+    ///
+    /// This avoids copying if Self::All
+    fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T>;
+
+    /// Removes the number of rows from `blocks` required to emit,
+    /// returning a `Vec` with elements taken.
+    ///
+    /// The detailed behavior in different emissions:
+    ///   - For Emit::CurrentBlock, the first block will be taken and return.
+    ///   - For Emit::All and Emit::First, it will be only supported in `GroupStatesMode::Flat`,
+    ///     similar as `take_needed`.
+    fn take_needed_from_blocks<T>(
+        &self,
+        blocks: &mut VecBlocks<T>,
+        mode: GroupStatesMode,
+    ) -> Vec<T>;
+}
+
+impl EmitToExt for EmitTo {
+    fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
+        match self {
+            Self::All => {
+                // Take the entire vector, leave new (empty) vector
+                std::mem::take(v)
+            }
+            Self::First(n) => {
+                // get end n+1,.. values into t
+                let mut t = v.split_off(*n);
+                // leave n+1,.. in v
+                std::mem::swap(v, &mut t);
+                t
+            }
+            Self::NextBlock(_) => unreachable!(
+                "can not support blocked emission in take_needed, you should use take_needed_from_blocks"
+            ),
+        }
+    }
+
+    fn take_needed_from_blocks<T>(
+        &self,
+        blocks: &mut VecBlocks<T>,
+        mode: GroupStatesMode,
+    ) -> Vec<T> {
+        match self {
+            Self::All => {
+                debug_assert!(matches!(mode, GroupStatesMode::Flat));
+                blocks.pop_first_block().unwrap()
+            }
+            Self::First(n) => {
+                debug_assert!(matches!(mode, GroupStatesMode::Flat));
+
+                let block = blocks.current_mut().unwrap();
+                let split_at = min(block.len(), *n);
+
+                // get end n+1,.. values into t
+                let mut t = block.split_off(split_at);
+                // leave n+1,.. in v
+                std::mem::swap(block, &mut t);
+                t
+            }
+            Self::NextBlock(_) => {
+                debug_assert!(matches!(mode, GroupStatesMode::Blocked(_)));
+                blocks.pop_first_block().unwrap()
+            }
+        }
+    }
+}
+
+/// Blocked style group index used in blocked mode group values and accumulators
+///
+/// Parts in index:
+///   - High 32 bits represent `block_id`
+///   - Low 32 bits represent `block_offset`
+#[derive(Debug, Clone, Copy)]
+pub struct BlockedGroupIndex {
+    pub block_id: usize,
+    pub block_offset: usize,
+}
+
+impl BlockedGroupIndex {
+    pub fn new(group_index: usize) -> Self {
+        let block_id =
+            ((group_index as u64 >> 32) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
+        let block_offset =
+            ((group_index as u64) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
+
+        Self {
+            block_id,
+            block_offset,
+        }
+    }
+
+    pub fn new_from_parts(block_id: usize, block_offset: usize) -> Self {
+        Self {
+            block_id,
+            block_offset,
+        }
+    }
+
+    pub fn as_packed_index(&self) -> usize {
+        ((((self.block_id as u64) << 32) & BLOCKED_INDEX_HIGH_32_BITS_MASK)
+            | (self.block_offset as u64 & BLOCKED_INDEX_LOW_32_BITS_MASK))
+            as usize
+    }
+}
+
+/// The basic data structure for blocked aggregation intermediate results
+///
+/// The reason why not use `VecDeque` directly:
+///
+/// `current` and `current_mut` will be called frequently,
+/// and if we use `VecDeque` directly, they will be mapped
+/// to `back` and `back_mut` in it.
+///
+/// `back` and `back_mut` are implemented using indexed operation
+/// which need some computation about address that will be a bit
+/// more expansive than we keep the latest element in `current`,
+/// and just return reference of it directly.
+///
+/// This small optimization can bring slight performance improvement
+/// in the single block case(e.g. when blocked optimization is disabled).
+///
+pub struct Blocks<T> {
+    /// The current block, it should be pushed into `previous`
+    /// when next block is pushed
+    current: Option<T>,
+
+    /// Previous blocks pushed before `current`
+    previous: VecDeque<T>,
+}
+
+impl<T> Blocks<T> {
+    pub fn new() -> Self {
+        Self {
+            current: None,
+            previous: VecDeque::new(),
+        }
+    }
+
+    pub fn current(&self) -> Option<&T> {
+        self.current.as_ref()
+    }
+
+    pub fn current_mut(&mut self) -> Option<&mut T> {
+        self.current.as_mut()
+    }
+
+    pub fn push_block(&mut self, block: T) {
+        // If empty, use the block as initialized current
+        if self.current.is_none() {
+            self.current = Some(block);
+            return;
+        }
+
+        // Take and push the old current to `previous`,
+        // use input `block` as the new `current`
+        let old_cur = std::mem::replace(&mut self.current, Some(block)).unwrap();
+        self.previous.push_back(old_cur);
+    }
+
+    pub fn pop_first_block(&mut self) -> Option<T> {
+        // If `previous` not empty, pop the first of them
+        if !self.previous.is_empty() {
+            return self.previous.pop_front();
+        }
+
+        // Otherwise, we pop the current
+        std::mem::take(&mut self.current)
+    }
+
+    pub fn num_blocks(&self) -> usize {
+        if self.current.is_none() {
+            return 0;
+        }
+
+        self.previous.len() + 1
+    }
+
+    // TODO: maybe impl a specific Iterator rather than use the trait object,
+    // it can slightly improve performance by eliminating the dynamic dispatch.
+    pub fn iter(&self) -> Box<dyn Iterator<Item = &'_ T> + '_> {
+        // If current is None, it means no data, return empty iter
+        if self.current.is_none() {
+            return Box::new(iter::empty());
+        }
+
+        let cur_iter = iter::once(self.current.as_ref().unwrap());
+
+        if !self.previous.is_empty() {
+            let previous_iter = self.previous.iter();
+            Box::new(previous_iter.chain(cur_iter))
+        } else {
+            Box::new(cur_iter)
+        }
+    }
+
+    // TODO: maybe impl a specific Iterator rather than use the trait object,
+    // it can slightly improve performance by eliminating the dynamic dispatch.
+    pub fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &'_ mut T> + '_> {
+        // If current is None, it means no data, return empty iter
+        if self.current.is_none() {
+            return Box::new(iter::empty());
+        }
+
+        let cur_iter = iter::once(self.current.as_mut().unwrap());
+
+        if !self.previous.is_empty() {
+            let previous_iter = self.previous.iter_mut();
+            Box::new(previous_iter.chain(cur_iter))
+        } else {
+            Box::new(cur_iter)
+        }
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::new();
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for Blocks<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Blocks")
+            .field("current", &self.current)
+            .field("previous", &self.previous)
+            .finish()
+    }
+}
+
+impl<T> Index<usize> for Blocks<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &T {
+        if index < self.previous.len() {
+            &self.previous[index]
+        } else {
+            self.current.as_ref().unwrap()
+        }
+    }
+}
+
+impl<T> IndexMut<usize> for Blocks<T> {
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        if index < self.previous.len() {
+            &mut self.previous[index]
+        } else {
+            self.current.as_mut().unwrap()
+        }
+    }
+}
+
+impl<T> Default for Blocks<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub type VecBlocks<T> = Blocks<Vec<T>>;
+
+impl<T> VecBlocks<T> {
+    pub fn capacity(&self) -> usize {
+        let cur_cap = self.current.as_ref().map(|blk| blk.capacity()).unwrap_or(0);
+        let prev_cap = self.previous.iter().map(|p| p.capacity()).sum::<usize>();
+
+        cur_cap + prev_cap
     }
 }
 

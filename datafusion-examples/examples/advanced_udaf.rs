@@ -17,6 +17,7 @@
 
 use arrow_schema::{Field, Schema};
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::EmitToExt;
 use datafusion_physical_expr::NullState;
 use std::{any::Any, sync::Arc};
 

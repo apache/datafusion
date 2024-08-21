@@ -23,9 +23,9 @@ use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowPrimitiveType;
 
-use datafusion_expr_common::groups_accumulator::{
-    BlockedGroupIndex, Blocks, EmitTo, GroupStatesMode,
-};
+use datafusion_expr_common::groups_accumulator::{EmitTo, GroupStatesMode};
+
+use crate::aggregate::groups_accumulator::{BlockedGroupIndex, Blocks};
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -714,8 +714,6 @@ fn ensure_enough_room_for_flat_nulls(
     total_num_groups: usize,
     default_value: bool,
 ) {
-    debug_assert!(total_num_groups > 0);
-
     // It flat mode, we just a single builder, and grow it constantly.
     if builder_blocks.num_blocks() == 0 {
         builder_blocks.push_block(BooleanBufferBuilder::new(0));
@@ -735,8 +733,6 @@ fn ensure_enough_room_for_blocked_nulls(
     block_size: usize,
     default_value: bool,
 ) {
-    debug_assert!(total_num_groups > 0);
-
     // In blocked mode, we ensure the blks are enough first,
     // and then ensure slots in blks are enough.
     let (mut cur_blk_idx, exist_slots) = if builder_blocks.num_blocks() > 0 {

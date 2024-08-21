@@ -27,8 +27,11 @@ use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use datafusion_expr::groups_accumulator::{BlockedGroupIndex, Blocks, GroupStatesMode};
+use datafusion_expr::groups_accumulator::GroupStatesMode;
 use datafusion_expr::EmitTo;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+    BlockedGroupIndex, Blocks,
+};
 use hashbrown::raw::RawTable;
 
 /// A [`GroupValues`] making use of [`Rows`]
