@@ -489,6 +489,32 @@ impl AggregateFunctionExpr {
         }
     }
 
+    /// Returns all expressions used in the [`AggregateExpr`].
+    /// These expressions are  (1)function arguments, (2) order by expressions.
+    pub fn all_expressions(&self) -> AggregatePhysicalExpressions {
+        let args = self.expressions();
+        let order_bys = self.order_bys().unwrap_or(&[]);
+        let order_by_exprs = order_bys
+            .iter()
+            .map(|sort_expr| Arc::clone(&sort_expr.expr))
+            .collect::<Vec<_>>();
+        AggregatePhysicalExpressions {
+            args,
+            order_by_exprs,
+        }
+    }
+
+    /// Rewrites [`AggregateExpr`], with new expressions given. The argument should be consistent
+    /// with the return value of the [`AggregateExpr::all_expressions`] method.
+    /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
+    pub fn with_new_expressions(
+        &self,
+        _args: Vec<Arc<dyn PhysicalExpr>>,
+        _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Option<Arc<AggregateFunctionExpr>> {
+        None
+    }
+
     /// If this function is max, return (output_field, true)
     /// if the function is min, return (output_field, false)
     /// otherwise return None (the default)
@@ -508,6 +534,14 @@ impl AggregateFunctionExpr {
     pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         self.fun.default_value(data_type)
     }
+}
+
+/// Stores the physical expressions used inside the `AggregateExpr`.
+pub struct AggregatePhysicalExpressions {
+    /// Aggregate function arguments
+    pub args: Vec<Arc<dyn PhysicalExpr>>,
+    /// Order by expressions
+    pub order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
 impl PartialEq for AggregateFunctionExpr {
