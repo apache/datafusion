@@ -60,6 +60,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 
 /// Builder for logical plans
 ///
+/// # Example building a simple plan
 /// ```
 /// # use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
 /// # use datafusion_common::Result;
@@ -88,17 +89,27 @@ pub const UNNAMED_TABLE: &str = "?table?";
 ///  .project(vec![col("last_name")])?
 ///  .build()?;
 ///
+/// // Convert from plan back to builder
+/// let builder = LogicalPlanBuilder::from(plan);
+///
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Debug, Clone)]
 pub struct LogicalPlanBuilder {
-    plan: LogicalPlan,
+    plan: Arc<LogicalPlan>,
 }
 
 impl LogicalPlanBuilder {
     /// Create a builder from an existing plan
-    pub fn from(plan: LogicalPlan) -> Self {
+    pub fn new(plan: LogicalPlan) -> Self {
+        Self {
+            plan: Arc::new(plan),
+        }
+    }
+
+    /// Create a builder from an existing plan
+    pub fn new_from_arc(plan: Arc<LogicalPlan>) -> Self {
         Self { plan }
     }
 
@@ -116,7 +127,7 @@ impl LogicalPlanBuilder {
     ///
     /// `produce_one_row` set to true means this empty node needs to produce a placeholder row.
     pub fn empty(produce_one_row: bool) -> Self {
-        Self::from(LogicalPlan::EmptyRelation(EmptyRelation {
+        Self::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
         }))
@@ -125,7 +136,7 @@ impl LogicalPlanBuilder {
     /// Convert a regular plan into a recursive query.
     /// `is_distinct` indicates whether the recursive term should be de-duplicated (`UNION`) after each iteration or not (`UNION ALL`).
     pub fn to_recursive_query(
-        &self,
+        self,
         name: String,
         recursive_term: LogicalPlan,
         is_distinct: bool,
@@ -150,7 +161,7 @@ impl LogicalPlanBuilder {
             coerce_plan_expr_for_schema(recursive_term, self.plan.schema())?;
         Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
             name,
-            static_term: Arc::new(self.plan.clone()),
+            static_term: self.plan,
             recursive_term: Arc::new(coerced_recursive_term),
             is_distinct,
         })))
@@ -228,7 +239,7 @@ impl LogicalPlanBuilder {
             .collect::<Vec<_>>();
         let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
-        Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
+        Ok(Self::new(LogicalPlan::Values(Values { schema, values })))
     }
 
     /// Convert a table provider into a builder with a TableScan
@@ -279,7 +290,7 @@ impl LogicalPlanBuilder {
         options: HashMap<String, String>,
         partition_by: Vec<String>,
     ) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Copy(CopyTo {
+        Ok(Self::new(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
             partition_by,
@@ -303,7 +314,7 @@ impl LogicalPlanBuilder {
             WriteOp::InsertInto
         };
 
-        Ok(Self::from(LogicalPlan::Dml(DmlStatement::new(
+        Ok(Self::new(LogicalPlan::Dml(DmlStatement::new(
             table_name.into(),
             table_schema,
             op,
@@ -320,7 +331,7 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         TableScan::try_new(table_name, table_source, projection, filters, None)
             .map(LogicalPlan::TableScan)
-            .map(Self::from)
+            .map(Self::new)
     }
 
     /// Wrap a plan in a window
@@ -365,7 +376,7 @@ impl LogicalPlanBuilder {
         self,
         expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        project(self.plan, expr).map(Self::from)
+        project(unwrap_arc(self.plan), expr).map(Self::new)
     }
 
     /// Select the given column indices
@@ -380,9 +391,9 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Filter::try_new(expr, Arc::new(self.plan))
+        Filter::try_new(expr, self.plan)
             .map(LogicalPlan::Filter)
-            .map(Self::from)
+            .map(Self::new)
     }
 
     /// Apply a filter which is used for a having clause
@@ -395,10 +406,10 @@ impl LogicalPlanBuilder {
 
     /// Make a builder for a prepare logical plan from the builder's plan
     pub fn prepare(self, name: String, data_types: Vec<DataType>) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Prepare(Prepare {
+        Ok(Self::new(LogicalPlan::Prepare(Prepare {
             name,
             data_types,
-            input: Arc::new(self.plan),
+            input: self.plan,
         })))
     }
 
@@ -409,16 +420,16 @@ impl LogicalPlanBuilder {
     /// `fetch` - Maximum number of rows to fetch, after skipping `skip` rows,
     ///          if specified.
     pub fn limit(self, skip: usize, fetch: Option<usize>) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Limit(Limit {
+        Ok(Self::new(LogicalPlan::Limit(Limit {
             skip,
             fetch,
-            input: Arc::new(self.plan),
+            input: self.plan,
         })))
     }
 
     /// Apply an alias
     pub fn alias(self, alias: impl Into<TableReference>) -> Result<Self> {
-        subquery_alias(self.plan, alias).map(Self::from)
+        subquery_alias(unwrap_arc(self.plan), alias).map(Self::new)
     }
 
     /// Add missing sort columns to all downstream projection
@@ -473,7 +484,7 @@ impl LogicalPlanBuilder {
                     Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
                 }
                 expr.extend(missing_exprs);
-                project((*input).clone(), expr)
+                project(unwrap_arc(input), expr)
             }
             _ => {
                 let is_distinct =
@@ -558,9 +569,9 @@ impl LogicalPlanBuilder {
             })?;
 
         if missing_cols.is_empty() {
-            return Ok(Self::from(LogicalPlan::Sort(Sort {
+            return Ok(Self::new(LogicalPlan::Sort(Sort {
                 expr: normalize_cols(exprs, &self.plan)?,
-                input: Arc::new(self.plan),
+                input: self.plan,
                 fetch: None,
             })));
         }
@@ -569,7 +580,8 @@ impl LogicalPlanBuilder {
         let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
 
         let is_distinct = false;
-        let plan = Self::add_missing_columns(self.plan, &missing_cols, is_distinct)?;
+        let plan =
+            Self::add_missing_columns(unwrap_arc(self.plan), &missing_cols, is_distinct)?;
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &plan)?,
             input: Arc::new(plan),
@@ -578,29 +590,27 @@ impl LogicalPlanBuilder {
 
         Projection::try_new(new_expr, Arc::new(sort_plan))
             .map(LogicalPlan::Projection)
-            .map(Self::from)
+            .map(Self::new)
     }
 
     /// Apply a union, preserving duplicate rows
     pub fn union(self, plan: LogicalPlan) -> Result<Self> {
-        union(self.plan, plan).map(Self::from)
+        union(unwrap_arc(self.plan), plan).map(Self::new)
     }
 
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
-        let left_plan: LogicalPlan = self.plan;
+        let left_plan: LogicalPlan = unwrap_arc(self.plan);
         let right_plan: LogicalPlan = plan;
 
-        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
+        Ok(Self::new(LogicalPlan::Distinct(Distinct::All(Arc::new(
             union(left_plan, right_plan)?,
         )))))
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
     pub fn distinct(self) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
-            self.plan,
-        )))))
+        Ok(Self::new(LogicalPlan::Distinct(Distinct::All(self.plan))))
     }
 
     /// Project first values of the specified expression list according to the provided
@@ -611,8 +621,8 @@ impl LogicalPlanBuilder {
         select_expr: Vec<Expr>,
         sort_expr: Option<Vec<Expr>>,
     ) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Distinct(Distinct::On(
-            DistinctOn::try_new(on_expr, select_expr, sort_expr, Arc::new(self.plan))?,
+        Ok(Self::new(LogicalPlan::Distinct(Distinct::On(
+            DistinctOn::try_new(on_expr, select_expr, sort_expr, self.plan)?,
         ))))
     }
 
@@ -827,8 +837,8 @@ impl LogicalPlanBuilder {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
-        Ok(Self::from(LogicalPlan::Join(Join {
-            left: Arc::new(self.plan),
+        Ok(Self::new(LogicalPlan::Join(Join {
+            left: self.plan,
             right: Arc::new(right),
             on,
             filter,
@@ -891,8 +901,8 @@ impl LogicalPlanBuilder {
                 DataFusionError::Internal("filters should not be None here".to_string())
             })?)
         } else {
-            Ok(Self::from(LogicalPlan::Join(Join {
-                left: Arc::new(self.plan),
+            Ok(Self::new(LogicalPlan::Join(Join {
+                left: self.plan,
                 right: Arc::new(right),
                 on: join_on,
                 filter: filters,
@@ -908,8 +918,8 @@ impl LogicalPlanBuilder {
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &JoinType::Inner)?;
-        Ok(Self::from(LogicalPlan::CrossJoin(CrossJoin {
-            left: Arc::new(self.plan),
+        Ok(Self::new(LogicalPlan::CrossJoin(CrossJoin {
+            left: self.plan,
             right: Arc::new(right),
             schema: DFSchemaRef::new(join_schema),
         })))
@@ -917,8 +927,8 @@ impl LogicalPlanBuilder {
 
     /// Repartition
     pub fn repartition(self, partitioning_scheme: Partitioning) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Repartition(Repartition {
-            input: Arc::new(self.plan),
+        Ok(Self::new(LogicalPlan::Repartition(Repartition {
+            input: self.plan,
             partitioning_scheme,
         })))
     }
@@ -930,9 +940,9 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let window_expr = normalize_cols(window_expr, &self.plan)?;
         validate_unique_names("Windows", &window_expr)?;
-        Ok(Self::from(LogicalPlan::Window(Window::try_new(
+        Ok(Self::new(LogicalPlan::Window(Window::try_new(
             window_expr,
-            Arc::new(self.plan),
+            self.plan,
         )?)))
     }
 
@@ -949,9 +959,9 @@ impl LogicalPlanBuilder {
 
         let group_expr =
             add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?;
-        Aggregate::try_new(Arc::new(self.plan), group_expr, aggr_expr)
+        Aggregate::try_new(self.plan, group_expr, aggr_expr)
             .map(LogicalPlan::Aggregate)
-            .map(Self::from)
+            .map(Self::new)
     }
 
     /// Create an expression to represent the explanation of the plan
@@ -965,18 +975,18 @@ impl LogicalPlanBuilder {
         let schema = schema.to_dfschema_ref()?;
 
         if analyze {
-            Ok(Self::from(LogicalPlan::Analyze(Analyze {
+            Ok(Self::new(LogicalPlan::Analyze(Analyze {
                 verbose,
-                input: Arc::new(self.plan),
+                input: self.plan,
                 schema,
             })))
         } else {
             let stringified_plans =
                 vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
-            Ok(Self::from(LogicalPlan::Explain(Explain {
+            Ok(Self::new(LogicalPlan::Explain(Explain {
                 verbose,
-                plan: Arc::new(self.plan),
+                plan: self.plan,
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded: false,
@@ -1054,7 +1064,7 @@ impl LogicalPlanBuilder {
 
     /// Build the plan
     pub fn build(self) -> Result<LogicalPlan> {
-        Ok(self.plan)
+        Ok(unwrap_arc(self.plan))
     }
 
     /// Apply a join with the expression on constraint.
@@ -1114,8 +1124,8 @@ impl LogicalPlanBuilder {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
-        Ok(Self::from(LogicalPlan::Join(Join {
-            left: Arc::new(self.plan),
+        Ok(Self::new(LogicalPlan::Join(Join {
+            left: self.plan,
             right: Arc::new(right),
             on: join_key_pairs,
             filter,
@@ -1128,7 +1138,7 @@ impl LogicalPlanBuilder {
 
     /// Unnest the given column.
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
-        Ok(Self::from(unnest(self.plan, vec![column.into()])?))
+        unnest(unwrap_arc(self.plan), vec![column.into()]).map(Self::new)
     }
 
     /// Unnest the given column given [`UnnestOptions`]
@@ -1137,11 +1147,8 @@ impl LogicalPlanBuilder {
         column: impl Into<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        Ok(Self::from(unnest_with_options(
-            self.plan,
-            vec![column.into()],
-            options,
-        )?))
+        unnest_with_options(unwrap_arc(self.plan), vec![column.into()], options)
+            .map(Self::new)
     }
 
     /// Unnest the given columns with the given [`UnnestOptions`]
@@ -1150,45 +1157,19 @@ impl LogicalPlanBuilder {
         columns: Vec<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        Ok(Self::from(unnest_with_options(
-            self.plan, columns, options,
-        )?))
+        unnest_with_options(unwrap_arc(self.plan), columns, options).map(Self::new)
     }
 }
 
-/// Converts a `Arc<LogicalPlan>` into `LogicalPlanBuilder`
-/// ```
-/// # use datafusion_expr::{Expr, expr, col, LogicalPlanBuilder, logical_plan::table_scan};
-/// # use datafusion_common::Result;
-/// # use arrow::datatypes::{Schema, DataType, Field};
-/// # fn main() -> Result<()> {
-/// #
-/// # fn employee_schema() -> Schema {
-/// #    Schema::new(vec![
-/// #           Field::new("id", DataType::Int32, false),
-/// #           Field::new("first_name", DataType::Utf8, false),
-/// #           Field::new("last_name", DataType::Utf8, false),
-/// #           Field::new("state", DataType::Utf8, false),
-/// #           Field::new("salary", DataType::Int32, false),
-/// #       ])
-/// #   }
-/// #
-/// // Create the plan
-/// let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
-///     .sort(vec![
-///         Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
-///         Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
-///      ])?
-///     .build()?;
-/// // Convert LogicalPlan into LogicalPlanBuilder
-/// let plan_builder: LogicalPlanBuilder = std::sync::Arc::new(plan).into();
-/// # Ok(())
-/// # }
-/// ```
+impl From<LogicalPlan> for LogicalPlanBuilder {
+    fn from(plan: LogicalPlan) -> Self {
+        LogicalPlanBuilder::new(plan)
+    }
+}
 
 impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
     fn from(plan: Arc<LogicalPlan>) -> Self {
-        LogicalPlanBuilder::from(unwrap_arc(plan))
+        LogicalPlanBuilder::new_from_arc(plan)
     }
 }
 
