@@ -25,6 +25,7 @@ use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
+use datafusion_functions::string::common::StringArrayType;
 use itertools::Itertools;
 
 use crate::utils::{check_datatypes, make_scalar_function};
@@ -324,31 +325,52 @@ pub fn array_has_dispatch<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let haystack = as_generic_list_array::<O>(haystack)?;
     match needle.data_type() {
-        DataType::Utf8 => array_has_string_internal::<O, i32>(haystack, needle),
-        DataType::LargeUtf8 => array_has_string_internal::<O, i64>(haystack, needle),
-        DataType::Utf8View => array_has_string_view_internal::<O>(haystack, needle),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            array_has_string_internal::<O>(haystack, needle)
+        }
         _ => general_array_has::<O>(haystack, needle),
     }
 }
 
-fn array_has_string_internal<O: OffsetSizeTrait, S: OffsetSizeTrait>(
+fn array_has_string_internal<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
+    let needle_data_type = needle.data_type();
+    let needle_array = match needle_data_type {
+        DataType::Utf8 => needle
+            .as_string::<i32>()
+            .iter()
+            .collect::<Vec<Option<&str>>>(),
+        DataType::LargeUtf8 => needle
+            .as_string::<i64>()
+            .iter()
+            .collect::<Vec<Option<&str>>>(),
+        DataType::Utf8View => needle
+            .as_string_view()
+            .iter()
+            .collect::<Vec<Option<&str>>>(),
+        _ => unreachable!(),
+    };
+
     let mut boolean_builder = BooleanArray::builder(array.len());
-    let needle_array = needle.as_string::<S>();
-    for (arr, element) in array.iter().zip(needle_array.iter()) {
+    for (arr, element) in array.iter().zip(needle_array.into_iter()) {
         match (arr, element) {
             (Some(arr), Some(element)) => {
-                let string_arr = arr.as_string::<S>();
-                let mut res = false;
-                for sub_arr in string_arr.iter().flatten() {
-                    if sub_arr == element {
-                        res = true;
-                        break;
+                let is_contained = match needle_data_type {
+                    DataType::Utf8 => {
+                        check_inner_array_has(arr.as_string::<i32>(), element)
                     }
-                }
-                boolean_builder.append_value(res);
+                    DataType::LargeUtf8 => {
+                        check_inner_array_has(arr.as_string::<i64>(), element)
+                    }
+                    DataType::Utf8View => {
+                        check_inner_array_has(arr.as_string_view(), element)
+                    }
+                    _ => unreachable!(),
+                };
+
+                boolean_builder.append_value(is_contained);
             }
             (_, _) => {
                 boolean_builder.append_null();
@@ -359,32 +381,17 @@ fn array_has_string_internal<O: OffsetSizeTrait, S: OffsetSizeTrait>(
     Ok(Arc::new(boolean_builder.finish()))
 }
 
-fn array_has_string_view_internal<O: OffsetSizeTrait>(
-    array: &GenericListArray<O>,
-    needle: &ArrayRef,
-) -> Result<ArrayRef> {
-    let mut boolean_builder = BooleanArray::builder(array.len());
-    let needle_array = needle.as_string_view();
-    for (arr, element) in array.iter().zip(needle_array.iter()) {
-        match (arr, element) {
-            (Some(arr), Some(element)) => {
-                let string_arr = arr.as_string_view();
-                let mut res = false;
-                for sub_arr in string_arr.iter().flatten() {
-                    if sub_arr == element {
-                        res = true;
-                        break;
-                    }
-                }
-                boolean_builder.append_value(res);
-            }
-            (_, _) => {
-                boolean_builder.append_null();
-            }
+fn check_inner_array_has<'a, V>(haystack: V, needle: &str) -> bool
+where
+    V: StringArrayType<'a>,
+{
+    for sub_arr in haystack.iter().flatten() {
+        if sub_arr == needle {
+            return true;
         }
     }
 
-    Ok(Arc::new(boolean_builder.finish()))
+    false
 }
 
 fn general_array_has<O: OffsetSizeTrait>(
