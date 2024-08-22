@@ -1813,6 +1813,8 @@ pub struct CoalesceBatchesExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(uint32, tag = "2")]
     pub target_batch_size: u32,
+    #[prost(uint32, optional, tag = "3")]
+    pub fetch: ::core::option::Option<u32>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
