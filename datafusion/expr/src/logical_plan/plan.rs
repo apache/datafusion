@@ -643,9 +643,12 @@ impl LogicalPlan {
                 // todo it isn't clear why the schema is not recomputed here
                 Ok(LogicalPlan::Values(Values { schema, values }))
             }
-            LogicalPlan::Filter(Filter { predicate, input }) => {
-                Filter::try_new(predicate, input).map(LogicalPlan::Filter)
-            }
+            LogicalPlan::Filter(Filter {
+                predicate,
+                input,
+                having,
+            }) => Filter::try_new_internal(predicate, input, having)
+                .map(LogicalPlan::Filter),
             LogicalPlan::Repartition(_) => Ok(self),
             LogicalPlan::Window(Window {
                 input,
@@ -2015,10 +2018,9 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
-    let mut schema = DFSchema::new_with_metadata(
-        exprlist_to_fields(exprs, input)?,
-        input.schema().metadata().clone(),
-    )?;
+    let metadata = input.schema().metadata().clone();
+    let mut schema =
+        DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?;
     schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
         exprs, input,
     )?)?;
@@ -2081,6 +2083,8 @@ pub struct Filter {
     pub predicate: Expr,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
+    /// The flag to indicate if the filter is a having clause
+    pub having: bool,
 }
 
 impl Filter {
@@ -2089,6 +2093,20 @@ impl Filter {
     /// Notes: as Aliases have no effect on the output of a filter operator,
     /// they are removed from the predicate expression.
     pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+        Self::try_new_internal(predicate, input, false)
+    }
+
+    /// Create a new filter operator for a having clause.
+    /// This is similar to a filter, but its having flag is set to true.
+    pub fn try_new_with_having(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+        Self::try_new_internal(predicate, input, true)
+    }
+
+    fn try_new_internal(
+        predicate: Expr,
+        input: Arc<LogicalPlan>,
+        having: bool,
+    ) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -2105,6 +2123,7 @@ impl Filter {
         Ok(Self {
             predicate: predicate.unalias_nested().data,
             input,
+            having,
         })
     }
 
@@ -2655,7 +2674,10 @@ impl Aggregate {
 
         qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
 
-        let schema = DFSchema::new_with_metadata(qualified_fields, HashMap::new())?;
+        let schema = DFSchema::new_with_metadata(
+            qualified_fields,
+            input.schema().metadata().clone(),
+        )?;
 
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }

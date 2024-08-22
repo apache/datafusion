@@ -85,5 +85,6 @@ pub mod udaf {
     pub use datafusion_physical_expr_functions_aggregate::aggregate::AggregateFunctionExpr;
 }
 
+pub mod coalesce;
 #[cfg(test)]
 pub mod test;

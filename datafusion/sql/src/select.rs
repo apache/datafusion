@@ -92,6 +92,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
+
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
         // See https://github.com/apache/datafusion/issues/9162
@@ -214,7 +215,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
             LogicalPlanBuilder::from(plan)
-                .filter(having_expr_post_aggr)?
+                .having(having_expr_post_aggr)?
                 .build()?
         } else {
             plan
@@ -288,9 +289,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        let plan = self.order_by(plan, order_by_rex)?;
-
-        Ok(plan)
+        self.order_by(plan, order_by_rex)
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
@@ -496,20 +495,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match from.len() {
             0 => Ok(LogicalPlanBuilder::empty(true).build()?),
             1 => {
-                let from = from.remove(0);
-                self.plan_table_with_joins(from, planner_context)
+                let input = from.remove(0);
+                self.plan_table_with_joins(input, planner_context)
             }
             _ => {
-                let mut plans = from
-                    .into_iter()
-                    .map(|t| self.plan_table_with_joins(t, planner_context));
+                let mut from = from.into_iter();
 
-                let mut left = LogicalPlanBuilder::from(plans.next().unwrap()?);
-
-                for right in plans {
-                    left = left.cross_join(right?)?;
+                let mut left = LogicalPlanBuilder::from({
+                    let input = from.next().unwrap();
+                    self.plan_table_with_joins(input, planner_context)?
+                });
+                let old_outer_from_schema = {
+                    let left_schema = Some(Arc::clone(left.schema()));
+                    planner_context.set_outer_from_schema(left_schema)
+                };
+                for input in from {
+                    // Join `input` with the current result (`left`).
+                    let right = self.plan_table_with_joins(input, planner_context)?;
+                    left = left.cross_join(right)?;
+                    // Update the outer FROM schema.
+                    let left_schema = Some(Arc::clone(left.schema()));
+                    planner_context.set_outer_from_schema(left_schema);
                 }
-                Ok(left.build()?)
+                planner_context.set_outer_from_schema(old_outer_from_schema);
+                left.build()
             }
         }
     }

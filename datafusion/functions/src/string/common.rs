@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Common utilities for implementing string functions
+
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -252,7 +254,69 @@ impl<'a> ColumnarValueRef<'a> {
     }
 }
 
+/// Abstracts iteration over different types of string arrays.
+///
+/// The [`StringArrayType`] trait helps write generic code for string functions that can work with
+/// different types of string arrays.
+///
+/// Currently three types are supported:
+/// - [`StringArray`]
+/// - [`LargeStringArray`]
+/// - [`StringViewArray`]
+///
+/// It is inspired / copied from [arrow-rs].
+///
+/// [arrow-rs]: https://github.com/apache/arrow-rs/blob/bf0ea9129e617e4a3cf915a900b747cc5485315f/arrow-string/src/like.rs#L151-L157
+///
+/// # Examples
+/// Generic function that works for [`StringArray`], [`LargeStringArray`]
+/// and [`StringViewArray`]:
+/// ```
+/// # use arrow::array::{StringArray, LargeStringArray, StringViewArray};
+/// # use datafusion_functions::string::common::StringArrayType;
+///
+/// /// Combines string values for any StringArrayType type. It can be invoked on
+/// /// and combination of `StringArray`, `LargeStringArray` or `StringViewArray`
+/// fn combine_values<'a, S1, S2>(array1: S1, array2: S2) -> Vec<String>
+///   where S1: StringArrayType<'a>, S2: StringArrayType<'a>
+/// {
+///   // iterate over the elements of the 2 arrays in parallel
+///   array1
+///   .iter()
+///   .zip(array2.iter())
+///   .map(|(s1, s2)| {
+///      // if both values are non null, combine them
+///      if let (Some(s1), Some(s2)) = (s1, s2) {
+///        format!("{s1}{s2}")
+///      } else {
+///        "None".to_string()
+///     }
+///    })
+///   .collect()
+/// }
+///
+/// let string_array = StringArray::from(vec!["foo", "bar"]);
+/// let large_string_array = LargeStringArray::from(vec!["foo2", "bar2"]);
+/// let string_view_array = StringViewArray::from(vec!["foo3", "bar3"]);
+///
+/// // can invoke this function a string array and large string array
+/// assert_eq!(
+///   combine_values(&string_array, &large_string_array),
+///   vec![String::from("foofoo2"), String::from("barbar2")]
+/// );
+///
+/// // Can call the same function with string array and string view array
+/// assert_eq!(
+///   combine_values(&string_array, &string_view_array),
+///   vec![String::from("foofoo3"), String::from("barbar3")]
+/// );
+/// ```
+///
+/// [`LargeStringArray`]: arrow::array::LargeStringArray
 pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+    /// Return an [`ArrayIter`]  over the values of the array.
+    ///
+    /// This iterator iterates returns `Option<&str>` for each item in the array.
     fn iter(&self) -> ArrayIter<Self>;
 }
 

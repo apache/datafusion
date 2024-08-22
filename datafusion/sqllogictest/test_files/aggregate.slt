@@ -5387,6 +5387,18 @@ physical_plan
 statement ok
 DROP TABLE empty;
 
+# verify count aggregate function should not be nullable
+statement ok
+create table empty;
+
+query I
+select distinct count() from empty;
+----
+0
+
+statement ok
+DROP TABLE empty;
+
 statement ok
 CREATE TABLE t(col0 INTEGER) as VALUES(2);
 
@@ -5642,6 +5654,97 @@ query I??III?T
 select count(null), min(null), max(null), bit_and(NULL), bit_or(NULL), bit_xor(NULL), nth_value(NULL, 1), string_agg(NULL, ',');
 ----
 0 NULL NULL NULL NULL NULL NULL NULL
+
+statement ok
+create table having_test(v1 int, v2 int)
+
+statement ok
+create table join_table(v1 int, v2 int)
+
+statement ok
+insert into having_test values (1, 2), (2, 3), (3, 4)
+
+statement ok
+insert into join_table values (1, 2), (2, 3), (3, 4)
+
+
+query II
+select * from having_test group by v1, v2 having max(v1) = 3
+----
+3 4
+
+query TT
+EXPLAIN select * from having_test group by v1, v2 having max(v1) = 3
+----
+logical_plan
+01)Projection: having_test.v1, having_test.v2
+02)--Filter: max(having_test.v1) = Int32(3)
+03)----Aggregate: groupBy=[[having_test.v1, having_test.v2]], aggr=[[max(having_test.v1)]]
+04)------TableScan: having_test projection=[v1, v2]
+physical_plan
+01)ProjectionExec: expr=[v1@0 as v1, v2@1 as v2]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: max(having_test.v1)@2 = 3
+04)------AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+
+query error
+select * from having_test having max(v1) = 3
+
+query I
+select max(v1) from having_test having max(v1) = 3
+----
+3
+
+query I
+select max(v1), * exclude (v1, v2) from having_test having max(v1) = 3
+----
+3
+
+# because v1, v2 is not in the group by clause, the sql is invalid
+query III
+select max(v1), * replace ('v1' as v3) from having_test group by v1, v2 having max(v1) = 3
+----
+3 3 4
+
+query III
+select max(v1), t.* from having_test t group by v1, v2 having max(v1) = 3
+----
+3 3 4
+
+# j.* should also be included in the group-by clause
+query error
+select max(t.v1), j.* from having_test t join join_table j on t.v1 = j.v1 group by t.v1, t.v2 having max(t.v1) = 3
+
+query III
+select max(t.v1), j.* from having_test t join join_table j on t.v1 = j.v1 group by j.v1, j.v2 having max(t.v1) = 3
+----
+3 3 4
+
+# If the select items only contain scalar expressions, the having clause is valid.
+query P
+select now() from having_test having max(v1) = 4
+----
+
+# If the select items only contain scalar expressions, the having clause is valid.
+query I
+select 0 from having_test having max(v1) = 4
+----
+
+# v2 should also be included in group-by clause
+query error
+select * from having_test group by v1 having max(v1) = 3
+
+statement ok
+drop table having_test
+
+statement ok
+drop table join_table
 
 # test min/max Float16 without group expression
 query RRTT
