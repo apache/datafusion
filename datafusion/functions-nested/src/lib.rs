@@ -57,7 +57,6 @@ pub mod string;
 pub mod utils;
 
 pub use array_has::array_has_dispatch;
-pub use array_has::general_array_has_dispatch;
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::ScalarUDF;
