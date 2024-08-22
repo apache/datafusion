@@ -245,8 +245,7 @@ enum ComparisonType {
     Any,
 }
 
-/// Public function for internal benchmark, avoid to use it in production
-pub fn array_has_dispatch<O: OffsetSizeTrait>(
+fn array_has_dispatch<O: OffsetSizeTrait>(
     haystack: &ArrayRef,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
@@ -278,21 +277,16 @@ fn array_has_string_internal<O: OffsetSizeTrait>(
     haystack: &GenericListArray<O>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
-    let needle_array = string_array_to_vec(needle);
-
     let mut boolean_builder = BooleanArray::builder(haystack.len());
-    for (arr, element) in haystack.iter().zip(needle_array.into_iter()) {
+    for (arr, element) in haystack.iter().zip(string_array_to_vec(needle).into_iter()) {
         match (arr, element) {
             (Some(arr), Some(element)) => {
-                let haystack_array = string_array_to_vec(&arr);
-                let mut is_contained = false;
-                for sub_arr in haystack_array.into_iter().flatten() {
-                    if sub_arr == element {
-                        is_contained = true;
-                        break;
-                    }
-                }
-                boolean_builder.append_value(is_contained);
+                boolean_builder.append_value(
+                    string_array_to_vec(&arr)
+                        .into_iter()
+                        .flatten()
+                        .any(|x| x == element),
+                );
             }
             (_, _) => {
                 boolean_builder.append_null();
