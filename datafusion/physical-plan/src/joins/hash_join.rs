@@ -1203,7 +1203,7 @@ fn lookup_join_hashmap(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let (mut probe_indices, mut build_indices, next_offset) = build_hashmap
+    let (probe_indices, build_indices, next_offset) = build_hashmap
         .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
 
     let build_indices: UInt64Array = build_indices.into();
@@ -1563,7 +1563,7 @@ mod tests {
         test::build_table_i32, test::exec::MockExec,
     };
 
-    use arrow::array::{Date32Array, Int32Array, UInt32Builder, UInt64Builder};
+    use arrow::array::{Date32Array, Int32Array};
     use arrow::datatypes::{DataType, Field};
     use arrow_array::StructArray;
     use arrow_buffer::NullBuffer;

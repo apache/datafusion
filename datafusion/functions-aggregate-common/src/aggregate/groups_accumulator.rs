@@ -184,7 +184,7 @@ impl GroupsAccumulatorAdapter {
             }
 
             groups_with_rows.push(group_index);
-            batch_indices.append_slice(indices);
+            batch_indices.extend_from_slice(indices);
             offset_so_far += indices.len();
             offsets.push(offset_so_far);
         }
