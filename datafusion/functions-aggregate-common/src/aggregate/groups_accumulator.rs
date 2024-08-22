@@ -648,6 +648,13 @@ impl<T> VecBlocks<T> {
 
         cur_cap + prev_cap
     }
+
+    pub fn len(&self) -> usize {
+        let cur_len = self.current.as_ref().map(|blk| blk.len()).unwrap_or(0);
+        let prev_len = self.previous.iter().map(|p| p.len()).sum::<usize>();
+
+        cur_len + prev_len
+    }
 }
 
 fn get_filter_at_indices(
@@ -792,5 +799,92 @@ pub fn ensure_enough_room_for_blocked_values<T: Clone>(
             .current_mut()
             .unwrap()
             .extend(iter::repeat(default_value.clone()).take(last_expand_slots));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ensure_room_for_blocked_values() {
+        let mut blocks = VecBlocks::new();
+        let block_size = 4;
+
+        // 0 total_num_groups, should be no blocks
+        ensure_enough_room_for_blocked_values(&mut blocks, 0, block_size, 0);
+        assert_eq!(blocks.num_blocks(), 0);
+        assert_eq!(blocks.len(), 0);
+
+        // 0 -> 3 total_num_groups, blocks should look like:
+        // [d, d, d, empty]
+        ensure_enough_room_for_blocked_values(&mut blocks, 3, block_size, 0);
+        assert_eq!(blocks.num_blocks(), 1);
+        assert_eq!(blocks.len(), 3);
+
+        // 3 -> 8 total_num_groups, blocks should look like:
+        // [d, d, d, d], [d, d, d, d]
+        ensure_enough_room_for_blocked_values(&mut blocks, 8, block_size, 0);
+        assert_eq!(blocks.num_blocks(), 2);
+        assert_eq!(blocks.len(), 8);
+
+        // 8 -> 13 total_num_groups, blocks should look like:
+        // [d, d, d, d], [d, d, d, d], [d, d, d, d], [d, empty, empty, empty]
+        ensure_enough_room_for_blocked_values(&mut blocks, 13, block_size, 0);
+        assert_eq!(blocks.num_blocks(), 4);
+        assert_eq!(blocks.len(), 13);
+    }
+
+    #[test]
+    fn test_blocks_ops() {
+        let mut blocks = VecBlocks::<i32>::new();
+
+        // Test empty blocks
+        assert!(blocks.current().is_none());
+        assert!(blocks.current_mut().is_none());
+        assert!(blocks.pop_first_block().is_none());
+        assert_eq!(blocks.num_blocks(), 0);
+        {
+            let mut iter = blocks.iter();
+            assert!(iter.next().is_none());
+        }
+        {
+            let mut iter_mut = blocks.iter_mut();
+            assert!(iter_mut.next().is_none());
+        }
+
+        // Test push block
+        for cnt in 0..100 {
+            blocks.push_block(Vec::with_capacity(4));
+
+            assert!(blocks.current().is_some());
+            assert!(blocks.current_mut().is_some());
+            assert_eq!(blocks.num_blocks(), cnt + 1);
+
+            let block_num = blocks.iter().count();
+            assert_eq!(block_num, cnt + 1);
+            let block_num = blocks.iter_mut().count();
+            assert_eq!(block_num, cnt + 1);
+        }
+
+        // Test pop block
+        for cnt in 0..100 {
+            blocks.pop_first_block();
+
+            let rest_blk_num = 100 - cnt - 1;
+            assert_eq!(blocks.num_blocks(), rest_blk_num);
+            if rest_blk_num > 0 {
+                assert!(blocks.current().is_some());
+                assert!(blocks.current_mut().is_some());
+            } else {
+                assert!(blocks.current().is_none());
+                assert!(blocks.current_mut().is_none());
+            }
+
+            let block_num = blocks.iter().count();
+            assert_eq!(block_num, rest_blk_num);
+            let block_num = blocks.iter_mut().count();
+            assert_eq!(block_num, rest_blk_num);
+        }
     }
 }
