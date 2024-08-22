@@ -65,7 +65,3 @@ name = "array_expression"
 [[bench]]
 harness = false
 name = "map"
-
-[[bench]]
-harness = false
-name = "array_has"
