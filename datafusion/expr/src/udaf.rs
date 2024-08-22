@@ -328,6 +328,9 @@ where
 /// let expr = geometric_mean.call(vec![col("a")]);
 /// ```
 pub trait AggregateUDFImpl: Debug + Send + Sync {
+    // Note: When adding any methods (with default implementations), remember to add them also
+    // into the AliasedAggregateUDFImpl below!
+
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 

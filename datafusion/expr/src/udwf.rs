@@ -266,6 +266,9 @@ where
 ///     .unwrap();
 /// ```
 pub trait WindowUDFImpl: Debug + Send + Sync {
+    // Note: When adding any methods (with default implementations), remember to add them also
+    // into the AliasedWindowUDFImpl below!
+
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
