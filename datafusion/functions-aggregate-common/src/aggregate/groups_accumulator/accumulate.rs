@@ -1471,4 +1471,37 @@ mod test {
                 .collect()
         }
     }
+
+    #[test]
+    fn test_ensure_room_for_blocked_nulls() {
+        let mut blocks: Blocks<BooleanBufferBuilder> = Blocks::new();
+        let block_size = 4;
+
+        // 0 total_num_groups, should be no blocks
+        ensure_enough_room_for_blocked_nulls(&mut blocks, 0, block_size, false);
+        assert_eq!(blocks.num_blocks(), 0);
+        let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
+        assert_eq!(total_len, 0);
+
+        // 0 -> 3 total_num_groups, blocks should look like:
+        // [d, d, d, empty]
+        ensure_enough_room_for_blocked_nulls(&mut blocks, 3, block_size, false);
+        assert_eq!(blocks.num_blocks(), 1);
+        let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
+        assert_eq!(total_len, 3);
+
+        // 3 -> 8 total_num_groups, blocks should look like:
+        // [d, d, d, d], [d, d, d, d]
+        ensure_enough_room_for_blocked_nulls(&mut blocks, 8, block_size, false);
+        assert_eq!(blocks.num_blocks(), 2);
+        let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
+        assert_eq!(total_len, 8);
+
+        // 8 -> 13 total_num_groups, blocks should look like:
+        // [d, d, d, d], [d, d, d, d], [d, d, d, d], [d, empty, empty, empty]
+        ensure_enough_room_for_blocked_nulls(&mut blocks, 13, block_size, false);
+        assert_eq!(blocks.num_blocks(), 4);
+        let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
+        assert_eq!(total_len, 13);
+    }
 }
