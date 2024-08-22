@@ -3881,7 +3881,6 @@ union_extract(union, field_name)
 
 ```
 
-
 ## Other Functions
 
 - [arrow_cast](#arrow_cast)

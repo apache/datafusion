@@ -1,7 +1,22 @@
-#[macro_use]
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 extern crate criterion;
 
-use crate::criterion::Criterion;
 use arrow::{
     array::{
         Array, BooleanArray, Int32Array, Int8Array, NullArray, StringArray, UnionArray,
@@ -12,7 +27,7 @@ use arrow::{
     },
 };
 use arrow_buffer::ScalarBuffer;
-use criterion::black_box;
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 use datafusion_functions::core::union_extract::{
@@ -965,6 +980,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         is_sequential_group.bench_function("offsets sequential windows fold &&", |b| {
             b.iter(|| {
                 black_box(
+                    #[allow(clippy::unnecessary_fold)]
                     offsets
                         .windows(2)
                         .fold(true, |b, w| b && (w[0] + 1 == w[1])),
@@ -993,6 +1009,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         is_sequential_group.bench_function("offsets sequential fold &&", |b| {
             b.iter(|| {
                 black_box(
+                    #[allow(clippy::unnecessary_fold)]
                     offsets
                         .iter()
                         .copied()
@@ -1055,6 +1072,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
 
         type_ids_eq.bench_function("type_ids equal fold &&", |b| {
+            #[allow(clippy::unnecessary_fold)]
             b.iter(|| type_ids.iter().fold(true, |b, v| b && (*v == type_id)))
         });
 

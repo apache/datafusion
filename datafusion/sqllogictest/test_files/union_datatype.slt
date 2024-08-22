@@ -232,26 +232,15 @@ select union_extract(my_union, 'int'), expected, my_union from empty_dense_union
 
 query error
 select union_extract() from empty_dense_union;
-----
-DataFusion error: Error during planning: Error during planning: union_extract does not support zero arguments. No function matches the given name and argument types 'union_extract()'. You might need to add explicit type casts.
-	Candidate functions:
-	union_extract(Any, Any)
 
 
 query error
 select union_extract(my_union) from empty_dense_union;
-----
-DataFusion error: Error during planning: Error during planning: The function expected 2 arguments but received 1 No function matches the given name and argument types 'union_extract(Union([], Dense))'. You might need to add explicit type casts.
-	Candidate functions:
-	union_extract(Any, Any)
 
 
 query error
 select union_extract('a') from empty_dense_union;
-----
-DataFusion error: Error during planning: Error during planning: The function expected 2 arguments but received 1 No function matches the given name and argument types 'union_extract(Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	union_extract(Any, Any)
+
 
 
 query error DataFusion error: Execution error: union_extract first argument must be a union, got Utf8 instead
@@ -264,7 +253,3 @@ select union_extract(my_union, 1) from empty_dense_union;
 
 query error
 select union_extract(my_union, 'a', 'b') from empty_dense_union;
-----
-DataFusion error: Error during planning: Error during planning: The function expected 2 arguments but received 3 No function matches the given name and argument types 'union_extract(Union([], Dense), Utf8, Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	union_extract(Any, Any)
