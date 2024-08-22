@@ -3166,13 +3166,13 @@ mod tests {
             (0, None),
         )?;
 
-        let mut left_ids = vec![0, 1];
+        let left_ids: UInt64Array = vec![0, 1].into();
 
-        let mut right_ids = vec![0, 1];
+        let right_ids: UInt32Array = vec![0, 1].into();
 
-        assert_eq!(left_ids.finish(), l);
+        assert_eq!(left_ids, l);
 
-        assert_eq!(right_ids.finish(), r);
+        assert_eq!(right_ids, r);
 
         Ok(())
     }
