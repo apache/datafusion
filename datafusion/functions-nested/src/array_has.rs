@@ -114,6 +114,17 @@ fn array_has_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::List(_) => array_has_all_dispatch::<i32>(&args[0], &args[1]),
+        DataType::LargeList(_) => array_has_all_dispatch::<i64>(&args[0], &args[1]),
+        _ => exec_err!(
+            "array_has does not support type '{:?}'.",
+            args[0].data_type()
+        ),
+    }
+}
+
 #[derive(Debug)]
 pub struct ArrayHasAll {
     signature: Signature,
@@ -152,24 +163,7 @@ impl ScalarUDFImpl for ArrayHasAll {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        if args.len() != 2 {
-            return exec_err!("array_has_all needs two arguments");
-        }
-
-        let array_type = args[0].data_type();
-
-        match array_type {
-            DataType::List(_) => {
-                general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::All)
-                    .map(ColumnarValue::Array)
-            }
-            DataType::LargeList(_) => {
-                general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::All)
-                    .map(ColumnarValue::Array)
-            }
-            _ => exec_err!("array_has_all does not support type '{array_type:?}'."),
-        }
+        make_scalar_function(array_has_all_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -332,14 +326,28 @@ pub fn array_has_dispatch<O: OffsetSizeTrait>(
     }
 }
 
+fn array_has_all_dispatch<O: OffsetSizeTrait>(
+    haystack: &ArrayRef,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let haystack = as_generic_list_array::<O>(haystack)?;
+    let needle = as_generic_list_array::<O>(needle)?;
+    match needle.data_type() {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            array_has_all_string_internal::<O>(haystack, needle)
+        }
+        _ => general_array_has_all::<O>(haystack, needle),
+    }
+}
+
 fn array_has_string_internal<O: OffsetSizeTrait>(
-    array: &GenericListArray<O>,
+    haystack: &GenericListArray<O>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     let needle_array = string_array_to_vec(needle);
 
-    let mut boolean_builder = BooleanArray::builder(array.len());
-    for (arr, element) in array.iter().zip(needle_array.into_iter()) {
+    let mut boolean_builder = BooleanArray::builder(haystack.len());
+    for (arr, element) in haystack.iter().zip(needle_array.into_iter()) {
         match (arr, element) {
             (Some(arr), Some(element)) => {
                 let haystack_array = string_array_to_vec(&arr);
@@ -376,6 +384,58 @@ fn general_array_has<O: OffsetSizeTrait>(
                 .iter()
                 .dedup()
                 .any(|x| x == sub_arr_values.row(row_idx));
+            boolean_builder.append_value(res);
+        } else {
+            boolean_builder.append_null();
+        }
+    }
+
+    Ok(Arc::new(boolean_builder.finish()))
+}
+
+fn array_has_all_string_internal<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    needle: &GenericListArray<O>,
+) -> Result<ArrayRef> {
+    // let needle_array = string_array_to_vec(needle);
+
+    let mut boolean_builder = BooleanArray::builder(array.len());
+    for (arr, sub_arr) in array.iter().zip(needle.iter()) {
+        match (arr, sub_arr) {
+            (Some(arr), Some(sub_arr)) => {
+                let haystack_array = string_array_to_vec(&arr);
+                let needle_array = string_array_to_vec(&sub_arr);
+                boolean_builder.append_value(
+                    needle_array
+                        .iter()
+                        .dedup()
+                        .all(|x| haystack_array.iter().dedup().any(|y| y == x)),
+                );
+            }
+            (_, _) => {
+                boolean_builder.append_null();
+            }
+        }
+    }
+
+    Ok(Arc::new(boolean_builder.finish()))
+}
+
+fn general_array_has_all<O: OffsetSizeTrait>(
+    haystack: &GenericListArray<O>,
+    needle: &GenericListArray<O>,
+) -> Result<ArrayRef> {
+    let mut boolean_builder = BooleanArray::builder(haystack.len());
+    let converter = RowConverter::new(vec![SortField::new(haystack.value_type())])?;
+
+    for (arr, sub_arr) in haystack.iter().zip(needle.iter()) {
+        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
+            let arr_values = converter.convert_columns(&[arr])?;
+            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
+            let res = sub_arr_values
+                .iter()
+                .dedup()
+                .all(|elem| arr_values.iter().dedup().any(|x| x == elem));
             boolean_builder.append_value(res);
         } else {
             boolean_builder.append_null();
