@@ -614,6 +614,46 @@ SELECT regexp_count(arrow_cast(str, 'Utf8'), arrow_cast(pattern, 'LargeUtf8'),  
 1
 1
 
+# NULL tests
+
+query I
+SELECT regexp_count(NULL, NULL);
+----
+0
+
+query I
+SELECT regexp_count(NULL, 'a');
+----
+0
+
+query I
+SELECT regexp_count('a', NULL);
+----
+0
+
+query I
+SELECT regexp_count(NULL, NULL, NULL, NULL);
+----
+0
+
+statement ok
+CREATE TABLE empty_table (str varchar, pattern varchar, start int, flags varchar);
+
+query I
+SELECT regexp_count(str, pattern, start, flags) from empty_table;
+----
+
+statement ok
+INSERT INTO empty_table VALUES ('a', NULL, 1, 'i'), (NULL, 'a', 1, 'i'), (NULL, NULL, 1, 'i'), (NULL, NULL, NULL, 'i');
+
+query I
+SELECT regexp_count(str, pattern, start, flags) from empty_table;
+----
+0
+0
+0
+0
+
 statement ok
 drop table t;
 

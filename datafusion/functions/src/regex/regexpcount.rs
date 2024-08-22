@@ -131,6 +131,11 @@ pub fn regexp_count<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         2..=4 => {
             let values = as_generic_string_array::<O>(&args[0])?;
             let regex = as_generic_string_array::<O>(&args[1])?;
+
+            if values.is_empty() || regex.is_empty() {
+                return Ok(Arc::new(Int64Array::new_null(0)));
+            }
+
             let regex_datum: &dyn Datum = if regex.len() != 1 {
                 regex
             } else {
@@ -139,7 +144,9 @@ pub fn regexp_count<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let start_scalar: Scalar<&Int64Array>;
             let start_array_datum: Option<&dyn Datum> = if arg_len > 2 {
                 let start_array = as_primitive_array::<Int64Type>(&args[2])?;
-                if start_array.len() != 1 {
+                if start_array.is_empty() {
+                    None
+                } else if start_array.len() != 1 {
                     Some(start_array as &dyn Datum)
                 } else {
                     start_scalar = Scalar::new(start_array);
@@ -152,7 +159,9 @@ pub fn regexp_count<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let flags_scalar: Scalar<&GenericStringArray<O>>;
             let flags_array_datum: Option<&dyn Datum> = if arg_len > 3 {
                 let flags_array = as_generic_string_array::<O>(&args[3])?;
-                if flags_array.len() != 1 {
+                if flags_array.is_empty() {
+                    None
+                } else if flags_array.len() != 1 {
                     Some(flags_array as &dyn Datum)
                 } else {
                     flags_scalar = Scalar::new(flags_array);
