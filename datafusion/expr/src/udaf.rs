@@ -637,8 +637,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self: Arc<Self>,
         beneficial_ordering: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
-        self.inner
-            .clone()
+        Arc::clone(&self.inner)
             .with_beneficial_ordering(beneficial_ordering)
             .map(|udf| {
                 udf.map(|udf| {
