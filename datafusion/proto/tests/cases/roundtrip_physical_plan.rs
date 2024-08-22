@@ -25,6 +25,7 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
+use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::min_max::max_udaf;
@@ -626,6 +627,23 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
     roundtrip_test(Arc::new(
         SortExec::new(sort_exprs, Arc::new(EmptyExec::new(schema)))
             .with_preserve_partitioning(true),
+    ))
+}
+
+#[test]
+fn roundtrip_coalesce_with_fetch() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    roundtrip_test(Arc::new(CoalesceBatchesExec::new(
+        Arc::new(EmptyExec::new(schema.clone())),
+        8096,
+    )))?;
+
+    roundtrip_test(Arc::new(
+        CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema.clone())), 8096)
+            .with_fetch(Some(10)),
     ))
 }
 
