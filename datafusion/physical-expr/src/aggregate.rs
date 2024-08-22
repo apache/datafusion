@@ -489,7 +489,7 @@ impl AggregateFunctionExpr {
         }
     }
 
-    /// Returns all expressions used in the [`AggregateExpr`].
+    /// Returns all expressions used in the [`AggregateFunctionExpr`].
     /// These expressions are  (1)function arguments, (2) order by expressions.
     pub fn all_expressions(&self) -> AggregatePhysicalExpressions {
         let args = self.expressions();
@@ -504,8 +504,8 @@ impl AggregateFunctionExpr {
         }
     }
 
-    /// Rewrites [`AggregateExpr`], with new expressions given. The argument should be consistent
-    /// with the return value of the [`AggregateExpr::all_expressions`] method.
+    /// Rewrites [`AggregateFunctionExpr`], with new expressions given. The argument should be consistent
+    /// with the return value of the [`AggregateFunctionExpr::all_expressions`] method.
     /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
     pub fn with_new_expressions(
         &self,
