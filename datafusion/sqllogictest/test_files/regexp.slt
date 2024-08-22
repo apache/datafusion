@@ -614,6 +614,119 @@ SELECT regexp_count(arrow_cast(str, 'Utf8'), arrow_cast(pattern, 'LargeUtf8'),  
 1
 1
 
+# test string views
+
+statement ok
+CREATE TABLE t_stringview AS
+SELECT arrow_cast(str, 'Utf8View') as str, arrow_cast(pattern, 'Utf8View') as pattern, arrow_cast(start, 'Int64') as start, arrow_cast(flags, 'Utf8View') as flags FROM t;
+
+query I
+SELECT regexp_count(str, '\w') from t;
+----
+3
+3
+3
+3
+3
+4
+4
+10
+6
+4
+7
+
+query I
+SELECT regexp_count(str, '\w{2}', start) from t;
+----
+1
+1
+1
+1
+0
+2
+1
+4
+1
+2
+3
+
+query I
+SELECT regexp_count(str, 'ab', 1, 'i') from t;
+----
+1
+1
+1
+1
+1
+0
+0
+0
+0
+0
+0
+
+
+query I
+SELECT regexp_count(str, pattern) from t;
+----
+1
+1
+0
+0
+0
+0
+1
+1
+1
+1
+1
+
+query I
+SELECT regexp_count(str, pattern, start) from t;
+----
+1
+1
+0
+0
+0
+0
+0
+1
+1
+1
+1
+
+query I
+SELECT regexp_count(str, pattern, start, flags) from t;
+----
+1
+1
+1
+0
+0
+0
+0
+1
+1
+1
+1
+
+# test type coercion
+query I
+SELECT regexp_count(arrow_cast(str, 'Utf8'), arrow_cast(pattern, 'LargeUtf8'),  arrow_cast(start, 'Int32'), flags) from t;
+----
+1
+1
+1
+0
+0
+0
+0
+1
+1
+1
+1
+
 # NULL tests
 
 query I

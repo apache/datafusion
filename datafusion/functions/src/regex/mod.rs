@@ -34,8 +34,18 @@ make_udf_function!(
 pub mod expr_fn {
     use datafusion_expr::Expr;
 
-    pub fn regexp_count(values: Expr, regex: Expr, flags: Option<Expr>) -> Expr {
+    /// Returns the number of consecutive occurrences of a regular expression in a string.
+    pub fn regexp_count(
+        values: Expr,
+        regex: Expr,
+        start: Option<Expr>,
+        flags: Option<Expr>,
+    ) -> Expr {
         let mut args = vec![values, regex];
+        if let Some(start) = start {
+            args.push(start);
+        };
+
         if let Some(flags) = flags {
             args.push(flags);
         };

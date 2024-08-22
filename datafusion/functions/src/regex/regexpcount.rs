@@ -22,14 +22,14 @@ use arrow::array::{
     Array, ArrayRef, AsArray, Datum, GenericStringArray, Int64Array, OffsetSizeTrait,
     Scalar,
 };
-use arrow::datatypes::DataType::{self, Int64, LargeUtf8, Utf8};
+use arrow::datatypes::DataType::{self, Int64, LargeUtf8, Utf8, Utf8View};
 use arrow::datatypes::Int64Type;
 use arrow::error::ArrowError;
 use datafusion_common::cast::{as_generic_string_array, as_primitive_array};
 use datafusion_common::{
     arrow_err, exec_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::TypeSignature::{Exact, Uniform};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use itertools::izip;
 use regex::Regex;
@@ -51,14 +51,13 @@ impl RegexpCountFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8, Utf8]),
+                    Uniform(2, vec![Utf8, LargeUtf8, Utf8View]),
                     Exact(vec![Utf8, Utf8, Int64]),
                     Exact(vec![Utf8, Utf8, Int64, Utf8]),
-                    Exact(vec![Utf8, Utf8, Int64, LargeUtf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
                     Exact(vec![LargeUtf8, LargeUtf8, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64, Utf8]),
                     Exact(vec![LargeUtf8, LargeUtf8, Int64, LargeUtf8]),
+                    Exact(vec![Utf8View, Utf8View, Int64]),
+                    Exact(vec![Utf8View, Utf8View, Int64, Utf8View]),
                 ],
                 Volatility::Immutable,
             ),
