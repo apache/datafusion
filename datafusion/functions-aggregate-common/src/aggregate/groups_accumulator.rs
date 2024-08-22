@@ -24,7 +24,7 @@ pub mod nulls;
 pub mod prim_op;
 
 use arrow::{
-    array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray, UInt32Builder},
+    array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
     datatypes::UInt32Type,
 };
@@ -170,7 +170,7 @@ impl GroupsAccumulatorAdapter {
         let mut groups_with_rows = vec![];
 
         // batch_indices holds indices into values, each group is contiguous
-        let mut batch_indices = UInt32Builder::with_capacity(0);
+        let mut batch_indices = vec![];
 
         // offsets[i] is index into batch_indices where the rows for
         // group_index i starts
@@ -188,7 +188,7 @@ impl GroupsAccumulatorAdapter {
             offset_so_far += indices.len();
             offsets.push(offset_so_far);
         }
-        let batch_indices = batch_indices.finish();
+        let batch_indices = batch_indices.into();
 
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the

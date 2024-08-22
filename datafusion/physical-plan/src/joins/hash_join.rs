@@ -49,8 +49,7 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
-    UInt64Array,
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array,
 };
 use arrow::compute::kernels::cmp::{eq, not_distinct};
 use arrow::compute::{and, concat_batches, take, FilterBuilder};
@@ -1204,13 +1203,11 @@ fn lookup_join_hashmap(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let (mut probe_builder, mut build_builder, next_offset) = build_hashmap
+    let (mut probe_indices, mut build_indices, next_offset) = build_hashmap
         .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
 
-    let build_indices: UInt64Array =
-        PrimitiveArray::new(build_builder.finish().into(), None);
-    let probe_indices: UInt32Array =
-        PrimitiveArray::new(probe_builder.finish().into(), None);
+    let build_indices: UInt64Array = build_indices.into();
+    let probe_indices: UInt32Array = probe_indices.into();
 
     let (build_indices, probe_indices) = equal_rows_arr(
         &build_indices,
@@ -3169,13 +3166,9 @@ mod tests {
             (0, None),
         )?;
 
-        let mut left_ids = UInt64Builder::with_capacity(0);
-        left_ids.append_value(0);
-        left_ids.append_value(1);
+        let mut left_ids = vec![0, 1];
 
-        let mut right_ids = UInt32Builder::with_capacity(0);
-        right_ids.append_value(0);
-        right_ids.append_value(1);
+        let mut right_ids = vec![0, 1];
 
         assert_eq!(left_ids.finish(), l);
 
