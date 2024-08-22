@@ -679,6 +679,12 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/building-logical-plans.md",
+    library_user_guide_logical_plans
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/library-user-guide/using-the-dataframe-api.md",
     library_user_guide_dataframe_api
 );

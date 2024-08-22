@@ -30,7 +30,9 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
     WindowUDF,
@@ -283,7 +285,9 @@ fn create_built_in_window_expr(
                 args[1]
                     .as_any()
                     .downcast_ref::<Literal>()
-                    .unwrap()
+                    .ok_or_else(|| {
+                        exec_datafusion_err!("Expected a signed integer literal for the second argument of nth_value, got {}", args[1])
+                    })?
                     .value()
                     .clone(),
             )?;
