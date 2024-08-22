@@ -161,3 +161,8 @@ required-features = ["string_expressions"]
 harness = false
 name = "random"
 required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "union_extract"
+required-features = ["core_expressions"]

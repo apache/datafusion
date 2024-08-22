@@ -3827,6 +3827,61 @@ sha512(expression)
 - **expression**: String expression to operate on.
   Can be a constant, column, or function, and any combination of string operators.
 
+## Union Functions
+
+- [union_extract](#union_extract)
+
+### `union_extract`
+
+Returns the value of the given field when selected, or NULL otherwise.
+
+```
+union_extract(union, field_name)
+```
+
+#### Arguments
+
+- **union**: Union expression to extract the field from
+- **field_name**: Literal string, name of the field to extract
+
+```
+❯ select my_union from table_with_union;
++----------+
+| my_union |
++----------+
+| {a=1}    |
+| {b=3.0}  |
+| {a=4}    |
+| {b=}     |
+| {a=}     |
++----------+
+
+❯ select union_extract(my_union, 'a');
++------------------------------+
+| union_extract(my_union, 'a') |
++------------------------------+
+| 1                            |
+|                              |
+| 4                            |
+|                              |
+|                              |
++------------------------------+
+
+❯ select union_extract(my_union, 'b');
++------------------------------+
+| union_extract(my_union, 'b') |
++------------------------------+
+|                              |
+| 3.0                          |
+|                              |
+|                              |
+|                              |
++------------------------------+
+
+
+```
+
+
 ## Other Functions
 
 - [arrow_cast](#arrow_cast)
