@@ -119,6 +119,66 @@ SELECT
 ----
 2048 2 NULL NULL
 
+# TODO move these tests down to be with the other date_part/extract tests, but for now so many
+# interval tests are failing due to changes to their display code.
+
+query R
+SELECT EXTRACT(second FROM interval '1 second')
+----
+1
+
+query R
+SELECT EXTRACT(second FROM interval '1 hour')
+----
+3600
+
+query R
+SELECT EXTRACT(nanosecond FROM interval '1 second')
+----
+1000000000
+
+query R
+SELECT EXTRACT(second FROM interval '1 day')
+----
+0
+
+query R
+SELECT EXTRACT(nanosecond FROM interval '1 day')
+----
+0
+
+query R
+SELECT EXTRACT(second FROM interval '1 month')
+----
+0
+
+query R
+SELECT EXTRACT(hour FROM arrow_cast(42, 'Duration(Second)') )
+----
+0
+
+query R
+SELECT EXTRACT(second FROM arrow_cast(42, 'Duration(Second)') )
+----
+42
+
+query R
+SELECT EXTRACT(second FROM arrow_cast(61, 'Duration(Second)') )
+----
+61
+
+query R
+SELECT EXTRACT(minute FROM arrow_cast(61, 'Duration(Second)') )
+----
+1
+
+query R
+SELECT EXTRACT(second FROM arrow_cast(61, 'Duration(Millisecond)') )
+----
+0.061
+
+
+
 query ?
 SELECT interval '1'
 ----

@@ -18,13 +18,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Float64Array};
+use arrow::array::{Array, ArrayRef, Float64Array, PrimitiveArray};
 use arrow::compute::{binary, cast, date_part, DatePart};
 use arrow::datatypes::DataType::{
-    Date32, Date64, Float64, Time32, Time64, Timestamp, Utf8, Utf8View,
+    Date32, Date64, Duration, Float64, Interval, Time32, Time64, Timestamp, Utf8, Utf8View,
 };
+use arrow::datatypes::IntervalUnit::{YearMonth, DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, Int32Type, TimeUnit};
 
 use datafusion_common::cast::{
     as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
@@ -107,6 +108,20 @@ impl DatePartFunc {
                     Exact(vec![Utf8View, Time64(Microsecond)]),
                     Exact(vec![Utf8, Time64(Nanosecond)]),
                     Exact(vec![Utf8View, Time64(Nanosecond)]),
+                    Exact(vec![Utf8, Interval(YearMonth)]),
+                    Exact(vec![Utf8View, Interval(YearMonth)]),
+                    Exact(vec![Utf8, Interval(DayTime)]),
+                    Exact(vec![Utf8View, Interval(DayTime)]),
+                    Exact(vec![Utf8, Interval(MonthDayNano)]),
+                    Exact(vec![Utf8View, Interval(MonthDayNano)]),
+                    Exact(vec![Utf8, Duration(Second)]),
+                    Exact(vec![Utf8View, Duration(Second)]),
+                    Exact(vec![Utf8, Duration(Millisecond)]),
+                    Exact(vec![Utf8View, Duration(Millisecond)]),
+                    Exact(vec![Utf8, Duration(Microsecond)]),
+                    Exact(vec![Utf8View, Duration(Microsecond)]),
+                    Exact(vec![Utf8, Duration(Nanosecond)]),
+                    Exact(vec![Utf8View, Duration(Nanosecond)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -211,9 +226,16 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     let secs = as_int32_array(secs.as_ref())?;
     let subsecs = date_part(array, DatePart::Nanosecond)?;
     let subsecs = as_int32_array(subsecs.as_ref())?;
+    // REVIEW: there has got to be a better way to do this: I want to treat null as 0, I was expecting
+    // some kind of map function (or even better map_if_null) on PrimitiveArray. Instead I have just
+    // discarded the null mask, which feels bad because if I was meant to be able to do this, I'd
+    // expect there to be a function to do it. I think it is also possible that a null-masked value in
+    // the array will not be 0 (I don't think that happens right now, but I think we're one optimisation
+    // away from disaster).
+    let subsecs: PrimitiveArray<Int32Type> = PrimitiveArray::new(subsecs.values().clone(), None);
 
-    let r: Float64Array = binary(secs, subsecs, |secs, subsecs| {
-        (secs as f64 + (subsecs as f64 / 1_000_000_000_f64)) * sf
+    let r: Float64Array = binary(secs, &subsecs, |secs, subsecs| {
+        (secs as f64 + ((subsecs % 1_000_000_000) as f64 / 1_000_000_000_f64)) * sf
     })?;
     Ok(Arc::new(r))
 }
@@ -244,7 +266,7 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         Time64(Nanosecond) => {
             as_time64_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
         }
-        d => return exec_err!("Can not convert {d:?} to epoch"),
+        d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))
 }
