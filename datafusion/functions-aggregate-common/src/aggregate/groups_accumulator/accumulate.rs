@@ -995,7 +995,7 @@ mod test {
                 AccumulateTest::Original => {
                     Fixture::accumulate_test(
                         group_indices,
-                        &values,
+                        values,
                         opt_filter,
                         total_num_groups,
                         NullState::new(),
@@ -1004,7 +1004,7 @@ mod test {
                 AccumulateTest::Flat => {
                     Fixture::accumulate_test(
                         group_indices,
-                        &values,
+                        values,
                         opt_filter,
                         total_num_groups,
                         BlockedNullStateInFlatMode::new(),
@@ -1013,7 +1013,7 @@ mod test {
                 AccumulateTest::Blocked => {
                     Fixture::accumulate_test(
                         group_indices,
-                        &values,
+                        values,
                         opt_filter,
                         total_num_groups,
                         BlockedNullStateInBlockedMode::new(),

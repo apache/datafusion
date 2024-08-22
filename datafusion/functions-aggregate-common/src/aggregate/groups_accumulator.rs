@@ -430,7 +430,7 @@ impl EmitToExt for EmitTo {
         match self {
             Self::All => {
                 debug_assert!(matches!(mode, GroupStatesMode::Flat));
-                blocks.pop_first_block().unwrap_or(Vec::new())
+                blocks.pop_first_block().unwrap_or_default()
             }
             Self::First(n) => {
                 debug_assert!(matches!(mode, GroupStatesMode::Flat));
@@ -446,7 +446,7 @@ impl EmitToExt for EmitTo {
             }
             Self::NextBlock(_) => {
                 debug_assert!(matches!(mode, GroupStatesMode::Blocked(_)));
-                blocks.pop_first_block().unwrap_or(Vec::new())
+                blocks.pop_first_block().unwrap_or_default()
             }
         }
     }
@@ -655,6 +655,10 @@ impl<T> VecBlocks<T> {
         let prev_len = self.previous.iter().map(|p| p.len()).sum::<usize>();
 
         cur_len + prev_len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.current.is_none()
     }
 }
 
