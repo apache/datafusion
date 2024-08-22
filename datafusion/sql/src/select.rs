@@ -16,7 +16,6 @@
 // under the License.
 
 use std::collections::HashSet;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::planner::{
@@ -36,8 +35,7 @@ use datafusion_expr::expr_rewriter::{
 };
 use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::utils::{
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_column_exprs,
-    find_window_exprs,
+    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
@@ -765,46 +763,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let having_expr_post_aggr =
                 rebase_expr(having_expr, &aggr_projection_exprs, input)?;
 
-            let is_grouping_projection_valid = check_columns_satisfy_exprs(
+            check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
                 &[having_expr_post_aggr.clone()],
                 "HAVING clause references non-aggregate values",
             )?;
-
-            // If the select items only contain scalar expressions, we don't need to check
-            // the column used by the HAVING clause.
-            //
-            // For example, the following query is valid:
-            // SELECT 1 FROM t1 HAVING MAX(t1.v1) = 3;
-            //
-            // If group-by and projection are invalid, we should check the columns used by having clause.
-            if !check_contain_scalar_only(&select_exprs_post_aggr)
-                && !is_grouping_projection_valid
-            {
-                // the column used by the HAVING clause must appear in the GROUP BY clause or
-                // must be part of an aggregate function.
-                let having_columns = find_column_exprs(&[having_expr.clone()]);
-                // aggregation functions are checked in the previous step. In this step,
-                // we only need to check the projection columns containing the columns in the having clause.
-                let aggr_projection_columns = aggr_projection_exprs
-                    .into_iter()
-                    .filter(|expr| {
-                        matches!(expr, Expr::Column(_) | Expr::Wildcard { .. })
-                    })
-                    .collect::<Vec<_>>();
-                // If the projection column is empty, it means the projection only contains
-                // aggregation functions or wildcard. In this case, we don't need to check
-                // the column used by the HAVING clause.
-                // For example, the following query is valid:
-                // SELECT MAX(v1) FROM t1 HAVING MAX(v1) = 3;
-                if !aggr_projection_columns.is_empty() {
-                    check_columns_satisfy_exprs(
-                        &aggr_projection_columns,
-                        &having_columns,
-                        "HAVING clause references non-aggregate values",
-                    )?;
-                }
-            }
 
             Some(having_expr_post_aggr)
         } else {
@@ -813,15 +776,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
-}
-
-fn check_contain_scalar_only(exprs: &[Expr]) -> bool {
-    exprs.iter().all(|expr| match expr {
-        Expr::ScalarFunction(_) => true,
-        Expr::Literal(_) => true,
-        Expr::Alias(alias) => check_contain_scalar_only(&[alias.expr.deref().clone()]),
-        _ => false,
-    })
 }
 
 // If there are any multiple-defined windows, we raise an error.
