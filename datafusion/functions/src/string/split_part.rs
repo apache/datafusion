@@ -27,7 +27,6 @@ use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 use std::any::Any;
-use std::fmt::Write;
 use std::sync::Arc;
 
 use crate::utils::utf8_to_str_type;
@@ -99,7 +98,7 @@ impl ScalarUDFImpl for SplitPartFunc {
             .iter()
             .map(|arg| match arg {
                 ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(inferred_length),
-                ColumnarValue::Array(array) => Ok(array.clone()),
+                ColumnarValue::Array(array) => Ok(Arc::clone(array)),
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -214,9 +213,7 @@ where
 
                     if index < len {
                         builder.append_value(split_string[index]);
-                        builder.append_value("");
                     } else {
-                        builder.write_str("")?;
                         builder.append_value("");
                     }
                 }
