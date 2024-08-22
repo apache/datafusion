@@ -166,3 +166,8 @@ required-features = ["math_expressions"]
 harness = false
 name = "union_extract"
 required-features = ["core_expressions"]
+
+[[bench]]
+harness = false
+name = "substr"
+required-features = ["unicode_expressions"]
