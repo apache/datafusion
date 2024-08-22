@@ -91,7 +91,7 @@ pub(crate) fn check_columns_satisfy_exprs(
     columns: &[Expr],
     exprs: &[Expr],
     message_prefix: &str,
-) -> Result<bool> {
+) -> Result<()> {
     columns.iter().try_for_each(|c| match c {
         Expr::Column(_) => Ok(()),
         _ => internal_err!("Expr::Column are required"),
@@ -119,7 +119,7 @@ pub(crate) fn check_columns_satisfy_exprs(
             _ => check_column_satisfies_expr(columns, e, message_prefix)?,
         }
     }
-    Ok(!column_exprs.is_empty())
+    Ok(())
 }
 
 fn check_column_satisfies_expr(
