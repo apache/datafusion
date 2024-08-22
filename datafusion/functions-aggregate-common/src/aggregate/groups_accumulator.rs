@@ -409,8 +409,9 @@ impl EmitToExt for EmitTo {
                 std::mem::take(v)
             }
             Self::First(n) => {
+                let split_at = min(v.len(), *n);
                 // get end n+1,.. values into t
-                let mut t = v.split_off(*n);
+                let mut t = v.split_off(split_at);
                 // leave n+1,.. in v
                 std::mem::swap(v, &mut t);
                 t
@@ -429,7 +430,7 @@ impl EmitToExt for EmitTo {
         match self {
             Self::All => {
                 debug_assert!(matches!(mode, GroupStatesMode::Flat));
-                blocks.pop_first_block().unwrap()
+                blocks.pop_first_block().unwrap_or(Vec::new())
             }
             Self::First(n) => {
                 debug_assert!(matches!(mode, GroupStatesMode::Flat));
@@ -445,7 +446,7 @@ impl EmitToExt for EmitTo {
             }
             Self::NextBlock(_) => {
                 debug_assert!(matches!(mode, GroupStatesMode::Blocked(_)));
-                blocks.pop_first_block().unwrap()
+                blocks.pop_first_block().unwrap_or(Vec::new())
             }
         }
     }
@@ -886,5 +887,60 @@ mod tests {
             let block_num = blocks.iter_mut().count();
             assert_eq!(block_num, rest_blk_num);
         }
+    }
+
+    #[test]
+    fn test_take_need() {
+        let values = vec![1, 2, 3, 4, 5, 6, 7, 8];
+
+        // Test emit all
+        let emit = EmitTo::All;
+        let mut source = values.clone();
+        let expected = values.clone();
+        let actual = emit.take_needed(&mut source);
+        assert_eq!(actual, expected);
+        assert!(source.is_empty());
+
+        // Test emit first n
+        // n < source len
+        let emit = EmitTo::First(4);
+        let mut origin = values.clone();
+        let expected = origin[0..4].to_vec();
+        let rest_expected = origin[4..].to_vec();
+        let actual = emit.take_needed(&mut origin);
+        assert_eq!(actual, expected);
+        assert_eq!(origin, rest_expected);
+
+        // n > source len
+        let emit = EmitTo::First(9);
+        let mut origin = values.clone();
+        let expected = values.clone();
+        let actual = emit.take_needed(&mut origin);
+        assert_eq!(actual, expected);
+        assert!(origin.is_empty());
+    }
+
+    #[test]
+    fn test_take_need_from_blocks() {
+        let block1 = vec![1, 2, 3, 4];
+        let block2 = vec![5, 6, 7, 8];
+
+        let mut values = VecBlocks::new();
+        values.push_block(block1.clone());
+        values.push_block(block2.clone());
+
+        // Test emit block
+        let emit = EmitTo::NextBlock(false);
+        let actual =
+            emit.take_needed_from_blocks(&mut values, GroupStatesMode::Blocked(4));
+        assert_eq!(actual, block1);
+
+        let actual =
+            emit.take_needed_from_blocks(&mut values, GroupStatesMode::Blocked(4));
+        assert_eq!(actual, block2);
+
+        let actual =
+            emit.take_needed_from_blocks(&mut values, GroupStatesMode::Blocked(4));
+        assert!(actual.is_empty());
     }
 }
