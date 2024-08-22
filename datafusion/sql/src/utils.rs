@@ -86,12 +86,11 @@ pub(crate) fn rebase_expr(
 
 /// Determines if the set of `Expr`'s are a valid projection on the input
 /// `Expr::Column`'s.
-/// Return true if the expressions are valid and not empty.
 pub(crate) fn check_columns_satisfy_exprs(
     columns: &[Expr],
     exprs: &[Expr],
     message_prefix: &str,
-) -> Result<bool> {
+) -> Result<()> {
     columns.iter().try_for_each(|c| match c {
         Expr::Column(_) => Ok(()),
         _ => internal_err!("Expr::Column are required"),
@@ -119,7 +118,7 @@ pub(crate) fn check_columns_satisfy_exprs(
             _ => check_column_satisfies_expr(columns, e, message_prefix)?,
         }
     }
-    Ok(!column_exprs.is_empty())
+    Ok(())
 }
 
 fn check_column_satisfies_expr(
