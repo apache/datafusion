@@ -1208,7 +1208,7 @@ dependencies = [
  "half",
  "hashbrown",
  "indexmap",
- "itertools 0.12.1",
+ "itertools",
  "log",
  "num-traits",
  "num_cpus",
@@ -1359,7 +1359,7 @@ dependencies = [
  "datafusion-expr",
  "hashbrown",
  "hex",
- "itertools 0.12.1",
+ "itertools",
  "log",
  "md-5",
  "rand",
@@ -1414,7 +1414,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions",
  "datafusion-functions-aggregate",
- "itertools 0.12.1",
+ "itertools",
  "log",
  "paste",
  "rand",
@@ -1442,7 +1442,7 @@ dependencies = [
  "datafusion-physical-expr",
  "hashbrown",
  "indexmap",
- "itertools 0.12.1",
+ "itertools",
  "log",
  "paste",
  "regex-syntax",
@@ -1471,7 +1471,7 @@ dependencies = [
  "hashbrown",
  "hex",
  "indexmap",
- "itertools 0.12.1",
+ "itertools",
  "log",
  "paste",
  "petgraph",
@@ -1512,7 +1512,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
- "itertools 0.12.1",
+ "itertools",
 ]
 
 [[package]]
@@ -1540,7 +1540,7 @@ dependencies = [
  "half",
  "hashbrown",
  "indexmap",
- "itertools 0.12.1",
+ "itertools",
  "log",
  "once_cell",
  "parking_lot",
@@ -2239,15 +2239,6 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -2646,7 +2637,7 @@ dependencies = [
  "futures",
  "humantime",
  "hyper 1.4.1",
- "itertools 0.13.0",
+ "itertools",
  "md-5",
  "parking_lot",
  "percent-encoding",

@@ -52,13 +52,13 @@ pub fn row_number_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
 
 /// row_number expression
 #[derive(Debug)]
-struct RowNumber {
+pub struct RowNumber {
     signature: Signature,
 }
 
 impl RowNumber {
     /// Create a new `row_number` function
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             signature: Signature::any(0, Volatility::Immutable),
         }
