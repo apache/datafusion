@@ -442,7 +442,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// not implement the method, returns an error. Order insensitive and hard
     /// requirement aggregators return `Ok(None)`.
     fn with_beneficial_ordering(
-        &self,
+        self: Arc<Self>,
         _beneficial_ordering: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
         if self.order_sensitivity().is_beneficial() {
@@ -631,10 +631,11 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
     }
 
     fn with_beneficial_ordering(
-        &self,
+        self: Arc<Self>,
         beneficial_ordering: bool,
     ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
         self.inner
+            .clone()
             .with_beneficial_ordering(beneficial_ordering)
             .map(|udf| {
                 udf.map(|udf| {
