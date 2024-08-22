@@ -58,12 +58,12 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 if let Some((non_null_rows, name)) =
-                    take_optimizable_column_and_table_count(&**expr, &stats)
+                    take_optimizable_column_and_table_count(expr, &stats)
                 {
                     projections.push((expressions::lit(non_null_rows), name.to_owned()));
-                } else if let Some((min, name)) = take_optimizable_min(&**expr, &stats) {
+                } else if let Some((min, name)) = take_optimizable_min(expr, &stats) {
                     projections.push((expressions::lit(min), name.to_owned()));
-                } else if let Some((max, name)) = take_optimizable_max(&**expr, &stats) {
+                } else if let Some((max, name)) = take_optimizable_max(expr, &stats) {
                     projections.push((expressions::lit(max), name.to_owned()));
                 } else {
                     // TODO: we need all aggr_expr to be resolved (cf TODO fullres)

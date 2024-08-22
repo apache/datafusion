@@ -419,7 +419,7 @@ impl AggregateFunctionExpr {
                 let mut name = self.name().to_string();
                 // If the function is changed, we need to reverse order_by clause as well
                 // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
-                if self.name() == reverse_udf.name() {
+                if self.fun().name() == reverse_udf.name() {
                 } else {
                     replace_order_by_clause(&mut name);
                 }
