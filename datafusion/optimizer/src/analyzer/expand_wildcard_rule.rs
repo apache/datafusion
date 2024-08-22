@@ -160,13 +160,12 @@ fn replace_columns(
 mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
 
+    use crate::test::{assert_analyzed_plan_eq_display_indent, test_table_scan};
+    use crate::Analyzer;
     use datafusion_common::{JoinType, TableReference};
     use datafusion_expr::{
         col, in_subquery, qualified_wildcard, table_scan, wildcard, LogicalPlanBuilder,
     };
-
-    use crate::test::{assert_analyzed_plan_eq_display_indent, test_table_scan};
-    use crate::Analyzer;
 
     use super::*;
 

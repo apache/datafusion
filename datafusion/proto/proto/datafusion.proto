@@ -1140,6 +1140,7 @@ message NestedLoopJoinExecNode {
 message CoalesceBatchesExecNode {
   PhysicalPlanNode input = 1;
   uint32 target_batch_size = 2;
+  optional uint32 fetch = 3;
 }
 
 message CoalescePartitionsExecNode {
