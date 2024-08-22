@@ -481,16 +481,22 @@ fn type_union_resolution_coercion(
     }
 }
 
-/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
-/// Unlike `coerced_from`, usually the coerced type is for comparison only.
-/// For example, compare with Dictionary and Dictionary, only value type is what we care about
+/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a
+/// comparison operation
+///
+/// Example comparison operations are `lhs = rhs` and `lhs > rhs`
+///
+/// Binary comparison kernels require the two arguments to be the (exact) same
+/// data type. However, users can write queries where the two arguments are
+/// different data types. In such cases, the data types are automatically cast
+/// (coerced) to a single data type to pass to the kernels.
 pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     if lhs_type == rhs_type {
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
+        .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| list_coercion(lhs_type, rhs_type))
@@ -501,7 +507,11 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| struct_coercion(lhs_type, rhs_type))
 }
 
-/// Coerce `lhs_type` and `rhs_type` to a common type for value exprs
+/// Coerce `lhs_type` and `rhs_type` to a common type for `VALUES` expression
+///
+/// For example `VALUES (1, 2), (3.0, 4.0)` where the first row is `Int32` and
+/// the second row is `Float64` will coerce to `Float64`
+///
 pub fn values_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     if lhs_type == rhs_type {
         // same type => equality is possible
@@ -883,7 +893,7 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
 ///
 /// Not all operators support dictionaries, if `preserve_dictionaries` is true
 /// dictionaries will be preserved if possible
-fn dictionary_coercion(
+fn dictionary_comparison_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
     preserve_dictionaries: bool,
@@ -1044,7 +1054,7 @@ pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     string_coercion(lhs_type, rhs_type)
         .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| binary_to_string_coercion(lhs_type, rhs_type))
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
+        .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, false))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
 }
@@ -1064,7 +1074,7 @@ fn regex_null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 /// This is a union of string coercion rules and dictionary coercion rules
 pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
+        .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, false))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
 }
 
@@ -1324,38 +1334,50 @@ mod tests {
 
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Int32));
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
-        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, true), Some(Int32));
         assert_eq!(
-            dictionary_coercion(&lhs_type, &rhs_type, false),
+            dictionary_comparison_coercion(&lhs_type, &rhs_type, true),
+            Some(Int32)
+        );
+        assert_eq!(
+            dictionary_comparison_coercion(&lhs_type, &rhs_type, false),
             Some(Int32)
         );
 
         // Since we can coerce values of Int16 to Utf8 can support this
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
-        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, true), Some(Utf8));
+        assert_eq!(
+            dictionary_comparison_coercion(&lhs_type, &rhs_type, true),
+            Some(Utf8)
+        );
 
         // Since we can coerce values of Utf8 to Binary can support this
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Binary));
         assert_eq!(
-            dictionary_coercion(&lhs_type, &rhs_type, true),
+            dictionary_comparison_coercion(&lhs_type, &rhs_type, true),
             Some(Binary)
         );
 
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let rhs_type = Utf8;
-        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, false), Some(Utf8));
         assert_eq!(
-            dictionary_coercion(&lhs_type, &rhs_type, true),
+            dictionary_comparison_coercion(&lhs_type, &rhs_type, false),
+            Some(Utf8)
+        );
+        assert_eq!(
+            dictionary_comparison_coercion(&lhs_type, &rhs_type, true),
             Some(lhs_type.clone())
         );
 
         let lhs_type = Utf8;
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
-        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, false), Some(Utf8));
         assert_eq!(
-            dictionary_coercion(&lhs_type, &rhs_type, true),
+            dictionary_comparison_coercion(&lhs_type, &rhs_type, false),
+            Some(Utf8)
+        );
+        assert_eq!(
+            dictionary_comparison_coercion(&lhs_type, &rhs_type, true),
             Some(rhs_type.clone())
         );
     }
