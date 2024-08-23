@@ -22,9 +22,10 @@ use std::sync::Arc;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     make_view, Array, ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray,
-    OffsetSizeTrait, StringViewArray, StringViewBuilder,
+    OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
+use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
 use arrow_data::ByteView;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
@@ -144,21 +145,18 @@ fn get_true_start_end(input: &str, start: usize, count: i64) -> (usize, usize) {
 }
 
 /// Make a `u128` based on the given substr, start(offset to view.offset), and
-/// append to the given builder
-///
-/// # Safety:
-/// (1) The block of the given view must be added to the builder
-/// (2) The range `view.offset+start..end` must be within the bounds of the block, where
-/// end = view.offset+start+substr_len
-unsafe fn make_and_append_view(
-    builder: &mut StringViewBuilder,
+/// push into to the given buffers
+fn make_and_append_view(
+    views_buffer: &mut Vec<u128>,
+    null_builder: &mut NullBufferBuilder,
     raw: &u128,
     substr: &str,
     start: u32,
 ) {
     let substr_len = substr.len();
     if substr_len == 0 {
-        builder.append_null();
+        null_builder.append_null();
+        views_buffer.push(0);
     } else {
         let sub_view = if substr_len > 12 {
             let view = ByteView::from(*raw);
@@ -167,7 +165,8 @@ unsafe fn make_and_append_view(
             // inline value does not need block id or offset
             make_view(substr.as_bytes(), 0, 0)
         };
-        builder.append_view_u128_unchecked(sub_view);
+        views_buffer.push(sub_view);
+        null_builder.append_non_null();
     }
 }
 
@@ -177,11 +176,8 @@ fn string_view_substr(
     string_view_array: &StringViewArray,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
-    let mut builder = StringViewBuilder::new();
-    // Copy all blocks from input
-    for block in string_view_array.data_buffers() {
-        builder.append_block(block.clone());
-    }
+    let mut views_buf = Vec::with_capacity(string_view_array.len());
+    let mut null_builder = NullBufferBuilder::new(string_view_array.len());
 
     let start_array = as_int64_array(&args[0])?;
 
@@ -197,17 +193,22 @@ fn string_view_substr(
                     let start = (start - 1).max(0) as usize;
 
                     // Safety:
-                    // 1. idx < string_array.views.size()
-                    // 2. builder is guaranteed to have corresponding blocks
+                    // idx is always smaller or equal to string_view_array.views.len()
                     unsafe {
                         let str = string_view_array.value_unchecked(idx);
                         let (start, end) = get_true_start_end(str, start, -1);
                         let substr = &str[start..end];
 
-                        make_and_append_view(&mut builder, raw, substr, start as u32);
+                        make_and_append_view(
+                            &mut views_buf,
+                            &mut null_builder,
+                            raw,
+                            substr,
+                            start as u32,
+                        );
                     }
                 } else {
-                    builder.append_null();
+                    null_builder.append_null();
                 }
             }
         }
@@ -227,16 +228,24 @@ fn string_view_substr(
                             "negative substring length not allowed: substr(<str>, {start}, {count})"
                         );
                     } else {
+                        // Safety:
+                        // idx is always smaller or equal to string_view_array.views.len()
                         unsafe {
                             let str = string_view_array.value_unchecked(idx);
                             let (start, end) = get_true_start_end(str, start, count);
                             let substr = &str[start..end];
 
-                            make_and_append_view(&mut builder, raw, substr, start as u32);
+                            make_and_append_view(
+                                &mut views_buf,
+                                &mut null_builder,
+                                raw,
+                                substr,
+                                start as u32,
+                            );
                         }
                     }
                 } else {
-                    builder.append_null();
+                    null_builder.append_null();
                 }
             }
         }
@@ -247,8 +256,21 @@ fn string_view_substr(
         }
     }
 
-    let result = builder.finish();
-    Ok(Arc::new(result) as ArrayRef)
+    let views_buf = ScalarBuffer::from(views_buf);
+    let nulls_buf = null_builder.finish();
+
+    // Safety:
+    // (1) The blocks of the given views are all provided
+    // (2) Each of the range `view.offset+start..end` of view in views_buf is within
+    // the bounds of each of the blocks
+    unsafe {
+        let array = StringViewArray::new_unchecked(
+            views_buf,
+            string_view_array.data_buffers().to_vec(),
+            nulls_buf,
+        );
+        Ok(Arc::new(array) as ArrayRef)
+    }
 }
 
 fn string_substr<'a, V, T>(string_array: V, args: &[ArrayRef]) -> Result<ArrayRef>
