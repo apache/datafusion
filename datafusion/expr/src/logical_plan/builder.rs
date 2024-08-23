@@ -1331,7 +1331,17 @@ pub fn validate_unique_names<'a>(
     })
 }
 
-/// Union two logical plans.
+/// Union two [`LogicalPlan`]s.
+///
+/// Constructs the UNION plan, but does not perform type-coercion. Therefore the
+/// subtree expressions will not be properly typed until the optimizer pass.
+///
+/// If a properly typed UNION plan is needed, refer to [`TypeCoercionRewriter::coerce_union`]
+/// or alternatively, merge the union input schema using [`coerce_union_schema`] and
+/// apply the expression rewrite with [`coerce_plan_expr_for_schema`].
+///
+/// [`TypeCoercionRewriter::coerce_union`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/struct.TypeCoercionRewriter.html#method.coerce_union
+/// [`coerce_union_schema`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/fn.coerce_union_schema.html
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
     // Temporarily use the schema from the left input and later rely on the analyzer to
     // coerce the two schemas into a common one.
