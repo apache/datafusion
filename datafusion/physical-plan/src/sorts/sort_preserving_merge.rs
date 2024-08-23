@@ -34,6 +34,7 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortRequirement;
 
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -186,7 +187,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![false]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![Some(PhysicalSortRequirement::from_sort_exprs(&self.expr))]
     }
 
