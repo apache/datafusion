@@ -341,7 +341,10 @@ impl DataSink for ArrowFileSink {
             }
         }
 
-        demux_task.join_unwind().await?;
+        demux_task
+            .join_unwind()
+            .await
+            .map_err(DataFusionError::ExecutionJoin)??;
         Ok(row_count as u64)
     }
 }

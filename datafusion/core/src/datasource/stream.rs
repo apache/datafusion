@@ -438,6 +438,9 @@ impl DataSink for StreamWrite {
             }
         }
         drop(sender);
-        write_task.join_unwind().await
+        write_task
+            .join_unwind()
+            .await
+            .map_err(DataFusionError::ExecutionJoin)?
     }
 }
