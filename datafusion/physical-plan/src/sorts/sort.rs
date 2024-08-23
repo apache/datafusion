@@ -433,7 +433,8 @@ impl ExternalSorter {
         // Reserve headroom for next sort/merge
         self.reserve_memory_for_merge()?;
 
-        self.reservation.try_resize(size)?;
+        // Allow memory to exceed limit temporarily before spill
+        self.reservation.resize(size);
         self.in_mem_batches_sorted = true;
         Ok(())
     }
@@ -579,7 +580,8 @@ impl ExternalSorter {
         if self.runtime.disk_manager.tmp_files_enabled() {
             let size = self.sort_spill_reservation_bytes;
             if self.merge_reservation.size() != size {
-                self.merge_reservation.try_resize(size)?;
+                // Allow memory to exceed the limit
+                self.merge_reservation.resize(size);
             }
         }
 
