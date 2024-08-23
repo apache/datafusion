@@ -65,11 +65,12 @@ impl<R: 'static> SpawnedTask<R> {
             // `JoinError` can be caused either by panic or cancellation. We have to handle panics:
             if e.is_panic() {
                 std::panic::resume_unwind(e.into_panic());
-            } else if e.is_cancelled() {
+            } else {
+                // Cancellation may be caused by two reasons:
+                // 1. Abort is called, but since we consumed `self`, it's not our case (`JoinHandle` not accessible outside).
+                // 2. The runtime is shutting down.
                 log::warn!("SpawnedTask was polled during shutdown");
                 e
-            } else {
-                unreachable!("SpawnedTask was cancelled unexpectedly");
             }
         })
     }
@@ -102,6 +103,9 @@ mod tests {
 
         // race condition
         // poll occurs during shutdown (buffered stream poll calls, etc)
-        let _ = task.join_unwind().await;
+        assert!(matches!(
+            task.join_unwind().await,
+            Err(e) if e.is_cancelled()
+        ));
     }
 }
