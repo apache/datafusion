@@ -21,8 +21,23 @@
 
 ## Introduction
 
-A query in Datafusion is executed based on a `query plan`. To see the plan without running the query, add
-the keyword `EXPLAIN`
+This section describes  of how to read a DataFusion query plan. While fully
+comprehending all details of these plans requires significant expertise in the
+DataFusion engine, this guide will help you get started with the basics.
+
+Datafusion executes queries using a `query plan`. To see the plan without
+running the query, add the keyword `EXPLAIN` to your SQL query or call the
+[DataFrame::explain] method
+
+[DataFrame::explain]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.explain
+
+## Example: Select and filter
+
+In this section, we run example queries against the `hits.parquet` file. See
+[below](#data-in-this-example)) for information on how to get this file.
+
+Let's see how DataFusion runs a query that selects the top 5 watch lists for the
+site `http://domcheloveplanet.ru/`:
 
 ```sql
 EXPLAIN SELECT "WatchID" AS wid, "hits.parquet"."ClientIP" AS ip
@@ -31,8 +46,6 @@ WHERE starts_with("URL", 'http://domcheloveplanet.ru/')
 ORDER BY wid ASC, ip DESC
 LIMIT 5;
 ```
-
-(Get the data used in this example [below](#data-in-this-example) )
 
 The output will look like
 
@@ -55,16 +68,16 @@ The output will look like
 Elapsed 0.060 seconds.
 ```
 
-There are two major plans: logical plan and physical plan
+There are two sections: logical plan and physical plan
 
-- **Logical Plan:** is a plan generated for a specific SQL query, DataFrame query, or other language without the  
+- **Logical Plan:** is a plan generated for a specific SQL query, DataFrame, or other language without the  
   knowledge of the underlying data organization.
-- **Physical Plan:** is a plan generated from the corresponding logical plan plus the consideration of the hardware
+- **Physical Plan:** is a plan generated from a logical plan along with consideration of the hardware
   configuration (e.g number of CPUs) and the underlying data organization (e.g number of files).
-  This physical plan is very specific to your hardware configuration and your data. If you load the same
+  This physical plan is specific to your hardware configuration and your data. If you load the same
   data to different hardware with different configurations, the same query may generate different query plans.
 
-Understanding a query plan can help to explain why your query is slower than you expect. For example, when the plan shows your query reads
+Understanding a query plan can help to you understand its performance. For example, when the plan shows your query reads
 many files, it signals you to either add more filter in the query to read less data or to modify your file
 design to make fewer but larger files. This document focuses on how to read a query plan. How to make a
 query run faster depends on the reason it is slow and beyond the scope of this document.
@@ -135,23 +148,97 @@ A large query plan may look intimidating, but you can quickly understand what it
 3. Understand the input data of the operator and how large/small it may be.
 4. Understand how much data that operator produces and what it would look like.
 
-If you can answer those questions, you will be able to estimate how much work that plan has to do and thus how long it will take. However, the
-`EXPLAIN` just shows you the plan without executing it. If you want to know exactly how long a plan and each of its
-operators take, you can run `EXPLAIN ANALYZE` to get the explain with runtime added.
+If you can answer those questions, you will be able to estimate how much work
+that plan has to do and thus how long it will take. However, the `EXPLAIN` just
+shows you the plan without executing it.
 
-## More information for debugging
+If you want to know more about how much work each operator in query plan does,
+you can use the `EXPLAIN ANALYZE` to get the explain with runtime added (see
+next section)
 
-If the plan has to read too many files, not all of them will be shown in the `explain`. To see them, use
-`EXPLAIN VEBOSE`. Like `EXPLAIN`, `EXPLAIN VERBOSE` does not run the query and thus you won't get runtime. What you get
-is all information that is cut off from the explain and all intermediate physical plans DataFusion
-generates before returning the final physical plan. This is very helpful for debugging to see when an operator is added
-to or removed from a plan.
+##  More Debugging Information: `EXPLAIN VERBOSE` 
 
-## Example of typical plan of leading edge data
+If the plan has to read too many files, not all of them will be shown in the
+`EXPLAIN`. To see them, use `EXPLAIN VEBOSE`. Like `EXPLAIN`, `EXPLAIN VERBOSE`
+does not run the query. Instead it shows the full explain plan, with information
+that is omitted from the default explain, as well as all intermediate physical
+plans DataFusion generates before returning. This mode can be very helpful for
+debugging to see why and when DataFusion added and removed operators from a plan.
 
-Let us delve into an example that covers typical operators on leading edge data.
+## Execution Counters: `EXPLAIN ANALYZE` 
+
+During execution, DataFusion operators collect detailed metrics. You can access
+them programmatically via [`ExecutionPlan::metrics`] as well as with the
+`EXPLAIN ANALYZE` command. For example here is the same query query as
+above but with `EXPLAIN ANALYZE` (note the output is edited for clarity)
+
+[`ExecutionPlan::metrics`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.metrics
+
+```sql
+> EXPLAIN ANALYZE SELECT "WatchID" AS wid, "hits.parquet"."ClientIP" AS ip
+FROM 'hits.parquet'
+WHERE starts_with("URL", 'http://domcheloveplanet.ru/')
+ORDER BY wid ASC, ip DESC
+LIMIT 5;
++-------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| plan_type         | plan                                                                                                                                                                                                                                                                                                                                                           |
++-------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| Plan with Metrics | SortPreservingMergeExec: [wid@0 ASC NULLS LAST,ip@1 DESC], fetch=5, metrics=[output_rows=5, elapsed_compute=2.375µs]                                                                                                                                                                                                                                           |
+|                   |   SortExec: TopK(fetch=5), expr=[wid@0 ASC NULLS LAST,ip@1 DESC], preserve_partitioning=[true], metrics=[output_rows=75, elapsed_compute=7.243038ms, row_replacements=482]                                                                                                                                                                                     |
+|                   |     ProjectionExec: expr=[WatchID@0 as wid, ClientIP@1 as ip], metrics=[output_rows=811821, elapsed_compute=66.25µs]                                                                                                                                                                                                                                           |
+|                   |         FilterExec: starts_with(URL@2, http://domcheloveplanet.ru/), metrics=[output_rows=811821, elapsed_compute=1.36923816s]                                                                                                                                                                                                                                 |
+|                   |           ParquetExec: file_groups={16 groups: [[hits.parquet:0..923748528], ...]}, projection=[WatchID, ClientIP, URL], predicate=starts_with(URL@13, http://domcheloveplanet.ru/), metrics=[output_rows=99997497, elapsed_compute=16ns, ... bytes_scanned=3703192723, ...  time_elapsed_opening=308.203002ms, time_elapsed_scanning_total=8.350342183s, ...] |
++-------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+1 row(s) fetched.
+Elapsed 0.720 seconds.
+```
+
+In this case, DataFusion actually ran the query, but discarded any results, and
+instead returned an annotated plan with a new field, `metrics=[...]`
+
+Most operators have the common metrics `output_rows` and `elapsed_compute` and
+some have operator specific metrics such as `ParquetExec` which has
+`bytes_scanned=3703192723`. Note that times and counters are reported across all
+cores, so if you have 16 cores, the time reported is the sum of the time taken
+by all 16 cores.
+
+Again, reading from bottom up:
+- `ParquetExec`
+  - `output_rows=99997497`: A total 99.9M rows were produced 
+  - `bytes_scanned=3703192723`: Of the 14GB file, 3.7GB were actually read (due to projection pushdown) 
+  - `time_elapsed_opening=308.203002ms`: It took 300ms to open the file and prepare to read it
+  - `time_elapsed_scanning_total=8.350342183s`: It took 8.3 seconds of CPU time (across 16 cores) to actually decode the parquet data
+- `FilterExec`
+  - `output_rows=811821`: Of the 99.9M rows at its input, only 811K rows passed the filter and were produced at the output 
+  - `elapsed_compute=1.36923816s`: In total, 1.36s of CPU time (across 16 cores) was spend evaluating the filter
+- `CoalesceBatchesExec`
+  - `output_rows=811821`, `elapsed_compute=12.873379ms`: Produced 811K rows in 13ms
+- `ProjectionExec`
+  - `output_rows=811821, elapsed_compute=66.25µs`: Produced 811K rows in 66µs (microseconds). This projection is almost instantaneous as it does not manipulate any data
+- `SortExec`
+  - `output_rows=75`: Produced 75 rows in total. Each of 16 cores could produce up to 5 rows, but in this case not all cores did.
+  - `elapsed_compute=7.243038ms`: 7ms was used to determine the top 5 rows
+  - `row_replacements=482`: Internally, the TopK operator updated its top list 482 times 
+- `SortPreservingMergeExec`
+  - `output_rows=5`, `elapsed_compute=2.375µs`: Produced the final 5 rows in 2.375µs (microseconds)
+
+## Example of an Aggregate Query
+
+Let us delve into an example click bench query that aggregates data from the `hits.parquet` file. 
+
+For example, this query from ClickBench finds the top 10 users by the number of hits:
+
+```sql
+SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*) DESC LIMIT 10;
+```
 
 ##### Query and query plan
+
+TODO: devanbenz can you update this section, trying to follow the model of the simpler one above?
+In this case only do the `EXPLAIN` not the `EXPLAIN ANALYZE`
+
+
+
 
 ```sql
 EXPLAIN SELECT "hits.parquet"."OS" AS os, COUNT(1) FROM 'hits.parquet' WHERE to_timestamp("hits.parquet"."EventTime") >= to_timestamp(200) AND to_timestamp("hits.parquet"."EventTime") < to_timestamp(700) AND "hits.parquet"."RegionID" = 839 GROUP BY os ORDER BY os ASC;
