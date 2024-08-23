@@ -219,19 +219,46 @@ Now let us look at the rest of the plan
 
 Figure 9: The rest of the plan structure
 
+#### A note on exchange-based parallelism
+
+It may appear that every execution node has one input and one output but that is not the case. Given `figure 10` below we can see that
+there are two nodes with `AggregateExec` that are seemingly running an aggregate on the same data. 
+
+```sql
+|               |       AggregateExec: mode=FinalPartitioned, gby=[OS@0 as OS], aggr=[count(Int64(1))]  |                                      
+|               |         CoalesceBatchesExec: target_batch_size=8192                                   |
+|               |           RepartitionExec: partitioning=Hash([OS@0], 10), input_partitions=10         |
+|               |             AggregateExec: mode=Partial, gby=[OS@0 as OS], aggr=[count(Int64(1))]     |  
+```
+Figure 10: Multi-staged parallel aggregation
+
+**First `AggregateExec`**
+
+The first `AggregateExect` with `mode=Partial` is a partial aggregate that is applied in parallel across all input partitions. 
+The partitions in this case are the file group fragments from `ParquetExec`.
+
+**Second `AggregateExec`**
+
+The second `AggregateExec` with `mode=FinalPartitioned` is the final aggregate working on the pre-partitioned data.
+
+
+#### Explaining the plan
+
 * `ProjectionExec: expr=[to_timestamp(EventTime@0) as __common_expr_4, RegionID@1 as RegionID, OS@2 as OS]`: this will filter the column
 data to only send data of column's `EventTime` aliased as `__common_expr_4` converted to a timestamp, `RegionID` and `OS` 
 * `FilterExec: __common_expr_4@0 >= 200000000000 AND __common_expr_4@0 < 700000000000 AND RegionID@1 = 839`: places a filter on the data
 that meets the conditions. The pruning that happens before is not guaranteed and thus we need to use this filter to complete the filtering.
 * `CoalesceBatchesExec: target_batch_size=8192`: groups smaller data in to larger groups
 * `ProjectionExec: expr=[OS@2 as OS]`: TODO: explain why there are multiple projection steps
-* `AggregateExec: mode=Partial, gby=[OS@0 as OS], aggr=[count(Int64(1))]`:
-* `RepartitionExec: partitioning=Hash([OS@0], 10), input_partitions=10`:
-* `CoalesceBatchesExec: target_batch_size=8192`:
-* `AggregateExec: mode=FinalPartitioned, gby=[OS@0 as OS], aggr=[count(Int64(1))]`:
-* `ProjectionExec: expr=[OS@0 as os, count(Int64(1))@1 as count(Int64(1))]`:
-* `SortExec: expr=[os@0 ASC NULLS LAST], preserve_partitioning=[true]`: 
-* `SortPreservingMergeExec: [os@0 ASC NULLS LAST]`:
+* `AggregateExec: mode=Partial, gby=[OS@0 as OS], aggr=[count(Int64(1))]`: partial aggregate working in parallel across partitions of data.
+This group of data is specified as `"hits.parquet".OS AS OS, COUNT(1)`.
+* `RepartitionExec: partitioning=Hash([OS@0], 10), input_partitions=10`: this takes 10 input streams and partitions them based on the `Hash`
+partition variant using `OS` as the hash. See: https://docs.rs/datafusion/latest/datafusion/physical_plan/enum.Partitioning.html for other variants and more information
+* `CoalesceBatchesExec: target_batch_size=8192`: TODO: explain why there are multiple coalesce batches steps
+* `AggregateExec: mode=FinalPartitioned, gby=[OS@0 as OS], aggr=[count(Int64(1))]`: we do a final aggregate on the data
+* `ProjectionExec: expr=[OS@0 as os, count(Int64(1))@1 as count(Int64(1))]`: filter column data and only send out `os` and `count(1)`
+* `SortExec: expr=[os@0 ASC NULLS LAST], preserve_partitioning=[true]`: sorts the 10 streams of data each on the `os` column ascendingly
+* `SortPreservingMergeExec: [os@0 ASC NULLS LAST]`: sort and merge the 10 streams of data for final results
 
 ### Logical plan operators
 
@@ -244,3 +271,5 @@ that meets the conditions. The pruning that happens before is not guaranteed and
 |               |           Projection: to_timestamp(hits.parquet.EventTime) AS __common_expr_4, hits.parquet.RegionID, hits.parquet.OS                                                                                                                                                                           |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
 |               |             TableScan: hits.parquet projection=[EventTime, RegionID, OS], partial_filters=[to_timestamp(hits.parquet.EventTime) >= TimestampNanosecond(200000000000, None), to_timestamp(hits.parquet.EventTime) < TimestampNanosecond(700000000000, None), hits.parquet.RegionID = Int32(839)] | 
 ```
+Figure 11: Logical plan portion of query plan
+
