@@ -273,3 +273,12 @@ partition variant using `OS` as the hash. See: https://docs.rs/datafusion/latest
 ```
 Figure 11: Logical plan portion of query plan
 
+* `TableScan: hits.parquet projection=[EventTime, RegionID, OS], partial_filters=[to_timestamp(hits.parquet.EventTime) >= TimestampNanosecond(200000000000, None), to_timestamp(hits.parquet.EventTime) < TimestampNanosecond(700000000000, None), hits.parquet.RegionID = Int32(839)]`:
+produces a row of tables from `hits.parquet`, projects the following fields `EventTime`, `RegionID`, and `OS` and does further partial filtering.
+* `Projection: to_timestamp(hits.parquet.EventTime) AS __common_expr_4, hits.parquet.RegionID, hits.parquet.OS`: projects a subset of the data
+* `Filter: __common_expr_4 >= TimestampNanosecond(200000000000, None) AND __common_expr_4 < TimestampNanosecond(700000000000, None) AND hits.parquet.RegionID = Int32(839)`:
+filters the data 
+* `Projection: hits.parquet.OS`: projects field to be displayed
+* `Aggregate: groupBy=[[hits.parquet.OS]], aggr=[[count(Int64(1))]]`: aggregates the values `OS, count(1)`
+* `Projection: hits.parquet.OS AS os, count(Int64(1))`: projects `hits.parquet.OS` as `os` 
+* `Sort: os ASC NULLS LAST`: final sort of the data where projected `os` field is sorted ascendingly
