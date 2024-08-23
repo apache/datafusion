@@ -413,6 +413,31 @@ pub fn would_column_prevent_pushdown(
     checker.non_primitive_columns || checker.projected_columns
 }
 
+/// recurses through expr as a trea, finds all `column`s, and checks if any of them would prevent
+/// this expression from being predicate pushed down. If any of them would, this returns false.
+/// Otherwise, true.
+pub fn can_expr_be_pushed_down_with_schemas(
+    expr: &datafusion_expr::Expr,
+    file_schema: &Schema,
+    table_schema: &Schema,
+) -> bool {
+    let mut can_be_pushed = true;
+    expr.apply(|expr| match expr {
+        datafusion_expr::Expr::Column(column) => {
+            can_be_pushed &=
+                !would_column_prevent_pushdown(column.name(), file_schema, table_schema);
+            Ok(if can_be_pushed {
+                TreeNodeRecursion::Jump
+            } else {
+                TreeNodeRecursion::Stop
+            })
+        }
+        _ => Ok(TreeNodeRecursion::Continue), // we never return an Err, so we can safely unwrap this
+    })
+    .unwrap();
+    can_be_pushed
+}
+
 /// Computes the projection required to go from the file's schema order to the projected
 /// order expected by this filter
 ///
@@ -546,10 +571,7 @@ pub fn build_row_filter(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::datasource::{
-        listing::can_expr_be_pushed_down_with_schemas,
-        schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapterFactory},
-    };
+    use crate::datasource::schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapterFactory};
 
     use arrow::datatypes::Field;
     use arrow_schema::{Fields, TimeUnit::Nanosecond};

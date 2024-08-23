@@ -61,7 +61,7 @@ pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
-pub use row_filter::would_column_prevent_pushdown;
+pub use row_filter::{can_expr_be_pushed_down_with_schemas, would_column_prevent_pushdown};
 pub use writer::plan_to_parquet;
 
 /// Execution plan for reading one or more Parquet files.

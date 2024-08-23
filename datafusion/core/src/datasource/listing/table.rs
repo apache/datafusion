@@ -21,14 +21,14 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
-use super::helpers::{
-    can_expr_be_pushed_down_with_schemas, expr_applicable_for_cols,
-    pruned_partition_list, split_files,
-};
+use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
 
 use super::ListingTableUrl;
-use crate::datasource::file_format::parquet::ParquetFormat;
+
+#[cfg(feature = "parquet")]
+use crate::datasource::{physical_plan::parquet::can_expr_be_pushed_down_with_schemas, file_format::parquet::ParquetFormat};
+
 use crate::datasource::{create_ordering, get_statistics_with_limit};
 use crate::datasource::{
     file_format::{file_compression_type::FileCompressionType, FileFormat},
@@ -846,22 +846,25 @@ impl TableProvider for ListingTable {
                     return TableProviderFilterPushDown::Exact;
                 }
 
-                let parquet_pushdown_enabled = self
-                    .options
-                    .format
-                    .as_any()
-                    .downcast_ref::<ParquetFormat>()
-                    .is_some_and(|format| format.options().global.pushdown_filters);
-                let columns_can_be_pushed_down = can_expr_be_pushed_down_with_schemas(
-                    filter,
-                    &self.file_schema,
-                    &self.table_schema,
-                );
-                if parquet_pushdown_enabled && columns_can_be_pushed_down {
-                    // if we can't push it down completely with only the filename-based/path-based
-                    // column names, then we should check if we can do parquet predicate pushdown
+                #[cfg(feature = "parquet")]
+                {
+                    let parquet_pushdown_enabled = self
+                        .options
+                        .format
+                        .as_any()
+                        .downcast_ref::<ParquetFormat>()
+                        .is_some_and(|format| format.options().global.pushdown_filters);
+                    let columns_can_be_pushed_down = can_expr_be_pushed_down_with_schemas(
+                        filter,
+                        &self.file_schema,
+                        &self.table_schema,
+                    );
+                    if parquet_pushdown_enabled && columns_can_be_pushed_down {
+                        // if we can't push it down completely with only the filename-based/path-based
+                        // column names, then we should check if we can do parquet predicate pushdown
 
-                    return TableProviderFilterPushDown::Exact;
+                        return TableProviderFilterPushDown::Exact;
+                    }
                 }
 
                 TableProviderFilterPushDown::Inexact
