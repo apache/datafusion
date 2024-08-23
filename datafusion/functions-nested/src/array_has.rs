@@ -25,8 +25,9 @@ use arrow_array::{GenericListArray, UInt32Array};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, Operator, ScalarUDFImpl, Signature, Volatility};
 
+use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use itertools::Itertools;
 
 use crate::utils::make_scalar_function;
@@ -106,8 +107,8 @@ impl ScalarUDFImpl for ArrayHas {
 
 fn array_has_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::List(_) => array_has_dispatch_unnest::<i32>(&args[0], &args[1]),
-        DataType::LargeList(_) => array_has_dispatch::<i64>(&args[0], &args[1]),
+        DataType::List(_) => array_has_dispatch_eq_kernel::<i32>(&args[0], &args[1]),
+        DataType::LargeList(_) => array_has_dispatch_eq_kernel::<i64>(&args[0], &args[1]),
         _ => exec_err!(
             "array_has does not support type '{:?}'.",
             args[0].data_type()
@@ -239,14 +240,14 @@ impl ScalarUDFImpl for ArrayHasAny {
 
 /// Represents the type of comparison for array_has.
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum ComparisonType {
+pub enum ComparisonType {
     // array_has_all
     All,
     // array_has_any
     Any,
 }
 
-fn array_has_dispatch<O: OffsetSizeTrait>(
+pub fn array_has_dispatch<O: OffsetSizeTrait>(
     haystack: &ArrayRef,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
@@ -259,14 +260,11 @@ fn array_has_dispatch<O: OffsetSizeTrait>(
     }
 }
 
-fn array_has_dispatch_unnest<O: OffsetSizeTrait>(
+pub fn array_has_dispatch_eq_kernel<O: OffsetSizeTrait>(
     haystack: &ArrayRef,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
-
     let haystack = as_generic_list_array::<O>(haystack)?;
-    // println!("haystack: {:?}", haystack);
-    // println!("needle: {:?}", needle);
     let values = haystack.values();
     let offsets = haystack.value_offsets();
 
@@ -277,33 +275,33 @@ fn array_has_dispatch_unnest<O: OffsetSizeTrait>(
     }
 
     let indices = Arc::new(UInt32Array::from(indices)) as ArrayRef;
-
-    // println!("indices: {:?}", indices);
     let elements = kernels::take::take(needle, &indices, None).unwrap();
-    // println!("elements: {:?}", elements);
+    let eq_array = compare_op_for_nested(Operator::Eq, values, &elements)?;
 
-    let res = arrow::compute::kernels::cmp::eq(values, &elements)?;
-    // println!("res: {:?}", res);
-
-    let mut final_contained = vec![false; haystack.len()];
+    let mut final_contained = vec![None; haystack.len()];
     for (i, offset) in offsets.windows(2).enumerate() {
         let start = offset[0].to_usize().unwrap();
         let end = offset[1].to_usize().unwrap();
         let length = end - start;
-        let sub = res.slice(start, length).true_count();
-        if sub > 0 {
-            final_contained[i] = true;
+        // For non-nested list, length is 0 for null
+        if length == 0 {
+            continue;
+        }
+        // For nested lsit, check number of nulls
+        let null_count = eq_array.slice(start, length).null_count();
+        if null_count == length {
+            continue;
+        }
+
+        let number_of_true = eq_array.slice(start, length).true_count();
+        if number_of_true > 0 {
+            final_contained[i] = Some(true);
+        } else {
+            final_contained[i] = Some(false);
         }
     }
 
     Ok(Arc::new(BooleanArray::from(final_contained)))
-
-    // match needle.data_type() {
-    //     DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-    //         array_has_string_internal::<O>(haystack, needle)
-    //     }
-    //     _ => general_array_has::<O>(haystack, needle),
-    // }
 }
 
 // fn create_take_indicies<O: OffsetSizeTrait>(
@@ -315,7 +313,6 @@ fn array_has_dispatch_unnest<O: OffsetSizeTrait>(
 //     }
 
 //     let indices = UInt32Array::from(vec![2, 1]);
-
 
 //     let mut builder = PrimitiveArray::<Int64Type>::builder(capacity);
 //     for (index, repeat) in offsets.iter().enumerate() {
@@ -365,7 +362,7 @@ fn array_has_string_internal<O: OffsetSizeTrait>(
     Ok(Arc::new(boolean_builder.finish()))
 }
 
-fn general_array_has<O: OffsetSizeTrait>(
+pub fn general_array_has<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {

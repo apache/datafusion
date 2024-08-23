@@ -272,7 +272,6 @@ impl UnnestStream {
                         &self.struct_column_indices,
                         &self.options,
                     );
-                    println!("result: {:?}", result);
                     self.metrics.input_batches.add(1);
                     self.metrics.input_rows.add(batch.num_rows());
                     if let Ok(ref batch) = result {
@@ -381,19 +380,14 @@ fn build_batch(
             let unnested_arrays =
                 unnest_list_arrays(&list_arrays, unnested_length, total_length)?;
 
-            println!("unnested_arrays: {:?}", unnested_arrays);
             let unnested_array_map: HashMap<_, _> = unnested_arrays
                 .into_iter()
                 .zip(list_type_columns.iter())
                 .map(|(array, column)| (*column, array))
                 .collect();
 
-            println!("unnested_array_map: {:?}", unnested_array_map);
-
             // Create the take indices array for other columns
             let take_indicies = create_take_indicies(unnested_length, total_length);
-
-            println!("take_indicies: {:?}", take_indicies);
 
             // vertical expansion because of list unnest
             let ret = flatten_list_cols_from_indices(
@@ -401,8 +395,6 @@ fn build_batch(
                 &unnested_array_map,
                 &take_indicies,
             )?;
-
-            println!("ret: {:?}", ret);
 
             flatten_struct_cols(&ret, schema, struct_column_indices)
         }
