@@ -843,10 +843,11 @@ impl TableProvider for ListingTable {
                         .collect::<Vec<_>>(),
                 ) {
                     // if filter can be handled by partition pruning, it is exact
-                    return TableProviderFilterPushDown::Exact
+                    return TableProviderFilterPushDown::Exact;
                 }
 
-                let parquet_pushdown_enabled = self.options
+                let parquet_pushdown_enabled = self
+                    .options
                     .format
                     .as_any()
                     .downcast_ref::<ParquetFormat>()

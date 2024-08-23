@@ -117,6 +117,9 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
     is_applicable
 }
 
+/// recurses through expr as a trea, finds all `column`s, and checks if any of them would prevent
+/// this expression from being predicate pushed down. If any of them would, this returns false.
+/// Otherwise, true.
 pub fn can_expr_be_pushed_down_with_schemas(
     expr: &Expr,
     file_schema: &Schema,
@@ -126,7 +129,7 @@ pub fn can_expr_be_pushed_down_with_schemas(
     expr.apply(|expr| match expr {
         Expr::Column(column) => {
             can_be_pushed &=
-                would_column_prevent_pushdown(column.name(), file_schema, table_schema);
+                !would_column_prevent_pushdown(column.name(), file_schema, table_schema);
             Ok(if can_be_pushed {
                 TreeNodeRecursion::Jump
             } else {
