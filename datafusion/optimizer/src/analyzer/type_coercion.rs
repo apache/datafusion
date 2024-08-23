@@ -128,7 +128,7 @@ fn analyze_internal(
     .map_data(|plan| plan.recompute_schema())
 }
 
-pub(crate) struct TypeCoercionRewriter<'a> {
+pub struct TypeCoercionRewriter<'a> {
     pub(crate) schema: &'a DFSchema,
 }
 
@@ -809,7 +809,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 }
 
 /// Get a common schema that is compatible with all inputs of UNION.
-fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
+pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
     let base_schema = inputs[0].schema();
     let mut union_datatypes = base_schema
         .fields()
