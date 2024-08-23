@@ -1,0 +1,18 @@
+statement ok
+create table t1 (a int, b int) as values (1, 1), (1, 1), (1, 1), (1, 1), (1, 1), (1, 1), (1, 1), (1, 1), (1, 1), (1, 1), (8193, 8193), (8193, 8193), (8193, 8193), (8193, 8193), (8193, 8193), (8193, 8193), (8193, 8193), (8193, 8193), (8193, 8193), (8193, 8193);
+
+query I
+select count(*) from t1 group by a, b;
+----
+10
+10
+
+
+
+statement ok
+CREATE EXTERNAL TABLE hits
+STORED AS PARQUET
+LOCATION '../../benchmarks/data/hits.parquet';
+
+# query II
+# SELECT "RegionID", COUNT(DISTINCT "UserID") AS u FROM hits GROUP BY "RegionID" ORDER BY u DESC LIMIT 10;

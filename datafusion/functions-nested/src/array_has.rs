@@ -18,9 +18,10 @@
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
 use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
+use arrow::compute::kernels;
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
-use arrow_array::GenericListArray;
+use arrow_array::{GenericListArray, UInt32Array};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result};
@@ -105,7 +106,7 @@ impl ScalarUDFImpl for ArrayHas {
 
 fn array_has_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::List(_) => array_has_dispatch::<i32>(&args[0], &args[1]),
+        DataType::List(_) => array_has_dispatch_unnest::<i32>(&args[0], &args[1]),
         DataType::LargeList(_) => array_has_dispatch::<i64>(&args[0], &args[1]),
         _ => exec_err!(
             "array_has does not support type '{:?}'.",
@@ -257,6 +258,73 @@ fn array_has_dispatch<O: OffsetSizeTrait>(
         _ => general_array_has::<O>(haystack, needle),
     }
 }
+
+fn array_has_dispatch_unnest<O: OffsetSizeTrait>(
+    haystack: &ArrayRef,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+
+    let haystack = as_generic_list_array::<O>(haystack)?;
+    // println!("haystack: {:?}", haystack);
+    // println!("needle: {:?}", needle);
+    let values = haystack.values();
+    let offsets = haystack.value_offsets();
+
+    let mut indices = Vec::with_capacity(haystack.len());
+    for i in 0..haystack.len() {
+        let len = haystack.value_length(i).to_usize().unwrap();
+        indices.extend(std::iter::repeat(i as u32).take(len));
+    }
+
+    let indices = Arc::new(UInt32Array::from(indices)) as ArrayRef;
+
+    // println!("indices: {:?}", indices);
+    let elements = kernels::take::take(needle, &indices, None).unwrap();
+    // println!("elements: {:?}", elements);
+
+    let res = arrow::compute::kernels::cmp::eq(values, &elements)?;
+    // println!("res: {:?}", res);
+
+    let mut final_contained = vec![false; haystack.len()];
+    for (i, offset) in offsets.windows(2).enumerate() {
+        let start = offset[0].to_usize().unwrap();
+        let end = offset[1].to_usize().unwrap();
+        let length = end - start;
+        let sub = res.slice(start, length).true_count();
+        if sub > 0 {
+            final_contained[i] = true;
+        }
+    }
+
+    Ok(Arc::new(BooleanArray::from(final_contained)))
+
+    // match needle.data_type() {
+    //     DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+    //         array_has_string_internal::<O>(haystack, needle)
+    //     }
+    //     _ => general_array_has::<O>(haystack, needle),
+    // }
+}
+
+// fn create_take_indicies<O: OffsetSizeTrait>(
+//     needle: &ArrayRef,
+//     offsets: &[O],
+// ) -> Result<ArrayRef> {
+//     for offset in offsets.iter() {
+
+//     }
+
+//     let indices = UInt32Array::from(vec![2, 1]);
+
+
+//     let mut builder = PrimitiveArray::<Int64Type>::builder(capacity);
+//     for (index, repeat) in offsets.iter().enumerate() {
+//         // The length array should not contain nulls, so unwrap is safe
+//         let repeat = repeat.unwrap();
+//         (0..repeat).for_each(|_| builder.append_value(index as i64));
+//     }
+//     builder.finish()
+// }
 
 fn array_has_all_and_any_dispatch<O: OffsetSizeTrait>(
     haystack: &ArrayRef,
