@@ -491,7 +491,8 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = downcast_value!(values[0], Float64Array);
+        let values = &cast(&values[0], &DataType::Float64)?;
+        let values = downcast_value!(values, Float64Array);
 
         self.resize(total_num_groups);
         accumulate(group_indices, values, opt_filter, |group_index, value| {
