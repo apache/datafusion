@@ -154,19 +154,20 @@ fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
 }
 
 fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
-    let percentile = match get_scalar_value(expr)? {
-        ScalarValue::Float32(Some(value)) => {
+    let percentile = match get_scalar_value(expr).ok() {
+        Some(ScalarValue::Float32(Some(value))) => {
             value as f64
         }
-        ScalarValue::Float64(Some(value)) => {
+        Some(ScalarValue::Float64(Some(value))) => {
             value
         }
-        sv => {
+        Some(sv) => {
             return not_impl_err!(
                 "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
                 sv.data_type()
             )
-        }
+        },
+        None => return not_impl_err!("Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal"),
     };
 
     // Ensure the percentile is between 0 and 1.
@@ -179,21 +180,22 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
 }
 
 fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
-    let max_size = match get_scalar_value(expr)? {
-        ScalarValue::UInt8(Some(q)) => q as usize,
-        ScalarValue::UInt16(Some(q)) => q as usize,
-        ScalarValue::UInt32(Some(q)) => q as usize,
-        ScalarValue::UInt64(Some(q)) => q as usize,
-        ScalarValue::Int32(Some(q)) if q > 0 => q as usize,
-        ScalarValue::Int64(Some(q)) if q > 0 => q as usize,
-        ScalarValue::Int16(Some(q)) if q > 0 => q as usize,
-        ScalarValue::Int8(Some(q)) if q > 0 => q as usize,
-        sv => {
+    let max_size = match get_scalar_value(expr).ok() {
+        Some(ScalarValue::UInt8(Some(q))) => q as usize,
+        Some(ScalarValue::UInt16(Some(q))) => q as usize,
+        Some(ScalarValue::UInt32(Some(q))) => q as usize,
+        Some(ScalarValue::UInt64(Some(q))) => q as usize,
+        Some(ScalarValue::Int32(Some(q))) if q > 0 => q as usize,
+        Some(ScalarValue::Int64(Some(q))) if q > 0 => q as usize,
+        Some(ScalarValue::Int16(Some(q))) if q > 0 => q as usize,
+        Some(ScalarValue::Int8(Some(q))) if q > 0 => q as usize,
+        Some(sv) => {
             return not_impl_err!(
                 "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
                 sv.data_type()
             )
-        }
+        },
+        None => return not_impl_err!("Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal"),
     };
 
     Ok(max_size)
