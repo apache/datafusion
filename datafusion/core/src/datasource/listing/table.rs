@@ -27,7 +27,10 @@ use super::PartitionedFile;
 use super::ListingTableUrl;
 
 #[cfg(feature = "parquet")]
-use crate::datasource::{physical_plan::parquet::can_expr_be_pushed_down_with_schemas, file_format::parquet::ParquetFormat};
+use crate::datasource::{
+    file_format::parquet::ParquetFormat,
+    physical_plan::parquet::can_expr_be_pushed_down_with_schemas,
+};
 
 use crate::datasource::{create_ordering, get_statistics_with_limit};
 use crate::datasource::{

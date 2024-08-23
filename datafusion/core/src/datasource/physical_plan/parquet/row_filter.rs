@@ -571,7 +571,9 @@ pub fn build_row_filter(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::datasource::schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapterFactory};
+    use crate::datasource::schema_adapter::{
+        DefaultSchemaAdapterFactory, SchemaAdapterFactory,
+    };
 
     use arrow::datatypes::Field;
     use arrow_schema::{Fields, TimeUnit::Nanosecond};

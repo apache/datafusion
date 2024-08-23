@@ -1077,8 +1077,12 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             PhysicalPlanType::ParquetSink(sink) => {
                 #[cfg(feature = "parquet")]
                 {
-                    let input =
-                        into_physical_plan(&sink.input, registry, runtime, extension_codec)?;
+                    let input = into_physical_plan(
+                        &sink.input,
+                        registry,
+                        runtime,
+                        extension_codec,
+                    )?;
 
                     let data_sink: ParquetSink = sink
                         .sink
