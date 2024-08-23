@@ -209,6 +209,7 @@ fn string_view_substr(
                     }
                 } else {
                     null_builder.append_null();
+                    views_buf.push(0);
                 }
             }
         }
@@ -246,6 +247,7 @@ fn string_view_substr(
                     }
                 } else {
                     null_builder.append_null();
+                    views_buf.push(0);
                 }
             }
         }
