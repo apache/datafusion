@@ -53,9 +53,10 @@ use object_store::{ObjectMeta, ObjectStore};
 /// - the expression can be marked as `TableProviderFilterPushDown::Exact` once this filtering
 ///   was performed
 pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
+    let mut is_applicable = true;
     expr.apply(|expr| match expr {
-        Expr::Column(column) => {
-            is_applicable &= cols.contains(&column.name());
+        Expr::Column(Column { ref name, .. }) => {
+            is_applicable &= col_names.contains(&name.as_str());
             if is_applicable {
                 Ok(TreeNodeRecursion::Jump)
             } else {
@@ -536,10 +537,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Not;
+
     use futures::StreamExt;
 
     use crate::test::object_store::make_test_store_and_state;
-    use datafusion_expr::{col, lit, Expr};
+    use datafusion_expr::{case, col, lit, Expr};
 
     use super::*;
 

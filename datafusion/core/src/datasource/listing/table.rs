@@ -834,13 +834,13 @@ impl TableProvider for ListingTable {
             .iter()
             .map(|filter| {
                 if expr_applicable_for_cols(
-                    filter,
                     &self
                         .options
                         .table_partition_cols
                         .iter()
                         .map(|col| col.0.as_str())
                         .collect::<Vec<_>>(),
+                    filter,
                 ) {
                     // if filter can be handled by partition pruning, it is exact
                     return TableProviderFilterPushDown::Exact;
