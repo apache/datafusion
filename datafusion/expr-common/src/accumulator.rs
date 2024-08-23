@@ -17,6 +17,7 @@
 
 //! Accumulator module contains the trait definition for aggregation function's accumulators.
 
+use crate::columnar_value::Scalar;
 use arrow::array::ArrayRef;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::fmt::Debug;
@@ -71,6 +72,10 @@ pub trait Accumulator: Send + Sync + Debug {
     /// arrow compatible internal state that can be returned without copying
     /// when possible (for example distinct strings)
     fn evaluate(&mut self) -> Result<ScalarValue>;
+
+    fn evaluate_as_scalar(&mut self) -> Result<Scalar> {
+        self.evaluate().map(Scalar::from)
+    }
 
     /// Returns the allocated size required for this accumulator, in
     /// bytes, including `Self`.
@@ -249,6 +254,11 @@ pub trait Accumulator: Send + Sync + Debug {
     ///           in partition 0         in partition 1
     /// ```
     fn state(&mut self) -> Result<Vec<ScalarValue>>;
+
+    fn state_as_scalars(&mut self) -> Result<Vec<Scalar>> {
+        self.state()
+            .map(|scalars| scalars.into_iter().map(Scalar::from).collect())
+    }
 
     /// Updates the accumulator's state from an `Array` containing one
     /// or more intermediate values.

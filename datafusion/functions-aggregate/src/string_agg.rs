@@ -24,7 +24,7 @@ use datafusion_common::Result;
 use datafusion_common::{not_impl_err, ScalarValue};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Scalar, Signature, TypeSignature, Volatility,
 };
 use datafusion_physical_expr::expressions::Literal;
 use std::any::Any;
@@ -140,8 +140,19 @@ impl Accumulator for StringAggAccumulator {
         Ok(vec![self.evaluate()?])
     }
 
+    fn state_as_scalars(&mut self) -> Result<Vec<Scalar>> {
+        Ok(vec![self.evaluate_as_scalar()?])
+    }
+
     fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(ScalarValue::Utf8(self.values.clone()))
+    }
+
+    fn evaluate_as_scalar(&mut self) -> Result<Scalar> {
+        Ok(Scalar::new(
+            ScalarValue::Utf8(self.values.clone()),
+            DataType::LargeUtf8,
+        ))
     }
 
     fn size(&self) -> usize {

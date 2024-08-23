@@ -63,10 +63,10 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::ScalarValue;
-use datafusion_expr::GroupsAccumulator;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Signature, Volatility,
 };
+use datafusion_expr::{GroupsAccumulator, Scalar};
 use half::f16;
 use std::ops::Deref;
 
@@ -769,6 +769,7 @@ macro_rules! min_max {
 #[derive(Debug)]
 pub struct MaxAccumulator {
     max: ScalarValue,
+    return_type: DataType,
 }
 
 impl MaxAccumulator {
@@ -776,6 +777,7 @@ impl MaxAccumulator {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             max: ScalarValue::try_from(datatype)?,
+            return_type: datatype.clone(),
         })
     }
 }
@@ -797,8 +799,14 @@ impl Accumulator for MaxAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
+    fn state_as_scalars(&mut self) -> Result<Vec<Scalar>> {
+        Ok(vec![self.evaluate_as_scalar()?])
+    }
     fn evaluate(&mut self) -> Result<ScalarValue> {
         Ok(self.max.clone())
+    }
+    fn evaluate_as_scalar(&mut self) -> Result<Scalar> {
+        Ok(Scalar::new(self.evaluate()?, self.return_type.clone()))
     }
 
     fn size(&self) -> usize {
@@ -810,6 +818,7 @@ impl Accumulator for MaxAccumulator {
 pub struct SlidingMaxAccumulator {
     max: ScalarValue,
     moving_max: MovingMax<ScalarValue>,
+    return_type: DataType,
 }
 
 impl SlidingMaxAccumulator {
@@ -818,6 +827,7 @@ impl SlidingMaxAccumulator {
         Ok(Self {
             max: ScalarValue::try_from(datatype)?,
             moving_max: MovingMax::<ScalarValue>::new(),
+            return_type: datatype.clone(),
         })
     }
 }
@@ -856,6 +866,13 @@ impl Accumulator for SlidingMaxAccumulator {
         Ok(self.max.clone())
     }
 
+    fn state_as_scalars(&mut self) -> Result<Vec<Scalar>> {
+        Ok(vec![self.evaluate_as_scalar()?])
+    }
+
+    fn evaluate_as_scalar(&mut self) -> Result<Scalar> {
+        Ok(Scalar::new(self.evaluate()?, self.return_type.clone()))
+    }
     fn supports_retract_batch(&self) -> bool {
         true
     }
@@ -1026,6 +1043,7 @@ impl AggregateUDFImpl for Min {
 #[derive(Debug)]
 pub struct MinAccumulator {
     min: ScalarValue,
+    return_type: DataType,
 }
 
 impl MinAccumulator {
@@ -1033,6 +1051,7 @@ impl MinAccumulator {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             min: ScalarValue::try_from(datatype)?,
+            return_type: datatype.clone(),
         })
     }
 }
@@ -1040,6 +1059,10 @@ impl MinAccumulator {
 impl Accumulator for MinAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
+    }
+
+    fn state_as_scalars(&mut self) -> Result<Vec<Scalar>> {
+        Ok(vec![self.evaluate_as_scalar()?])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -1059,6 +1082,10 @@ impl Accumulator for MinAccumulator {
         Ok(self.min.clone())
     }
 
+    fn evaluate_as_scalar(&mut self) -> Result<Scalar> {
+        Ok(Scalar::new(self.evaluate()?, self.return_type.clone()))
+    }
+
     fn size(&self) -> usize {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
     }
@@ -1068,6 +1095,7 @@ impl Accumulator for MinAccumulator {
 pub struct SlidingMinAccumulator {
     min: ScalarValue,
     moving_min: MovingMin<ScalarValue>,
+    return_type: DataType,
 }
 
 impl SlidingMinAccumulator {
@@ -1075,6 +1103,7 @@ impl SlidingMinAccumulator {
         Ok(Self {
             min: ScalarValue::try_from(datatype)?,
             moving_min: MovingMin::<ScalarValue>::new(),
+            return_type: datatype.clone(),
         })
     }
 }
@@ -1082,6 +1111,14 @@ impl SlidingMinAccumulator {
 impl Accumulator for SlidingMinAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.min.clone()])
+    }
+
+    fn state_as_scalars(&mut self) -> Result<Vec<Scalar>> {
+        Ok(vec![self.evaluate_as_scalar()?])
+    }
+
+    fn evaluate_as_scalar(&mut self) -> Result<Scalar> {
+        Ok(Scalar::new(self.evaluate()?, self.return_type.clone()))
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

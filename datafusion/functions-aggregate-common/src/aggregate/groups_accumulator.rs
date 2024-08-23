@@ -30,9 +30,9 @@ use arrow::{
 };
 use datafusion_common::{
     arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
-    ScalarValue,
 };
 use datafusion_expr_common::accumulator::Accumulator;
+use datafusion_expr_common::columnar_value::Scalar;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
@@ -275,15 +275,15 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
         let states = emit_to.take_needed(&mut self.states);
 
-        let results: Vec<ScalarValue> = states
+        let results: Vec<Scalar> = states
             .into_iter()
             .map(|mut state| {
                 self.free_allocation(state.size());
-                state.accumulator.evaluate()
+                state.accumulator.evaluate_as_scalar()
             })
             .collect::<Result<_>>()?;
 
-        let result = ScalarValue::iter_to_array(results);
+        let result = Scalar::iter_to_array(results);
 
         self.adjust_allocation(vec_size_pre, self.states.allocated_size());
 
@@ -296,11 +296,11 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
         // each accumulator produces a potential vector of values
         // which we need to form into columns
-        let mut results: Vec<Vec<ScalarValue>> = vec![];
+        let mut results: Vec<Vec<Scalar>> = vec![];
 
         for mut state in states {
             self.free_allocation(state.size());
-            let accumulator_state = state.accumulator.state()?;
+            let accumulator_state = state.accumulator.state_as_scalars()?;
             results.resize_with(accumulator_state.len(), Vec::new);
             for (idx, state_val) in accumulator_state.into_iter().enumerate() {
                 results[idx].push(state_val);
@@ -310,7 +310,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         // create an array for each intermediate column
         let arrays = results
             .into_iter()
-            .map(ScalarValue::iter_to_array)
+            .map(Scalar::iter_to_array)
             .collect::<Result<Vec<_>>>()?;
 
         // double check each array has the same length (aka the

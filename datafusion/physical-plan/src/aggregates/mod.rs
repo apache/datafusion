@@ -1074,7 +1074,7 @@ pub fn finalize_aggregation(
             accumulators
                 .iter_mut()
                 .map(|accumulator| {
-                    accumulator.state().and_then(|e| {
+                    accumulator.state_as_scalars().and_then(|e| {
                         e.iter()
                             .map(|v| v.to_array())
                             .collect::<Result<Vec<ArrayRef>>>()
@@ -1090,7 +1090,9 @@ pub fn finalize_aggregation(
             // Merge the state to the final value
             accumulators
                 .iter_mut()
-                .map(|accumulator| accumulator.evaluate().and_then(|v| v.to_array()))
+                .map(|accumulator| {
+                    accumulator.evaluate_as_scalar().and_then(|v| v.to_array())
+                })
                 .collect()
         }
     }
