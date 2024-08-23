@@ -39,7 +39,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{GetExt, Statistics};
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalExpr;
 use object_store::{ObjectMeta, ObjectStore};
 use tempfile::tempdir;
 
