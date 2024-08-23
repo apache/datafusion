@@ -343,17 +343,17 @@ mod tests {
 
     #[test]
     fn test_functions() -> Result<()> {
-        // test_function!(
-        //     SubstrFunc::new(),
-        //     &[
-        //         ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
-        //         ColumnarValue::Scalar(ScalarValue::from(1i64)),
-        //     ],
-        //     Ok(None),
-        //     &str,
-        //     Utf8View,
-        //     StringViewArray
-        // );
+        test_function!(
+            SubstrFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+            ],
+            Ok(None),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
         test_function!(
             SubstrFunc::new(),
             &[
