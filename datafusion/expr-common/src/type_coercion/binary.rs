@@ -937,7 +937,7 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
             string_concat_internal_coercion(from_type, &LargeUtf8)
         }
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
-            string_coercion(&lhs_value_type, &rhs_value_type).or(None)
+            string_coercion(lhs_value_type, rhs_value_type).or(None)
         }
         _ => None,
     })
