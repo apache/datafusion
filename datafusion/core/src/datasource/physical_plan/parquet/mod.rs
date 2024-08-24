@@ -61,9 +61,7 @@ pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
-pub use row_filter::{
-    can_expr_be_pushed_down_with_schemas, would_column_prevent_pushdown,
-};
+pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use writer::plan_to_parquet;
 
 /// Execution plan for reading one or more Parquet files.
@@ -213,9 +211,9 @@ pub use writer::plan_to_parquet;
 /// # Execution Overview
 ///
 /// * Step 1: [`ParquetExec::execute`] is called, returning a [`FileStream`]
-///   configured to open parquet files with a [`ParquetOpener`].
+///   configured to open parquet files with a `ParquetOpener`.
 ///
-/// * Step 2: When the stream is polled, the [`ParquetOpener`] is called to open
+/// * Step 2: When the stream is polled, the `ParquetOpener` is called to open
 ///   the file.
 ///
 /// * Step 3: The `ParquetOpener` gets the [`ParquetMetaData`] (file metadata)

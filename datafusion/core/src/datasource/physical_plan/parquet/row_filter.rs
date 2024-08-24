@@ -391,7 +391,7 @@ pub fn non_pushdown_columns(
 /// to check preemptively if a column name would prevent pushdowning.
 /// effectively does that [`non_pushdown_columns`] does, but with a single given column (instead of
 /// traversing the entire tree to determine this)
-pub fn would_column_prevent_pushdown(
+fn would_column_prevent_pushdown(
     column_name: &str,
     file_schema: &Schema,
     table_schema: &Schema,
