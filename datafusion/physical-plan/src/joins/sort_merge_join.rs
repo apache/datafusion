@@ -51,6 +51,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
@@ -288,7 +289,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![
             Some(PhysicalSortRequirement::from_sort_exprs(
                 &self.left_sort_exprs,

@@ -45,12 +45,14 @@ use crate::physical_plan::{ExecutionPlan, Statistics};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt};
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalExpr;
 
 use async_trait::async_trait;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use file_compression_type::FileCompressionType;
 use object_store::{ObjectMeta, ObjectStore};
 use std::fmt::Debug;
+
 /// Factory for creating [`FileFormat`] instances based on session and command level options
 ///
 /// Users can provide their own `FileFormatFactory` to support arbitrary file formats
@@ -132,7 +134,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         _input: Arc<dyn ExecutionPlan>,
         _state: &SessionState,
         _conf: FileSinkConfig,
-        _order_requirements: Option<Vec<PhysicalSortRequirement>>,
+        _order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
     }
