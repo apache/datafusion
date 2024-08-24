@@ -118,7 +118,7 @@ impl ScalarUDFImpl for ArrayHas {
         let result = match args[1] {
             ColumnarValue::Array(_) => {
                 let args = ColumnarValue::values_to_arrays(args)?;
-                array_has_inner_for_array(&args)
+                array_has_inner_for_array(&args[0], &args[1])
             }
             ColumnarValue::Scalar(_) => {
                 let haystack = args[0].to_owned().into_array(1)?;
@@ -158,20 +158,18 @@ fn arrat_has_inner_for_scalar(
     }
 }
 
-fn array_has_inner_for_array(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::List(_) => array_has_dispatch_general_scalar::<i32>(&args[0], &args[1]),
-        DataType::LargeList(_) => {
-            array_has_dispatch_general_scalar::<i64>(&args[0], &args[1])
-        }
+fn array_has_inner_for_array(haystack: &ArrayRef, needle: &ArrayRef) -> Result<ArrayRef> {
+    match haystack.data_type() {
+        DataType::List(_) => array_has_dispatch_for_array::<i32>(haystack, needle),
+        DataType::LargeList(_) => array_has_dispatch_for_array::<i64>(haystack, needle),
         _ => exec_err!(
             "array_has does not support type '{:?}'.",
-            args[0].data_type()
+            haystack.data_type()
         ),
     }
 }
 
-fn array_has_dispatch_general_scalar<O: OffsetSizeTrait>(
+fn array_has_dispatch_for_array<O: OffsetSizeTrait>(
     haystack: &ArrayRef,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
@@ -354,7 +352,7 @@ impl ScalarUDFImpl for ArrayHasAny {
 
 /// Represents the type of comparison for array_has.
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub enum ComparisonType {
+enum ComparisonType {
     // array_has_all
     All,
     // array_has_any

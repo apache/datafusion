@@ -22,7 +22,6 @@ use arrow::array::NullArray;
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::not_impl_err;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::sync::Arc;
 
