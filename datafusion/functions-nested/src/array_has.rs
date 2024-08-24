@@ -124,7 +124,7 @@ impl ScalarUDFImpl for ArrayHas {
                 let haystack = args[0].to_owned().into_array(1)?;
                 let needle = args[1].to_owned().into_array(1)?;
                 let needle = Scalar::new(needle);
-                arrat_has_inner_for_scalar(&haystack, &needle)
+                array_has_inner_for_scalar(&haystack, &needle)
             }
         };
 
@@ -142,7 +142,7 @@ impl ScalarUDFImpl for ArrayHas {
     }
 }
 
-fn arrat_has_inner_for_scalar(
+fn array_has_inner_for_scalar(
     haystack: &ArrayRef,
     needle: &dyn Datum,
 ) -> Result<ArrayRef> {
@@ -211,18 +211,12 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
         if length == 0 {
             continue;
         }
-        // For nested lsit, check number of nulls
-        let null_count = eq_array.slice(start, length).null_count();
-        if null_count == length {
+        let sliced_array = eq_array.slice(start, length);
+        // For nested list, check number of nulls
+        if sliced_array.null_count() == length {
             continue;
         }
-
-        let number_of_true = eq_array.slice(start, length).true_count();
-        if number_of_true > 0 {
-            final_contained[i] = Some(true);
-        } else {
-            final_contained[i] = Some(false);
-        }
+        final_contained[i] = Some(sliced_array.true_count() > 0);
     }
 
     Ok(Arc::new(BooleanArray::from(final_contained)))
