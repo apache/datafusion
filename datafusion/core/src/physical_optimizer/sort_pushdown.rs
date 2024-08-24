@@ -36,6 +36,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
@@ -46,7 +47,7 @@ use datafusion_physical_expr::{
 /// [`EnforceSorting`]: crate::physical_optimizer::enforce_sorting::EnforceSorting
 #[derive(Default, Clone)]
 pub struct ParentRequirements {
-    ordering_requirement: Option<Vec<PhysicalSortRequirement>>,
+    ordering_requirement: Option<LexRequirement>,
     fetch: Option<usize>,
 }
 
@@ -159,7 +160,7 @@ fn pushdown_sorts_helper(
 fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
     parent_required: LexRequirementRef,
-) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
+) -> Result<Option<Vec<Option<LexRequirement>>>> {
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
         let required_input_ordering = plan.required_input_ordering();
@@ -345,7 +346,7 @@ fn try_pushdown_requirements_to_join(
     parent_required: LexRequirementRef,
     sort_expr: Vec<PhysicalSortExpr>,
     push_side: JoinSide,
-) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
+) -> Result<Option<Vec<Option<LexRequirement>>>> {
     let left_eq_properties = smj.left().equivalence_properties();
     let right_eq_properties = smj.right().equivalence_properties();
     let mut smj_required_orderings = smj.required_input_ordering();
@@ -460,7 +461,7 @@ fn expr_source_side(
 fn shift_right_required(
     parent_required: LexRequirementRef,
     left_columns_len: usize,
-) -> Result<Vec<PhysicalSortRequirement>> {
+) -> Result<LexRequirement> {
     let new_right_required = parent_required
         .iter()
         .filter_map(|r| {
@@ -486,7 +487,7 @@ enum RequirementsCompatibility {
     /// Requirements satisfy
     Satisfy,
     /// Requirements compatible
-    Compatible(Option<Vec<PhysicalSortRequirement>>),
+    Compatible(Option<LexRequirement>),
     /// Requirements not compatible
     NonCompatible,
 }

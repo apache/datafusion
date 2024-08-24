@@ -1295,12 +1295,14 @@ dependencies = [
  "parquet",
  "paste",
  "sqlparser",
+ "tokio",
 ]
 
 [[package]]
 name = "datafusion-common-runtime"
 version = "41.0.0"
 dependencies = [
+ "log",
  "tokio",
 ]
 
