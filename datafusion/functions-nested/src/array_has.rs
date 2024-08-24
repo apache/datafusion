@@ -122,8 +122,6 @@ impl ScalarUDFImpl for ArrayHas {
             }
             ColumnarValue::Scalar(_) => {
                 let haystack = args[0].to_owned().into_array(1)?;
-                // If first argument is empty list (second argument is non-null), return false
-                // i.e. array_has([], non-null element) -> false
                 let needle = args[1].to_owned().into_array(1)?;
                 let needle = Scalar::new(needle);
                 arrat_has_inner_for_scalar(&haystack, &needle)
@@ -198,6 +196,8 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
     let haystack = as_generic_list_array::<O>(haystack)?;
     let values = haystack.values();
     let offsets = haystack.value_offsets();
+    // If first argument is empty list (second argument is non-null), return false
+    // i.e. array_has([], non-null element) -> false
     if values.len() == 0 {
         return Ok(Arc::new(BooleanArray::from(vec![Some(false)])));
     }
