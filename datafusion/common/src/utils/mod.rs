@@ -20,6 +20,7 @@
 pub mod expr;
 pub mod memory;
 pub mod proxy;
+pub mod string_utils;
 
 use crate::error::{_internal_datafusion_err, _internal_err};
 use crate::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};

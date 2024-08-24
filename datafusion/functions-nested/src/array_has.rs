@@ -19,14 +19,16 @@
 
 use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
-use arrow::row::{RowConverter, SortField};
+use arrow::row::{RowConverter, Rows, SortField};
+use arrow_array::GenericListArray;
 use datafusion_common::cast::as_generic_list_array;
+use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 use itertools::Itertools;
 
-use crate::utils::check_datatypes;
+use crate::utils::make_scalar_function;
 
 use std::any::Any;
 use std::sync::Arc;
@@ -93,33 +95,52 @@ impl ScalarUDFImpl for ArrayHas {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-
-        if args.len() != 2 {
-            return exec_err!("array_has needs two arguments");
-        }
-
-        let array_type = args[0].data_type();
-
-        match array_type {
-            DataType::List(_) => general_array_has_dispatch::<i32>(
-                &args[0],
-                &args[1],
-                ComparisonType::Single,
-            )
-            .map(ColumnarValue::Array),
-            DataType::LargeList(_) => general_array_has_dispatch::<i64>(
-                &args[0],
-                &args[1],
-                ComparisonType::Single,
-            )
-            .map(ColumnarValue::Array),
-            _ => exec_err!("array_has does not support type '{array_type:?}'."),
-        }
+        make_scalar_function(array_has_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+}
+
+fn array_has_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::List(_) => array_has_dispatch::<i32>(&args[0], &args[1]),
+        DataType::LargeList(_) => array_has_dispatch::<i64>(&args[0], &args[1]),
+        _ => exec_err!(
+            "array_has does not support type '{:?}'.",
+            args[0].data_type()
+        ),
+    }
+}
+
+fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::List(_) => {
+            array_has_all_and_any_dispatch::<i32>(&args[0], &args[1], ComparisonType::All)
+        }
+        DataType::LargeList(_) => {
+            array_has_all_and_any_dispatch::<i64>(&args[0], &args[1], ComparisonType::All)
+        }
+        _ => exec_err!(
+            "array_has does not support type '{:?}'.",
+            args[0].data_type()
+        ),
+    }
+}
+
+fn array_has_any_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::List(_) => {
+            array_has_all_and_any_dispatch::<i32>(&args[0], &args[1], ComparisonType::Any)
+        }
+        DataType::LargeList(_) => {
+            array_has_all_and_any_dispatch::<i64>(&args[0], &args[1], ComparisonType::Any)
+        }
+        _ => exec_err!(
+            "array_has does not support type '{:?}'.",
+            args[0].data_type()
+        ),
     }
 }
 
@@ -161,24 +182,7 @@ impl ScalarUDFImpl for ArrayHasAll {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        if args.len() != 2 {
-            return exec_err!("array_has_all needs two arguments");
-        }
-
-        let array_type = args[0].data_type();
-
-        match array_type {
-            DataType::List(_) => {
-                general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::All)
-                    .map(ColumnarValue::Array)
-            }
-            DataType::LargeList(_) => {
-                general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::All)
-                    .map(ColumnarValue::Array)
-            }
-            _ => exec_err!("array_has_all does not support type '{array_type:?}'."),
-        }
+        make_scalar_function(array_has_all_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -224,25 +228,7 @@ impl ScalarUDFImpl for ArrayHasAny {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-
-        if args.len() != 2 {
-            return exec_err!("array_has_any needs two arguments");
-        }
-
-        let array_type = args[0].data_type();
-
-        match array_type {
-            DataType::List(_) => {
-                general_array_has_dispatch::<i32>(&args[0], &args[1], ComparisonType::Any)
-                    .map(ColumnarValue::Array)
-            }
-            DataType::LargeList(_) => {
-                general_array_has_dispatch::<i64>(&args[0], &args[1], ComparisonType::Any)
-                    .map(ColumnarValue::Array)
-            }
-            _ => exec_err!("array_has_any does not support type '{array_type:?}'."),
-        }
+        make_scalar_function(array_has_any_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -251,75 +237,176 @@ impl ScalarUDFImpl for ArrayHasAny {
 }
 
 /// Represents the type of comparison for array_has.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum ComparisonType {
     // array_has_all
     All,
     // array_has_any
     Any,
-    // array_has
-    Single,
 }
 
-fn general_array_has_dispatch<O: OffsetSizeTrait>(
+fn array_has_dispatch<O: OffsetSizeTrait>(
+    haystack: &ArrayRef,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let haystack = as_generic_list_array::<O>(haystack)?;
+    match needle.data_type() {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            array_has_string_internal::<O>(haystack, needle)
+        }
+        _ => general_array_has::<O>(haystack, needle),
+    }
+}
+
+fn array_has_all_and_any_dispatch<O: OffsetSizeTrait>(
     haystack: &ArrayRef,
     needle: &ArrayRef,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
-    let array = if comparison_type == ComparisonType::Single {
-        let arr = as_generic_list_array::<O>(haystack)?;
-        check_datatypes("array_has", &[arr.values(), needle])?;
-        arr
-    } else {
-        check_datatypes("array_has", &[haystack, needle])?;
-        as_generic_list_array::<O>(haystack)?
-    };
+    let haystack = as_generic_list_array::<O>(haystack)?;
+    let needle = as_generic_list_array::<O>(needle)?;
+    match needle.data_type() {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            array_has_all_and_any_string_internal::<O>(haystack, needle, comparison_type)
+        }
+        _ => general_array_has_for_all_and_any::<O>(haystack, needle, comparison_type),
+    }
+}
 
-    let mut boolean_builder = BooleanArray::builder(array.len());
-
-    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
-
-    let element = Arc::clone(needle);
-    let sub_array = if comparison_type != ComparisonType::Single {
-        as_generic_list_array::<O>(needle)?
-    } else {
-        array
-    };
-    for (row_idx, (arr, sub_arr)) in array.iter().zip(sub_array.iter()).enumerate() {
-        match (arr, sub_arr) {
-            (Some(arr), Some(sub_arr)) => {
-                let arr_values = converter.convert_columns(&[arr])?;
-                let sub_arr_values = if comparison_type != ComparisonType::Single {
-                    converter.convert_columns(&[sub_arr])?
-                } else {
-                    converter.convert_columns(&[Arc::clone(&element)])?
-                };
-
-                let mut res = match comparison_type {
-                    ComparisonType::All => sub_arr_values
-                        .iter()
-                        .dedup()
-                        .all(|elem| arr_values.iter().dedup().any(|x| x == elem)),
-                    ComparisonType::Any => sub_arr_values
-                        .iter()
-                        .dedup()
-                        .any(|elem| arr_values.iter().dedup().any(|x| x == elem)),
-                    ComparisonType::Single => arr_values
-                        .iter()
-                        .dedup()
-                        .any(|x| x == sub_arr_values.row(row_idx)),
-                };
-
-                if comparison_type == ComparisonType::Any {
-                    res |= res;
-                }
-                boolean_builder.append_value(res);
+fn array_has_string_internal<O: OffsetSizeTrait>(
+    haystack: &GenericListArray<O>,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let mut boolean_builder = BooleanArray::builder(haystack.len());
+    for (arr, element) in haystack.iter().zip(string_array_to_vec(needle).into_iter()) {
+        match (arr, element) {
+            (Some(arr), Some(element)) => {
+                boolean_builder.append_value(
+                    string_array_to_vec(&arr)
+                        .into_iter()
+                        .flatten()
+                        .any(|x| x == element),
+                );
             }
-            // respect null input
             (_, _) => {
                 boolean_builder.append_null();
             }
         }
     }
+
     Ok(Arc::new(boolean_builder.finish()))
+}
+
+fn general_array_has<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let mut boolean_builder = BooleanArray::builder(array.len());
+    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
+    let sub_arr_values = converter.convert_columns(&[Arc::clone(needle)])?;
+
+    for (row_idx, arr) in array.iter().enumerate() {
+        if let Some(arr) = arr {
+            let arr_values = converter.convert_columns(&[arr])?;
+            boolean_builder.append_value(
+                arr_values
+                    .iter()
+                    .dedup()
+                    .any(|x| x == sub_arr_values.row(row_idx)),
+            );
+        } else {
+            boolean_builder.append_null();
+        }
+    }
+
+    Ok(Arc::new(boolean_builder.finish()))
+}
+
+// String comparison for array_has_all and array_has_any
+fn array_has_all_and_any_string_internal<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+    needle: &GenericListArray<O>,
+    comparison_type: ComparisonType,
+) -> Result<ArrayRef> {
+    let mut boolean_builder = BooleanArray::builder(array.len());
+    for (arr, sub_arr) in array.iter().zip(needle.iter()) {
+        match (arr, sub_arr) {
+            (Some(arr), Some(sub_arr)) => {
+                let haystack_array = string_array_to_vec(&arr);
+                let needle_array = string_array_to_vec(&sub_arr);
+                boolean_builder.append_value(array_has_string_kernel(
+                    haystack_array,
+                    needle_array,
+                    comparison_type,
+                ));
+            }
+            (_, _) => {
+                boolean_builder.append_null();
+            }
+        }
+    }
+
+    Ok(Arc::new(boolean_builder.finish()))
+}
+
+fn array_has_string_kernel(
+    haystack: Vec<Option<&str>>,
+    needle: Vec<Option<&str>>,
+    comparison_type: ComparisonType,
+) -> bool {
+    match comparison_type {
+        ComparisonType::All => needle
+            .iter()
+            .dedup()
+            .all(|x| haystack.iter().dedup().any(|y| y == x)),
+        ComparisonType::Any => needle
+            .iter()
+            .dedup()
+            .any(|x| haystack.iter().dedup().any(|y| y == x)),
+    }
+}
+
+// General row comparison for array_has_all and array_has_any
+fn general_array_has_for_all_and_any<O: OffsetSizeTrait>(
+    haystack: &GenericListArray<O>,
+    needle: &GenericListArray<O>,
+    comparison_type: ComparisonType,
+) -> Result<ArrayRef> {
+    let mut boolean_builder = BooleanArray::builder(haystack.len());
+    let converter = RowConverter::new(vec![SortField::new(haystack.value_type())])?;
+
+    for (arr, sub_arr) in haystack.iter().zip(needle.iter()) {
+        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
+            let arr_values = converter.convert_columns(&[arr])?;
+            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
+            boolean_builder.append_value(general_array_has_all_and_any_kernel(
+                arr_values,
+                sub_arr_values,
+                comparison_type,
+            ));
+        } else {
+            boolean_builder.append_null();
+        }
+    }
+
+    Ok(Arc::new(boolean_builder.finish()))
+}
+
+fn general_array_has_all_and_any_kernel(
+    haystack_rows: Rows,
+    needle_rows: Rows,
+    comparison_type: ComparisonType,
+) -> bool {
+    match comparison_type {
+        ComparisonType::All => needle_rows.iter().all(|needle_row| {
+            haystack_rows
+                .iter()
+                .any(|haystack_row| haystack_row == needle_row)
+        }),
+        ComparisonType::Any => needle_rows.iter().any(|needle_row| {
+            haystack_rows
+                .iter()
+                .any(|haystack_row| haystack_row == needle_row)
+        }),
+    }
 }
