@@ -56,14 +56,6 @@ pub mod sort;
 pub mod string;
 pub mod utils;
 
-pub use array_has::array_has_dispatch;
-pub use array_has::array_has_dispatch_eq_kernel;
-pub use array_has::general_array_has;
-pub use array_has::invoke_new;
-pub use array_has::invoke_eq_kernel;
-pub use array_has::invoke_iter;
-pub use array_has::invoke_general_kernel;
-pub use array_has::invoke_general_scalar;
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::ScalarUDF;

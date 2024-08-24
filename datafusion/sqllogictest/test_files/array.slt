@@ -4971,6 +4971,15 @@ NULL 1 1
 2 1 NULL
 
 ## array_has/array_has_all/array_has_any
+query B
+select array_has([], 1);
+----
+false
+
+query B
+select array_has([], null);
+----
+NULL
 
 # If rhs is Null, we returns Null
 query BBB

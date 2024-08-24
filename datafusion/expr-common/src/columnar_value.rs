@@ -113,13 +113,6 @@ impl ColumnarValue {
         }
     }
 
-    pub fn get_scalar(self) -> Result<ScalarValue> {
-        if let ColumnarValue::Scalar(s) = self {
-            return Ok(s)
-        }
-        not_impl_err!("not scalar")
-    }
-
     /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
     /// number of rows. [`Self::Scalar`] is converted by repeating the same
     /// scalar multiple times which is not as efficient as handling the scalar
