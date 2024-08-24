@@ -21,7 +21,7 @@ use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow::compute::kernels;
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
-use arrow_array::{Datum, GenericListArray, Scalar, UInt32Array};
+use arrow_array::{Datum, GenericListArray, LargeStringArray, Scalar, StringArray, StringViewArray, UInt32Array};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result, ScalarValue};
@@ -97,7 +97,8 @@ impl ScalarUDFImpl for ArrayHas {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        invoke_new(args)
+        // invoke_new(args)
+        invoke_general_scalar(args)
 
         // make_scalar_function(array_has_inner)(args)
     }
@@ -107,8 +108,16 @@ impl ScalarUDFImpl for ArrayHas {
     }
 }
 
-pub fn invoke_old(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn invoke_eq_kernel(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     make_scalar_function(array_has_inner)(args)
+}
+
+pub fn invoke_general_kernel(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    make_scalar_function(array_has_inner_general_kerenl)(args)
+}
+
+pub fn invoke_iter(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    make_scalar_function(array_has_inner_simple_iter)(args)
 }
 
 pub fn invoke_new(args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -154,6 +163,61 @@ pub fn invoke_new(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 }
 
+pub fn invoke_general_scalar(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if let ColumnarValue::Scalar(s) = &args[1] {
+        if s.is_null() {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))
+        }
+    }
+
+    // first, identify if any of the arguments is an Array. If yes, store its `len`,
+    // as any scalar will need to be converted to an array of len `len`.
+    let len = args
+        .iter()
+        .fold(Option::<usize>::None, |acc, arg| match arg {
+            ColumnarValue::Scalar(_) => acc,
+            ColumnarValue::Array(a) => Some(a.len()),
+        });
+
+    let is_scalar = len.is_none();
+
+    let result = match args[1] {
+        ColumnarValue::Array(_) => {
+            let args = ColumnarValue::values_to_arrays(args)?;
+            // array_has_inner(&args)                
+            array_has_inner_general_kerenl_scalar(&args)
+        }
+        ColumnarValue::Scalar(_) => {
+            let haystack = args[0].to_owned().into_array(1)?;
+            if haystack.len() == 0 {
+                return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))
+            }
+            let needle = args[1].to_owned().into_array(1)?;
+            let needle = Scalar::new(needle);
+            array_has_inner_v2(&haystack, &needle)
+        }
+    };
+
+    if is_scalar {
+        // If all inputs are scalar, keeps output as scalar
+        let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+        result.map(ColumnarValue::Scalar)
+    } else {
+        result.map(ColumnarValue::Array)
+    }
+}
+
+
+fn array_has_inner_simple_iter(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::List(_) => array_has_dispatch::<i32>(&args[0], &args[1]),
+        DataType::LargeList(_) => array_has_dispatch::<i64>(&args[0], &args[1]),
+        _ => exec_err!(
+            "array_has does not support type '{:?}'.",
+            args[0].data_type()
+        ),
+    }
+}
 
 fn array_has_inner_v2(haystack: &ArrayRef, needle: &dyn Datum) -> Result<ArrayRef> {
     match haystack.data_type() {
@@ -170,6 +234,28 @@ fn array_has_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::List(_) => array_has_dispatch_eq_kernel::<i32>(&args[0], &args[1]),
         DataType::LargeList(_) => array_has_dispatch_eq_kernel::<i64>(&args[0], &args[1]),
+        _ => exec_err!(
+            "array_has does not support type '{:?}'.",
+            args[0].data_type()
+        ),
+    }
+}
+
+fn array_has_inner_general_kerenl(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::List(_) => array_has_dispatch_general_kernel::<i32>(&args[0], &args[1]),
+        DataType::LargeList(_) => array_has_dispatch_general_kernel::<i64>(&args[0], &args[1]),
+        _ => exec_err!(
+            "array_has does not support type '{:?}'.",
+            args[0].data_type()
+        ),
+    }
+}
+
+fn array_has_inner_general_kerenl_scalar(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::List(_) => array_has_dispatch_general_scalar::<i32>(&args[0], &args[1]),
+        DataType::LargeList(_) => array_has_dispatch_general_scalar::<i64>(&args[0], &args[1]),
         _ => exec_err!(
             "array_has does not support type '{:?}'.",
             args[0].data_type()
@@ -321,7 +407,7 @@ pub fn array_has_dispatch<O: OffsetSizeTrait>(
     }
 }
 
-pub fn array_has_dispatch_eq_kernel<O: OffsetSizeTrait>(
+pub fn array_has_dispatch_general_kernel<O: OffsetSizeTrait>(
     haystack: &ArrayRef,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
@@ -363,6 +449,93 @@ pub fn array_has_dispatch_eq_kernel<O: OffsetSizeTrait>(
     }
 
     Ok(Arc::new(BooleanArray::from(final_contained)))
+}
+
+pub fn array_has_dispatch_eq_kernel<O: OffsetSizeTrait>(
+    haystack: &ArrayRef,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let haystack = as_generic_list_array::<O>(haystack)?;
+    let mut boolean_builder = BooleanArray::builder(haystack.len());
+    for (arr, element) in haystack.iter().zip(string_array_to_vec(needle).into_iter()) {
+        match (arr, element) {
+            (Some(arr), Some(element)) => {
+                // let scalar = ScalarValue::Utf8(Some(element.to_string()));
+                let eq_array = match arr.data_type() {
+                    DataType::Utf8 => {
+                        let scalar = StringArray::new_scalar(element.to_string());
+                        compare_op_for_nested(Operator::Eq, &arr, &scalar)?
+                    }
+                    DataType::LargeUtf8 => {
+                        let scalar = LargeStringArray::new_scalar(element.to_string());
+                        compare_op_for_nested(Operator::Eq, &arr, &scalar)?
+                    }
+                    DataType::Utf8View => {
+                        let scalar = StringViewArray::new_scalar(element.to_string());
+                        compare_op_for_nested(Operator::Eq, &arr, &scalar)?
+                    }
+                    _ => unreachable!("")
+                };
+                let is_contained = eq_array.true_count() > 0;
+                boolean_builder.append_value(is_contained)
+            }
+            (_, _) => {
+                boolean_builder.append_null();
+            }
+        }
+    }
+
+    Ok(Arc::new(boolean_builder.finish()))
+}
+
+pub fn array_has_dispatch_general_scalar<O: OffsetSizeTrait>(
+    haystack: &ArrayRef,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let haystack = as_generic_list_array::<O>(haystack)?;
+    let mut boolean_builder = BooleanArray::builder(haystack.len());
+
+    for (i, arr) in haystack.iter().enumerate() {
+        if arr.is_none() || needle.is_null(i) {
+            boolean_builder.append_null();
+            continue;
+        }
+        let arr = arr.unwrap();
+        let needle_row = Scalar::new(needle.slice(i, 1));
+        let eq_array = compare_op_for_nested(Operator::Eq, &arr, &needle_row)?;
+        let is_contained = eq_array.true_count() > 0;
+        boolean_builder.append_value(is_contained)
+    } 
+
+    // for (arr, element) in haystack.iter().zip(string_array_to_vec(needle).into_iter()) {
+    //     match (arr, element) {
+    //         (Some(arr), Some(element)) => {
+    //             // let scalar = ScalarValue::Utf8(Some(element.to_string()));
+    //             let eq_array = match arr.data_type() {
+    //                 DataType::Utf8 => {
+    //                     let scalar = StringArray::new_scalar(element.to_string());
+    //                     compare_op_for_nested(Operator::Eq, &arr, &scalar)?
+    //                 }
+    //                 DataType::LargeUtf8 => {
+    //                     let scalar = LargeStringArray::new_scalar(element.to_string());
+    //                     compare_op_for_nested(Operator::Eq, &arr, &scalar)?
+    //                 }
+    //                 DataType::Utf8View => {
+    //                     let scalar = StringViewArray::new_scalar(element.to_string());
+    //                     compare_op_for_nested(Operator::Eq, &arr, &scalar)?
+    //                 }
+    //                 _ => unreachable!("")
+    //             };
+    //             let is_contained = eq_array.true_count() > 0;
+    //             boolean_builder.append_value(is_contained)
+    //         }
+    //         (_, _) => {
+    //             boolean_builder.append_null();
+    //         }
+    //     }
+    // }
+
+    Ok(Arc::new(boolean_builder.finish()))
 }
 
 pub fn array_has_dispatch_eq_kernel_v2<O: OffsetSizeTrait>(

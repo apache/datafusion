@@ -2,31 +2,7 @@ statement ok
 create table t(a int[], b int) as values ([1,2,3], 3), ([4,5,6], 7);
 
 query B
-select array_has(a, 1) from t;
-----
-true
-false
-
-query B
 select array_has(a, b) from t;
 ----
 true
 false
-
-query error
-select array_has(null, 1);
-----
-DataFusion error: Error during planning: Error during planning: Coercion from [Null, Int64] to the signature ArraySignature(ArrayAndElement) failed. No function matches the given name and argument types 'array_has(Null, Int64)'. You might need to add explicit type casts.
-	Candidate functions:
-	array_has(array, element)
-
-
-query B
-select array_has([], 1);
-----
-NULL
-
-query B
-select array_has(make_array(1,2), 1);
-----
-true

@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray, StringArray};
 use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion_common::{utils::array_into_list_array, ScalarValue};
+use datafusion_common::utils::array_into_list_array;
 use datafusion_expr::ColumnarValue;
 use datafusion_functions_nested::{
-    invoke_new, invoke_old}
+    invoke_eq_kernel, invoke_general_kernel, invoke_general_scalar, invoke_iter, invoke_new}
 ;
 use rand::Rng;
 
@@ -66,7 +66,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     let sub_array = Arc::new(StringArray::from(vec!["abcd"])) as ArrayRef;
 
     let a1 = ColumnarValue::Array(array);
-    let a2 = ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abcd"))));
+    // let a2 = ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("abcd"))));
+    let a2 = ColumnarValue::Array(sub_array);
 
     c.bench_function("array_has new", |b| {
         b.iter(|| {
@@ -78,9 +79,36 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     });
 
-    c.bench_function("array_has old", |b| {
+    c.bench_function("array_has iter", |b| {
         b.iter(|| {
-            invoke_old(&[a1.clone(), a2.clone()])
+            invoke_iter(&[a1.clone(), a2.clone()])
+            // let is_contained =
+            //     black_box(array_has_dispatch::<i32>(&array, &sub_array).unwrap());
+            // assert_eq!(&is_contained, &expected);
+        })
+    });
+
+    c.bench_function("array_has eq", |b| {
+        b.iter(|| {
+            invoke_eq_kernel(&[a1.clone(), a2.clone()])
+            // let is_contained =
+            //     black_box(array_has_dispatch::<i32>(&array, &sub_array).unwrap());
+            // assert_eq!(&is_contained, &expected);
+        })
+    });
+
+    c.bench_function("array_has general kerenl", |b| {
+        b.iter(|| {
+            invoke_general_kernel(&[a1.clone(), a2.clone()])
+            // let is_contained =
+            //     black_box(array_has_dispatch::<i32>(&array, &sub_array).unwrap());
+            // assert_eq!(&is_contained, &expected);
+        })
+    });
+
+    c.bench_function("array_has general scalar", |b| {
+        b.iter(|| {
+            invoke_general_scalar(&[a1.clone(), a2.clone()])
             // let is_contained =
             //     black_box(array_has_dispatch::<i32>(&array, &sub_array).unwrap());
             // assert_eq!(&is_contained, &expected);

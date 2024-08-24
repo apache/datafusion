@@ -29,3 +29,19 @@ pub fn string_array_to_vec(array: &dyn Array) -> Vec<Option<&str>> {
         _ => unreachable!(),
     }
 }
+
+// pub fn iter_as_scalar(array: &dyn Array) -> Vec<Option<&str>> {
+//     match array.data_type() {
+//         DataType::Utf8 => {
+//             let arr = array.as_string::<i32>();
+//             for a in arr {
+
+//             }
+
+//             array.as_string::<i32>().iter().collect()
+//         }
+//         DataType::LargeUtf8 => array.as_string::<i64>().iter().collect(),
+//         DataType::Utf8View => array.as_string_view().iter().collect(),
+//         _ => unreachable!(),
+//     }
+// }
