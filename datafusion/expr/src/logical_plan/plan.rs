@@ -2927,7 +2927,11 @@ impl Debug for Subquery {
     }
 }
 
-/// Logical partitioning schemes supported by the repartition operator.
+/// Logical partitioning schemes supported by [`LogicalPlan::Repartition`]
+///
+/// See [`Partitioning`] for more details on partitioning
+///
+/// [`Partitioning`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html#
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
