@@ -21,7 +21,7 @@
 
 ## Introduction
 
-This section describes  of how to read a DataFusion query plan. While fully
+This section describes of how to read a DataFusion query plan. While fully
 comprehending all details of these plans requires significant expertise in the
 DataFusion engine, this guide will help you get started with the basics.
 
@@ -29,7 +29,7 @@ Datafusion executes queries using a `query plan`. To see the plan without
 running the query, add the keyword `EXPLAIN` to your SQL query or call the
 [DataFrame::explain] method
 
-[DataFrame::explain]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.explain
+[dataframe::explain]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.explain
 
 ## Example: Select and filter
 
@@ -156,7 +156,7 @@ If you want to know more about how much work each operator in query plan does,
 you can use the `EXPLAIN ANALYZE` to get the explain with runtime added (see
 next section)
 
-##  More Debugging Information: `EXPLAIN VERBOSE` 
+## More Debugging Information: `EXPLAIN VERBOSE`
 
 If the plan has to read too many files, not all of them will be shown in the
 `EXPLAIN`. To see them, use `EXPLAIN VEBOSE`. Like `EXPLAIN`, `EXPLAIN VERBOSE`
@@ -165,14 +165,14 @@ that is omitted from the default explain, as well as all intermediate physical
 plans DataFusion generates before returning. This mode can be very helpful for
 debugging to see why and when DataFusion added and removed operators from a plan.
 
-## Execution Counters: `EXPLAIN ANALYZE` 
+## Execution Counters: `EXPLAIN ANALYZE`
 
 During execution, DataFusion operators collect detailed metrics. You can access
 them programmatically via [`ExecutionPlan::metrics`] as well as with the
 `EXPLAIN ANALYZE` command. For example here is the same query query as
 above but with `EXPLAIN ANALYZE` (note the output is edited for clarity)
 
-[`ExecutionPlan::metrics`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.metrics
+[`executionplan::metrics`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.metrics
 
 ```sql
 > EXPLAIN ANALYZE SELECT "WatchID" AS wid, "hits.parquet"."ClientIP" AS ip
@@ -203,13 +203,14 @@ cores, so if you have 16 cores, the time reported is the sum of the time taken
 by all 16 cores.
 
 Again, reading from bottom up:
+
 - `ParquetExec`
-  - `output_rows=99997497`: A total 99.9M rows were produced 
-  - `bytes_scanned=3703192723`: Of the 14GB file, 3.7GB were actually read (due to projection pushdown) 
+  - `output_rows=99997497`: A total 99.9M rows were produced
+  - `bytes_scanned=3703192723`: Of the 14GB file, 3.7GB were actually read (due to projection pushdown)
   - `time_elapsed_opening=308.203002ms`: It took 300ms to open the file and prepare to read it
   - `time_elapsed_scanning_total=8.350342183s`: It took 8.3 seconds of CPU time (across 16 cores) to actually decode the parquet data
 - `FilterExec`
-  - `output_rows=811821`: Of the 99.9M rows at its input, only 811K rows passed the filter and were produced at the output 
+  - `output_rows=811821`: Of the 99.9M rows at its input, only 811K rows passed the filter and were produced at the output
   - `elapsed_compute=1.36923816s`: In total, 1.36s of CPU time (across 16 cores) was spend evaluating the filter
 - `CoalesceBatchesExec`
   - `output_rows=811821`, `elapsed_compute=12.873379ms`: Produced 811K rows in 13ms
@@ -218,7 +219,7 @@ Again, reading from bottom up:
 - `SortExec`
   - `output_rows=75`: Produced 75 rows in total. Each of 16 cores could produce up to 5 rows, but in this case not all cores did.
   - `elapsed_compute=7.243038ms`: 7ms was used to determine the top 5 rows
-  - `row_replacements=482`: Internally, the TopK operator updated its top list 482 times 
+  - `row_replacements=482`: Internally, the TopK operator updated its top list 482 times
 - `SortPreservingMergeExec`
   - `output_rows=5`, `elapsed_compute=2.375µs`: Produced the final 5 rows in 2.375µs (microseconds)
 
@@ -227,16 +228,15 @@ Again, reading from bottom up:
 DataFusion determines the optimal number of cores to use as part of query
 planning. Roughly speaking, each "partition" in the plan is run independently using
 a separate core. Data crosses between cores only within certain operators such as
-`RepartitionExec`, `CoalescePartitions` and  `SortPreservingMergeExec`
+`RepartitionExec`, `CoalescePartitions` and `SortPreservingMergeExec`
 
 You can read more about this in the [Partitoning Docs].
 
-[Partitoning Docs]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html
-
+[partitoning docs]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html
 
 ## Example of an Aggregate Query
 
-Let us delve into an example click bench query that aggregates data from the `hits.parquet` file. 
+Let us delve into an example click bench query that aggregates data from the `hits.parquet` file.
 
 For example, this query from ClickBench finds the top 10 users by the number of hits:
 
@@ -248,9 +248,6 @@ SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*
 
 TODO: devanbenz can you update this section, trying to follow the model of the simpler one above?
 In this case only do the `EXPLAIN` not the `EXPLAIN ANALYZE`
-
-
-
 
 ```sql
 EXPLAIN SELECT "hits.parquet"."OS" AS os, COUNT(1) FROM 'hits.parquet' WHERE to_timestamp("hits.parquet"."EventTime") >= to_timestamp(200) AND to_timestamp("hits.parquet"."EventTime") < to_timestamp(700) AND "hits.parquet"."RegionID" = 839 GROUP BY os ORDER BY os ASC;
