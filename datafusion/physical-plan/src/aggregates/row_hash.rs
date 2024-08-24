@@ -76,11 +76,11 @@ use super::AggregateExec;
 
 /// This encapsulates the spilling state
 struct SpillState {
-    /* ======================================================================== */
+    // ========================================================================
     // PROPERTIES:
     // These fields are initialized at the start and remain constant throughout
     // the execution.
-    /* ======================================================================== */
+    // ========================================================================
     /// Sorting expression for spilling batches
     spill_expr: Vec<PhysicalSortExpr>,
 
@@ -93,9 +93,11 @@ struct SpillState {
     /// GROUP BY expressions for merging spilled data
     merging_group_by: PhysicalGroupBy,
 
-    /* ======================================================================== */
+    // ========================================================================
     // STATES:
-    /* ======================================================================== */
+    // Fields changes during execution. Can be buffer, or state flags that
+    // influence the exeuction in parent `GroupedHashAggregateStream`
+    // ========================================================================
     /// If data has previously been spilled, the locations of the
     /// spill files (in Arrow IPC format)
     spills: Vec<RefCountedTempFile>,
@@ -108,11 +110,11 @@ struct SpillState {
 ///
 /// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
 struct SkipAggregationProbe {
-    /* ======================================================================== */
+    // ========================================================================
     // PROPERTIES:
     // These fields are initialized at the start and remain constant throughout
     // the execution.
-    /* ======================================================================== */
+    // ========================================================================
     /// Aggregation ratio check performed when the number of input rows exceeds
     /// this threshold (from `SessionConfig`)
     probe_rows_threshold: usize,
@@ -121,9 +123,11 @@ struct SkipAggregationProbe {
     /// is skipped and input rows are directly converted to output
     probe_ratio_threshold: f64,
 
-    /* ======================================================================== */
+    // ========================================================================
     // STATES:
-    /* ======================================================================== */
+    // Fields changes during execution. Can be buffer, or state flags that
+    // influence the exeuction in parent `GroupedHashAggregateStream`
+    // ========================================================================
     /// Number of processed input rows (updated during probing)
     input_rows: usize,
     /// Number of total group values for `input_rows` (updated during probing)
@@ -332,11 +336,11 @@ impl SkipAggregationProbe {
 /// └─────────────────┘    └─────────────────┘
 /// ```
 pub(crate) struct GroupedHashAggregateStream {
-    /* ======================================================================== */
+    // ========================================================================
     // PROPERTIES:
     // These fields are initialized at the start and remain constant throughout
     // the execution.
-    /* ======================================================================== */
+    // ========================================================================
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
@@ -370,21 +374,21 @@ pub(crate) struct GroupedHashAggregateStream {
     /// output mode and emits all groups.
     group_values_soft_limit: Option<usize>,
 
-    /* ======================================================================== */
+    // ========================================================================
     // STATE FLAGS:
     // These fields will be updated during the execution. And control the flow of
     // the execution.
-    /* ======================================================================== */
+    // ========================================================================
     /// Tracks if this stream is generating input or output
     exec_state: ExecutionState,
 
     /// Have we seen the end of the input
     input_done: bool,
 
-    /* ======================================================================== */
+    // ========================================================================
     // STATE BUFFERS:
     // These fields will accumulate intermediate results during the execution.
-    /* ======================================================================== */
+    // ========================================================================
     /// An interning store of group keys
     group_values: Box<dyn GroupValues>,
 
@@ -399,10 +403,10 @@ pub(crate) struct GroupedHashAggregateStream {
     /// specialized for that particular aggregate and its input types
     accumulators: Vec<Box<dyn GroupsAccumulator>>,
 
-    /* ======================================================================== */
+    // ========================================================================
     // TASK-SPECIFIC STATES:
-    // Inner states groups together configurations, states for a specific task.
-    /* ======================================================================== */
+    // Inner states groups together properties, states for a specific task.
+    // ========================================================================
     /// Optional ordering information, that might allow groups to be
     /// emitted from the hash table prior to seeing the end of the
     /// input
@@ -415,10 +419,10 @@ pub(crate) struct GroupedHashAggregateStream {
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
-    /* ======================================================================== */
+    // ========================================================================
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
-    /* ======================================================================== */
+    // ========================================================================
     /// The memory reservation for this grouping
     reservation: MemoryReservation,
 
