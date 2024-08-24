@@ -222,6 +222,18 @@ Again, reading from bottom up:
 - `SortPreservingMergeExec`
   - `output_rows=5`, `elapsed_compute=2.375µs`: Produced the final 5 rows in 2.375µs (microseconds)
 
+## Partitions and Execution
+
+DataFusion determines the optimal number of cores to use as part of query
+planning. Roughly speaking, each "partition" in the plan is run independently using
+a separate core. Data crosses between cores only within certain operators such as
+`RepartitionExec`, `CoalescePartitions` and  `SortPreservingMergeExec`
+
+You can read more about this in the [Partitoning Docs].
+
+[Partitoning Docs]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html
+
+
 ## Example of an Aggregate Query
 
 Let us delve into an example click bench query that aggregates data from the `hits.parquet` file. 
