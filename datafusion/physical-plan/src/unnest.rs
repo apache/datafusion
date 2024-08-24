@@ -379,7 +379,6 @@ fn build_batch(
             // Unnest all the list arrays
             let unnested_arrays =
                 unnest_list_arrays(&list_arrays, unnested_length, total_length)?;
-
             let unnested_array_map: HashMap<_, _> = unnested_arrays
                 .into_iter()
                 .zip(list_type_columns.iter())
@@ -395,7 +394,6 @@ fn build_batch(
                 &unnested_array_map,
                 &take_indicies,
             )?;
-
             flatten_struct_cols(&ret, schema, struct_column_indices)
         }
     };
