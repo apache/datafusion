@@ -22,6 +22,7 @@ use arrow::array::NullArray;
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
+use datafusion_common::not_impl_err;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::sync::Arc;
 
@@ -110,6 +111,13 @@ impl ColumnarValue {
             ColumnarValue::Array(array_value) => array_value.data_type().clone(),
             ColumnarValue::Scalar(scalar_value) => scalar_value.data_type(),
         }
+    }
+
+    pub fn get_scalar(self) -> Result<ScalarValue> {
+        if let ColumnarValue::Scalar(s) = self {
+            return Ok(s)
+        }
+        not_impl_err!("not scalar")
     }
 
     /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified

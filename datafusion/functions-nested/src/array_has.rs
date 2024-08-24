@@ -21,10 +21,10 @@ use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow::compute::kernels;
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
-use arrow_array::{GenericListArray, UInt32Array};
+use arrow_array::{Datum, GenericListArray, Scalar, UInt32Array};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Operator, ScalarUDFImpl, Signature, Volatility};
 
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
@@ -97,11 +97,72 @@ impl ScalarUDFImpl for ArrayHas {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_has_inner)(args)
+        invoke_new(args)
+
+        // make_scalar_function(array_has_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+}
+
+pub fn invoke_old(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    make_scalar_function(array_has_inner)(args)
+}
+
+pub fn invoke_new(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if let ColumnarValue::Scalar(s) = &args[1] {
+        if s.is_null() {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))
+        }
+    }
+
+    // first, identify if any of the arguments is an Array. If yes, store its `len`,
+    // as any scalar will need to be converted to an array of len `len`.
+    let len = args
+        .iter()
+        .fold(Option::<usize>::None, |acc, arg| match arg {
+            ColumnarValue::Scalar(_) => acc,
+            ColumnarValue::Array(a) => Some(a.len()),
+        });
+
+    let is_scalar = len.is_none();
+
+    let result = match args[1] {
+        ColumnarValue::Array(_) => {
+            let args = ColumnarValue::values_to_arrays(args)?;
+            array_has_inner(&args)                
+        }
+        ColumnarValue::Scalar(_) => {
+            let haystack = args[0].to_owned().into_array(1)?;
+            if haystack.len() == 0 {
+                return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))
+            }
+            let needle = args[1].to_owned().into_array(1)?;
+            let needle = Scalar::new(needle);
+            array_has_inner_v2(&haystack, &needle)
+        }
+    };
+
+    if is_scalar {
+        // If all inputs are scalar, keeps output as scalar
+        let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+        result.map(ColumnarValue::Scalar)
+    } else {
+        result.map(ColumnarValue::Array)
+    }
+}
+
+
+fn array_has_inner_v2(haystack: &ArrayRef, needle: &dyn Datum) -> Result<ArrayRef> {
+    match haystack.data_type() {
+        DataType::List(_) => array_has_dispatch_eq_kernel_v2::<i32>(haystack, needle),
+        DataType::LargeList(_) => array_has_dispatch_eq_kernel_v2::<i64>(haystack, needle),
+        _ => exec_err!(
+            "array_has does not support type '{:?}'.",
+            haystack.data_type()
+        ),
     }
 }
 
@@ -277,6 +338,41 @@ pub fn array_has_dispatch_eq_kernel<O: OffsetSizeTrait>(
     let indices = Arc::new(UInt32Array::from(indices)) as ArrayRef;
     let elements = kernels::take::take(needle, &indices, None).unwrap();
     let eq_array = compare_op_for_nested(Operator::Eq, values, &elements)?;
+
+    let mut final_contained = vec![None; haystack.len()];
+    for (i, offset) in offsets.windows(2).enumerate() {
+        let start = offset[0].to_usize().unwrap();
+        let end = offset[1].to_usize().unwrap();
+        let length = end - start;
+        // For non-nested list, length is 0 for null
+        if length == 0 {
+            continue;
+        }
+        // For nested lsit, check number of nulls
+        let null_count = eq_array.slice(start, length).null_count();
+        if null_count == length {
+            continue;
+        }
+
+        let number_of_true = eq_array.slice(start, length).true_count();
+        if number_of_true > 0 {
+            final_contained[i] = Some(true);
+        } else {
+            final_contained[i] = Some(false);
+        }
+    }
+
+    Ok(Arc::new(BooleanArray::from(final_contained)))
+}
+
+pub fn array_has_dispatch_eq_kernel_v2<O: OffsetSizeTrait>(
+    haystack: &ArrayRef,
+    needle: &dyn Datum,
+) -> Result<ArrayRef> {
+    let haystack = as_generic_list_array::<O>(haystack)?;
+    let values = haystack.values();
+    let offsets = haystack.value_offsets();
+    let eq_array = compare_op_for_nested(Operator::Eq, values, needle)?;
 
     let mut final_contained = vec![None; haystack.len()];
     for (i, offset) in offsets.windows(2).enumerate() {
