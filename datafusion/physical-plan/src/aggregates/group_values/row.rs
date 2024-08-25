@@ -135,13 +135,9 @@ impl GroupValues for GroupValuesRows {
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
         let group_index_parse_fn = if self.block_size.is_some() {
-            |raw_index: usize| -> BlockedGroupIndex {
-                BlockedGroupIndex::new_blocked(raw_index)
-            }
+            BlockedGroupIndex::new_blocked
         } else {
-            |raw_index: usize| -> BlockedGroupIndex {
-                BlockedGroupIndex::new_flat(raw_index)
-            }
+            BlockedGroupIndex::new_flat
         };
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
@@ -186,8 +182,11 @@ impl GroupValues for GroupValuesRows {
                     let blk_offset = cur_blk.num_rows();
                     cur_blk.push(group_rows.row(row));
 
-                    let blocked_index =
-                        BlockedGroupIndex::new(blk_id, blk_offset, self.block_size.is_some());
+                    let blocked_index = BlockedGroupIndex::new(
+                        blk_id,
+                        blk_offset,
+                        self.block_size.is_some(),
+                    );
                     let group_idx = blocked_index.as_packed_index();
 
                     // for hasher function, use precomputed hash value
@@ -288,13 +287,9 @@ impl GroupValues for GroupValuesRows {
                 let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
                 let group_index_parse_fn = if self.block_size.is_some() {
-                    |raw_index: usize| -> BlockedGroupIndex {
-                        BlockedGroupIndex::new_blocked(raw_index)
-                    }
+                    BlockedGroupIndex::new_blocked
                 } else {
-                    |raw_index: usize| -> BlockedGroupIndex {
-                        BlockedGroupIndex::new_flat(raw_index)
-                    }
+                    BlockedGroupIndex::new_flat
                 };
 
                 unsafe {

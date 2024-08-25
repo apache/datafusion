@@ -422,13 +422,9 @@ impl BlockedNullState {
         let seen_values_blocks = &mut self.seen_values_blocks;
 
         let group_index_parse_fn = if self.block_size.is_some() {
-            |raw_index: usize| -> BlockedGroupIndex {
-                BlockedGroupIndex::new_blocked(raw_index)
-            }
+            BlockedGroupIndex::new_blocked
         } else {
-            |raw_index: usize| -> BlockedGroupIndex {
-                BlockedGroupIndex::new_flat(raw_index)
-            }
+            BlockedGroupIndex::new_flat
         };
 
         do_accumulate(
