@@ -269,7 +269,7 @@ SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*
 
 - `ParquetExec`
   - `file_groups={10 groups: [...]}`: Reads 10 groups of data in parallel from `hits.parquet`file.
-  - `projection=[UserID]`: Pushes down projection of `UserID` field as to limit data coming in.
+  - `projection=[UserID]`: Pushes down projection of `UserID` column as to limit data coming in.
 - `AggregateExec`
   - `mode=Partial` Runs a [partial aggregation] in parallel across multiple inputs. In this case 10 inputs from the various groups denoted in `ParquetExec`.   
   - `gby=[UserID@0 as UserID]`: Represents `GROUP BY` in the [physical plan] and groups together `UserID`. 
