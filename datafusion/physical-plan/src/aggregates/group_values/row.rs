@@ -27,7 +27,6 @@ use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use datafusion_expr::groups_accumulator::GroupStatesMode;
 use datafusion_expr::EmitTo;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
     BlockedGroupIndex, Blocks,
@@ -75,7 +74,7 @@ pub struct GroupValuesRows {
     random_state: RandomState,
 
     /// Mode about current GroupValuesRows
-    mode: GroupStatesMode,
+    block_size: Option<usize>,
 }
 
 impl GroupValuesRows {
@@ -103,7 +102,7 @@ impl GroupValuesRows {
             hashes_buffer: Default::default(),
             rows_buffer,
             random_state: Default::default(),
-            mode: GroupStatesMode::Flat,
+            block_size: None,
         })
     }
 }
@@ -118,11 +117,9 @@ impl GroupValues for GroupValuesRows {
 
         let mut group_values = mem::take(&mut self.group_values);
         if group_values.num_blocks() == 0 {
-            let block = match self.mode {
-                GroupStatesMode::Flat => self.row_converter.empty_rows(0, 0),
-                GroupStatesMode::Blocked(blk_size) => {
-                    self.row_converter.empty_rows(blk_size, 0)
-                }
+            let block = match self.block_size {
+                Some(blk_size) => self.row_converter.empty_rows(blk_size, 0),
+                None => self.row_converter.empty_rows(0, 0),
             };
 
             group_values.push_block(block);
@@ -137,8 +134,8 @@ impl GroupValues for GroupValuesRows {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
+        let is_blocked = self.block_size.is_some();
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
-            let mode = self.mode;
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
                 // Somewhat surprisingly, this closure can be called even if the
                 // hash doesn't match, so check the hash first with an integer
@@ -151,18 +148,10 @@ impl GroupValues for GroupValuesRows {
                 // verify that the group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
-                match mode {
-                    GroupStatesMode::Flat => {
-                        group_rows.row(row)
-                            == group_values.current().unwrap().row(*group_idx)
-                    }
-                    GroupStatesMode::Blocked(_) => {
-                        let blocked_index = BlockedGroupIndex::new(*group_idx);
-                        group_rows.row(row)
-                            == group_values[blocked_index.block_id]
-                                .row(blocked_index.block_offset)
-                    }
-                }
+                let blocked_index = BlockedGroupIndex::new(*group_idx, is_blocked);
+                group_rows.row(row)
+                    == group_values[blocked_index.block_id]
+                        .row(blocked_index.block_offset)
             });
 
             let group_idx = match entry {
@@ -171,34 +160,26 @@ impl GroupValues for GroupValuesRows {
                 //  1.2 Need to create new entry for the group
                 None => {
                     // Add new entry to aggr_state and save newly created index
-                    let group_idx = match mode {
-                        GroupStatesMode::Flat => {
-                            let blk = group_values.current_mut().unwrap();
-                            let group_idx = blk.num_rows();
-                            blk.push(group_rows.row(row));
-                            group_idx
+                    if let Some(blk_size) = self.block_size {
+                        if group_values.current().unwrap().num_rows() == blk_size {
+                            // Use blk_size as offset cap,
+                            // and old block's buffer size as buffer cap
+                            let new_buf_cap =
+                                rows_buffer_size(group_values.current().unwrap());
+                            let new_blk =
+                                self.row_converter.empty_rows(blk_size, new_buf_cap);
+                            group_values.push_block(new_blk);
                         }
-                        GroupStatesMode::Blocked(blk_size) => {
-                            if group_values.current().unwrap().num_rows() == blk_size {
-                                // Use blk_size as offset cap,
-                                // and old block's buffer size as buffer cap
-                                let new_buf_cap =
-                                    rows_buffer_size(group_values.current().unwrap());
-                                let new_blk =
-                                    self.row_converter.empty_rows(blk_size, new_buf_cap);
-                                group_values.push_block(new_blk);
-                            }
+                    }
 
-                            let blk_id = group_values.num_blocks() - 1;
-                            let cur_blk = group_values.current_mut().unwrap();
-                            let blk_offset = cur_blk.num_rows();
-                            cur_blk.push(group_rows.row(row));
+                    let blk_id = group_values.num_blocks() - 1;
+                    let cur_blk = group_values.current_mut().unwrap();
+                    let blk_offset = cur_blk.num_rows();
+                    cur_blk.push(group_rows.row(row));
 
-                            let blocked_index =
-                                BlockedGroupIndex::new_from_parts(blk_id, blk_offset);
-                            blocked_index.as_packed_index()
-                        }
-                    };
+                    let blocked_index =
+                        BlockedGroupIndex::new_from_parts(blk_id, blk_offset, is_blocked);
+                    let group_idx = blocked_index.as_packed_index();
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
@@ -206,6 +187,7 @@ impl GroupValues for GroupValuesRows {
                         |(hash, _group_index)| *hash,
                         &mut self.map_size,
                     );
+
                     group_idx
                 }
             };
@@ -237,22 +219,20 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn len(&self) -> usize {
-        match self.mode {
-            GroupStatesMode::Flat => self
-                .group_values
-                .current()
-                .map(|g| g.num_rows())
-                .unwrap_or(0),
-            GroupStatesMode::Blocked(blk_size) => {
-                let num_blocks = self.group_values.num_blocks();
-                if num_blocks == 0 {
-                    return 0;
-                }
-
-                (num_blocks - 1) * blk_size
-                    + self.group_values.current().unwrap().num_rows()
-            }
+        let num_blocks = self.group_values.num_blocks();
+        if num_blocks == 0 {
+            return 0;
         }
+
+        let mut group_len = if let Some(blk_size) = self.block_size {
+            (num_blocks - 1) * blk_size
+        } else {
+            0
+        };
+
+        group_len = group_len + self.group_values.current().unwrap().num_rows();
+
+        group_len
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -260,13 +240,13 @@ impl GroupValues for GroupValuesRows {
 
         let mut output = match emit_to {
             EmitTo::All => {
-                debug_assert!(matches!(self.mode, GroupStatesMode::Flat));
+                debug_assert!(self.block_size.is_none());
 
                 let blk = group_values.pop_first_block().unwrap();
                 self.row_converter.convert_rows(blk.into_iter())?
             }
             EmitTo::First(n) => {
-                debug_assert!(matches!(self.mode, GroupStatesMode::Flat));
+                debug_assert!(self.block_size.is_none());
 
                 let blk = group_values.current_mut().unwrap();
                 let groups_rows = blk.iter().take(n);
@@ -294,7 +274,7 @@ impl GroupValues for GroupValuesRows {
                 output
             }
             EmitTo::NextBlock(true) => {
-                debug_assert!(matches!(self.mode, GroupStatesMode::Blocked(_)));
+                debug_assert!(self.block_size.is_some());
 
                 let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
@@ -302,13 +282,14 @@ impl GroupValues for GroupValuesRows {
                     for bucket in self.map.iter() {
                         // Decrement group index by n
                         let group_idx = bucket.as_ref().1;
-                        let old_blk_idx = BlockedGroupIndex::new(group_idx);
+                        let old_blk_idx = BlockedGroupIndex::new(group_idx, true);
                         match old_blk_idx.block_id.checked_sub(1) {
                             // Group index was >= n, shift value down
                             Some(new_blk_id) => {
                                 let new_group_idx = BlockedGroupIndex::new_from_parts(
                                     new_blk_id,
                                     old_blk_idx.block_offset,
+                                    true,
                                 );
                                 bucket.as_mut().1 = new_group_idx.as_packed_index();
                             }
@@ -320,8 +301,6 @@ impl GroupValues for GroupValuesRows {
                 output
             }
             EmitTo::NextBlock(false) => {
-                debug_assert!(matches!(self.mode, GroupStatesMode::Blocked(_)));
-
                 let cur_blk = group_values.pop_first_block().unwrap();
                 self.row_converter.convert_rows(cur_blk.iter())?
             }
@@ -360,10 +339,10 @@ impl GroupValues for GroupValuesRows {
         true
     }
 
-    fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
         self.map.clear();
         self.group_values.clear();
-        self.mode = mode;
+        self.block_size = block_size;
 
         Ok(())
     }

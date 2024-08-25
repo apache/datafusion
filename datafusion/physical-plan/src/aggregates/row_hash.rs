@@ -625,10 +625,10 @@ fn maybe_enable_blocked_group_states(
 
     match (group_supports_blocked, accumulators_support_blocked) {
         (true, true) => {
-            group_values.switch_to_mode(GroupStatesMode::Blocked(block_size))?;
-            accumulators.iter_mut().try_for_each(|acc| {
-                acc.switch_to_mode(GroupStatesMode::Blocked(block_size))
-            })?;
+            group_values.alter_block_size(Some(block_size))?;
+            accumulators
+                .iter_mut()
+                .try_for_each(|acc| acc.alter_block_size(Some(block_size)))?;
             Ok(true)
         }
         _ => Ok(false),
@@ -1100,7 +1100,7 @@ impl GroupedHashAggregateStream {
             self.group_values.switch_to_mode(GroupStatesMode::Flat)?;
             self.accumulators
                 .iter_mut()
-                .try_for_each(|acc| acc.switch_to_mode(GroupStatesMode::Flat))?;
+                .try_for_each(|acc| acc.alter_block_size(None))?;
             self.enable_blocked_group_states = false;
         }
 

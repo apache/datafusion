@@ -23,14 +23,11 @@ use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
-use datafusion_expr_common::groups_accumulator::{
-    EmitTo, GroupStatesMode, GroupsAccumulator,
-};
+use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::aggregate::groups_accumulator::accumulate::BlockedNullState;
 use crate::aggregate::groups_accumulator::{
-    ensure_enough_room_for_blocked_values, ensure_enough_room_for_flat_values,
-    BlockedGroupIndex, Blocks, EmitToExt, VecBlocks,
+    ensure_enough_room_for_values, BlockedGroupIndex, Blocks, EmitToExt, VecBlocks,
 };
 
 /// An accumulator that implements a single operation over
@@ -63,7 +60,7 @@ where
     /// Function that computes the primitive result
     prim_fn: F,
 
-    mode: GroupStatesMode,
+    block_size: Option<usize>,
 }
 
 impl<T, F> PrimitiveGroupsAccumulator<T, F>
@@ -75,10 +72,10 @@ where
         Self {
             values_blocks: Blocks::new(),
             data_type: data_type.clone(),
-            null_state: BlockedNullState::new(GroupStatesMode::Flat),
+            null_state: BlockedNullState::new(None),
             starting_value: T::default_value(),
             prim_fn,
-            mode: GroupStatesMode::Flat,
+            block_size: None,
         }
     }
 
@@ -109,57 +106,32 @@ where
         let values = values[0].as_primitive::<T>();
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
-        match self.mode {
-            GroupStatesMode::Flat => {
-                // Ensure enough room in values
-                ensure_enough_room_for_flat_values(
-                    &mut self.values_blocks,
-                    total_num_groups,
-                    self.starting_value,
-                );
+        ensure_enough_room_for_values(
+            &mut self.values_blocks,
+            total_num_groups,
+            self.block_size,
+            self.starting_value,
+        );
+        let is_blocked = self.block_size.is_some();
 
-                let block = self.values_blocks.current_mut().unwrap();
-                self.null_state.accumulate_for_flat(
-                    group_indices,
-                    values,
-                    opt_filter,
-                    total_num_groups,
-                    |group_index, new_value| {
-                        let value = &mut block[group_index];
-                        (self.prim_fn)(value, new_value);
-                    },
-                );
-            }
-            GroupStatesMode::Blocked(blk_size) => {
-                // Ensure enough room in values
-                ensure_enough_room_for_blocked_values(
-                    &mut self.values_blocks,
-                    total_num_groups,
-                    blk_size,
-                    self.starting_value,
-                );
-
-                self.null_state.accumulate_for_blocked(
-                    group_indices,
-                    values,
-                    opt_filter,
-                    total_num_groups,
-                    blk_size,
-                    |group_index, new_value| {
-                        let blocked_index = BlockedGroupIndex::new(group_index);
-                        let value = &mut self.values_blocks[blocked_index.block_id]
-                            [blocked_index.block_offset];
-                        (self.prim_fn)(value, new_value);
-                    },
-                );
-            }
-        }
+        self.null_state.accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            |group_index, new_value| {
+                let blocked_index = BlockedGroupIndex::new(group_index, is_blocked);
+                let value = &mut self.values_blocks[blocked_index.block_id]
+                    [blocked_index.block_offset];
+                (self.prim_fn)(value, new_value);
+            },
+        );
 
         Ok(())
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let values = emit_to.take_needed_from_blocks(&mut self.values_blocks, self.mode);
+        let values = emit_to.take_needed_from_blocks(&mut self.values_blocks);
         let nulls = self.null_state.build(emit_to);
         let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
             .with_data_type(self.data_type.clone());
@@ -249,10 +221,10 @@ where
         true
     }
 
-    fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
         self.values_blocks.clear();
-        self.null_state = BlockedNullState::new(mode);
-        self.mode = mode;
+        self.null_state = BlockedNullState::new(block_size);
+        self.block_size = block_size;
 
         Ok(())
     }

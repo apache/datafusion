@@ -164,6 +164,20 @@ pub trait GroupsAccumulator: Send {
         Ok(())
     }
 
+    /// Switch the accumulator to flat or blocked mode.
+    /// You can see detail about the mode on [GroupStatesMode].
+    ///
+    /// After switching mode, all data in previous mode will be cleared.
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        if block_size.is_some() {
+            return Err(DataFusionError::NotImplemented(
+                "this accumulator doesn't support blocked mode yet".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Merges intermediate state (the output from [`Self::state`])
     /// into this accumulator's current state.
     ///

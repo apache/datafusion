@@ -71,6 +71,16 @@ pub trait GroupValues: Send {
 
         Ok(())
     }
+
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        if block_size.is_some() {
+            return Err(DataFusionError::NotImplemented(
+                "this group values doesn't support blocked mode yet".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
