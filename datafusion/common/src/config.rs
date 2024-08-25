@@ -341,6 +341,19 @@ config_namespace! {
         /// if the source of statistics is accurate.
         /// We plan to make this the default in the future.
         pub use_row_number_estimates_to_optimize_partitioning: bool, default = false
+
+        /// Should DataFusion use the the blocked approach to manage the groups
+        /// values and their related states in accumulators. By default, the single 
+        /// approach will be used, and such group values and states will be managed
+        /// using a single big block(can think a `Vec`), obviously as the block growing up,
+        /// many copies will be triggered and finally get a bad performance.
+        /// If setting this flag to `true`, the blocked approach will be used.
+        /// We will allocate the `block size` capacity for block first, and when we
+        /// found the block has been filled to `block size` limit, we will allocate 
+        /// next block rather than growing current block and copying the data. This
+        /// approach can eliminate all unnecessary copies and get a good performance finally.
+        /// We plan to make this the default in the future when tests are enough.
+        pub enable_aggregation_group_states_blocked_approach: bool, default = false
     }
 }
 

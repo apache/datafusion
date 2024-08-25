@@ -601,6 +601,7 @@ impl GroupedHashAggregateStream {
 
 /// Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
 /// The blocked optimization will be enabled when:
+///   - When `enable_aggregation_group_states_blocked_approach` is true
 ///   - It is not streaming aggregation(because blocked mode can't support Emit::first(exact n))
 ///   - The spilling is disabled(still need to consider more to support it efficiently)
 ///   - The accumulator is not empty(I am still not sure about logic in this case)
@@ -613,7 +614,12 @@ fn maybe_enable_blocked_group_states(
     block_size: usize,
     group_ordering: &GroupOrdering,
 ) -> Result<bool> {
-    if !matches!(group_ordering, GroupOrdering::None)
+    if !context
+        .session_config()
+        .options()
+        .execution
+        .enable_aggregation_group_states_blocked_approach
+        || !matches!(group_ordering, GroupOrdering::None)
         || accumulators.is_empty()
         || enable_spilling(context.memory_pool().as_ref())
     {
