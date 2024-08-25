@@ -1208,7 +1208,7 @@ mod tests {
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
-    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
@@ -1320,11 +1320,10 @@ mod tests {
     fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
         let session_config = SessionConfig::new().with_batch_size(batch_size);
         let runtime = Arc::new(
-            RuntimeEnv::new(
-                RuntimeEnvBuilder::default()
-                    .with_memory_pool(Arc::new(FairSpillPool::new(max_memory))),
-            )
-            .unwrap(),
+            RuntimeEnvBuilder::default()
+                .with_memory_pool(Arc::new(FairSpillPool::new(max_memory)))
+                .build()
+                .unwrap(),
         );
         let task_ctx = TaskContext::default()
             .with_session_config(session_config)

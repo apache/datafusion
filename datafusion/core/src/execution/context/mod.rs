@@ -212,15 +212,15 @@ where
 /// # use std::sync::Arc;
 /// # use datafusion::prelude::*;
 /// # use datafusion::execution::SessionStateBuilder;
-/// # use datafusion_execution::runtime_env::{RuntimeEnvBuilder, RuntimeEnv};
+/// # use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 /// // Configure a 4k batch size
 /// let config = SessionConfig::new() .with_batch_size(4 * 1024);
 ///
 /// // configure a memory limit of 1GB with 20%  slop
-/// let runtime_env = RuntimeEnv::new(
-///   RuntimeEnvBuilder::new()
+///  let runtime_env = RuntimeEnvBuilder::new()
 ///     .with_memory_limit(1024 * 1024 * 1024, 0.80)
-///  ).unwrap();
+///     .build()
+///     .unwrap();
 ///
 /// // Create a SessionState using the config and runtime_env
 /// let state = SessionStateBuilder::new()
@@ -1758,8 +1758,7 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let rt_cfg = RuntimeEnvBuilder::new();
-        let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
+        let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")

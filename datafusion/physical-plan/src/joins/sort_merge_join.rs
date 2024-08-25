@@ -2894,10 +2894,12 @@ mod tests {
         ];
 
         // Disable DiskManager to prevent spilling
-        let runtime_config = RuntimeEnvBuilder::new()
-            .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+        let runtime = Arc::new(
+            RuntimeEnvBuilder::new()
+                .with_memory_limit(100, 1.0)
+                .with_disk_manager(DiskManagerConfig::Disabled)
+                .build()?,
+        );
         let session_config = SessionConfig::default().with_batch_size(50);
 
         for join_type in join_types {
@@ -2979,10 +2981,12 @@ mod tests {
         ];
 
         // Disable DiskManager to prevent spilling
-        let runtime_config = RuntimeEnvBuilder::new()
-            .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+        let runtime = Arc::new(
+            RuntimeEnvBuilder::new()
+                .with_memory_limit(100, 1.0)
+                .with_disk_manager(DiskManagerConfig::Disabled)
+                .build()?,
+        );
         let session_config = SessionConfig::default().with_batch_size(50);
 
         for join_type in join_types {
@@ -3042,10 +3046,12 @@ mod tests {
         ];
 
         // Enable DiskManager to allow spilling
-        let runtime_config = RuntimeEnvBuilder::new()
-            .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+        let runtime = Arc::new(
+            RuntimeEnvBuilder::new()
+                .with_memory_limit(100, 1.0)
+                .with_disk_manager(DiskManagerConfig::NewOs)
+                .build()?,
+        );
 
         for batch_size in [1, 50] {
             let session_config = SessionConfig::default().with_batch_size(batch_size);
@@ -3150,10 +3156,13 @@ mod tests {
         ];
 
         // Enable DiskManager to allow spilling
-        let runtime_config = RuntimeEnvBuilder::new()
-            .with_memory_limit(500, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+        let runtime = Arc::new(
+            RuntimeEnvBuilder::new()
+                .with_memory_limit(500, 1.0)
+                .with_disk_manager(DiskManagerConfig::NewOs)
+                .build()?,
+        );
+
         for batch_size in [1, 50] {
             let session_config = SessionConfig::default().with_batch_size(batch_size);
 

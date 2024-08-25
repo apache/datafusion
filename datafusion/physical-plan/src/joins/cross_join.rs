@@ -379,7 +379,7 @@ fn build_batch(
             .collect(),
         &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
     )
-    .map_err(Into::into)
+        .map_err(Into::into)
 }
 
 #[async_trait]
@@ -488,7 +488,7 @@ mod tests {
     use crate::test::build_table_scan_i32;
 
     use datafusion_common::{assert_batches_sorted_eq, assert_contains};
-    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
     async fn join_collect(
         left: Arc<dyn ExecutionPlan>,
@@ -673,8 +673,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_overallocation() -> Result<()> {
-        let runtime_config = RuntimeEnvBuilder::new().with_memory_limit(100, 1.0);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+        let runtime = Arc::new(
+            RuntimeEnvBuilder::new()
+                .with_memory_limit(100, 1.0)
+                .build()?,
+        );
         let task_ctx = TaskContext::default().with_runtime(runtime);
         let task_ctx = Arc::new(task_ctx);
 
