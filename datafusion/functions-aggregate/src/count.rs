@@ -438,18 +438,32 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             self.block_size,
             0,
         );
-                
-        do_count_merge_batch(
-            values,
-            group_indices,
-            opt_filter,
-            |group_index, partial_count| {
-                let blocked_index = BlockedGroupIndex::new_flat(group_index);
-                let count =
-                    &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
-                *count += partial_count;
-            },
-        );
+        
+        if self.block_size.is_some() {
+            do_count_merge_batch(
+                values,
+                group_indices,
+                opt_filter,
+                |group_index, partial_count| {
+                    let blocked_index = BlockedGroupIndex::new_blocked(group_index);
+                    let count =
+                        &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
+                    *count += partial_count;
+                },
+            );
+        } else {
+            do_count_merge_batch(
+                values,
+                group_indices,
+                opt_filter,
+                |group_index, partial_count| {
+                    let blocked_index = BlockedGroupIndex::new_flat(group_index);
+                    let count =
+                        &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
+                    *count += partial_count;
+                },
+            );
+        }
 
         Ok(())
     }

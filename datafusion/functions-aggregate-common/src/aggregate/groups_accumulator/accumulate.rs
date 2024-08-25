@@ -25,9 +25,7 @@ use arrow::datatypes::ArrowPrimitiveType;
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
-use crate::aggregate::groups_accumulator::{
-    BlockedGroupIndex, Blocks,
-};
+use crate::aggregate::groups_accumulator::{BlockedGroupIndex, Blocks};
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -430,16 +428,29 @@ impl BlockedNullState {
         );
         let seen_values_blocks = &mut self.seen_values_blocks;
 
-        do_accumulate(
-            group_indices,
-            values,
-            opt_filter,
-            BlockedGroupIndex::new_flat,
-            value_fn,
-            |index: &BlockedGroupIndex| {
-                seen_values_blocks[index.block_id].set_bit(index.block_offset, true);
-            },
-        );
+        if self.block_size.is_some() {
+            do_accumulate(
+                group_indices,
+                values,
+                opt_filter,
+                BlockedGroupIndex::new_blocked,
+                value_fn,
+                |index: &BlockedGroupIndex| {
+                    seen_values_blocks[index.block_id].set_bit(index.block_offset, true);
+                },
+            )
+        } else {
+            do_accumulate(
+                group_indices,
+                values,
+                opt_filter,
+                BlockedGroupIndex::new_flat,
+                value_fn,
+                |index: &BlockedGroupIndex| {
+                    seen_values_blocks[index.block_id].set_bit(index.block_offset, true);
+                },
+            );
+        }
     }
 
     /// Similar as [NullState::build] but support the blocked version accumulator
@@ -571,18 +582,19 @@ pub fn accumulate_indices<F>(
     }
 }
 
-fn do_accumulate<T, F1, F2>(
+fn do_accumulate<T, F1, F2, G>(
     group_indices: &[usize],
     values: &PrimitiveArray<T>,
     opt_filter: Option<&BooleanArray>,
-    group_index_parse_fn: fn(usize) -> BlockedGroupIndex,
+    group_index_parse_fn: G,
     mut value_fn: F1,
     mut set_valid_fn: F2,
 ) where
     T: ArrowPrimitiveType + Send,
+    G: Fn(usize) -> BlockedGroupIndex,
     F1: FnMut(&BlockedGroupIndex, T::Native) + Send,
     F2: FnMut(&BlockedGroupIndex) + Send,
-{   
+{
     let data: &[T::Native] = values.values();
     match (values.null_count() > 0, opt_filter) {
         // no nulls, no filter,
