@@ -239,7 +239,7 @@ impl GroupValues for GroupValuesRows {
             0
         };
 
-        group_len = group_len + self.group_values.current().unwrap().num_rows();
+        group_len += self.group_values.current().unwrap().num_rows();
 
         group_len
     }

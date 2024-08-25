@@ -29,7 +29,6 @@ use std::{
     fmt::{self, Debug},
     iter,
     ops::{Index, IndexMut},
-    usize,
 };
 
 use arrow::{
