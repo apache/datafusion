@@ -350,6 +350,7 @@ mod tests {
             batch_size: 8192,
             debug: false,
             string_view: false,
+            blocked_approach: false,
         };
         let opt = RunOpt {
             query: Some(query),
@@ -384,6 +385,7 @@ mod tests {
             batch_size: 8192,
             debug: false,
             string_view: false,
+            blocked_approach: false,
         };
         let opt = RunOpt {
             query: Some(query),
