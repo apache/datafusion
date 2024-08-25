@@ -268,14 +268,14 @@ SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*
 **Physical plan operators**
 
 - `ParquetExec`
-  - `file_groups={10 groups: [...]}`: Reads 10 groups of data in parallel from `hits.parquet`file.
+  - `file_groups={10 groups: [...]}`: Reads 10 groups of data in parallel from `hits.parquet`file. (The example above was run on a machine with 10 cores.)
   - `projection=[UserID]`: Pushes down projection of `UserID` column as to limit data coming in.
 - `AggregateExec`
   - `mode=Partial` Runs a [partial aggregation] in parallel across multiple inputs. In this case 10 inputs from the various groups denoted in `ParquetExec`.   
   - `gby=[UserID@0 as UserID]`: Represents `GROUP BY` in the [physical plan] and groups together `UserID`. 
   - `aggr=[count(*)]`: Aggregates on all rows for the group.
 - `RepartitionExec`
-  - `partitioning=Hash([UserID@0], 10)`: Maps 10 partitions using `hash(UserID)`. You can read more about this in the [partitioning] documentation.
+  - `partitioning=Hash([UserID@0], 10)`: Maps 10 inputs to 10 streams of data allocating rows based on `hash(UserID)`. You can read more about this in the [partitioning] documentation.
   - `input_partitions=10`: Using 10 inputs of data, this is creating a 1:1 mapping (i.e. 10 partitions from 10 groups).  
 - `CoalesceBatchesExec`
   - `target_batch_size=8192`: Combines smaller batches in to larger batches. In this case 8192 rows of data in each batch.
