@@ -75,8 +75,6 @@ pub struct GroupValuesRows {
 
     /// Mode about current GroupValuesRows
     block_size: Option<usize>,
-
-    group_index_parse_fn: fn(usize) -> BlockedGroupIndex,
 }
 
 impl GroupValuesRows {
@@ -106,7 +104,6 @@ impl GroupValuesRows {
             rows_buffer,
             random_state: Default::default(),
             block_size: None,
-            group_index_parse_fn: BlockedGroupIndex::new_flat,
         })
     }
 }
@@ -362,11 +359,6 @@ impl GroupValues for GroupValuesRows {
         self.map.clear();
         self.group_values.clear();
         self.block_size = block_size;
-        self.group_index_parse_fn = if block_size.is_some() {
-            BlockedGroupIndex::new_blocked
-        } else {
-            BlockedGroupIndex::new_flat
-        };
 
         Ok(())
     }

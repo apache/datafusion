@@ -18,7 +18,7 @@
 use ahash::RandomState;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
-    ensure_enough_room_for_values, BlockedGroupIndex, Blocks, EmitToExt, VecBlocks
+    ensure_enough_room_for_values, BlockedGroupIndex, Blocks, EmitToExt, VecBlocks,
 };
 use std::collections::HashSet;
 use std::ops::BitAnd;
@@ -364,8 +364,6 @@ struct CountGroupsAccumulator {
     counts: VecBlocks<i64>,
 
     block_size: Option<usize>,
-
-    group_index_parse_fn: fn(usize) -> BlockedGroupIndex,
 }
 
 impl CountGroupsAccumulator {
@@ -373,7 +371,6 @@ impl CountGroupsAccumulator {
         Self {
             counts: Blocks::new(),
             block_size: None,
-            group_index_parse_fn: BlockedGroupIndex::new_flat,
         }
     }
 }
@@ -402,17 +399,31 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             0,
         );
 
-        accumulate_indices(
-            group_indices,
-            values.logical_nulls().as_ref(),
-            opt_filter,
-            |group_index| {
-                let blocked_index = BlockedGroupIndex::new_flat(group_index);
-                let count =
-                    &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
-                *count += 1;
-            },
-        );
+        if self.block_size.is_some() {
+            accumulate_indices(
+                group_indices,
+                values.logical_nulls().as_ref(),
+                opt_filter,
+                |group_index| {
+                    let blocked_index = BlockedGroupIndex::new_blocked(group_index);
+                    let count = &mut self.counts[blocked_index.block_id]
+                        [blocked_index.block_offset];
+                    *count += 1;
+                },
+            );
+        } else {
+            accumulate_indices(
+                group_indices,
+                values.logical_nulls().as_ref(),
+                opt_filter,
+                |group_index| {
+                    let blocked_index = BlockedGroupIndex::new_flat(group_index);
+                    let count = &mut self.counts[blocked_index.block_id]
+                        [blocked_index.block_offset];
+                    *count += 1;
+                },
+            );
+        }
 
         Ok(())
     }
@@ -438,7 +449,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             self.block_size,
             0,
         );
-        
+
         if self.block_size.is_some() {
             do_count_merge_batch(
                 values,
@@ -446,8 +457,8 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                 opt_filter,
                 |group_index, partial_count| {
                     let blocked_index = BlockedGroupIndex::new_blocked(group_index);
-                    let count =
-                        &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
+                    let count = &mut self.counts[blocked_index.block_id]
+                        [blocked_index.block_offset];
                     *count += partial_count;
                 },
             );
@@ -458,8 +469,8 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                 opt_filter,
                 |group_index, partial_count| {
                     let blocked_index = BlockedGroupIndex::new_flat(group_index);
-                    let count =
-                        &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
+                    let count = &mut self.counts[blocked_index.block_id]
+                        [blocked_index.block_offset];
                     *count += partial_count;
                 },
             );
@@ -561,11 +572,6 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
         self.counts.clear();
         self.block_size = block_size;
-        self.group_index_parse_fn = if block_size.is_some() {
-            BlockedGroupIndex::new_blocked
-        } else {
-            BlockedGroupIndex::new_flat
-        };
 
         Ok(())
     }

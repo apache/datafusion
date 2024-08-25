@@ -369,8 +369,6 @@ pub struct BlockedNullState {
     seen_values_blocks: Blocks<BooleanBufferBuilder>,
 
     block_size: Option<usize>,
-
-    group_index_parse_fn: fn(usize) -> BlockedGroupIndex,
 }
 
 impl Default for BlockedNullState {
@@ -390,7 +388,6 @@ impl BlockedNullState {
         Self {
             seen_values_blocks: Blocks::new(),
             block_size,
-            group_index_parse_fn,
         }
     }
 

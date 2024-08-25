@@ -454,7 +454,11 @@ pub struct BlockedGroupIndex {
 
 impl BlockedGroupIndex {
     #[inline]
-    pub fn new_from_parts(block_id: usize, block_offset: usize, is_blocked: bool) -> Self {
+    pub fn new_from_parts(
+        block_id: usize,
+        block_offset: usize,
+        is_blocked: bool,
+    ) -> Self {
         Self {
             block_id,
             block_offset,
