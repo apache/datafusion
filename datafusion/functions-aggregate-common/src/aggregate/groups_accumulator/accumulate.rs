@@ -430,17 +430,11 @@ impl BlockedNullState {
         );
         let seen_values_blocks = &mut self.seen_values_blocks;
 
-        let group_index_parse_fn = if self.block_size.is_some() {
-            BlockedGroupIndex::new_blocked
-        } else {
-            BlockedGroupIndex::new_flat
-        };
-
         do_accumulate(
             group_indices,
             values,
             opt_filter,
-            group_index_parse_fn,
+            BlockedGroupIndex::new_flat,
             value_fn,
             |index: &BlockedGroupIndex| {
                 seen_values_blocks[index.block_id].set_bit(index.block_offset, true);
