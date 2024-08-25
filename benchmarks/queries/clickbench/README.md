@@ -58,6 +58,21 @@ LIMIT 10;
 ```
 
 
+### Q3: What is the income distribution for users in specific regions
+
+**Question**: "What regions and social networks have the highest variance of parameter price 
+
+**Important Query Properties**: STDDEV and VAR aggregation functions, GROUP BY multiple small ints
+
+```sql
+SELECT "SocialSourceNetworkID", "RegionID", COUNT(*), AVG("Age"), AVG("ParamPrice"), STDDEV("ParamPrice") as s, VAR("ParamPrice") 
+FROM 'hits.parquet' 
+GROUP BY "SocialSourceNetworkID", "RegionID"  
+HAVING s IS NOT NULL
+ORDER BY s DESC 
+LIMIT 10;
+```
+
 ## Data Notes
 
 Here are some interesting statistics about the data used in the queries
