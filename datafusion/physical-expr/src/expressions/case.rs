@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::expressions::{try_cast, BinaryExpr};
+use crate::expressions::{try_cast, BinaryExpr, CastExpr};
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
@@ -37,7 +37,7 @@ use itertools::Itertools;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Hash, PartialEq)]
 enum EvalMethod {
     /// CASE WHEN condition THEN result
     ///      [WHEN ...]
@@ -165,18 +165,34 @@ impl CaseExpr {
                     .expect("expected binary expression");
 
                 if b.op().eq(&Operator::Gt) {
-                    if let Some(lit) = b.right().as_any().downcast_ref::<Literal>() {
-                        if matches!(lit.value(), ScalarValue::Int32(Some(0))) {
-                            if let Some(b) =
-                                when_then_expr[0].1.as_any().downcast_ref::<BinaryExpr>()
-                            {
-                                if b.op().eq(&Operator::Divide) {
-                                    return Ok(Self {
-                                        expr,
-                                        when_then_expr,
-                                        else_expr,
-                                        eval_method: EvalMethod::DivideZeroExpression,
-                                    })
+                    if let Some(col) = b.left().as_any().downcast_ref::<Column>() {
+                        if let Some(lit) = b.right().as_any().downcast_ref::<Literal>() {
+                            if matches!(lit.value(), ScalarValue::Int32(Some(0))) {
+                                if let Some(b) = when_then_expr[0]
+                                    .1
+                                    .as_any()
+                                    .downcast_ref::<BinaryExpr>()
+                                {
+                                    if b.op().eq(&Operator::Divide) {
+                                        if let Some(cast) =
+                                            b.right().as_any().downcast_ref::<CastExpr>()
+                                        {
+                                            if let Some(col2) = cast
+                                                .expr()
+                                                .as_any()
+                                                .downcast_ref::<Column>()
+                                            {
+                                                if col.name() == col2.name() {
+                                                    return Ok(Self {
+                                                        expr: None,
+                                                        when_then_expr,
+                                                        else_expr,
+                                                        eval_method: EvalMethod::DivideZeroExpression,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -428,26 +444,22 @@ impl CaseExpr {
         let mut current_value = new_null_array(&return_type, batch.num_rows());
         let mut remainder = BooleanArray::from(vec![true; batch.num_rows()]);
         let when_value = BooleanArray::from(vec![true; batch.num_rows()]);
-        for i in 0..self.when_then_expr.len() {
-            let then_value = self.when_then_expr[i]
-                .1
-                .evaluate(batch)?;
-            current_value = match then_value {
-                ColumnarValue::Scalar(ScalarValue::Null) => {
-                    nullif(current_value.as_ref(), &when_value)?
-                }
-                ColumnarValue::Scalar(then_value) => {
-                    zip(&when_value, &then_value.to_scalar()?, &current_value)?
-                }
-                ColumnarValue::Array(then_value) => {
-                    zip(&when_value, &then_value, &current_value)?
-                }
-            };
+        let then_value = self.when_then_expr()[0].1.evaluate(batch)?;
+        current_value = match then_value {
+            ColumnarValue::Scalar(ScalarValue::Null) => {
+                nullif(current_value.as_ref(), &when_value)?
+            }
+            ColumnarValue::Scalar(then_value) => {
+                zip(&when_value, &then_value.to_scalar()?, &current_value)?
+            }
+            ColumnarValue::Array(then_value) => {
+                zip(&when_value, &then_value, &current_value)?
+            }
+        };
 
-            // Succeed tuples should be filtered out for short-circuit evaluation,
-            // null values for the current when expr should be kept
-            remainder = and_not(&remainder, &when_value)?;
-        }
+        // Succeed tuples should be filtered out for short-circuit evaluation,
+        // null values for the current when expr should be kept
+        remainder = and_not(&remainder, &when_value)?;
 
         if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
@@ -840,6 +852,13 @@ mod tests {
 
     fn case_test_batch1() -> Result<RecordBatch> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let a = Int32Array::from(vec![Some(1), Some(0), None, Some(5)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+        Ok(batch)
+    }
+
+    fn case_test_batch2() -> Result<RecordBatch> {
+        let schema = Schema::new(vec![Field::new("y", DataType::Int32, true)]);
         let a = Int32Array::from(vec![Some(1), Some(0), None, Some(5)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
         Ok(batch)
@@ -1317,5 +1336,59 @@ mod tests {
                 // refactor again.
                 comparison_coercion(&left_type, right_type)
             })
+    }
+
+    #[test]
+    fn gen_optimize_case_for_div_zero() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        let batch2 = case_test_batch2()?;
+        let schema2 = batch2.schema();
+
+        // DivideZeroExpression: CASE WHEN a > 0 THEN 25.0 / cast(a, float64) ELSE float64(null) END
+        let when1 = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &batch.schema())?;
+        let then1 = binary(
+            lit(25.0f64),
+            Operator::Divide,
+            cast(col("a", &schema)?, &batch.schema(), Float64)?,
+            &batch.schema(),
+        )?;
+        let x = lit(ScalarValue::Float64(None));
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when1, then1)],
+            Some(x),
+            schema.as_ref(),
+        )?;
+        let case = expr
+            .as_any()
+            .downcast_ref::<CaseExpr>()
+            .expect("expected case expression");
+        assert_eq!(case.eval_method, EvalMethod::DivideZeroExpression);
+
+        // NoExpression: CASE WHEN a > 0 THEN 25.0 / cast(y, float64) ELSE float64(null) END
+        let when1 = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &batch.schema())?;
+        let then1 = binary(
+            lit(25.0f64),
+            Operator::Divide,
+            cast(col("y", &schema2)?, &batch2.schema(), Float64)?,
+            &batch2.schema(),
+        )?;
+        let x = lit(ScalarValue::Float64(None));
+
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when1, then1)],
+            Some(x),
+            schema.as_ref(),
+        )?;
+        let case = expr
+            .as_any()
+            .downcast_ref::<CaseExpr>()
+            .expect("expected case expression");
+        assert_eq!(case.eval_method, EvalMethod::NoExpression);
+
+        Ok(())
     }
 }
