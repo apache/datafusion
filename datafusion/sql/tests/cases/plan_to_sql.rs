@@ -21,7 +21,7 @@ use std::vec;
 use arrow_schema::*;
 use datafusion_common::{DFSchema, Result, TableReference};
 use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_udaf};
-use datafusion_expr::{col, table_scan};
+use datafusion_expr::{col, table_scan, wildcard, LogicalPlanBuilder};
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
     DefaultDialect as UnparserDefaultDialect, Dialect as UnparserDialect,
@@ -586,6 +586,45 @@ fn test_pretty_roundtrip() -> Result<()> {
 
         assert_eq!(expr.to_string(), pretty_expr.to_string());
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_table_scan_pushdown() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+
+    let scan_with_projection = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?
+        .build()?;
+    let scan_with_projection = plan_to_sql(&scan_with_projection)?;
+    assert_eq!(format!("{}", scan_with_projection), "SELECT t1.id, t1.age FROM t1");
+
+    let scan_with_no_projection = table_scan(Some("t1"), &schema, None)?
+        .build()?;
+    let scan_with_no_projection = plan_to_sql(&scan_with_no_projection)?;
+    assert_eq!(format!("{}", scan_with_no_projection), "SELECT * FROM t1");
+
+    let table_scan_with_projection_alias = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?
+        .alias("ta")?
+        .build()?;
+    let table_scan_with_projection_alias = plan_to_sql(&table_scan_with_projection_alias)?;
+    assert_eq!(format!("{}", table_scan_with_projection_alias), "SELECT ta.id, ta.age FROM t1 AS ta");
+
+
+    let table_scan_with_no_projection_alias = table_scan(Some("t1"), &schema, None)?
+        .alias("ta")?
+        .build()?;
+    let table_scan_with_no_projection_alias = plan_to_sql(&table_scan_with_no_projection_alias)?;
+    assert_eq!(format!("{}", table_scan_with_no_projection_alias), "SELECT * FROM t1 AS ta");
+
+    let query_from_table_scan_with_projection = LogicalPlanBuilder::from(table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?)
+        .project(vec![wildcard()])?
+        .build()?;
+    let query_from_table_scan_with_projection = plan_to_sql(&query_from_table_scan_with_projection)?;
+    assert_eq!(format!("{}", query_from_table_scan_with_projection), "SELECT * FROM (SELECT t1.id, t1.age FROM t1)");
 
     Ok(())
 }
