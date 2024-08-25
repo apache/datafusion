@@ -387,7 +387,7 @@ async fn oom_with_tracked_consumer_pool() {
         .with_memory_pool(Arc::new(
             TrackConsumersPool::new(
                 GreedyMemoryPool::new(200_000),
-                NonZeroUsize::new(1).unwrap(),
+                NonZeroUsize::new(1).unwrap()
             )
         ))
         .run()
