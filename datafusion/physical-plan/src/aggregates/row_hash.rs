@@ -430,6 +430,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
+    /// Have we enabled the blocked optimization for group values and accumulators.
+    enable_blocked_group_states: bool,
+
     // ========================================================================
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
@@ -442,8 +445,6 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// The [`RuntimeEnv`] associated with the [`TaskContext`] argument
     runtime: Arc<RuntimeEnv>,
-    /// Have we enabled the blocked optimization for group values and accumulators.
-    enable_blocked_group_states: bool,
 }
 
 impl GroupedHashAggregateStream {
