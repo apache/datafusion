@@ -81,21 +81,18 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 
     fn check_unique_keys(array: &dyn Array) -> Result<()> {
-        let mut seen_keys = HashSet::new();
+        let mut seen_keys = HashSet::with_capacity(array.len());
 
         for i in 0..array.len() {
-            if !array.is_null(i) {
-                let key = ScalarValue::try_from_array(array, i)?;
-                if seen_keys.contains(&key) {
-                    return exec_err!(
-                        "map key must be unique, duplicate key found: {}",
-                        key
-                    );
-                }
-                seen_keys.insert(key);
-            } else {
+            if array.is_null(i) {
                 return exec_err!("map key cannot be null");
             }
+
+            let key = ScalarValue::try_from_array(array, i)?;
+            if seen_keys.contains(&key) {
+                return exec_err!("map key must be unique, duplicate key found: {}", key);
+            }
+            seen_keys.insert(key);
         }
         Ok(())
     }
