@@ -15,10 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_err, not_impl_err, plan_err, Column, DataFusionError, Result, TableReference};
-use datafusion_expr::{expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder, Projection};
-use sqlparser::ast::{self, Ident, SetExpr};
 use crate::unparser::utils::unproject_agg_exprs;
+use datafusion_common::{
+    internal_err, not_impl_err, plan_err, Column, DataFusionError, Result, TableReference,
+};
+use datafusion_expr::{
+    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Projection,
+};
+use sqlparser::ast::{self, Ident, SetExpr};
 
 use super::{
     ast::{
@@ -233,8 +238,12 @@ impl Unparser<'_> {
     ) -> Result<()> {
         match plan {
             LogicalPlan::TableScan(scan) => {
-                if scan.projection.is_some() {
-                    let unparsed_table_scan = Self::unparse_table_scan_pushdown(plan, None)?;
+                if scan.projection.is_some()
+                    || !scan.filters.is_empty()
+                    || scan.fetch.is_some()
+                {
+                    let unparsed_table_scan =
+                        Self::unparse_table_scan_pushdown(plan, None)?;
                     return self.select_to_sql_recursively(
                         &unparsed_table_scan,
                         query,
@@ -457,7 +466,10 @@ impl Unparser<'_> {
             LogicalPlan::SubqueryAlias(plan_alias) => {
                 // Handle bottom-up to allocate relation
                 let (plan, columns) = subquery_alias_inner_query_and_columns(plan_alias);
-                let plan = Self::unparse_table_scan_pushdown(plan, Some(plan_alias.alias.clone()))?;
+                let plan = Self::unparse_table_scan_pushdown(
+                    plan,
+                    Some(plan_alias.alias.clone()),
+                )?;
                 self.select_to_sql_recursively(&plan, query, select, relation)?;
                 relation.alias(Some(
                     self.new_table_alias(plan_alias.alias.table().to_string(), columns),
@@ -511,18 +523,34 @@ impl Unparser<'_> {
         }
     }
 
-    fn unparse_table_scan_pushdown(plan: &LogicalPlan, alias: Option<TableReference>) -> Result<LogicalPlan> {
+    fn unparse_table_scan_pushdown(
+        plan: &LogicalPlan,
+        alias: Option<TableReference>,
+    ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::TableScan(table_scan) => {
-                let mut builder = LogicalPlanBuilder::scan(table_scan.table_name(), table_scan.source(), None)?;
+                // TODO: support filters for table scan with alias
+                if alias.is_some() && !table_scan.filters().is_empty() {
+                    return not_impl_err!(
+                        "Subquery alias is not supported for table scan with pushdown filters"
+                    );
+                }
+
+                let mut builder = LogicalPlanBuilder::scan(
+                    table_scan.table_name(),
+                    table_scan.source(),
+                    None,
+                )?;
                 if let Some(project_vec) = table_scan.projection() {
-                    let project_columns = project_vec.into_iter().cloned()
+                    let project_columns = project_vec
+                        .iter()
+                        .cloned()
                         .map(|i| {
-                            let (qualifier, field) = table_scan.projected_schema.qualified_field(i);
+                            let (qualifier, field) =
+                                table_scan.projected_schema.qualified_field(i);
                             if alias.is_some() {
                                 Column::new(alias.clone(), field.name().clone())
-                            }
-                            else {
+                            } else {
                                 Column::new(qualifier.cloned(), field.name().clone())
                             }
                         })
@@ -532,15 +560,32 @@ impl Unparser<'_> {
                     }
                     builder = builder.project(project_columns)?;
                 }
+
+                let filter_expr = table_scan
+                    .filters()
+                    .iter()
+                    .cloned()
+                    .reduce(|acc, expr| acc.and(expr));
+                if let Some(filter) = filter_expr {
+                    builder = builder.filter(filter)?;
+                }
+
+                if let Some(fetch) = table_scan.fetch {
+                    builder = builder.limit(0, Some(fetch))?;
+                }
+
                 builder.build()
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
-                let new_plan = Self::unparse_table_scan_pushdown(&subquery_alias.input, Some(subquery_alias.alias.clone()))?;
+                let new_plan = Self::unparse_table_scan_pushdown(
+                    &subquery_alias.input,
+                    Some(subquery_alias.alias.clone()),
+                )?;
                 LogicalPlanBuilder::from(new_plan)
                     .alias(subquery_alias.alias.clone())?
                     .build()
-            },
-            _ => Ok(plan.clone())
+            }
+            _ => Ok(plan.clone()),
         }
     }
 

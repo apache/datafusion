@@ -334,6 +334,18 @@ impl LogicalPlanBuilder {
             .map(Self::new)
     }
 
+    pub fn scan_with_filters_fetch(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<Expr>,
+        fetch: Option<usize>,
+    ) -> Result<Self> {
+        TableScan::try_new(table_name, table_source, projection, filters, fetch)
+            .map(LogicalPlan::TableScan)
+            .map(Self::new)
+    }
+
     /// Wrap a plan in a window
     pub fn window_plan(
         input: LogicalPlan,
@@ -1396,6 +1408,29 @@ pub fn table_scan_with_filters(
         .map(|n| n.into())
         .unwrap_or_else(|| TableReference::bare(UNNAMED_TABLE));
     LogicalPlanBuilder::scan_with_filters(name, table_source, projection, filters)
+}
+
+/// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema,
+/// filters, and inlined fetch.
+/// This is mostly used for testing and documentation.
+pub fn table_scan_with_filter_and_fetch(
+    name: Option<impl Into<TableReference>>,
+    table_schema: &Schema,
+    projection: Option<Vec<usize>>,
+    filters: Vec<Expr>,
+    fetch: Option<usize>,
+) -> Result<LogicalPlanBuilder> {
+    let table_source = table_source(table_schema);
+    let name = name
+        .map(|n| n.into())
+        .unwrap_or_else(|| TableReference::bare(UNNAMED_TABLE));
+    LogicalPlanBuilder::scan_with_filters_fetch(
+        name,
+        table_source,
+        projection,
+        filters,
+        fetch,
+    )
 }
 
 fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {

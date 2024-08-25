@@ -2411,6 +2411,11 @@ impl TableScan {
     pub fn projection(&self) -> Option<&[usize]> {
         self.projection.as_deref()
     }
+
+    /// Get the filters
+    pub fn filters(&self) -> &[Expr] {
+        &self.filters
+    }
 }
 
 /// Apply Cross Join to two logical plans
