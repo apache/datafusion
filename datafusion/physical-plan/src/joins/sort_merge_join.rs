@@ -1972,7 +1972,7 @@ mod tests {
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::disk_manager::DiskManagerConfig;
-    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::TaskContext;
 
     use crate::expressions::Column;
