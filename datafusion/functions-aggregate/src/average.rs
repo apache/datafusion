@@ -41,7 +41,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
     filtered_null_mask, set_nulls,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
-    ensure_enough_room_for_values, BlockedGroupIndex, Blocks, EmitToExt, VecBlocks,
+    ensure_enough_room_for_values, Blocks, EmitToExt, VecBlocks,
 };
 
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
@@ -468,15 +468,13 @@ where
             self.block_size,
             T::default_value(),
         );
-        let is_blocked = self.block_size.is_some();
 
         self.null_state.accumulate(
             group_indices,
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
-                let blocked_index = BlockedGroupIndex::new(group_index, is_blocked);
+            |blocked_index, new_value| {
                 let sum =
                     &mut self.sums[blocked_index.block_id][blocked_index.block_offset];
                 let count =
@@ -581,8 +579,7 @@ where
             partial_counts,
             opt_filter,
             total_num_groups,
-            |group_index, partial_count| {
-                let blocked_index = BlockedGroupIndex::new(group_index, is_blocked);
+            |blocked_index, partial_count| {
                 let count =
                     &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
                 *count += partial_count;
@@ -594,8 +591,7 @@ where
             partial_sums,
             opt_filter,
             total_num_groups,
-            |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
-                let blocked_index = BlockedGroupIndex::new(group_index, is_blocked);
+            |blocked_index, new_value: <T as ArrowPrimitiveType>::Native| {
                 let sum =
                     &mut self.sums[blocked_index.block_id][blocked_index.block_offset];
                 *sum = sum.add_wrapping(new_value);

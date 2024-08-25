@@ -26,8 +26,8 @@ pub mod prim_op;
 use std::{
     cmp::min,
     collections::VecDeque,
-    fmt, iter,
-    ops::{Index, IndexMut},
+    fmt::{self, Debug}, iter,
+    ops::{Index, IndexMut}, usize,
 };
 
 use arrow::{
@@ -42,8 +42,8 @@ use datafusion_common::{
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
-const BLOCKED_INDEX_HIGH_32_BITS_MASK: u64 = 0xffffffff00000000;
-const BLOCKED_INDEX_LOW_32_BITS_MASK: u64 = 0x00000000ffffffff;
+pub const BLOCKED_INDEX_HIGH_32_BITS_MASK: u64 = 0xffffffff00000000;
+pub const BLOCKED_INDEX_LOW_32_BITS_MASK: u64 = 0x00000000ffffffff;
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -451,28 +451,7 @@ pub struct BlockedGroupIndex {
 }
 
 impl BlockedGroupIndex {
-    pub fn new(group_index: usize, is_blocked: bool) -> Self {
-        if !is_blocked {
-            return Self {
-                block_id: 0,
-                block_offset: group_index,
-                is_blocked,
-            };
-        }
-
-        let block_id =
-            ((group_index as u64 >> 32) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
-        let block_offset =
-            ((group_index as u64) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
-
-        Self {
-            block_id,
-            block_offset,
-            is_blocked,
-        }
-    }
-
-    pub fn new_from_parts(
+    pub fn new(
         block_id: usize,
         block_offset: usize,
         is_blocked: bool,
@@ -484,12 +463,47 @@ impl BlockedGroupIndex {
         }
     }
 
+    pub fn parser(is_blocked: bool) -> Box<dyn GroupIndexParser> {
+        if is_blocked {
+            Box::new(BlockedIndexParser)
+        } else {
+            Box::new(FlatIndexParser)
+        }
+    } 
+
     pub fn as_packed_index(&self) -> usize {
         if self.is_blocked {
             (((self.block_id as u64) << 32) | (self.block_offset as u64)) as usize
         } else {
             self.block_offset
         }
+    }
+}
+
+pub trait GroupIndexParser: Send + Debug {
+    fn parse(&self, raw_index: usize) -> BlockedGroupIndex;
+}
+
+#[derive(Debug)]
+struct FlatIndexParser;
+
+impl GroupIndexParser for FlatIndexParser {
+    fn parse(&self, raw_index: usize) -> BlockedGroupIndex {
+        BlockedGroupIndex::new(0, raw_index, false)
+    }
+}
+
+#[derive(Debug)]
+struct BlockedIndexParser;
+
+impl GroupIndexParser for BlockedIndexParser {
+    fn parse(&self, raw_index: usize) -> BlockedGroupIndex {
+        let block_id =
+            ((raw_index as u64 >> 32) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
+        let block_offset =
+            ((raw_index as u64) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
+
+        BlockedGroupIndex::new(block_id, block_offset, true)
     }
 }
 

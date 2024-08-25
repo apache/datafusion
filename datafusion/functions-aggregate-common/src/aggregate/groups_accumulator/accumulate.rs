@@ -25,7 +25,9 @@ use arrow::datatypes::ArrowPrimitiveType;
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
-use crate::aggregate::groups_accumulator::{BlockedGroupIndex, Blocks};
+use crate::aggregate::groups_accumulator::{
+    BlockedGroupIndex, Blocks, GroupIndexParser,
+};
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -369,6 +371,8 @@ pub struct BlockedNullState {
     seen_values_blocks: Blocks<BooleanBufferBuilder>,
 
     block_size: Option<usize>,
+
+    group_index_parser: Box<dyn GroupIndexParser>,
 }
 
 impl Default for BlockedNullState {
@@ -379,9 +383,12 @@ impl Default for BlockedNullState {
 
 impl BlockedNullState {
     pub fn new(block_size: Option<usize>) -> Self {
+        let group_index_parser = BlockedGroupIndex::parser(block_size.is_some());
+
         Self {
             seen_values_blocks: Blocks::new(),
             block_size,
+            group_index_parser,
         }
     }
 
@@ -404,7 +411,7 @@ impl BlockedNullState {
         value_fn: F,
     ) where
         T: ArrowPrimitiveType + Send,
-        F: FnMut(usize, T::Native) + Send,
+        F: FnMut(&BlockedGroupIndex, T::Native) + Send,
     {
         debug_assert!(total_num_groups > 0);
         debug_assert_eq!(values.values().len(), group_indices.len());
@@ -418,13 +425,18 @@ impl BlockedNullState {
             false,
         );
         let seen_values_blocks = &mut self.seen_values_blocks;
-        let is_blocked = self.block_size.is_some();
+        let group_index_parser = self.group_index_parser.as_ref();
 
-        do_accumulate(group_indices, values, opt_filter, value_fn, |group_index| {
-            let blocked_index = BlockedGroupIndex::new(group_index, is_blocked);
-            seen_values_blocks[blocked_index.block_id]
-                .set_bit(blocked_index.block_offset, true);
-        });
+        do_accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            group_index_parser,
+            value_fn,
+            |index: &BlockedGroupIndex| {
+                seen_values_blocks[index.block_id].set_bit(index.block_offset, true);
+            },
+        );
     }
 
     /// Similar as [NullState::build] but support the blocked version accumulator
@@ -480,7 +492,7 @@ pub fn accumulate_indices<F>(
     opt_filter: Option<&BooleanArray>,
     mut index_fn: F,
 ) where
-    F: FnMut(usize) + Send,
+    F: FnMut(usize),
 {
     match (nulls, opt_filter) {
         (None, None) => {
@@ -560,22 +572,23 @@ fn do_accumulate<T, F1, F2>(
     group_indices: &[usize],
     values: &PrimitiveArray<T>,
     opt_filter: Option<&BooleanArray>,
+    group_index_parser: &dyn GroupIndexParser,
     mut value_fn: F1,
     mut set_valid_fn: F2,
 ) where
     T: ArrowPrimitiveType + Send,
-    F1: FnMut(usize, T::Native) + Send,
-    F2: FnMut(usize) + Send,
+    F1: FnMut(&BlockedGroupIndex, T::Native) + Send,
+    F2: FnMut(&BlockedGroupIndex) + Send,
 {
     let data: &[T::Native] = values.values();
-
     match (values.null_count() > 0, opt_filter) {
         // no nulls, no filter,
         (false, None) => {
             let iter = group_indices.iter().zip(data.iter());
             for (&group_index, &new_value) in iter {
-                set_valid_fn(group_index);
-                value_fn(group_index, new_value);
+                let blocked_index = group_index_parser.parse(group_index);
+                set_valid_fn(&blocked_index);
+                value_fn(&blocked_index, new_value);
             }
         }
         // nulls, no filter
@@ -601,8 +614,9 @@ fn do_accumulate<T, F1, F2>(
                             // valid bit was set, real value
                             let is_valid = (mask & index_mask) != 0;
                             if is_valid {
-                                set_valid_fn(group_index);
-                                value_fn(group_index, new_value);
+                                let blocked_index = group_index_parser.parse(group_index);
+                                set_valid_fn(&blocked_index);
+                                value_fn(&blocked_index, new_value);
                             }
                             index_mask <<= 1;
                         },
@@ -618,8 +632,9 @@ fn do_accumulate<T, F1, F2>(
                 .for_each(|(i, (&group_index, &new_value))| {
                     let is_valid = remainder_bits & (1 << i) != 0;
                     if is_valid {
-                        set_valid_fn(group_index);
-                        value_fn(group_index, new_value);
+                        let blocked_index = group_index_parser.parse(group_index);
+                        set_valid_fn(&blocked_index);
+                        value_fn(&blocked_index, new_value);
                     }
                 });
         }
@@ -635,8 +650,9 @@ fn do_accumulate<T, F1, F2>(
                 .zip(filter.iter())
                 .for_each(|((&group_index, &new_value), filter_value)| {
                     if let Some(true) = filter_value {
-                        set_valid_fn(group_index);
-                        value_fn(group_index, new_value);
+                        let blocked_index = group_index_parser.parse(group_index);
+                        set_valid_fn(&blocked_index);
+                        value_fn(&blocked_index, new_value);
                     }
                 })
         }
@@ -653,8 +669,9 @@ fn do_accumulate<T, F1, F2>(
                 .for_each(|((filter_value, &group_index), new_value)| {
                     if let Some(true) = filter_value {
                         if let Some(new_value) = new_value {
-                            set_valid_fn(group_index);
-                            value_fn(group_index, new_value)
+                            let blocked_index = group_index_parser.parse(group_index);
+                            set_valid_fn(&blocked_index);
+                            value_fn(&blocked_index, new_value)
                         }
                     }
                 })

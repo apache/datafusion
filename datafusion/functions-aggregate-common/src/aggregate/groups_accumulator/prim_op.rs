@@ -27,7 +27,7 @@ use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::aggregate::groups_accumulator::accumulate::BlockedNullState;
 use crate::aggregate::groups_accumulator::{
-    ensure_enough_room_for_values, BlockedGroupIndex, Blocks, EmitToExt, VecBlocks,
+    ensure_enough_room_for_values, Blocks, EmitToExt, VecBlocks,
 };
 
 /// An accumulator that implements a single operation over
@@ -112,17 +112,15 @@ where
             self.block_size,
             self.starting_value,
         );
-        let is_blocked = self.block_size.is_some();
-
+        
         self.null_state.accumulate(
             group_indices,
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
-                let blocked_index = BlockedGroupIndex::new(group_index, is_blocked);
-                let value = &mut self.values_blocks[blocked_index.block_id]
-                    [blocked_index.block_offset];
+            |index, new_value| {
+                let value = &mut self.values_blocks[index.block_id]
+                    [index.block_offset];
                 (self.prim_fn)(value, new_value);
             },
         );
