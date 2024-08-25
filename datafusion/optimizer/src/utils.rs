@@ -28,6 +28,10 @@ use datafusion_expr::{logical_plan::LogicalPlan, Expr, Operator};
 
 use log::{debug, trace};
 
+/// Re-export of `NamesPreserver` for backwards compatibility,
+/// as it was initially placed here and then moved elsewhere.
+pub use datafusion_expr::expr_rewriter::NamePreserver;
+
 /// Convenience rule for writing optimizers: recursively invoke
 /// optimize on plan's children and then return a node of the same
 /// type. Useful for optimizer rules which want to leave the type
@@ -293,55 +297,4 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 )]
 pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     expr_utils::merge_schema(inputs)
-}
-
-/// Handles ensuring the name of rewritten expressions is not changed.
-///
-/// For example, if an expression `1 + 2` is rewritten to `3`, the name of the
-/// expression should be preserved: `3 as "1 + 2"`
-///
-/// See <https://github.com/apache/datafusion/issues/3555> for details
-pub struct NamePreserver {
-    use_alias: bool,
-}
-
-/// If the name of an expression is remembered, it will be preserved when
-/// rewriting the expression
-pub struct SavedName(Option<String>);
-
-impl NamePreserver {
-    /// Create a new NamePreserver for rewriting the `expr` that is part of the specified plan
-    pub fn new(plan: &LogicalPlan) -> Self {
-        Self {
-            use_alias: !matches!(plan, LogicalPlan::Filter(_) | LogicalPlan::Join(_)),
-        }
-    }
-
-    /// Create a new NamePreserver for rewriting the `expr`s in `Projection`
-    ///
-    /// This will use aliases
-    pub fn new_for_projection() -> Self {
-        Self { use_alias: true }
-    }
-
-    pub fn save(&self, expr: &Expr) -> Result<SavedName> {
-        let original_name = if self.use_alias {
-            Some(expr.name_for_alias()?)
-        } else {
-            None
-        };
-
-        Ok(SavedName(original_name))
-    }
-}
-
-impl SavedName {
-    /// Ensures the name of the rewritten expression is preserved
-    pub fn restore(self, expr: Expr) -> Result<Expr> {
-        let Self(original_name) = self;
-        match original_name {
-            Some(name) => expr.alias_if_changed(name),
-            None => Ok(expr),
-        }
-    }
 }
