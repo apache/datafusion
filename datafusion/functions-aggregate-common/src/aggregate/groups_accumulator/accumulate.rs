@@ -91,36 +91,9 @@ impl NullState {
     /// * `opt_filter`: if present, only rows for which is Some(true) are included
     /// * `value_fn`: function invoked for  (group_index, value) where value is non null
     ///
-    /// # Example
+    /// See [`accumulate`], for more details on how value_fn is called
     ///
-    /// ```text
-    ///  ┌─────────┐   ┌─────────┐   ┌ ─ ─ ─ ─ ┐
-    ///  │ ┌─────┐ │   │ ┌─────┐ │     ┌─────┐
-    ///  │ │  2  │ │   │ │ 200 │ │   │ │  t  │ │
-    ///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
-    ///  │ │  2  │ │   │ │ 100 │ │   │ │  f  │ │
-    ///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
-    ///  │ │  0  │ │   │ │ 200 │ │   │ │  t  │ │
-    ///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
-    ///  │ │  1  │ │   │ │ 200 │ │   │ │NULL │ │
-    ///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
-    ///  │ │  0  │ │   │ │ 300 │ │   │ │  t  │ │
-    ///  │ └─────┘ │   │ └─────┘ │     └─────┘
-    ///  └─────────┘   └─────────┘   └ ─ ─ ─ ─ ┘
-    ///
-    /// group_indices   values        opt_filter
-    /// ```
-    ///
-    /// In the example above, `value_fn` is invoked for each (group_index,
-    /// value) pair where `opt_filter[i]` is true and values is non null
-    ///
-    /// ```text
-    /// value_fn(2, 200)
-    /// value_fn(0, 200)
-    /// value_fn(0, 300)
-    /// ```
-    ///
-    /// It also sets
+    /// When value_fn is called it also sets
     ///
     /// 1. `self.seen_values[group_index]` to true for all rows that had a non null vale
     pub fn accumulate<T, F>(
@@ -260,6 +233,44 @@ impl NullState {
     }
 }
 
+/// Invokes `value_fn(group_index, value)` for each non null, non
+/// filtered value of `value`,
+///
+/// # Arguments:
+///
+/// * `group_indices`:  To which groups do the rows in `values` belong, (aka group_index)
+/// * `values`: the input arguments to the accumulator
+/// * `opt_filter`: if present, only rows for which is Some(true) are included
+/// * `value_fn`: function invoked for  (group_index, value) where value is non null
+///
+/// # Example
+///
+/// ```text
+///  ┌─────────┐   ┌─────────┐   ┌ ─ ─ ─ ─ ┐
+///  │ ┌─────┐ │   │ ┌─────┐ │     ┌─────┐
+///  │ │  2  │ │   │ │ 200 │ │   │ │  t  │ │
+///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
+///  │ │  2  │ │   │ │ 100 │ │   │ │  f  │ │
+///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
+///  │ │  0  │ │   │ │ 200 │ │   │ │  t  │ │
+///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
+///  │ │  1  │ │   │ │ 200 │ │   │ │NULL │ │
+///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
+///  │ │  0  │ │   │ │ 300 │ │   │ │  t  │ │
+///  │ └─────┘ │   │ └─────┘ │     └─────┘
+///  └─────────┘   └─────────┘   └ ─ ─ ─ ─ ┘
+///
+/// group_indices   values        opt_filter
+/// ```
+///
+/// In the example above, `value_fn` is invoked for each (group_index,
+/// value) pair where `opt_filter[i]` is true and values is non null
+///
+/// ```text
+/// value_fn(2, 200)
+/// value_fn(0, 200)
+/// value_fn(0, 300)
+/// ```
 pub fn accumulate<T, F>(
     group_indices: &[usize],
     values: &PrimitiveArray<T>,

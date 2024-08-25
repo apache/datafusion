@@ -464,6 +464,8 @@ impl VarianceGroupsAccumulator {
         emit_to: datafusion_expr::EmitTo,
     ) -> (Vec<f64>, NullBuffer) {
         let mut counts = emit_to.take_needed(&mut self.counts);
+        // means are only needed for updating m2s and are not needed for the final result.
+        // But we still need to take them to ensure the internal state is consistent.
         let _ = emit_to.take_needed(&mut self.means);
         let m2s = emit_to.take_needed(&mut self.m2s);
 
@@ -517,7 +519,7 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 3, "two arguments to merge_batch");
-        // first batch is counts, second is partial sums
+        // first batch is counts, second is partial means, third is partial m2s
         let partial_counts = downcast_value!(values[0], UInt64Array);
         let partial_means = downcast_value!(values[1], Float64Array);
         let partial_m2s = downcast_value!(values[2], Float64Array);
