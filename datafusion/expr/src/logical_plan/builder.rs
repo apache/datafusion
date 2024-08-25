@@ -334,6 +334,7 @@ impl LogicalPlanBuilder {
             .map(Self::new)
     }
 
+    /// Convert a table provider into a builder with a TableScan with filter and fetch
     pub fn scan_with_filters_fetch(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
