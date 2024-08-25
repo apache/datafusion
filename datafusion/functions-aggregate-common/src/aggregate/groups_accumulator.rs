@@ -462,7 +462,6 @@ impl BlockedGroupIndex {
         }
     }
 
-    #[inline]
     pub fn new_flat(raw_index: usize) -> Self {
         Self {
             block_id: 0,
@@ -471,7 +470,6 @@ impl BlockedGroupIndex {
         }
     }
 
-    #[inline]
     pub fn new_blocked(raw_index: usize) -> Self {
         let block_id =
             ((raw_index as u64 >> 32) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;

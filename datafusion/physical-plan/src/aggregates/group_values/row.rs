@@ -138,7 +138,11 @@ impl GroupValues for GroupValuesRows {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
-        let group_index_parse_fn = self.group_index_parse_fn;
+        let group_index_parse_fn = if self.block_size.is_some() {
+            BlockedGroupIndex::new_blocked
+        } else {
+            BlockedGroupIndex::new_flat
+        };
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
@@ -286,7 +290,12 @@ impl GroupValues for GroupValuesRows {
 
                 let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
-                let group_index_parse_fn = self.group_index_parse_fn;
+
+                let group_index_parse_fn = if self.block_size.is_some() {
+                    BlockedGroupIndex::new_blocked
+                } else {
+                    BlockedGroupIndex::new_flat
+                };
 
                 unsafe {
                     for bucket in self.map.iter() {

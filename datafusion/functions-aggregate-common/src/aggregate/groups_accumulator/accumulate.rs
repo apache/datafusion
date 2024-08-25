@@ -430,11 +430,17 @@ impl BlockedNullState {
         );
         let seen_values_blocks = &mut self.seen_values_blocks;
 
+        let group_index_parse_fn = if self.block_size.is_some() {
+            BlockedGroupIndex::new_blocked
+        } else {
+            BlockedGroupIndex::new_flat
+        };
+
         do_accumulate(
             group_indices,
             values,
             opt_filter,
-            self.group_index_parse_fn,
+            group_index_parse_fn,
             value_fn,
             |index: &BlockedGroupIndex| {
                 seen_values_blocks[index.block_id].set_bit(index.block_offset, true);
@@ -582,8 +588,9 @@ fn do_accumulate<T, F1, F2>(
     T: ArrowPrimitiveType + Send,
     F1: FnMut(&BlockedGroupIndex, T::Native) + Send,
     F2: FnMut(&BlockedGroupIndex) + Send,
-{
+{   
     let data: &[T::Native] = values.values();
+    let group_index_parse_fn = |raw_index| { group_index_parse_fn(raw_index) };
     match (values.null_count() > 0, opt_filter) {
         // no nulls, no filter,
         (false, None) => {

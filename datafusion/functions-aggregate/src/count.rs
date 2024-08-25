@@ -402,7 +402,12 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             0,
         );
 
-        let group_index_parse_fn = self.group_index_parse_fn;
+        let group_index_parse_fn = if self.block_size.is_some() {
+            BlockedGroupIndex::new_blocked
+        } else {
+            BlockedGroupIndex::new_flat
+        };
+
         accumulate_indices(
             group_indices,
             values.logical_nulls().as_ref(),
@@ -439,8 +444,13 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             self.block_size,
             0,
         );
-
-        let group_index_parse_fn = self.group_index_parse_fn;
+        
+        let group_index_parse_fn = if self.block_size.is_some() {
+            BlockedGroupIndex::new_blocked
+        } else {
+            BlockedGroupIndex::new_flat
+        };
+        
         do_count_merge_batch(
             values,
             group_indices,
