@@ -4972,11 +4972,19 @@ NULL 1 1
 
 ## array_has/array_has_all/array_has_any
 
-query BB
-select array_has([], null),
-       array_has([1, 2, 3], null);
+# If lhs is empty, return false
+query B
+select array_has([], 1);
 ----
-false false
+false
+
+# If rhs is Null, we returns Null
+query BBB
+select array_has([], null),
+       array_has([1, 2, 3], null),
+       array_has([null, 1], null);
+----
+NULL NULL NULL
 
 #TODO: array_has_all and array_has_any cannot handle NULL
 #query BBBB

@@ -1419,6 +1419,7 @@ pub(crate) mod tests {
         expressions, expressions::binary, expressions::lit, LexOrdering,
         PhysicalSortExpr, PhysicalSortRequirement,
     };
+    use datafusion_physical_expr_common::sort_expr::LexRequirement;
     use datafusion_physical_plan::PlanProperties;
 
     /// Models operators like BoundedWindowExec that require an input
@@ -1489,7 +1490,7 @@ pub(crate) mod tests {
         }
 
         // model that it requires the output ordering of its input
-        fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
             if self.expr.is_empty() {
                 vec![None]
             } else {
