@@ -153,8 +153,8 @@ impl GroupValues for GroupValuesRows {
                             // existing_idx  (aka group_values @ row)
                             let blocked_index = group_index_parse_fn(*group_idx);
                             group_rows.row(row)
-                                == group_values[blocked_index.block_id]
-                                    .row(blocked_index.block_offset)
+                                == group_values[blocked_index.block_id()]
+                                    .row(blocked_index.block_offset())
                         });
 
                     let group_idx = match entry {
@@ -183,8 +183,8 @@ impl GroupValues for GroupValuesRows {
                             cur_blk.push(group_rows.row(row));
 
                             let blocked_index = BlockedGroupIndex::new_from_parts(
-                                blk_id,
-                                blk_offset,
+                                blk_id as u32,
+                                blk_offset as u64,
                                 self.block_size.is_some(),
                             );
                             let group_idx = blocked_index.as_packed_index();
@@ -300,11 +300,11 @@ impl GroupValues for GroupValuesRows {
                             // Decrement group index by n
                             let group_idx = bucket.as_ref().1;
                             let old_blk_idx = group_index_parse_fn(group_idx);
-                            match old_blk_idx.block_id.checked_sub(1) {
+                            match old_blk_idx.block_id().checked_sub(1) {
                                 // Group index was >= n, shift value down
                                 Some(new_blk_id) => {
                                     let new_group_idx = BlockedGroupIndex::new_from_parts(
-                                        new_blk_id,
+                                        new_blk_id as u32,
                                         old_blk_idx.block_offset,
                                         true,
                                     );

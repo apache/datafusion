@@ -446,18 +446,14 @@ impl EmitToExt for EmitTo {
 ///   - Low 32 bits represent `block_offset`
 #[derive(Debug, Clone, Copy)]
 pub struct BlockedGroupIndex {
-    pub block_id: usize,
-    pub block_offset: usize,
+    pub block_id: u32,
+    pub block_offset: u64,
     pub is_blocked: bool,
 }
 
 impl BlockedGroupIndex {
     #[inline]
-    pub fn new_from_parts(
-        block_id: usize,
-        block_offset: usize,
-        is_blocked: bool,
-    ) -> Self {
+    pub fn new_from_parts(block_id: u32, block_offset: u64, is_blocked: bool) -> Self {
         Self {
             block_id,
             block_offset,
@@ -469,16 +465,15 @@ impl BlockedGroupIndex {
     pub fn new_flat(raw_index: usize) -> Self {
         Self {
             block_id: 0,
-            block_offset: raw_index,
+            block_offset: raw_index as u64,
             is_blocked: false,
         }
     }
 
     #[inline]
     pub fn new_blocked(raw_index: usize) -> Self {
-        let block_id =
-            ((raw_index as u64 >> 32) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
-        let block_offset = ((raw_index as u64) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
+        let block_id = ((raw_index as u64 >> 32) & BLOCKED_INDEX_LOW_32_BITS_MASK) as u32;
+        let block_offset = (raw_index as u64) & BLOCKED_INDEX_LOW_32_BITS_MASK;
 
         Self {
             block_id,
@@ -487,11 +482,21 @@ impl BlockedGroupIndex {
         }
     }
 
+    #[inline]
+    pub fn block_id(&self) -> usize {
+        self.block_id as usize
+    }
+
+    #[inline]
+    pub fn block_offset(&self) -> usize {
+        self.block_offset as usize
+    }
+
     pub fn as_packed_index(&self) -> usize {
         if self.is_blocked {
-            (((self.block_id as u64) << 32) | (self.block_offset as u64)) as usize
+            (((self.block_id as u64) << 32) | self.block_offset) as usize
         } else {
-            self.block_offset
+            self.block_offset as usize
         }
     }
 }

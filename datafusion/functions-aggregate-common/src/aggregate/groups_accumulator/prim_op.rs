@@ -119,7 +119,8 @@ where
             opt_filter,
             total_num_groups,
             |index, new_value| {
-                let value = &mut self.values_blocks[index.block_id][index.block_offset];
+                let value =
+                    &mut self.values_blocks[index.block_id()][index.block_offset()];
                 (self.prim_fn)(value, new_value);
             },
         );

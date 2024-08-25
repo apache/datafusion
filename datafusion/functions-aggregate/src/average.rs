@@ -475,10 +475,10 @@ where
             opt_filter,
             total_num_groups,
             |blocked_index, new_value| {
-                let sum =
-                    &mut self.sums[blocked_index.block_id][blocked_index.block_offset];
-                let count =
-                    &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
+                let sum = &mut self.sums[blocked_index.block_id()]
+                    [blocked_index.block_offset()];
+                let count = &mut self.counts[blocked_index.block_id()]
+                    [blocked_index.block_offset()];
 
                 *sum = sum.add_wrapping(new_value);
                 *count += 1;
@@ -579,8 +579,8 @@ where
             opt_filter,
             total_num_groups,
             |blocked_index, partial_count| {
-                let count =
-                    &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
+                let count = &mut self.counts[blocked_index.block_id()]
+                    [blocked_index.block_offset()];
                 *count += partial_count;
             },
         );
@@ -591,8 +591,8 @@ where
             opt_filter,
             total_num_groups,
             |blocked_index, new_value: <T as ArrowPrimitiveType>::Native| {
-                let sum =
-                    &mut self.sums[blocked_index.block_id][blocked_index.block_offset];
+                let sum = &mut self.sums[blocked_index.block_id()]
+                    [blocked_index.block_offset()];
                 *sum = sum.add_wrapping(new_value);
             },
         );

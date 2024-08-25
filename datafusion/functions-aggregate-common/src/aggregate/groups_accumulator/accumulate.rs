@@ -427,7 +427,8 @@ impl BlockedNullState {
                 BlockedGroupIndex::new_blocked,
                 value_fn,
                 |index: &BlockedGroupIndex| {
-                    seen_values_blocks[index.block_id].set_bit(index.block_offset, true);
+                    seen_values_blocks[index.block_id()]
+                        .set_bit(index.block_offset(), true);
                 },
             )
         } else {
@@ -438,7 +439,8 @@ impl BlockedNullState {
                 BlockedGroupIndex::new_flat,
                 value_fn,
                 |index: &BlockedGroupIndex| {
-                    seen_values_blocks[index.block_id].set_bit(index.block_offset, true);
+                    seen_values_blocks[index.block_id()]
+                        .set_bit(index.block_offset(), true);
                 },
             );
         }
@@ -939,8 +941,12 @@ mod test {
                 .map(|idx| {
                     let block_id = *idx / self.block_size;
                     let block_offset = *idx % self.block_size;
-                    BlockedGroupIndex::new_from_parts(block_id, block_offset, true)
-                        .as_packed_index()
+                    BlockedGroupIndex::new_from_parts(
+                        block_id as u32,
+                        block_offset as u64,
+                        true,
+                    )
+                    .as_packed_index()
                 })
                 .collect::<Vec<_>>();
 
@@ -950,8 +956,8 @@ mod test {
                 opt_filter,
                 total_num_groups,
                 |blocked_index, value| {
-                    let flat_index = blocked_index.block_id * self.block_size
-                        + blocked_index.block_offset;
+                    let flat_index = blocked_index.block_id() * self.block_size
+                        + blocked_index.block_offset();
                     accumulated_values.push((flat_index, value));
                 },
             );
