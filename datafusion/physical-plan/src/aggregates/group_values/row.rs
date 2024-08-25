@@ -135,73 +135,79 @@ impl GroupValues for GroupValuesRows {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
-        let group_index_parse_fn = if self.block_size.is_some() {
-            BlockedGroupIndex::new_blocked
-        } else {
-            BlockedGroupIndex::new_flat
-        };
+        let mut get_or_create_groups =
+            |group_index_parse_fn: fn(usize) -> BlockedGroupIndex| {
+                for (row, &target_hash) in batch_hashes.iter().enumerate() {
+                    let entry =
+                        self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
+                            // Somewhat surprisingly, this closure can be called even if the
+                            // hash doesn't match, so check the hash first with an integer
+                            // comparison first avoid the more expensive comparison with
+                            // group value. https://github.com/apache/datafusion/pull/11718
+                            if target_hash != *exist_hash {
+                                return false;
+                            }
 
-        for (row, &target_hash) in batch_hashes.iter().enumerate() {
-            let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
-                // Somewhat surprisingly, this closure can be called even if the
-                // hash doesn't match, so check the hash first with an integer
-                // comparison first avoid the more expensive comparison with
-                // group value. https://github.com/apache/datafusion/pull/11718
-                if target_hash != *exist_hash {
-                    return false;
-                }
+                            // verify that the group that we are inserting with hash is
+                            // actually the same key value as the group in
+                            // existing_idx  (aka group_values @ row)
+                            let blocked_index = group_index_parse_fn(*group_idx);
+                            group_rows.row(row)
+                                == group_values[blocked_index.block_id]
+                                    .row(blocked_index.block_offset)
+                        });
 
-                // verify that the group that we are inserting with hash is
-                // actually the same key value as the group in
-                // existing_idx  (aka group_values @ row)
-                let blocked_index = group_index_parse_fn(*group_idx);
-                group_rows.row(row)
-                    == group_values[blocked_index.block_id]
-                        .row(blocked_index.block_offset)
-            });
+                    let group_idx = match entry {
+                        // Existing group_index for this group value
+                        Some((_hash, group_idx)) => *group_idx,
+                        //  1.2 Need to create new entry for the group
+                        None => {
+                            // Add new entry to aggr_state and save newly created index
+                            if let Some(blk_size) = self.block_size {
+                                if group_values.current().unwrap().num_rows() == blk_size
+                                {
+                                    // Use blk_size as offset cap,
+                                    // and old block's buffer size as buffer cap
+                                    let new_buf_cap =
+                                        rows_buffer_size(group_values.current().unwrap());
+                                    let new_blk = self
+                                        .row_converter
+                                        .empty_rows(blk_size, new_buf_cap);
+                                    group_values.push_block(new_blk);
+                                }
+                            }
 
-            let group_idx = match entry {
-                // Existing group_index for this group value
-                Some((_hash, group_idx)) => *group_idx,
-                //  1.2 Need to create new entry for the group
-                None => {
-                    // Add new entry to aggr_state and save newly created index
-                    if let Some(blk_size) = self.block_size {
-                        if group_values.current().unwrap().num_rows() == blk_size {
-                            // Use blk_size as offset cap,
-                            // and old block's buffer size as buffer cap
-                            let new_buf_cap =
-                                rows_buffer_size(group_values.current().unwrap());
-                            let new_blk =
-                                self.row_converter.empty_rows(blk_size, new_buf_cap);
-                            group_values.push_block(new_blk);
+                            let blk_id = group_values.num_blocks() - 1;
+                            let cur_blk = group_values.current_mut().unwrap();
+                            let blk_offset = cur_blk.num_rows();
+                            cur_blk.push(group_rows.row(row));
+
+                            let blocked_index = BlockedGroupIndex::new_from_parts(
+                                blk_id,
+                                blk_offset,
+                                self.block_size.is_some(),
+                            );
+                            let group_idx = blocked_index.as_packed_index();
+
+                            // for hasher function, use precomputed hash value
+                            self.map.insert_accounted(
+                                (target_hash, group_idx),
+                                |(hash, _group_index)| *hash,
+                                &mut self.map_size,
+                            );
+
+                            group_idx
                         }
-                    }
-
-                    let blk_id = group_values.num_blocks() - 1;
-                    let cur_blk = group_values.current_mut().unwrap();
-                    let blk_offset = cur_blk.num_rows();
-                    cur_blk.push(group_rows.row(row));
-
-                    let blocked_index = BlockedGroupIndex::new_from_parts(
-                        blk_id,
-                        blk_offset,
-                        self.block_size.is_some(),
-                    );
-                    let group_idx = blocked_index.as_packed_index();
-
-                    // for hasher function, use precomputed hash value
-                    self.map.insert_accounted(
-                        (target_hash, group_idx),
-                        |(hash, _group_index)| *hash,
-                        &mut self.map_size,
-                    );
-
-                    group_idx
+                    };
+                    groups.push(group_idx);
                 }
             };
-            groups.push(group_idx);
-        }
+
+        if self.block_size.is_some() {
+            get_or_create_groups(BlockedGroupIndex::new_blocked);
+        } else {
+            get_or_create_groups(BlockedGroupIndex::new_flat);
+        };
 
         self.group_values = group_values;
 
