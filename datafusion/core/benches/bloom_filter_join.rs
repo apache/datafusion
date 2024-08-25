@@ -97,7 +97,7 @@ fn create_tpch_q17_lineitem_parquet() -> Result<NamedTempFile, ArrowError> {
         Field::new("l_suppkey", DataType::Int64, false),
         Field::new("l_quantity", DataType::Float64, false),
         Field::new("l_extendedprice", DataType::Float64, false),
-        Field::new("l_discount", DataType::Float64, false), // 添加 l_discount 字段
+        Field::new("l_discount", DataType::Float64, false),
         Field::new("l_shipmode", DataType::Utf8, false),
         Field::new("l_shipinstruct", DataType::Utf8, false),
     ]));
@@ -113,13 +113,13 @@ fn create_tpch_q17_lineitem_parquet() -> Result<NamedTempFile, ArrowError> {
     let data: Vec<Vec<String>> = (0..BLOOM_FILTER_JOIN_SIZE)
         .map(|v| {
             vec![
-                (v % 10).to_string(),                                // l_partkey
-                (v % 100).to_string(),                               // l_suppkey
-                (v % 50).to_string(),                                // l_quantity
-                (10000.0 + (v % 50) as f64 * 1.1).to_string(),       // l_extendedprice
-                (v as f64 % 0.1).to_string(), // l_discount (模拟折扣)
-                shipmodes[v as usize % shipmodes.len()].to_string(), // l_shipmode
-                shipinstructs[v as usize % shipinstructs.len()].to_string(), // l_shipinstruct
+                (v % 10).to_string(),                               // l_partkey
+                (v % 100).to_string(),                              // l_suppkey
+                (v % 50).to_string(),                               // l_quantity
+                (10000.0 + (v % 50) as f64 * 1.1).to_string(),      // l_extendedprice
+                (v as f64 % 0.1).to_string(),                       // l_discount
+                shipmodes[v % shipmodes.len()].to_string(),         // l_shipmode
+                shipinstructs[v % shipinstructs.len()].to_string(), // l_shipinstruct
             ]
         })
         .collect();
