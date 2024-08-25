@@ -173,6 +173,7 @@ datafusion.execution.aggregate.scalar_update_factor 10
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
+datafusion.execution.enable_aggregation_group_states_blocked_approach false
 datafusion.execution.enable_recursive_ctes true
 datafusion.execution.keep_partition_by_columns false
 datafusion.execution.listing_table_ignore_subdirectory true
@@ -263,6 +264,7 @@ datafusion.execution.aggregate.scalar_update_factor 10 Specifies the threshold f
 datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
 datafusion.execution.collect_statistics false Should DataFusion collect statistics after listing files
+datafusion.execution.enable_aggregation_group_states_blocked_approach false Should DataFusion use the the blocked approach to manage the groups values and their related states in accumulators. By default, the single approach will be used, and such group values and states will be managed using a single big block(can think a `Vec`), obviously as the block growing up, many copies will be triggered and finally get a bad performance. If setting this flag to `true`, the blocked approach will be used. We will allocate the `block size` capacity for block first, and when we found the block has been filled to `block size` limit, we will allocate next block rather than growing current block and copying the data. This approach can eliminate all unnecessary copies and get a good performance finally. We plan to make this the default in the future when tests are enough.
 datafusion.execution.enable_recursive_ctes true Should DataFusion support recursive CTEs
 datafusion.execution.keep_partition_by_columns false Should DataFusion keep the columns used for partition_by in the output RecordBatches
 datafusion.execution.listing_table_ignore_subdirectory true Should sub directories be ignored when scanning directories for data files. Defaults to true (ignores subdirectories), consistent with Hive. Note that this setting does not affect reading partitioned tables (e.g. `/table/year=2021/month=01/data.parquet`).
