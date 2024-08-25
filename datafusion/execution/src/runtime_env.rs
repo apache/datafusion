@@ -151,7 +151,7 @@ impl Default for RuntimeEnv {
     }
 }
 
-/// Per: https://github.com/apache/datafusion/issues/12156
+/// Please see: <https://github.com/apache/datafusion/issues/12156>
 /// This is leaving a type alias for backwards compatibility.
 pub type RuntimeConfig = RuntimeEnvBuilder;
 
