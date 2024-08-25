@@ -590,7 +590,6 @@ fn do_accumulate<T, F1, F2>(
     F2: FnMut(&BlockedGroupIndex) + Send,
 {   
     let data: &[T::Native] = values.values();
-    let group_index_parse_fn = |raw_index| { group_index_parse_fn(raw_index) };
     match (values.null_count() > 0, opt_filter) {
         // no nulls, no filter,
         (false, None) => {

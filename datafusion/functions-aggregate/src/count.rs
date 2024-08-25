@@ -413,7 +413,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             values.logical_nulls().as_ref(),
             opt_filter,
             |group_index| {
-                let blocked_index = BlockedGroupIndex::new_flat(group_index);
+                let blocked_index = group_index_parse_fn(group_index);
                 let count =
                     &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
                 *count += 1;
@@ -456,7 +456,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             group_indices,
             opt_filter,
             |group_index, partial_count| {
-                let blocked_index = BlockedGroupIndex::new_flat(group_index);
+                let blocked_index = group_index_parse_fn(group_index);
                 let count =
                     &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
                 *count += partial_count;

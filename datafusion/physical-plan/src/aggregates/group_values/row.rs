@@ -186,7 +186,7 @@ impl GroupValues for GroupValuesRows {
                     let blk_offset = cur_blk.num_rows();
                     cur_blk.push(group_rows.row(row));
 
-                    let blocked_index = BlockedGroupIndex::new(
+                    let blocked_index = BlockedGroupIndex::new_from_parts(
                         blk_id,
                         blk_offset,
                         self.block_size.is_some(),
@@ -305,7 +305,7 @@ impl GroupValues for GroupValuesRows {
                         match old_blk_idx.block_id.checked_sub(1) {
                             // Group index was >= n, shift value down
                             Some(new_blk_id) => {
-                                let new_group_idx = BlockedGroupIndex::new(
+                                let new_group_idx = BlockedGroupIndex::new_from_parts(
                                     new_blk_id,
                                     old_blk_idx.block_offset,
                                     true,
