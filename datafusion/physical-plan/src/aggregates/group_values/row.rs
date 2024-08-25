@@ -294,32 +294,34 @@ impl GroupValues for GroupValuesRows {
                 let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
 
+                let mut shift_down_values =
+                    |group_index_parse_fn: fn(usize) -> BlockedGroupIndex| unsafe {
+                        for bucket in self.map.iter() {
+                            // Decrement group index by n
+                            let group_idx = bucket.as_ref().1;
+                            let old_blk_idx = group_index_parse_fn(group_idx);
+                            match old_blk_idx.block_id.checked_sub(1) {
+                                // Group index was >= n, shift value down
+                                Some(new_blk_id) => {
+                                    let new_group_idx = BlockedGroupIndex::new_from_parts(
+                                        new_blk_id,
+                                        old_blk_idx.block_offset,
+                                        true,
+                                    );
+                                    bucket.as_mut().1 = new_group_idx.as_packed_index();
+                                }
+                                // Group index was < n, so remove from table
+                                None => self.map.erase(bucket),
+                            }
+                        }
+                    };
+
                 let group_index_parse_fn = if self.block_size.is_some() {
-                    BlockedGroupIndex::new_blocked
+                    shift_down_values(BlockedGroupIndex::new_blocked);
                 } else {
-                    BlockedGroupIndex::new_flat
+                    shift_down_values(BlockedGroupIndex::new_flat);
                 };
 
-                unsafe {
-                    for bucket in self.map.iter() {
-                        // Decrement group index by n
-                        let group_idx = bucket.as_ref().1;
-                        let old_blk_idx = group_index_parse_fn(group_idx);
-                        match old_blk_idx.block_id.checked_sub(1) {
-                            // Group index was >= n, shift value down
-                            Some(new_blk_id) => {
-                                let new_group_idx = BlockedGroupIndex::new_from_parts(
-                                    new_blk_id,
-                                    old_blk_idx.block_offset,
-                                    true,
-                                );
-                                bucket.as_mut().1 = new_group_idx.as_packed_index();
-                            }
-                            // Group index was < n, so remove from table
-                            None => self.map.erase(bucket),
-                        }
-                    }
-                }
                 output
             }
             EmitTo::NextBlock(false) => {
