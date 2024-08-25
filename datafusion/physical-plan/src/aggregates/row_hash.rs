@@ -42,9 +42,9 @@ use arrow_schema::SortOptions;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
+use datafusion_execution::{DiskManager, TaskContext};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -620,7 +620,7 @@ fn maybe_enable_blocked_group_states(
         .enable_aggregation_group_states_blocked_approach
         || !matches!(group_ordering, GroupOrdering::None)
         || accumulators.is_empty()
-        || enable_spilling(context.memory_pool().as_ref())
+        || enable_spilling(context.runtime_env().disk_manager.as_ref())
     {
         return Ok(false);
     }
@@ -641,9 +641,9 @@ fn maybe_enable_blocked_group_states(
     }
 }
 
-// TODO: we should add a function(like `name`) to distinguish different memory pools.
-fn enable_spilling(memory_pool: &dyn MemoryPool) -> bool {
-    !format!("{memory_pool:?}").contains("UnboundedMemoryPool")
+#[inline]
+fn enable_spilling(disk_manager: &DiskManager) -> bool {
+    disk_manager.tmp_files_enabled()
 }
 
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
@@ -1058,11 +1058,15 @@ impl GroupedHashAggregateStream {
             && matches!(self.mode, AggregateMode::Partial)
             && self.update_memory_reservation().is_err()
         {
-            let n = self.group_values.len() / self.batch_size * self.batch_size;
-            let batch = self.emit(EmitTo::First(n), false)?;
-            self.exec_state = ExecutionState::ProducingOutput(batch);
+            if !self.enable_blocked_group_states {
+                let n = self.group_values.len() / self.batch_size * self.batch_size;
+                let batch = self.emit(EmitTo::First(n), false)?;
+                self.exec_state = ExecutionState::ProducingOutput(batch);
+            } else {
+                let blocks = self.group_values.len() / self.batch_size;
+                self.exec_state = ExecutionState::ProducingBlocks(Some(blocks));
+            }
         }
-
         Ok(())
     }
 
