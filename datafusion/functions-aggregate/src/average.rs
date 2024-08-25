@@ -572,7 +572,6 @@ where
             self.block_size,
             T::default_value(),
         );
-        let is_blocked = self.block_size.is_some();
 
         self.null_state.accumulate(
             group_indices,

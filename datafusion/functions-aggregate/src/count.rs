@@ -18,7 +18,7 @@
 use ahash::RandomState;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
-    ensure_enough_room_for_values, BlockedGroupIndex, Blocks, EmitToExt, GroupIndexParser, VecBlocks
+    ensure_enough_room_for_values, BlockedGroupIndex, Blocks, EmitToExt, VecBlocks
 };
 use std::collections::HashSet;
 use std::ops::BitAnd;
@@ -364,8 +364,6 @@ struct CountGroupsAccumulator {
     counts: VecBlocks<i64>,
 
     block_size: Option<usize>,
-
-    group_index_parser: Box<dyn GroupIndexParser>,
 }
 
 impl CountGroupsAccumulator {
@@ -373,7 +371,6 @@ impl CountGroupsAccumulator {
         Self {
             counts: Blocks::new(),
             block_size: None,
-            group_index_parser: BlockedGroupIndex::parser(false),
         }
     }
 }
@@ -402,13 +399,22 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             0,
         );
 
-        let group_index_parser = self.group_index_parser.as_ref();
+        let group_index_parse_fn = if self.block_size.is_some() {
+            |raw_index: usize| -> BlockedGroupIndex {
+                BlockedGroupIndex::new_blocked(raw_index)
+            }
+        } else {
+            |raw_index: usize| -> BlockedGroupIndex {
+                BlockedGroupIndex::new_flat(raw_index)
+            }
+        };
+
         accumulate_indices(
             group_indices,
             values.logical_nulls().as_ref(),
             opt_filter,
             |group_index| {
-                let blocked_index = group_index_parser.parse(group_index);
+                let blocked_index = group_index_parse_fn(group_index);
                 let count =
                     &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
                 *count += 1;
@@ -440,13 +446,22 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             0,
         );
 
-        let group_index_parser = self.group_index_parser.as_ref();
+        let group_index_parse_fn = if self.block_size.is_some() {
+            |raw_index: usize| -> BlockedGroupIndex {
+                BlockedGroupIndex::new_blocked(raw_index)
+            }
+        } else {
+            |raw_index: usize| -> BlockedGroupIndex {
+                BlockedGroupIndex::new_flat(raw_index)
+            }
+        };
+
         do_count_merge_batch(
             values,
             group_indices,
             opt_filter,
             |group_index, partial_count| {
-                let blocked_index = group_index_parser.parse(group_index);
+                let blocked_index = group_index_parse_fn(group_index);
                 let count =
                     &mut self.counts[blocked_index.block_id][blocked_index.block_offset];
                 *count += partial_count;
@@ -549,7 +564,6 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
         self.counts.clear();
         self.block_size = block_size;
-        self.group_index_parser = BlockedGroupIndex::parser(block_size.is_some());
 
         Ok(())
     }

@@ -26,7 +26,7 @@ use arrow::datatypes::ArrowPrimitiveType;
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
 use crate::aggregate::groups_accumulator::{
-    BlockedGroupIndex, Blocks, GroupIndexParser,
+    BlockedGroupIndex, Blocks,
 };
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
@@ -371,8 +371,6 @@ pub struct BlockedNullState {
     seen_values_blocks: Blocks<BooleanBufferBuilder>,
 
     block_size: Option<usize>,
-
-    group_index_parser: Box<dyn GroupIndexParser>,
 }
 
 impl Default for BlockedNullState {
@@ -383,12 +381,9 @@ impl Default for BlockedNullState {
 
 impl BlockedNullState {
     pub fn new(block_size: Option<usize>) -> Self {
-        let group_index_parser = BlockedGroupIndex::parser(block_size.is_some());
-
         Self {
             seen_values_blocks: Blocks::new(),
             block_size,
-            group_index_parser,
         }
     }
 
@@ -425,13 +420,22 @@ impl BlockedNullState {
             false,
         );
         let seen_values_blocks = &mut self.seen_values_blocks;
-        let group_index_parser = self.group_index_parser.as_ref();
+
+        let group_index_parse_fn = if self.block_size.is_some() {
+            |raw_index: usize| -> BlockedGroupIndex {
+                BlockedGroupIndex::new_blocked(raw_index)
+            }
+        } else {
+            |raw_index: usize| -> BlockedGroupIndex {
+                BlockedGroupIndex::new_flat(raw_index)
+            }
+        };
 
         do_accumulate(
             group_indices,
             values,
             opt_filter,
-            group_index_parser,
+            group_index_parse_fn,
             value_fn,
             |index: &BlockedGroupIndex| {
                 seen_values_blocks[index.block_id].set_bit(index.block_offset, true);
@@ -572,7 +576,7 @@ fn do_accumulate<T, F1, F2>(
     group_indices: &[usize],
     values: &PrimitiveArray<T>,
     opt_filter: Option<&BooleanArray>,
-    group_index_parser: &dyn GroupIndexParser,
+    group_index_parse_fn: fn(usize) -> BlockedGroupIndex,
     mut value_fn: F1,
     mut set_valid_fn: F2,
 ) where
@@ -586,7 +590,7 @@ fn do_accumulate<T, F1, F2>(
         (false, None) => {
             let iter = group_indices.iter().zip(data.iter());
             for (&group_index, &new_value) in iter {
-                let blocked_index = group_index_parser.parse(group_index);
+                let blocked_index = group_index_parse_fn(group_index);
                 set_valid_fn(&blocked_index);
                 value_fn(&blocked_index, new_value);
             }
@@ -614,7 +618,7 @@ fn do_accumulate<T, F1, F2>(
                             // valid bit was set, real value
                             let is_valid = (mask & index_mask) != 0;
                             if is_valid {
-                                let blocked_index = group_index_parser.parse(group_index);
+                                let blocked_index = group_index_parse_fn(group_index);
                                 set_valid_fn(&blocked_index);
                                 value_fn(&blocked_index, new_value);
                             }
@@ -632,7 +636,7 @@ fn do_accumulate<T, F1, F2>(
                 .for_each(|(i, (&group_index, &new_value))| {
                     let is_valid = remainder_bits & (1 << i) != 0;
                     if is_valid {
-                        let blocked_index = group_index_parser.parse(group_index);
+                        let blocked_index = group_index_parse_fn(group_index);
                         set_valid_fn(&blocked_index);
                         value_fn(&blocked_index, new_value);
                     }
@@ -650,7 +654,7 @@ fn do_accumulate<T, F1, F2>(
                 .zip(filter.iter())
                 .for_each(|((&group_index, &new_value), filter_value)| {
                     if let Some(true) = filter_value {
-                        let blocked_index = group_index_parser.parse(group_index);
+                        let blocked_index = group_index_parse_fn(group_index);
                         set_valid_fn(&blocked_index);
                         value_fn(&blocked_index, new_value);
                     }
@@ -669,7 +673,7 @@ fn do_accumulate<T, F1, F2>(
                 .for_each(|((filter_value, &group_index), new_value)| {
                     if let Some(true) = filter_value {
                         if let Some(new_value) = new_value {
-                            let blocked_index = group_index_parser.parse(group_index);
+                            let blocked_index = group_index_parse_fn(group_index);
                             set_valid_fn(&blocked_index);
                             value_fn(&blocked_index, new_value)
                         }

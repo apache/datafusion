@@ -26,8 +26,10 @@ pub mod prim_op;
 use std::{
     cmp::min,
     collections::VecDeque,
-    fmt::{self, Debug}, iter,
-    ops::{Index, IndexMut}, usize,
+    fmt::{self, Debug},
+    iter,
+    ops::{Index, IndexMut},
+    usize,
 };
 
 use arrow::{
@@ -451,11 +453,8 @@ pub struct BlockedGroupIndex {
 }
 
 impl BlockedGroupIndex {
-    pub fn new(
-        block_id: usize,
-        block_offset: usize,
-        is_blocked: bool,
-    ) -> Self {
+    #[inline]
+    pub fn new(block_id: usize, block_offset: usize, is_blocked: bool) -> Self {
         Self {
             block_id,
             block_offset,
@@ -463,13 +462,27 @@ impl BlockedGroupIndex {
         }
     }
 
-    pub fn parser(is_blocked: bool) -> Box<dyn GroupIndexParser> {
-        if is_blocked {
-            Box::new(BlockedIndexParser)
-        } else {
-            Box::new(FlatIndexParser)
+    #[inline]
+    pub fn new_flat(raw_index: usize) -> Self {
+        Self {
+            block_id: 0,
+            block_offset: raw_index,
+            is_blocked: false,
         }
-    } 
+    }
+
+    #[inline]
+    pub fn new_blocked(raw_index: usize) -> Self {
+        let block_id =
+            ((raw_index as u64 >> 32) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
+        let block_offset = ((raw_index as u64) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
+
+        Self {
+            block_id,
+            block_offset,
+            is_blocked: true,
+        }
+    }
 
     pub fn as_packed_index(&self) -> usize {
         if self.is_blocked {
@@ -477,33 +490,6 @@ impl BlockedGroupIndex {
         } else {
             self.block_offset
         }
-    }
-}
-
-pub trait GroupIndexParser: Send + Debug {
-    fn parse(&self, raw_index: usize) -> BlockedGroupIndex;
-}
-
-#[derive(Debug)]
-struct FlatIndexParser;
-
-impl GroupIndexParser for FlatIndexParser {
-    fn parse(&self, raw_index: usize) -> BlockedGroupIndex {
-        BlockedGroupIndex::new(0, raw_index, false)
-    }
-}
-
-#[derive(Debug)]
-struct BlockedIndexParser;
-
-impl GroupIndexParser for BlockedIndexParser {
-    fn parse(&self, raw_index: usize) -> BlockedGroupIndex {
-        let block_id =
-            ((raw_index as u64 >> 32) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
-        let block_offset =
-            ((raw_index as u64) & BLOCKED_INDEX_LOW_32_BITS_MASK) as usize;
-
-        BlockedGroupIndex::new(block_id, block_offset, true)
     }
 }
 

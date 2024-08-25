@@ -29,7 +29,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
-    BlockedGroupIndex, Blocks, GroupIndexParser,
+    BlockedGroupIndex, Blocks,
 };
 use hashbrown::raw::RawTable;
 
@@ -75,8 +75,6 @@ pub struct GroupValuesRows {
 
     /// Mode about current GroupValuesRows
     block_size: Option<usize>,
-
-    group_index_parser: Box<dyn GroupIndexParser>,
 }
 
 impl GroupValuesRows {
@@ -105,7 +103,6 @@ impl GroupValuesRows {
             rows_buffer,
             random_state: Default::default(),
             block_size: None,
-            group_index_parser: BlockedGroupIndex::parser(false),
         })
     }
 }
@@ -137,7 +134,16 @@ impl GroupValues for GroupValuesRows {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
-        let is_blocked = self.block_size.is_some();
+        let group_index_parse_fn = if self.block_size.is_some() {
+            |raw_index: usize| -> BlockedGroupIndex {
+                BlockedGroupIndex::new_blocked(raw_index)
+            }
+        } else {
+            |raw_index: usize| -> BlockedGroupIndex {
+                BlockedGroupIndex::new_flat(raw_index)
+            }
+        };
+
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
                 // Somewhat surprisingly, this closure can be called even if the
@@ -151,7 +157,7 @@ impl GroupValues for GroupValuesRows {
                 // verify that the group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
-                let blocked_index = self.group_index_parser.parse(*group_idx);
+                let blocked_index = group_index_parse_fn(*group_idx);
                 group_rows.row(row)
                     == group_values[blocked_index.block_id]
                         .row(blocked_index.block_offset)
@@ -181,7 +187,7 @@ impl GroupValues for GroupValuesRows {
                     cur_blk.push(group_rows.row(row));
 
                     let blocked_index =
-                        BlockedGroupIndex::new(blk_id, blk_offset, is_blocked);
+                        BlockedGroupIndex::new(blk_id, blk_offset, self.block_size.is_some());
                     let group_idx = blocked_index.as_packed_index();
 
                     // for hasher function, use precomputed hash value
@@ -281,11 +287,21 @@ impl GroupValues for GroupValuesRows {
 
                 let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
+                let group_index_parse_fn = if self.block_size.is_some() {
+                    |raw_index: usize| -> BlockedGroupIndex {
+                        BlockedGroupIndex::new_blocked(raw_index)
+                    }
+                } else {
+                    |raw_index: usize| -> BlockedGroupIndex {
+                        BlockedGroupIndex::new_flat(raw_index)
+                    }
+                };
+
                 unsafe {
                     for bucket in self.map.iter() {
                         // Decrement group index by n
                         let group_idx = bucket.as_ref().1;
-                        let old_blk_idx = self.group_index_parser.parse(group_idx);
+                        let old_blk_idx = group_index_parse_fn(group_idx);
                         match old_blk_idx.block_id.checked_sub(1) {
                             // Group index was >= n, shift value down
                             Some(new_blk_id) => {
@@ -346,7 +362,6 @@ impl GroupValues for GroupValuesRows {
         self.map.clear();
         self.group_values.clear();
         self.block_size = block_size;
-        self.group_index_parser = BlockedGroupIndex::parser(block_size.is_some());
 
         Ok(())
     }
