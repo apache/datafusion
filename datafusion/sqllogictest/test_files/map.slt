@@ -198,6 +198,27 @@ SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33]);
 query error DataFusion error: Execution error: map key cannot be null
 SELECT MAP(['POST', 'HEAD', null], [41, 33, 30]);
 
+# Test duplicate keys
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: POST
+SELECT MAP(['POST', 'HEAD', 'POST'], [41, 33, null]);
+
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: POST
+SELECT MAP(make_array('POST', 'HEAD', 'POST'), make_array(41, 33, 30));
+
+statement error DataFusion error: Execution error: map key must be unique, duplicate key found: 1
+CREATE TABLE duplicated_keys_table 
+AS VALUES
+  (MAP {1: [1, NULL, 3], 1: [4, NULL, 6]});
+
+# statement ok
+# create table duplicate_keys_table as values
+# ('a', 1, 'a', 10);
+
+# query error
+# SELECT make_map(column1, column2, column3, column4) FROM duplicate_keys_table;
+
+
+
 query ?
 SELECT MAP(make_array('POST', 'HEAD', 'PATCH'), make_array(41, 33, 30));
 ----

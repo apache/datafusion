@@ -575,7 +575,7 @@ impl PartialOrd for ScalarValue {
 
 /// List/LargeList/FixedSizeList scalars always have a single element
 /// array. This function returns that array
-fn first_array_for_list(arr: &dyn Array) -> ArrayRef {
+pub fn first_array_for_list(arr: &dyn Array) -> ArrayRef {
     assert_eq!(arr.len(), 1);
     if let Some(arr) = arr.as_list_opt::<i32>() {
         arr.value(0)

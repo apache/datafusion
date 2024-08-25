@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use arrow::array::ArrayData;
@@ -24,7 +24,8 @@ use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_schema::{DataType, Field, SchemaBuilder};
 
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::scalar::first_array_for_list;
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
@@ -51,7 +52,7 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
-fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return exec_err!(
             "make_map requires exactly 2 arguments, got {} instead",
@@ -61,14 +62,49 @@ fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarV
 
     let data_type = args[0].data_type();
     let can_evaluate_to_const = can_evaluate_to_const(args);
-    let key = get_first_array_ref(&args[0])?;
-    let value = get_first_array_ref(&args[1])?;
-    make_map_batch_internal(key, value, can_evaluate_to_const, data_type)
+
+    // check the keys array is unique
+    let keys = get_first_array_ref(&args[0])?;
+    let key_array = keys.as_ref();
+
+    match &args[0] {
+        ColumnarValue::Array(_) => {
+            for i in 0..key_array.len() {
+                let row_keys = key_array.slice(i, 1);
+                let row_keys = first_array_for_list(row_keys.as_ref());
+                check_unique_keys(row_keys.as_ref())?;
+            }
+        }
+        ColumnarValue::Scalar(_) => {
+            check_unique_keys(key_array)?;
+        }
+    }
+
+    fn check_unique_keys(array: &dyn Array) -> Result<()> {
+        let mut seen_keys = HashSet::new();
+
+        for i in 0..array.len() {
+            if !array.is_null(i) {
+                let key = ScalarValue::try_from_array(array, i)?;
+                if seen_keys.contains(&key) {
+                    return exec_err!(
+                        "map key must be unique, duplicate key found: {}",
+                        key
+                    );
+                }
+                seen_keys.insert(key);
+            } else {
+                return exec_err!("map key cannot be null");
+            }
+        }
+        Ok(())
+    }
+
+    let values = get_first_array_ref(&args[1])?;
+    make_map_batch_internal(keys, values, can_evaluate_to_const, data_type)
 }
 
-fn get_first_array_ref(
-    columnar_value: &ColumnarValue,
-) -> datafusion_common::Result<ArrayRef> {
+fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
     match columnar_value {
         ColumnarValue::Scalar(value) => match value {
             ScalarValue::List(array) => Ok(array.value(0)),
@@ -85,7 +121,7 @@ fn make_map_batch_internal(
     values: ArrayRef,
     can_evaluate_to_const: bool,
     data_type: DataType,
-) -> datafusion_common::Result<ColumnarValue> {
+) -> Result<ColumnarValue> {
     if keys.null_count() > 0 {
         return exec_err!("map key cannot be null");
     }
@@ -173,7 +209,7 @@ impl ScalarUDFImpl for MapFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() % 2 != 0 {
             return exec_err!(
                 "map requires an even number of arguments, got {} instead",
@@ -198,11 +234,11 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_map_batch(args)
     }
 }
-fn get_element_type(data_type: &DataType) -> datafusion_common::Result<&DataType> {
+fn get_element_type(data_type: &DataType) -> Result<&DataType> {
     match data_type {
         DataType::List(element) => Ok(element.data_type()),
         DataType::LargeList(element) => Ok(element.data_type()),
@@ -273,7 +309,7 @@ fn get_element_type(data_type: &DataType) -> datafusion_common::Result<&DataType
 fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,
-) -> datafusion_common::Result<ColumnarValue> {
+) -> Result<ColumnarValue> {
     let mut offset_buffer = vec![O::zero()];
     let mut running_offset = O::zero();
 
