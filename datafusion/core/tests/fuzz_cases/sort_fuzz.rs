@@ -137,7 +137,8 @@ impl SortTest {
             );
 
             let runtime_env = RuntimeConfig::new()
-                .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size))).build();
+                .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
+                .build();
             let runtime = Arc::new(runtime_env.unwrap());
             SessionContext::new_with_config_rt(session_config, runtime)
         } else {
