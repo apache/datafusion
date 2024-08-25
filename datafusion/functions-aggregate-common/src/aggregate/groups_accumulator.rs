@@ -441,9 +441,14 @@ impl EmitToExt for EmitTo {
 
 /// Blocked style group index used in blocked mode group values and accumulators
 ///
-/// Parts in index:
+/// In blocked mode(is_blocked=true):
 ///   - High 32 bits represent `block_id`
 ///   - Low 32 bits represent `block_offset`
+///
+/// In flat mode(is_blocked=false)
+///   - `block_id` is always 0
+///   - total 64 bits used to represent the `block offset`
+///
 #[derive(Debug, Clone, Copy)]
 pub struct BlockedGroupIndex {
     pub block_id: u32,
