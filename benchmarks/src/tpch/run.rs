@@ -125,6 +125,11 @@ impl RunOpt {
             .execution
             .parquet
             .schema_force_string_view = self.common.string_view;
+        config
+            .options_mut()
+            .execution
+            .enable_aggregation_group_states_blocked_approach =
+            self.common.blocked_approach;
         let ctx = SessionContext::new_with_config(config);
 
         // register tables

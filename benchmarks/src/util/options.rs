@@ -42,6 +42,11 @@ pub struct CommonOpt {
     /// when reading ParquetFiles
     #[structopt(long)]
     pub string_view: bool,
+
+    /// If true, will use blocked approach to manage group values and states
+    /// in accumulators in aggregation.
+    #[structopt(long)]
+    pub blocked_approach: bool,
 }
 
 impl CommonOpt {

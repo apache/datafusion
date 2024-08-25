@@ -353,7 +353,7 @@ config_namespace! {
         /// next block rather than growing current block and copying the data. This
         /// approach can eliminate all unnecessary copies and get a good performance finally.
         /// We plan to make this the default in the future when tests are enough.
-        pub enable_aggregation_group_states_blocked_approach: bool, default = true
+        pub enable_aggregation_group_states_blocked_approach: bool, default = false
     }
 }
 
