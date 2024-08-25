@@ -316,7 +316,7 @@ impl GroupValues for GroupValuesRows {
                         }
                     };
 
-                let group_index_parse_fn = if self.block_size.is_some() {
+                if self.block_size.is_some() {
                     shift_down_values(BlockedGroupIndex::new_blocked);
                 } else {
                     shift_down_values(BlockedGroupIndex::new_flat);
