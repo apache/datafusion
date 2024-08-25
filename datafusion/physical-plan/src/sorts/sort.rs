@@ -810,7 +810,7 @@ impl DisplayAs for SortExec {
                 let preserve_partitioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]",)
+                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]", )
                     }
                     None => write!(f, "SortExec: expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]"),
                 }
@@ -966,7 +966,7 @@ mod tests {
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::RuntimeConfig;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::Literal;
@@ -1009,7 +1009,7 @@ mod tests {
             .options()
             .execution
             .sort_spill_reservation_bytes;
-        let rt_config = RuntimeConfig::new()
+        let rt_config = RuntimeEnvBuilder::new()
             .with_memory_limit(sort_spill_reservation_bytes + 12288, 1.0);
         let runtime = Arc::new(RuntimeEnv::new(rt_config)?);
         let task_ctx = Arc::new(
@@ -1085,7 +1085,7 @@ mod tests {
                 .execution
                 .sort_spill_reservation_bytes;
 
-            let rt_config = RuntimeConfig::new().with_memory_limit(
+            let rt_config = RuntimeEnvBuilder::new().with_memory_limit(
                 sort_spill_reservation_bytes + avg_batch_size * (partitions - 1),
                 1.0,
             );

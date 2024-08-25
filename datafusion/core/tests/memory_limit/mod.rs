@@ -40,7 +40,7 @@ use tokio::fs::File;
 use datafusion::datasource::streaming::StreamingTable;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -141,7 +141,7 @@ async fn join_by_expression() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service != t2.service")
         .with_expected_errors(vec![
-           "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -223,8 +223,8 @@ async fn sort_preserving_merge() {
     let partition_size = scenario.partition_size();
 
     TestCase::new()
-    // This query uses the exact same ordering as the input table
-    // so only a merge is needed
+        // This query uses the exact same ordering as the input table
+        // so only a merge is needed
         .with_query("select * from t ORDER BY a ASC NULLS LAST, b ASC NULLS LAST LIMIT 10")
         .with_expected_errors(vec![
             "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: SortPreservingMergeExec",
@@ -266,14 +266,14 @@ async fn sort_spill_reservation() {
     // purposely sorting data that requires non trivial memory to
     // sort/merge.
     let test = TestCase::new()
-    // This query uses a different order than the input table to
-    // force a sort. It also needs to have multiple columns to
-    // force RowFormat / interner that makes merge require
-    // substantial memory
+        // This query uses a different order than the input table to
+        // force a sort. It also needs to have multiple columns to
+        // force RowFormat / interner that makes merge require
+        // substantial memory
         .with_query("select * from t ORDER BY a , b DESC")
-    // enough memory to sort if we don't try to merge it all at once
+        // enough memory to sort if we don't try to merge it all at once
         .with_memory_limit(partition_size)
-    // use a single partition so only a sort is needed
+        // use a single partition so only a sort is needed
         .with_scenario(scenario)
         .with_disk_manager_config(DiskManagerConfig::NewOs)
         .with_expected_plan(
@@ -387,7 +387,7 @@ async fn oom_with_tracked_consumer_pool() {
         .with_memory_pool(Arc::new(
             TrackConsumersPool::new(
                 GreedyMemoryPool::new(200_000),
-                NonZeroUsize::new(1).unwrap()
+                NonZeroUsize::new(1).unwrap(),
             )
         ))
         .run()
@@ -509,7 +509,7 @@ impl TestCase {
 
         let table = scenario.table();
 
-        let mut rt_config = RuntimeConfig::new()
+        let mut rt_config = RuntimeEnvBuilder::new()
             // disk manager setting controls the spilling
             .with_disk_manager(disk_manager_config)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);

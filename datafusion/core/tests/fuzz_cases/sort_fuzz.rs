@@ -22,7 +22,7 @@ use arrow::{
     compute::SortOptions,
     record_batch::RecordBatch,
 };
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -136,7 +136,7 @@ impl SortTest {
                     .sort_spill_reservation_bytes,
             );
 
-            let runtime_config = RuntimeConfig::new()
+            let runtime_config = RuntimeEnvBuilder::new()
                 .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)));
             let runtime = Arc::new(RuntimeEnv::new(runtime_config).unwrap());
             SessionContext::new_with_config_rt(session_config, runtime)

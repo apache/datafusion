@@ -1572,7 +1572,7 @@ mod tests {
         ScalarValue,
     };
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
 
@@ -3798,7 +3798,7 @@ mod tests {
         ];
 
         for join_type in join_types {
-            let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
+            let runtime_config = RuntimeEnvBuilder::new().with_memory_limit(100, 1.0);
             let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
             let task_ctx = TaskContext::default().with_runtime(runtime);
             let task_ctx = Arc::new(task_ctx);
@@ -3871,7 +3871,7 @@ mod tests {
         ];
 
         for join_type in join_types {
-            let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
+            let runtime_config = RuntimeEnvBuilder::new().with_memory_limit(100, 1.0);
             let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
             let session_config = SessionConfig::default().with_batch_size(50);
             let task_ctx = TaskContext::default()

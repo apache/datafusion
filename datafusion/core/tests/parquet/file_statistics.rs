@@ -33,7 +33,7 @@ use datafusion_execution::cache::cache_unit::{
     DefaultFileStatisticsCache, DefaultListFilesCache,
 };
 use datafusion_execution::config::SessionConfig;
-use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 
 use datafusion::execution::session_state::SessionStateBuilder;
 use tempfile::tempdir;
@@ -198,7 +198,8 @@ fn get_cache_runtime_state() -> (
         .with_list_files_cache(Some(list_file_cache.clone()));
 
     let rt = Arc::new(
-        RuntimeEnv::new(RuntimeConfig::new().with_cache_manager(cache_config)).unwrap(),
+        RuntimeEnv::new(RuntimeEnvBuilder::new().with_cache_manager(cache_config))
+            .unwrap(),
     );
     let state = SessionContext::new_with_config_rt(SessionConfig::default(), rt).state();
 

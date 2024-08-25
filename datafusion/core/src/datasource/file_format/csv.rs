@@ -680,7 +680,7 @@ mod tests {
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
     use datafusion_expr::{col, lit};
 
     use crate::execution::session_state::SessionStateBuilder;
@@ -863,7 +863,7 @@ mod tests {
     async fn query_compress_data(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new()).unwrap());
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeEnvBuilder::new()).unwrap());
         let mut cfg = SessionConfig::new();
         cfg.options_mut().catalog.has_header = true;
         let session_state = SessionStateBuilder::new()

@@ -212,13 +212,13 @@ where
 /// # use std::sync::Arc;
 /// # use datafusion::prelude::*;
 /// # use datafusion::execution::SessionStateBuilder;
-/// # use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+/// # use datafusion_execution::runtime_env::{RuntimeEnvBuilder, RuntimeEnv};
 /// // Configure a 4k batch size
 /// let config = SessionConfig::new() .with_batch_size(4 * 1024);
 ///
 /// // configure a memory limit of 1GB with 20%  slop
 /// let runtime_env = RuntimeEnv::new(
-///   RuntimeConfig::new()
+///   RuntimeEnvBuilder::new()
 ///     .with_memory_limit(1024 * 1024 * 1024, 0.80)
 ///  ).unwrap();
 ///
@@ -1623,7 +1623,7 @@ mod tests {
     use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
     use crate::execution::memory_pool::MemoryConsumer;
-    use crate::execution::runtime_env::RuntimeConfig;
+    use crate::execution::runtime_env::RuntimeEnvBuilder;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
 
@@ -1758,7 +1758,7 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let rt_cfg = RuntimeConfig::new();
+        let rt_cfg = RuntimeEnvBuilder::new();
         let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())

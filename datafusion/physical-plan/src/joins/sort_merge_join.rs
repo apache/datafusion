@@ -1972,7 +1972,7 @@ mod tests {
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::disk_manager::DiskManagerConfig;
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
     use datafusion_execution::TaskContext;
 
     use crate::expressions::Column;
@@ -2894,7 +2894,7 @@ mod tests {
         ];
 
         // Disable DiskManager to prevent spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime_config = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
             .with_disk_manager(DiskManagerConfig::Disabled);
         let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
@@ -2979,7 +2979,7 @@ mod tests {
         ];
 
         // Disable DiskManager to prevent spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime_config = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
             .with_disk_manager(DiskManagerConfig::Disabled);
         let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
@@ -3042,7 +3042,7 @@ mod tests {
         ];
 
         // Enable DiskManager to allow spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime_config = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
             .with_disk_manager(DiskManagerConfig::NewOs);
         let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
@@ -3150,7 +3150,7 @@ mod tests {
         ];
 
         // Enable DiskManager to allow spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime_config = RuntimeEnvBuilder::new()
             .with_memory_limit(500, 1.0)
             .with_disk_manager(DiskManagerConfig::NewOs);
         let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);

@@ -740,8 +740,8 @@ impl RepartitionExec {
     /// and the node remains a `RepartitionExec`.
     pub fn with_preserve_order(mut self) -> Self {
         self.preserve_order =
-                // If the input isn't ordered, there is no ordering to preserve
-                self.input.output_ordering().is_some() &&
+            // If the input isn't ordered, there is no ordering to preserve
+            self.input.output_ordering().is_some() &&
                 // if there is only one input partition, merging is not required
                 // to maintain order
                 self.input.output_partitioning().partition_count() > 1;
@@ -1025,7 +1025,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::{assert_batches_sorted_eq, exec_err};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 
     use tokio::task::JoinSet;
 
@@ -1507,7 +1507,8 @@ mod tests {
 
         // setup up context
         let runtime = Arc::new(
-            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(1, 1.0)).unwrap(),
+            RuntimeEnv::new(RuntimeEnvBuilder::default().with_memory_limit(1, 1.0))
+                .unwrap(),
         );
 
         let task_ctx = TaskContext::default().with_runtime(runtime);

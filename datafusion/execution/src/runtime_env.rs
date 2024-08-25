@@ -41,7 +41,7 @@ use url::Url;
 /// Execution runtime environment that manages system resources such
 /// as memory, disk, cache and storage.
 ///
-/// A [`RuntimeEnv`] is created from a [`RuntimeConfig`] and has the
+/// A [`RuntimeEnv`] is created from a [`RuntimeEnvBuilder`] and has the
 /// following resource management functionality:
 ///
 /// * [`MemoryPool`]: Manage memory
@@ -67,8 +67,8 @@ impl Debug for RuntimeEnv {
 
 impl RuntimeEnv {
     /// Create env based on configuration
-    pub fn new(config: RuntimeConfig) -> Result<Self> {
-        let RuntimeConfig {
+    pub fn new(config: RuntimeEnvBuilder) -> Result<Self> {
+        let RuntimeEnvBuilder {
             memory_pool,
             disk_manager,
             cache_manager,
@@ -147,13 +147,17 @@ impl RuntimeEnv {
 
 impl Default for RuntimeEnv {
     fn default() -> Self {
-        RuntimeEnv::new(RuntimeConfig::new()).unwrap()
+        RuntimeEnv::new(RuntimeEnvBuilder::new()).unwrap()
     }
 }
 
+/// Per: https://github.com/apache/datafusion/issues/12156
+/// This is leaving a type alias for backwards compatibility.
+pub type RuntimeConfig = RuntimeEnvBuilder;
+
 #[derive(Clone)]
 /// Execution runtime configuration
-pub struct RuntimeConfig {
+pub struct RuntimeEnvBuilder {
     /// DiskManager to manage temporary disk file usage
     pub disk_manager: DiskManagerConfig,
     /// [`MemoryPool`] from which to allocate memory
@@ -166,13 +170,13 @@ pub struct RuntimeConfig {
     pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
 }
 
-impl Default for RuntimeConfig {
+impl Default for RuntimeEnvBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RuntimeConfig {
+impl RuntimeEnvBuilder {
     /// New with default values
     pub fn new() -> Self {
         Self {
