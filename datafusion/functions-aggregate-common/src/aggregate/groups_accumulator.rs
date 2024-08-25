@@ -447,7 +447,7 @@ impl EmitToExt for EmitTo {
 ///
 /// In flat mode(is_blocked=false)
 ///   - `block_id` is always 0
-///   - total 64 bits used to represent the `block offset`
+///   - Total 64 bits used to represent the `block offset`
 ///
 #[derive(Debug, Clone, Copy)]
 pub struct BlockedGroupIndex {
