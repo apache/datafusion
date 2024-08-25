@@ -57,7 +57,8 @@ pub struct TaskContext {
 
 impl Default for TaskContext {
     fn default() -> Self {
-        let runtime = RuntimeEnv::new(RuntimeEnvBuilder::new())
+        let runtime = RuntimeEnvBuilder::new()
+            .build()
             .expect("default runtime created successfully");
 
         // Create a default task context, mostly useful for testing

@@ -147,7 +147,7 @@ impl RuntimeEnv {
 
 impl Default for RuntimeEnv {
     fn default() -> Self {
-        RuntimeEnv::new(RuntimeEnvBuilder::new()).unwrap()
+        RuntimeEnvBuilder::new().build().unwrap()
     }
 }
 
@@ -231,5 +231,19 @@ impl RuntimeEnvBuilder {
     /// Use the specified path to create any needed temporary files
     pub fn with_temp_file_path(self, path: impl Into<PathBuf>) -> Self {
         self.with_disk_manager(DiskManagerConfig::new_specified(vec![path.into()]))
+    }
+
+    /// Build a RuntimeEnv
+    pub fn build(self) -> Result<RuntimeEnv> {
+        let memory_pool = self
+            .memory_pool
+            .unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
+
+        Ok(RuntimeEnv {
+            memory_pool,
+            disk_manager: DiskManager::try_new(self.disk_manager)?,
+            cache_manager: CacheManager::try_new(&self.cache_manager)?,
+            object_store_registry: self.object_store_registry,
+        })
     }
 }

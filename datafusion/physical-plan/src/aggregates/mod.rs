@@ -1806,8 +1806,9 @@ mod tests {
         let input_schema = input.schema();
 
         let runtime = Arc::new(
-            RuntimeEnv::new(RuntimeEnvBuilder::default().with_memory_limit(1, 1.0))
-                .unwrap(),
+            RuntimeEnvBuilder::default()
+                .with_memory_limit(1, 1.0)
+                .build()?,
         );
         let task_ctx = TaskContext::default().with_runtime(runtime);
         let task_ctx = Arc::new(task_ctx);

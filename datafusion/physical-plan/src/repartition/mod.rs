@@ -1025,7 +1025,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::{assert_batches_sorted_eq, exec_err};
-    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
     use tokio::task::JoinSet;
 
@@ -1507,8 +1507,9 @@ mod tests {
 
         // setup up context
         let runtime = Arc::new(
-            RuntimeEnv::new(RuntimeEnvBuilder::default().with_memory_limit(1, 1.0))
-                .unwrap(),
+            RuntimeEnvBuilder::default()
+                .with_memory_limit(1, 1.0)
+                .build()?,
         );
 
         let task_ctx = TaskContext::default().with_runtime(runtime);
