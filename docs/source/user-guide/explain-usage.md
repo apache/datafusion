@@ -271,45 +271,45 @@ SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*
   - `file_groups={10 groups: [...]}`: Reads 10 groups of data in parallel from `hits.parquet`file. (The example above was run on a machine with 10 cores.)
   - `projection=[UserID]`: Pushes down projection of `UserID` column as to limit data coming in.
 - `AggregateExec`
-  - `mode=Partial` Runs a [partial aggregation] in parallel across multiple inputs. In this case 10 inputs from the various groups denoted in `ParquetExec`.   
-  - `gby=[UserID@0 as UserID]`: Represents `GROUP BY` in the [physical plan] and groups together `UserID`. 
+  - `mode=Partial` Runs a [partial aggregation] in parallel across multiple inputs. In this case 10 inputs from the various groups denoted in `ParquetExec`.
+  - `gby=[UserID@0 as UserID]`: Represents `GROUP BY` in the [physical plan] and groups together `UserID`.
   - `aggr=[count(*)]`: Aggregates on all rows for the group.
 - `RepartitionExec`
   - `partitioning=Hash([UserID@0], 10)`: Maps 10 inputs to 10 streams of data allocating rows based on `hash(UserID)`. You can read more about this in the [partitioning] documentation.
-  - `input_partitions=10`: Using 10 inputs of data, this is creating a 1:1 mapping (i.e. 10 partitions from 10 groups).  
+  - `input_partitions=10`: Using 10 inputs of data, this is creating a 1:1 mapping (i.e. 10 partitions from 10 groups).
 - `CoalesceBatchesExec`
   - `target_batch_size=8192`: Combines smaller batches in to larger batches. In this case 8192 rows of data in each batch.
 - `AggregateExec`
-  - `mode=FinalPartitioned`: Performs the final partitioned aggregation on the data. 
-  - `gby=[UserID@0 as UserID]`: Groups by `UserID`. 
+  - `mode=FinalPartitioned`: Performs the final partitioned aggregation on the data.
+  - `gby=[UserID@0 as UserID]`: Groups by `UserID`.
   - `aggr=[count(*)]`: Aggregates on all rows for the group.
 - `SortExec`
-  - `TopK(fetch=10)`: Runs a sort on the data storing only 10 values in memory at a time. You can read more about this in the [TopK] documentation. 
-  - `expr=[count(*)@1 DESC]`: Sorts all rows descendingly, this represents the `ORDER BY` in the physical plan. 
+  - `TopK(fetch=10)`: Runs a sort on the data storing only 10 values in memory at a time. You can read more about this in the [TopK] documentation.
+  - `expr=[count(*)@1 DESC]`: Sorts all rows descendingly, this represents the `ORDER BY` in the physical plan.
   - `preserve_partitioning=[true]`: Ensures preservation to the child partitions of data.
 - `SortPreservingMergeExec`
-  - `[count(*)@1 DESC]`: Makes sure data is sorted descinglying as it is merged. 
+  - `[count(*)@1 DESC]`: Makes sure data is sorted descinglying as it is merged.
   - `fetch=10`: Fetches 10 rows of data.
 - `GlobalLimitExec`
   - `skip=0`: Does not skip any rows of data.
-  - `fetch=10`: Fetches the top 10 rows of data denoted by `LIMIT 10` in the query. 
+  - `fetch=10`: Fetches the top 10 rows of data denoted by `LIMIT 10` in the query.
 
 [partial aggregation]: https://docs.rs/datafusion/latest/datafusion/physical_plan/aggregates/enum.AggregateMode.html#variant.Partial
 [physical plan]: https://docs.rs/datafusion/latest/datafusion/physical_plan/aggregates/struct.PhysicalGroupBy.html
 [partitioning]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
-[TopK]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.TopK.html
+[topk]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.TopK.html
 
 **Logical plan operators**
 
 - `TableScan`
-  - `hits.parquet`: Scans data from the file `hits.parquet`. 
+  - `hits.parquet`: Scans data from the file `hits.parquet`.
   - `projection=[UserID]`: Does a projection of column `UserID`.
 - `Aggregate`
   - `groupBy=[[hits.parquet.UserID]]`: Groups by `UserID` column.
   - `aggr=[[count(Int64(1)) AS count(*)]]`: Does the grouping on all rows.
 - `Sort`
   - `count(*) DESC NULLS FIRST`: Sorts the data descendingly.
-  - `fetch=10`: Fetches only 10 rows of data. 
+  - `fetch=10`: Fetches only 10 rows of data.
 - `Limit`
   - `skip=0`: Does not skip any data for the results.
   - `fetch=10`: Limits the results to 10 values.
