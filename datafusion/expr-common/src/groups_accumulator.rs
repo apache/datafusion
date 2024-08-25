@@ -41,23 +41,6 @@ pub enum EmitTo {
     NextBlock(bool),
 }
 
-/// Mode for `accumulators` and `group values`
-///
-/// Their meanings:
-///   - Flat, the values in them will be managed with a single `Vec`.
-///     It will grow constantly when more and more values are inserted,
-///     that leads to a considerable amount of copying, and finally a bad performance.
-///
-///   - Blocked(block_size), the values in them will be managed with multiple `Vec`s.
-///     When the block is large enough(reach block_size), a new block will be allocated
-///     and used for inserting.
-///     Obviously, this strategy can avoid copying and get a good performance.
-#[derive(Debug, Clone, Copy)]
-pub enum GroupStatesMode {
-    Flat,
-    Blocked(usize),
-}
-
 /// `GroupAccumulator` implements a single aggregate (e.g. AVG) and
 /// stores the state for *all* groups internally.
 ///
@@ -150,24 +133,17 @@ pub trait GroupsAccumulator: Send {
         false
     }
 
-    /// Switch the accumulator to flat or blocked mode.
-    /// You can see detail about the mode on [GroupStatesMode].
+    /// Alter the block size in the accumulator
     ///
-    /// After switching mode, all data in previous mode will be cleared.
-    fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
-        if matches!(&mode, GroupStatesMode::Blocked(_)) {
-            return Err(DataFusionError::NotImplemented(
-                "this accumulator doesn't support blocked mode yet".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Switch the accumulator to flat or blocked mode.
-    /// You can see detail about the mode on [GroupStatesMode].
+    /// If the target block size is `None`, it will use a single big
+    /// block(can think it a `Vec`) to manage the state.
     ///
-    /// After switching mode, all data in previous mode will be cleared.
+    /// If the target block size` is `Some(blk_size)`, it will try to
+    /// set the block size to `blk_size`, and the try will only success
+    /// when the accumulator has supported blocked mode.
+    ///
+    /// NOTICE: After altering block size, all data in previous will be cleared.
+    ///
     fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
         if block_size.is_some() {
             return Err(DataFusionError::NotImplemented(

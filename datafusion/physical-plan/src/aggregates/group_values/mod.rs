@@ -22,7 +22,7 @@ use bytes_view::GroupValuesBytesView;
 use datafusion_common::{DataFusionError, Result};
 
 pub(crate) mod primitive;
-use datafusion_expr::{groups_accumulator::GroupStatesMode, EmitTo};
+use datafusion_expr::EmitTo;
 use primitive::GroupValuesPrimitive;
 
 mod row;
@@ -58,20 +58,17 @@ pub trait GroupValues: Send {
         false
     }
 
-    /// Switch the group values to flat or blocked mode.
-    /// You can see detail about the mode on [GroupStatesMode].
+    /// Alter the block size in the accumulator
     ///
-    /// After switching mode, all data in previous mode will be cleared.
-    fn switch_to_mode(&mut self, mode: GroupStatesMode) -> Result<()> {
-        if matches!(&mode, GroupStatesMode::Blocked(_)) {
-            return Err(DataFusionError::NotImplemented(
-                "this group values doesn't support blocked mode yet".to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-
+    /// If the target block size is `None`, it will use a single big
+    /// block(can think it a `Vec`) to manage the state.
+    ///
+    /// If the target block size` is `Some(blk_size)`, it will try to
+    /// set the block size to `blk_size`, and the try will only success
+    /// when the accumulator has supported blocked mode.
+    ///
+    /// NOTICE: After altering block size, all data in previous will be cleared.
+    ///
     fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
         if block_size.is_some() {
             return Err(DataFusionError::NotImplemented(

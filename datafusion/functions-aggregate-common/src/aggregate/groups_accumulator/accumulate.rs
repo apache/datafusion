@@ -379,12 +379,6 @@ impl Default for BlockedNullState {
 
 impl BlockedNullState {
     pub fn new(block_size: Option<usize>) -> Self {
-        let group_index_parse_fn = if block_size.is_some() {
-            BlockedGroupIndex::new_blocked
-        } else {
-            BlockedGroupIndex::new_flat
-        };
-
         Self {
             seen_values_blocks: Blocks::new(),
             block_size,

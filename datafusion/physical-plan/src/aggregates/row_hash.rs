@@ -45,7 +45,6 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
-use datafusion_expr::groups_accumulator::GroupStatesMode;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -1104,7 +1103,7 @@ impl GroupedHashAggregateStream {
         // because the blocked mode can't support `Emit::First(exact n)` which is needed in
         // streaming aggregation.
         if self.enable_blocked_group_states {
-            self.group_values.switch_to_mode(GroupStatesMode::Flat)?;
+            self.group_values.alter_block_size(None)?;
             self.accumulators
                 .iter_mut()
                 .try_for_each(|acc| acc.alter_block_size(None))?;
