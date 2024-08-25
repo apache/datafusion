@@ -1474,6 +1474,12 @@ impl SMJStream {
                                 [chunk.buffered_batch_idx.unwrap()];
 
                             for i in 0..pre_mask.len() {
+                                // If the buffered row is not joined with streamed side,
+                                // skip it.
+                                if buffered_indices.is_null(i) {
+                                    continue;
+                                }
+
                                 let buffered_index = buffered_indices.value(i);
 
                                 buffered_batch.join_filter_failed_map.insert(
