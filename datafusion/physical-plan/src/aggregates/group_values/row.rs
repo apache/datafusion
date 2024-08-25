@@ -75,6 +75,8 @@ pub struct GroupValuesRows {
 
     /// Mode about current GroupValuesRows
     block_size: Option<usize>,
+
+    group_index_parse_fn: fn(usize) -> BlockedGroupIndex,
 }
 
 impl GroupValuesRows {
@@ -93,6 +95,7 @@ impl GroupValuesRows {
         let starting_data_capacity = 64 * starting_rows_capacity;
         let rows_buffer =
             row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
+
         Ok(Self {
             schema,
             row_converter,
@@ -103,6 +106,7 @@ impl GroupValuesRows {
             rows_buffer,
             random_state: Default::default(),
             block_size: None,
+            group_index_parse_fn: BlockedGroupIndex::new_flat,
         })
     }
 }
@@ -134,11 +138,7 @@ impl GroupValues for GroupValuesRows {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
-        let group_index_parse_fn = if self.block_size.is_some() {
-            BlockedGroupIndex::new_blocked
-        } else {
-            BlockedGroupIndex::new_flat
-        };
+        let group_index_parse_fn = self.group_index_parse_fn;
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
@@ -286,11 +286,7 @@ impl GroupValues for GroupValuesRows {
 
                 let cur_blk = group_values.pop_first_block().unwrap();
                 let output = self.row_converter.convert_rows(cur_blk.iter())?;
-                let group_index_parse_fn = if self.block_size.is_some() {
-                    BlockedGroupIndex::new_blocked
-                } else {
-                    BlockedGroupIndex::new_flat
-                };
+                let group_index_parse_fn = self.group_index_parse_fn;
 
                 unsafe {
                     for bucket in self.map.iter() {
@@ -357,6 +353,11 @@ impl GroupValues for GroupValuesRows {
         self.map.clear();
         self.group_values.clear();
         self.block_size = block_size;
+        self.group_index_parse_fn = if block_size.is_some() {
+            BlockedGroupIndex::new_blocked
+        } else {
+            BlockedGroupIndex::new_flat
+        };
 
         Ok(())
     }

@@ -371,6 +371,8 @@ pub struct BlockedNullState {
     seen_values_blocks: Blocks<BooleanBufferBuilder>,
 
     block_size: Option<usize>,
+
+    group_index_parse_fn: fn(usize) -> BlockedGroupIndex,
 }
 
 impl Default for BlockedNullState {
@@ -381,9 +383,16 @@ impl Default for BlockedNullState {
 
 impl BlockedNullState {
     pub fn new(block_size: Option<usize>) -> Self {
+        let group_index_parse_fn = if block_size.is_some() {
+            BlockedGroupIndex::new_blocked
+        } else {
+            BlockedGroupIndex::new_flat
+        };
+
         Self {
             seen_values_blocks: Blocks::new(),
             block_size,
+            group_index_parse_fn,
         }
     }
 
@@ -421,17 +430,11 @@ impl BlockedNullState {
         );
         let seen_values_blocks = &mut self.seen_values_blocks;
 
-        let group_index_parse_fn = if self.block_size.is_some() {
-            BlockedGroupIndex::new_blocked
-        } else {
-            BlockedGroupIndex::new_flat
-        };
-
         do_accumulate(
             group_indices,
             values,
             opt_filter,
-            group_index_parse_fn,
+            self.group_index_parse_fn,
             value_fn,
             |index: &BlockedGroupIndex| {
                 seen_values_blocks[index.block_id].set_bit(index.block_offset, true);

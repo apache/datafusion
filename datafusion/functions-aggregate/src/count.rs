@@ -364,6 +364,8 @@ struct CountGroupsAccumulator {
     counts: VecBlocks<i64>,
 
     block_size: Option<usize>,
+
+    group_index_parse_fn: fn(usize) -> BlockedGroupIndex,
 }
 
 impl CountGroupsAccumulator {
@@ -371,6 +373,7 @@ impl CountGroupsAccumulator {
         Self {
             counts: Blocks::new(),
             block_size: None,
+            group_index_parse_fn: BlockedGroupIndex::new_flat,
         }
     }
 }
@@ -399,12 +402,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             0,
         );
 
-        let group_index_parse_fn = if self.block_size.is_some() {
-            BlockedGroupIndex::new_blocked
-        } else {
-            BlockedGroupIndex::new_flat
-        };
-
+        let group_index_parse_fn = self.group_index_parse_fn;
         accumulate_indices(
             group_indices,
             values.logical_nulls().as_ref(),
@@ -442,12 +440,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             0,
         );
 
-        let group_index_parse_fn = if self.block_size.is_some() {
-            BlockedGroupIndex::new_blocked
-        } else {
-            BlockedGroupIndex::new_flat
-        };
-
+        let group_index_parse_fn = self.group_index_parse_fn;
         do_count_merge_batch(
             values,
             group_indices,
@@ -556,6 +549,11 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
         self.counts.clear();
         self.block_size = block_size;
+        self.group_index_parse_fn = if block_size.is_some() {
+            BlockedGroupIndex::new_blocked
+        } else {
+            BlockedGroupIndex::new_flat
+        };
 
         Ok(())
     }

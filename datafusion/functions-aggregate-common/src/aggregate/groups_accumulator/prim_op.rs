@@ -27,7 +27,7 @@ use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::aggregate::groups_accumulator::accumulate::BlockedNullState;
 use crate::aggregate::groups_accumulator::{
-    ensure_enough_room_for_values, Blocks, EmitToExt, VecBlocks,
+    ensure_enough_room_for_values, Blocks, EmitToExt, VecBlocks
 };
 
 /// An accumulator that implements a single operation over
