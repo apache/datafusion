@@ -67,8 +67,8 @@ impl Debug for RuntimeEnv {
 
 impl RuntimeEnv {
     /// Create env based on configuration
-    pub fn new(config: RuntimeEnvBuilder) -> Result<Self> {
-        let RuntimeEnvBuilder {
+    pub fn new(config: RuntimeConfig) -> Result<Self> {
+        let RuntimeConfig {
             memory_pool,
             disk_manager,
             cache_manager,
