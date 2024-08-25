@@ -810,7 +810,7 @@ impl DisplayAs for SortExec {
                 let preserve_partitioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]", )
+                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]",)
                     }
                     None => write!(f, "SortExec: expr=[{expr}], preserve_partitioning=[{preserve_partitioning}]"),
                 }

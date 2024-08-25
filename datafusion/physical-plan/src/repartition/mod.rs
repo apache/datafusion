@@ -740,8 +740,8 @@ impl RepartitionExec {
     /// and the node remains a `RepartitionExec`.
     pub fn with_preserve_order(mut self) -> Self {
         self.preserve_order =
-            // If the input isn't ordered, there is no ordering to preserve
-            self.input.output_ordering().is_some() &&
+                // If the input isn't ordered, there is no ordering to preserve
+                self.input.output_ordering().is_some() &&
                 // if there is only one input partition, merging is not required
                 // to maintain order
                 self.input.output_partitioning().partition_count() > 1;
