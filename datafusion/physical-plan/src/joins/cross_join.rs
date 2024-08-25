@@ -379,7 +379,7 @@ fn build_batch(
             .collect(),
         &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
     )
-        .map_err(Into::into)
+    .map_err(Into::into)
 }
 
 #[async_trait]
