@@ -21,6 +21,7 @@
 mod parquet;
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -1648,8 +1649,8 @@ impl TableProvider for DataFrameTableProvider {
         self
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
-        Some(&self.plan)
+    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+        Some(Cow::Borrowed(&self.plan))
     }
 
     fn supports_filters_pushdown(
