@@ -128,6 +128,9 @@ where
 /// the state of the connection between a user and an instance of the
 /// DataFusion engine.
 ///
+/// See examples below for how to use the `SessionContext` to execute queries
+/// and how to configure the session.
+///
 /// # Overview
 ///
 /// [`SessionContext`] provides the following functionality:
@@ -200,7 +203,38 @@ where
 /// # }
 /// ```
 ///
-/// # `SessionContext`, `SessionState`, and `TaskContext`
+/// # Example: Configuring `SessionContext`
+///
+/// The `SessionContext` can be configured by creating a [`SessionState`] using
+/// [`SessionStateBuilder`]:
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use datafusion::prelude::*;
+/// # use datafusion::execution::SessionStateBuilder;
+/// # use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+/// // Configure a 4k batch size
+/// let config = SessionConfig::new() .with_batch_size(4 * 1024);
+///
+/// // configure a memory limit of 1GB with 20%  slop
+/// let runtime_env = RuntimeEnv::new(
+///   RuntimeConfig::new()
+///     .with_memory_limit(1024 * 1024 * 1024, 0.80)
+///  ).unwrap();
+///
+/// // Create a SessionState using the config and runtime_env
+/// let state = SessionStateBuilder::new()
+///   .with_config(config)
+///   .with_runtime_env(Arc::new(runtime_env))
+///   // include support for built in functions and configurations
+///   .with_default_features()
+///   .build();
+///
+/// // Create a SessionContext
+/// let ctx = SessionContext::from(state);
+/// ```
+///
+/// # Relationship between `SessionContext`, `SessionState`, and `TaskContext`
 ///
 /// The state required to optimize, and evaluate queries is
 /// broken into three levels to allow tailoring
@@ -654,7 +688,7 @@ impl SessionContext {
             column_defaults,
         } = cmd;
 
-        let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
+        let input = Arc::unwrap_or_clone(input);
         let input = self.state().optimize(&input)?;
         let table = self.table(name.clone()).await;
         match (if_not_exists, or_replace, table) {
@@ -1424,6 +1458,12 @@ impl FunctionRegistry for SessionContext {
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {
         TaskContext::from(&*session.state.read())
+    }
+}
+
+impl From<SessionState> for SessionContext {
+    fn from(state: SessionState) -> Self {
+        Self::new_with_state(state)
     }
 }
 

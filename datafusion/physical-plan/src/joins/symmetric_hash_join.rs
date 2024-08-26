@@ -72,6 +72,7 @@ use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
 use ahash::RandomState;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{ready, Stream, StreamExt};
 use hashbrown::HashSet;
 use parking_lot::Mutex;
@@ -410,7 +411,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         }
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![
             self.left_sort_exprs
                 .as_ref()
@@ -929,13 +930,11 @@ fn lookup_join_hashmap(
     let (mut matched_probe, mut matched_build) = build_hashmap
         .get_matched_indices(hash_values.iter().enumerate().rev(), deleted_offset);
 
-    matched_probe.as_slice_mut().reverse();
-    matched_build.as_slice_mut().reverse();
+    matched_probe.reverse();
+    matched_build.reverse();
 
-    let build_indices: UInt64Array =
-        PrimitiveArray::new(matched_build.finish().into(), None);
-    let probe_indices: UInt32Array =
-        PrimitiveArray::new(matched_probe.finish().into(), None);
+    let build_indices: UInt64Array = matched_build.into();
+    let probe_indices: UInt32Array = matched_probe.into();
 
     let (build_indices, probe_indices) = equal_rows_arr(
         &build_indices,

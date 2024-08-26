@@ -26,7 +26,7 @@ use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
-use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
+use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols, NamePreserver};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -643,9 +643,12 @@ impl LogicalPlan {
                 // todo it isn't clear why the schema is not recomputed here
                 Ok(LogicalPlan::Values(Values { schema, values }))
             }
-            LogicalPlan::Filter(Filter { predicate, input }) => {
-                Filter::try_new(predicate, input).map(LogicalPlan::Filter)
-            }
+            LogicalPlan::Filter(Filter {
+                predicate,
+                input,
+                having,
+            }) => Filter::try_new_internal(predicate, input, having)
+                .map(LogicalPlan::Filter),
             LogicalPlan::Repartition(_) => Ok(self),
             LogicalPlan::Window(Window {
                 input,
@@ -1157,10 +1160,7 @@ impl LogicalPlan {
         Ok(if let LogicalPlan::Prepare(prepare_lp) = plan_with_values {
             param_values.verify(&prepare_lp.data_types)?;
             // try and take ownership of the input if is not shared, clone otherwise
-            match Arc::try_unwrap(prepare_lp.input) {
-                Ok(input) => input,
-                Err(arc_input) => arc_input.as_ref().clone(),
-            }
+            Arc::unwrap_or_clone(prepare_lp.input)
         } else {
             plan_with_values
         })
@@ -1336,15 +1336,20 @@ impl LogicalPlan {
     ) -> Result<LogicalPlan> {
         self.transform_up_with_subqueries(|plan| {
             let schema = Arc::clone(plan.schema());
+            let name_preserver = NamePreserver::new(&plan);
             plan.map_expressions(|e| {
-                e.infer_placeholder_types(&schema)?.transform_up(|e| {
-                    if let Expr::Placeholder(Placeholder { id, .. }) = e {
-                        let value = param_values.get_placeholders_with_values(&id)?;
-                        Ok(Transformed::yes(Expr::Literal(value)))
-                    } else {
-                        Ok(Transformed::no(e))
-                    }
-                })
+                let original_name = name_preserver.save(&e)?;
+                let transformed_expr =
+                    e.infer_placeholder_types(&schema)?.transform_up(|e| {
+                        if let Expr::Placeholder(Placeholder { id, .. }) = e {
+                            let value = param_values.get_placeholders_with_values(&id)?;
+                            Ok(Transformed::yes(Expr::Literal(value)))
+                        } else {
+                            Ok(Transformed::no(e))
+                        }
+                    })?;
+                // Preserve name to avoid breaking column references to this expression
+                transformed_expr.map_data(|expr| original_name.restore(expr))
             })
         })
         .map(|res| res.data)
@@ -2080,6 +2085,8 @@ pub struct Filter {
     pub predicate: Expr,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
+    /// The flag to indicate if the filter is a having clause
+    pub having: bool,
 }
 
 impl Filter {
@@ -2088,6 +2095,20 @@ impl Filter {
     /// Notes: as Aliases have no effect on the output of a filter operator,
     /// they are removed from the predicate expression.
     pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+        Self::try_new_internal(predicate, input, false)
+    }
+
+    /// Create a new filter operator for a having clause.
+    /// This is similar to a filter, but its having flag is set to true.
+    pub fn try_new_with_having(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+        Self::try_new_internal(predicate, input, true)
+    }
+
+    fn try_new_internal(
+        predicate: Expr,
+        input: Arc<LogicalPlan>,
+        having: bool,
+    ) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -2104,6 +2125,7 @@ impl Filter {
         Ok(Self {
             predicate: predicate.unalias_nested().data,
             input,
+            having,
         })
     }
 
@@ -2907,7 +2929,11 @@ impl Debug for Subquery {
     }
 }
 
-/// Logical partitioning schemes supported by the repartition operator.
+/// Logical partitioning schemes supported by [`LogicalPlan::Repartition`]
+///
+/// See [`Partitioning`] for more details on partitioning
+///
+/// [`Partitioning`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html#
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions

@@ -21,6 +21,7 @@
 mod parquet;
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -1648,8 +1649,8 @@ impl TableProvider for DataFrameTableProvider {
         self
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
-        Some(&self.plan)
+    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+        Some(Cow::Borrowed(&self.plan))
     }
 
     fn supports_filters_pushdown(
@@ -1707,7 +1708,7 @@ mod tests {
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
     use arrow::array::{self, Int32Array};
-    use datafusion_common::{Constraint, Constraints, ScalarValue};
+    use datafusion_common::{assert_batches_eq, Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::{
@@ -3697,6 +3698,34 @@ mod tests {
         // must be error
         result = ctx.sql("explain explain select 1").await;
         assert!(result.is_err());
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/datafusion/issues/12065
+    #[tokio::test]
+    async fn filtered_aggr_with_param_values() -> Result<()> {
+        let cfg = SessionConfig::new()
+            .set("datafusion.sql_parser.dialect", "PostgreSQL".into());
+        let ctx = SessionContext::new_with_config(cfg);
+        register_aggregate_csv(&ctx, "table1").await?;
+
+        let df = ctx
+            .sql("select count (c2) filter (where c3 > $1) from table1")
+            .await?
+            .with_param_values(ParamValues::List(vec![ScalarValue::from(10u64)]));
+
+        let df_results = df?.collect().await?;
+        assert_batches_eq!(
+            &[
+                "+------------------------------------------------+",
+                "| count(table1.c2) FILTER (WHERE table1.c3 > $1) |",
+                "+------------------------------------------------+",
+                "| 54                                             |",
+                "+------------------------------------------------+",
+            ],
+            &df_results
+        );
+
         Ok(())
     }
 }
