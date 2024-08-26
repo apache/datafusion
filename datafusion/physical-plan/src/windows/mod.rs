@@ -55,6 +55,7 @@ use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 pub use window_agg_exec::WindowAggExec;
 
 /// Build field from window function and add it into schema
@@ -400,7 +401,7 @@ pub(crate) fn calc_requirements<
 >(
     partition_by_exprs: impl IntoIterator<Item = T>,
     orderby_sort_exprs: impl IntoIterator<Item = S>,
-) -> Option<Vec<PhysicalSortRequirement>> {
+) -> Option<LexRequirement> {
     let mut sort_reqs = partition_by_exprs
         .into_iter()
         .map(|partition_by| {
@@ -570,7 +571,7 @@ pub fn get_window_mode(
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
-    let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
+    let mut partition_by_reqs: LexRequirement = vec![];
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
     partition_by_reqs.extend(indices.iter().map(|&idx| PhysicalSortRequirement {
         expr: Arc::clone(&partitionby_exprs[idx]),
@@ -727,7 +728,7 @@ mod tests {
                 orderbys.push(PhysicalSortExpr { expr, options });
             }
 
-            let mut expected: Option<Vec<PhysicalSortRequirement>> = None;
+            let mut expected: Option<LexRequirement> = None;
             for (col_name, reqs) in expected_params {
                 let options = reqs.map(|(descending, nulls_first)| SortOptions {
                     descending,

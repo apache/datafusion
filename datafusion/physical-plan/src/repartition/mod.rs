@@ -38,9 +38,10 @@ use crate::sorts::streaming_merge;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
+use arrow::array::ArrayRef;
+use arrow::datatypes::{SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
+use arrow_array::PrimitiveArray;
 use datafusion_common::utils::transpose;
 use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
@@ -275,12 +276,11 @@ impl BatchPartitioner {
                     create_hashes(&arrays, random_state, hash_buffer)?;
 
                     let mut indices: Vec<_> = (0..*partitions)
-                        .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
+                        .map(|_| Vec::with_capacity(batch.num_rows()))
                         .collect();
 
                     for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize]
-                            .append_value(index as u64);
+                        indices[(*hash % *partitions as u64) as usize].push(index as u64);
                     }
 
                     // Finished building index-arrays for output partitions
@@ -291,8 +291,8 @@ impl BatchPartitioner {
                     let it = indices
                         .into_iter()
                         .enumerate()
-                        .filter_map(|(partition, mut indices)| {
-                            let indices = indices.finish();
+                        .filter_map(|(partition, indices)| {
+                            let indices: PrimitiveArray<UInt64Type> = indices.into();
                             (!indices.is_empty()).then_some((partition, indices))
                         })
                         .map(move |(partition, indices)| {
