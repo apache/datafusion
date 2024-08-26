@@ -174,7 +174,7 @@ above but with `EXPLAIN ANALYZE` (note the output is edited for clarity)
 
 [`executionplan::metrics`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.metrics
 
-```sql
+```
 > EXPLAIN ANALYZE SELECT "WatchID" AS wid, "hits.parquet"."ClientIP" AS ip
 FROM 'hits.parquet'
 WHERE starts_with("URL", 'http://domcheloveplanet.ru/')
@@ -236,15 +236,21 @@ You can read more about this in the [Partitoning Docs].
 
 ## Example of an Aggregate Query
 
-Let us delve into an example click bench query that aggregates data from the `hits.parquet` file.
-
-For example, this query from ClickBench finds the top 10 users by the number of hits:
+Let us delve into an example query that aggregates data from the `hits.parquet`
+file. For example, this query from ClickBench finds the top 10 users by their
+number of hits:
 
 ```sql
-SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*) DESC LIMIT 10;
+SELECT "UserID", COUNT(*)
+FROM 'hits.parquet'
+GROUP BY "UserID"
+ORDER BY COUNT(*) DESC
+LIMIT 10;
 ```
 
-```sql
+We can again see the query plan by using `EXPLAIN`:
+
+```
 > EXPLAIN SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*) DESC LIMIT 10;
 +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type     | plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -265,54 +271,57 @@ SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*
 +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 ```
 
-**Physical plan operators**
-
-- `ParquetExec`
-  - `file_groups={10 groups: [...]}`: Reads 10 groups of data in parallel from `hits.parquet`file. (The example above was run on a machine with 10 cores.)
-  - `projection=[UserID]`: Pushes down projection of `UserID` column as to limit data coming in.
-- `AggregateExec`
-  - `mode=Partial` Runs a [partial aggregation] in parallel across multiple inputs. In this case 10 inputs from the various groups denoted in `ParquetExec`.
-  - `gby=[UserID@0 as UserID]`: Represents `GROUP BY` in the [physical plan] and groups together `UserID`.
-  - `aggr=[count(*)]`: Aggregates on all rows for the group.
-- `RepartitionExec`
-  - `partitioning=Hash([UserID@0], 10)`: Maps 10 inputs to 10 streams of data allocating rows based on `hash(UserID)`. You can read more about this in the [partitioning] documentation.
-  - `input_partitions=10`: Using 10 inputs of data, this is creating a 1:1 mapping (i.e. 10 partitions from 10 groups).
-- `CoalesceBatchesExec`
-  - `target_batch_size=8192`: Combines smaller batches in to larger batches. In this case 8192 rows of data in each batch.
-- `AggregateExec`
-  - `mode=FinalPartitioned`: Performs the final partitioned aggregation on the data.
-  - `gby=[UserID@0 as UserID]`: Groups by `UserID`.
-  - `aggr=[count(*)]`: Aggregates on all rows for the group.
-- `SortExec`
-  - `TopK(fetch=10)`: Runs a sort on the data storing only 10 values in memory at a time. You can read more about this in the [TopK] documentation.
-  - `expr=[count(*)@1 DESC]`: Sorts all rows descendingly, this represents the `ORDER BY` in the physical plan.
-  - `preserve_partitioning=[true]`: Ensures preservation to the child partitions of data.
-- `SortPreservingMergeExec`
-  - `[count(*)@1 DESC]`: Makes sure data is sorted descinglying as it is merged.
-  - `fetch=10`: Fetches 10 rows of data.
-- `GlobalLimitExec`
-  - `skip=0`: Does not skip any rows of data.
-  - `fetch=10`: Fetches the top 10 rows of data denoted by `LIMIT 10` in the query.
-
-[partial aggregation]: https://docs.rs/datafusion/latest/datafusion/physical_plan/aggregates/enum.AggregateMode.html#variant.Partial
-[physical plan]: https://docs.rs/datafusion/latest/datafusion/physical_plan/aggregates/struct.PhysicalGroupBy.html
-[partitioning]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
-[topk]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.TopK.html
+For this query, let's again read the plan from the bottom to the top:
 
 **Logical plan operators**
 
 - `TableScan`
   - `hits.parquet`: Scans data from the file `hits.parquet`.
-  - `projection=[UserID]`: Does a projection of column `UserID`.
+  - `projection=[UserID]`: Reads only the `UserID` column
 - `Aggregate`
   - `groupBy=[[hits.parquet.UserID]]`: Groups by `UserID` column.
-  - `aggr=[[count(Int64(1)) AS count(*)]]`: Does the grouping on all rows.
+  - `aggr=[[count(Int64(1)) AS count(*)]]`: Applies the `COUNT` aggregate on each distinct group.
 - `Sort`
-  - `count(*) DESC NULLS FIRST`: Sorts the data descendingly.
-  - `fetch=10`: Fetches only 10 rows of data.
+  - `count(*) DESC NULLS FIRST`: Sorts the data in descending count order.
+  - `fetch=10`: Returns only the first 10 rows.
 - `Limit`
   - `skip=0`: Does not skip any data for the results.
   - `fetch=10`: Limits the results to 10 values.
+
+**Physical plan operators**
+
+- `ParquetExec`
+  - `file_groups={10 groups: [...]}`: Reads 10 groups in parallel from `hits.parquet`file. (The example above was run on a machine with 10 cores.)
+  - `projection=[UserID]`: Pushes down projection of the `UserID` column. The parquet format is columnar and the DataFusion reader only decodes the columns required.
+- `AggregateExec`
+  - `mode=Partial` Runs a [partial aggregation] in parallel across each of the 10 partitions from the `ParquetExec` immediately after reading.
+  - `gby=[UserID@0 as UserID]`: Represents `GROUP BY` in the [physical plan] and groups together the same values of `UserID`.
+  - `aggr=[count(*)]`: Applies the `COUNT` aggregate on all rows for each group.
+- `RepartitionExec`
+  - `partitioning=Hash([UserID@0], 10)`: Divides the input into into 10 (new) output partitions based on the value of `hash(UserID)`. You can read more about this in the [partitioning] documentation.
+  - `input_partitions=10`: Number of input partitions.
+- `CoalesceBatchesExec`
+  - `target_batch_size=8192`: Combines smaller batches in to larger batches. In this case approximately 8192 rows in each batch.
+- `AggregateExec`
+  - `mode=FinalPartitioned`: Performs the final aggregation on each group. See the [documentation on multi phase grouping] for more information.
+  - `gby=[UserID@0 as UserID]`: Groups by `UserID`.
+  - `aggr=[count(*)]`: Applies the `COUNT` aggregate on all rows for each group.
+- `SortExec`
+  - `TopK(fetch=10)`: Use a special "TopK" sort that keeps only the largest 10 values in memory at a time. You can read more about this in the [TopK] documentation.
+  - `expr=[count(*)@1 DESC]`: Sorts all rows in descending order. Note this represents the `ORDER BY` in the physical plan.
+  - `preserve_partitioning=[true]`: The sort is done in parallel on each partition. In this case the top 10 values are found for each of the 10 partitions, in parallel.
+- `SortPreservingMergeExec`
+  - `[count(*)@1 DESC]`: This operator merges the 10 distinct streams into a single stream using this expression.
+  - `fetch=10`: Returns only the first 10 rows
+- `GlobalLimitExec`
+  - `skip=0`: Does not skip any rows
+  - `fetch=10`: Returns only the first 10 rows, denoted by `LIMIT 10` in the query.
+
+[partial aggregation]: https://docs.rs/datafusion/latest/datafusion/physical_plan/aggregates/enum.AggregateMode.html#variant.Partial
+[physical plan]: https://docs.rs/datafusion/latest/datafusion/physical_plan/aggregates/struct.PhysicalGroupBy.html
+[partitioning]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
+[topk]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.TopK.html
+[documentation on multi phase grouping]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.Accumulator.html#tymethod.state
 
 ### Data in this Example
 
