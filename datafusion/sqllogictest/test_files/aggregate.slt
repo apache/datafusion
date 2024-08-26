@@ -98,6 +98,17 @@ SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
 
+statement error DataFusion error: This feature is not implemented: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
+SELECT approx_percentile_cont(c12, c12) FROM aggregate_test_100
+
+statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal
+SELECT approx_percentile_cont(c12, 0.95, c5) FROM aggregate_test_100
+
+# Not supported over sliding windows
+query error This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented
+SELECT approx_percentile_cont(c3, 0.5) OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) 
+FROM aggregate_test_100
+
 # array agg can use order by
 query ?
 SELECT array_agg(c13 ORDER BY c13)

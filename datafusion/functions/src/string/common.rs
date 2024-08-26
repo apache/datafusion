@@ -24,7 +24,7 @@ use std::sync::Arc;
 use arrow::array::{
     new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef,
     BooleanArray, GenericStringArray, GenericStringBuilder, OffsetSizeTrait, StringArray,
-    StringViewArray,
+    StringBuilder, StringViewArray,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
@@ -217,6 +217,23 @@ where
                 i64,
                 _,
             >(array, op)?)),
+            DataType::Utf8View => {
+                let string_array = as_string_view_array(array)?;
+                let mut string_builder = StringBuilder::with_capacity(
+                    string_array.len(),
+                    string_array.get_array_memory_size(),
+                );
+
+                for str in string_array.iter() {
+                    if let Some(str) = str {
+                        string_builder.append_value(op(str));
+                    } else {
+                        string_builder.append_null();
+                    }
+                }
+
+                Ok(ColumnarValue::Array(Arc::new(string_builder.finish())))
+            }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -227,6 +244,10 @@ where
             ScalarValue::LargeUtf8(a) => {
                 let result = a.as_ref().map(|x| op(x));
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
+            }
+            ScalarValue::Utf8View(a) => {
+                let result = a.as_ref().map(|x| op(x));
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },

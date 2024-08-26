@@ -15,18 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Shared state for query planning and execution.
+//! Utilities for working with strings
 
-pub mod context;
-pub mod session_state;
-pub use session_state::{SessionState, SessionStateBuilder};
+use arrow::{array::AsArray, datatypes::DataType};
+use arrow_array::Array;
 
-mod session_state_defaults;
-
-pub use session_state_defaults::SessionStateDefaults;
-
-// backwards compatibility
-pub use crate::datasource::file_format::options;
-
-// backwards compatibility
-pub use datafusion_execution::*;
+/// Convenient function to convert an Arrow string array to a vector of strings
+pub fn string_array_to_vec(array: &dyn Array) -> Vec<Option<&str>> {
+    match array.data_type() {
+        DataType::Utf8 => array.as_string::<i32>().iter().collect(),
+        DataType::LargeUtf8 => array.as_string::<i64>().iter().collect(),
+        DataType::Utf8View => array.as_string_view().iter().collect(),
+        _ => unreachable!(),
+    }
+}

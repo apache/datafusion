@@ -459,8 +459,6 @@ Xiangpeng
 Raphael
 NULL
 
-
-
 ### Initcap
 
 query TT
@@ -500,7 +498,7 @@ SELECT
   INITCAP(column1_large_utf8_lower) as c3
 FROM test_lowercase;
 ----
-Andrew Andrew Andrew    
+Andrew Andrew Andrew
 Xiangpeng Xiangpeng Xiangpeng
 Raphael Raphael Raphael
 NULL NULL NULL
@@ -850,16 +848,42 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for LOWER
-## TODO https://github.com/apache/datafusion/issues/11855
 query TT
 EXPLAIN SELECT
   LOWER(column1_utf8view) as c1
 FROM test;
 ----
 logical_plan
-01)Projection: lower(CAST(test.column1_utf8view AS Utf8)) AS c1
+01)Projection: lower(test.column1_utf8view) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
+query T
+SELECT LOWER(column1_utf8view) as c1
+FROM test;
+----
+andrew
+xiangpeng
+raphael
+NULL
+
+## Ensure no casts for UPPER
+query TT
+EXPLAIN SELECT
+  UPPER(column1_utf8view) as c1
+FROM test;
+----
+logical_plan
+01)Projection: upper(test.column1_utf8view) AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+query T
+SELECT UPPER(column1_utf8view) as c1
+FROM test;
+----
+ANDREW
+XIANGPENG
+RAPHAEL
+NULL
 
 ## Ensure no casts for LPAD
 query TT

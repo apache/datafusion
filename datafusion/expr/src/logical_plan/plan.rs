@@ -26,7 +26,7 @@ use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
-use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
+use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols, NamePreserver};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -1339,15 +1339,20 @@ impl LogicalPlan {
     ) -> Result<LogicalPlan> {
         self.transform_up_with_subqueries(|plan| {
             let schema = Arc::clone(plan.schema());
+            let name_preserver = NamePreserver::new(&plan);
             plan.map_expressions(|e| {
-                e.infer_placeholder_types(&schema)?.transform_up(|e| {
-                    if let Expr::Placeholder(Placeholder { id, .. }) = e {
-                        let value = param_values.get_placeholders_with_values(&id)?;
-                        Ok(Transformed::yes(Expr::Literal(value)))
-                    } else {
-                        Ok(Transformed::no(e))
-                    }
-                })
+                let original_name = name_preserver.save(&e)?;
+                let transformed_expr =
+                    e.infer_placeholder_types(&schema)?.transform_up(|e| {
+                        if let Expr::Placeholder(Placeholder { id, .. }) = e {
+                            let value = param_values.get_placeholders_with_values(&id)?;
+                            Ok(Transformed::yes(Expr::Literal(value)))
+                        } else {
+                            Ok(Transformed::no(e))
+                        }
+                    })?;
+                // Preserve name to avoid breaking column references to this expression
+                transformed_expr.map_data(|expr| original_name.restore(expr))
             })
         })
         .map(|res| res.data)
