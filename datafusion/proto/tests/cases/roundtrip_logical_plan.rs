@@ -1232,6 +1232,8 @@ fn round_trip_scalar_values() {
         ScalarValue::UInt64(Some(0)),
         ScalarValue::Utf8(Some(String::from("Test string   "))),
         ScalarValue::LargeUtf8(Some(String::from("Test Large utf8"))),
+        ScalarValue::Utf8View(Some(String::from("Test stringview"))),
+        ScalarValue::BinaryView(Some(b"binaryview".to_vec())),
         ScalarValue::Date32(Some(0)),
         ScalarValue::Date32(Some(i32::MAX)),
         ScalarValue::Date32(None),
@@ -1462,7 +1464,6 @@ fn round_trip_scalar_values() {
         let proto: protobuf::ScalarValue = (&test_case)
             .try_into()
             .expect("failed conversion to protobuf");
-
         let roundtrip: ScalarValue = (&proto)
             .try_into()
             .expect("failed conversion from protobuf");
