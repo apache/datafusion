@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::regex::common::regexp_is_match;
+use crate::string::common::regexp_is_match;
 use crate::utils::make_scalar_function;
 
 use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, StringViewArray};

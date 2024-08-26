@@ -17,7 +17,6 @@
 
 //! "regex" DataFusion functions
 
-pub mod common;
 pub mod regexplike;
 pub mod regexpmatch;
 pub mod regexpreplace;
