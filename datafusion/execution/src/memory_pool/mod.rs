@@ -141,6 +141,9 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 
     /// Return the total amount of memory reserved
     fn reserved(&self) -> usize;
+
+    /// Return the configured pool size (if any)
+    fn pool_size(&self) -> Option<usize>;
 }
 
 /// A memory consumer is a named allocation traced by a particular
@@ -438,7 +441,9 @@ mod tests {
 
     #[test]
     fn test_memory_pool_underflow() {
-        let pool = Arc::new(GreedyMemoryPool::new(50)) as _;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(50)) as _;
+        assert_eq!(pool.pool_size(), Some(50));
+
         let mut a1 = MemoryConsumer::new("a1").register(&pool);
         assert_eq!(pool.reserved(), 0);
 
