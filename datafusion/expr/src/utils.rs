@@ -569,7 +569,7 @@ pub fn compare_sort_expr(
             }
             Ordering::Equal
         }
-        _ => Ordering::Equal,
+        _ => panic!("Sort expressions must be of type Sort"),
     }
 }
 
