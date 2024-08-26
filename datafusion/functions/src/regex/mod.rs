@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! "regx" DataFusion functions
+//! "regex" DataFusion functions
 
+pub mod common;
 pub mod regexplike;
 pub mod regexpmatch;
 pub mod regexpreplace;
+
 // create UDFs
 make_udf_function!(regexpmatch::RegexpMatchFunc, REGEXP_MATCH, regexp_match);
 make_udf_function!(regexplike::RegexpLikeFunc, REGEXP_LIKE, regexp_like);
