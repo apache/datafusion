@@ -21,11 +21,10 @@
 
 statement ok
 create table test_source as values
-    ('Andrew', 'X'),
-    ('Xiangpeng', 'Xiangpeng'),
-    ('Raphael', 'R'),
-    (NULL, 'R')
-;
+  ('Andrew', 'X'),
+  ('Xiangpeng', 'Xiangpeng'),
+  ('Raphael', 'R'),
+  (NULL, 'R');
 
 # Table with the different combination of column types
 statement ok
@@ -793,17 +792,40 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for CONTAINS
-## TODO https://github.com/apache/datafusion/issues/11838
 query TT
 EXPLAIN SELECT
   CONTAINS(column1_utf8view, 'foo') as c1,
-  CONTAINS(column2_utf8view, column2_utf8view) as c2
+  CONTAINS(column1_utf8view, column2_utf8view) as c2,
+  CONTAINS(column1_utf8view, column2_large_utf8) as c3,
+  CONTAINS(column1_utf8, column2_utf8view) as c4,
+  CONTAINS(column1_utf8, column2_utf8) as c5,
+  CONTAINS(column1_utf8, column2_large_utf8) as c6,
+  CONTAINS(column1_large_utf8, column1_utf8view) as c7,
+  CONTAINS(column1_large_utf8, column2_utf8) as c8,
+  CONTAINS(column1_large_utf8, column2_large_utf8) as c9
 FROM test;
 ----
 logical_plan
-01)Projection: contains(CAST(test.column1_utf8view AS Utf8), Utf8("foo")) AS c1, contains(__common_expr_1, __common_expr_1) AS c2
-02)--Projection: CAST(test.column2_utf8view AS Utf8) AS __common_expr_1, test.column1_utf8view
-03)----TableScan: test projection=[column1_utf8view, column2_utf8view]
+01)Projection: contains(test.column1_utf8view, Utf8("foo")) AS c1, contains(test.column1_utf8view, test.column2_utf8view) AS c2, contains(test.column1_utf8view, test.column2_large_utf8) AS c3, contains(test.column1_utf8, test.column2_utf8view) AS c4, contains(test.column1_utf8, test.column2_utf8) AS c5, contains(test.column1_utf8, test.column2_large_utf8) AS c6, contains(test.column1_large_utf8, test.column1_utf8view) AS c7, contains(test.column1_large_utf8, test.column2_utf8) AS c8, contains(test.column1_large_utf8, test.column2_large_utf8) AS c9
+02)--TableScan: test projection=[column1_utf8, column2_utf8, column1_large_utf8, column2_large_utf8, column1_utf8view, column2_utf8view]
+
+query BBBBBBBBB
+SELECT
+  CONTAINS(column1_utf8view, 'foo') as c1,
+  CONTAINS(column1_utf8view, column2_utf8view) as c2,
+  CONTAINS(column1_utf8view, column2_large_utf8) as c3,
+  CONTAINS(column1_utf8, column2_utf8view) as c4,
+  CONTAINS(column1_utf8, column2_utf8) as c5,
+  CONTAINS(column1_utf8, column2_large_utf8) as c6,
+  CONTAINS(column1_large_utf8, column1_utf8view) as c7,
+  CONTAINS(column1_large_utf8, column2_utf8) as c8,
+  CONTAINS(column1_large_utf8, column2_large_utf8) as c9
+FROM test;
+----
+false false false false false false true false false
+false true true true true true true true true
+false true true true true true true true true
+NULL NULL NULL NULL NULL NULL NULL NULL NULL
 
 ## Ensure no casts for ENDS_WITH
 query TT
