@@ -33,7 +33,6 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{qualified_name, Column, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::{Alias, ScalarFunction};
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
@@ -314,7 +313,7 @@ impl CommonSubexprEliminate {
             schema,
             ..
         } = projection;
-        let input = unwrap_arc(input);
+        let input = Arc::unwrap_or_clone(input);
         self.try_unary_plan(expr, input, config)?
             .map_data(|(new_expr, new_input)| {
                 Projection::try_new_with_schema(new_expr, Arc::new(new_input), schema)
@@ -327,7 +326,7 @@ impl CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         let Sort { expr, input, fetch } = sort;
-        let input = unwrap_arc(input);
+        let input = Arc::unwrap_or_clone(input);
         let new_sort = self.try_unary_plan(expr, input, config)?.update_data(
             |(new_expr, new_input)| {
                 LogicalPlan::Sort(Sort {
@@ -348,7 +347,7 @@ impl CommonSubexprEliminate {
         let Filter {
             predicate, input, ..
         } = filter;
-        let input = unwrap_arc(input);
+        let input = Arc::unwrap_or_clone(input);
         let expr = vec![predicate];
         self.try_unary_plan(expr, input, config)?
             .map_data(|(mut new_expr, new_input)| {
@@ -458,7 +457,7 @@ impl CommonSubexprEliminate {
             schema,
             ..
         } = aggregate;
-        let input = unwrap_arc(input);
+        let input = Arc::unwrap_or_clone(input);
         // Extract common sub-expressions from the aggregate and grouping expressions.
         self.find_common_exprs(vec![group_expr, aggr_expr], config, ExprMask::Normal)?
             .map_data(|common| {
@@ -729,7 +728,7 @@ fn get_consecutive_window_exprs(
         window_expr_list.push(window_expr);
         window_schemas.push(schema);
 
-        plan = unwrap_arc(input);
+        plan = Arc::unwrap_or_clone(input);
     }
     (window_expr_list, window_schemas, plan)
 }
