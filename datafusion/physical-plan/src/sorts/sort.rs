@@ -51,6 +51,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -737,9 +738,30 @@ impl SortExec {
     /// This can reduce the memory pressure required by the sort
     /// operation since rows that are not going to be included
     /// can be dropped.
-    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
-        self.fetch = fetch;
-        self
+    pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
+        let mut cache = self.cache.clone();
+        if fetch.is_some() {
+            // When a theoretically unnecessary sort becomes a top-K (which
+            // sometimes arises as an intermediate state before full removal),
+            // its execution mode should become `Bounded`.
+            let sort_requirement = PhysicalSortRequirement::from_sort_exprs(self.expr());
+            if self
+                .input()
+                .equivalence_properties()
+                .ordering_satisfy_requirement(&sort_requirement)
+            {
+                cache.execution_mode = ExecutionMode::Bounded;
+            }
+        }
+
+        SortExec {
+            input: Arc::clone(&self.input),
+            expr: self.expr.clone(),
+            metrics_set: self.metrics_set.clone(),
+            preserve_partitioning: self.preserve_partitioning,
+            fetch,
+            cache,
+        }
     }
 
     /// Input schema
@@ -933,14 +955,7 @@ impl ExecutionPlan for SortExec {
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        Some(Arc::new(SortExec {
-            input: Arc::clone(&self.input),
-            expr: self.expr.clone(),
-            metrics_set: self.metrics_set.clone(),
-            preserve_partitioning: self.preserve_partitioning,
-            fetch: limit,
-            cache: self.cache.clone(),
-        }))
+        Some(Arc::new(SortExec::with_fetch(self, limit)))
     }
 
     fn fetch(&self) -> Option<usize> {
