@@ -89,9 +89,12 @@ pub fn apply_cmp_for_nested(
 }
 
 /// Compare with eq with either nested or non-nested
-pub fn compare_with_eq(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray> {
-    let (array, _is_scalar) = lhs.get();
-    if array.data_type().is_nested() {
+pub fn compare_with_eq(
+    lhs: &dyn Datum,
+    rhs: &dyn Datum,
+    is_nested: bool,
+) -> Result<BooleanArray> {
+    if is_nested {
         compare_op_for_nested(Operator::Eq, lhs, rhs)
     } else {
         arrow::compute::kernels::cmp::eq(lhs, rhs).map_err(|e| arrow_datafusion_err!(e))

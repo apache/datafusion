@@ -356,10 +356,15 @@ impl PhysicalExpr for InListExpr {
             Some(f) => f.contains(value.into_array(num_rows)?.as_ref(), self.negated)?,
             None => {
                 let value = value.into_array(num_rows)?;
+                let is_nested = value.data_type().is_nested();
                 let found = self.list.iter().map(|expr| expr.evaluate(batch)).try_fold(
                     BooleanArray::new(BooleanBuffer::new_unset(num_rows), None),
                     |result, expr| -> Result<BooleanArray> {
-                        let rhs = compare_with_eq(&value, &expr?.into_array(num_rows)?)?;
+                        let rhs = compare_with_eq(
+                            &value,
+                            &expr?.into_array(num_rows)?,
+                            is_nested,
+                        )?;
                         Ok(or_kleene(&result, &rhs)?)
                     },
                 )?;
