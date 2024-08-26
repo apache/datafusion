@@ -92,12 +92,11 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (Utf8View, Utf8View) => {
             let mod_str = args[0].as_string_view();
             let match_str = args[1].as_string_view();
-            let res = regexp_is_match::<
-                StringViewArray,
-                StringViewArray,
-                StringViewArray
-            >(mod_str, match_str, None)
-            .map_err(|error| error)?;
+            let res =
+                regexp_is_match::<StringViewArray, StringViewArray, StringViewArray>(
+                    mod_str, match_str, None,
+                )
+                .map_err(|error| error)?;
 
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -252,12 +251,10 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(
-                    ScalarValue::Utf8View(Some(String::from("Apache")))
-                ),
-                ColumnarValue::Scalar(
-                    ScalarValue::Utf8View(Some(String::from("pac")))
-                ),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "Apache"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("pac")))),
             ],
             Ok(Some(true)),
             bool,
@@ -267,12 +264,10 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(
-                    ScalarValue::Utf8View(Some(String::from("Apache")))
-                ),
-                ColumnarValue::Scalar(
-                    ScalarValue::Utf8(Some(String::from("ap")))
-                ),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "Apache"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ap")))),
             ],
             Ok(Some(false)),
             bool,
@@ -282,12 +277,12 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(
-                    ScalarValue::Utf8View(Some(String::from("Apache")))
-                ),
-                ColumnarValue::Scalar(
-                    ScalarValue::LargeUtf8(Some(String::from("DataFusion")))
-                ),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "Apache"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
+                    "DataFusion"
+                )))),
             ],
             Ok(Some(false)),
             bool,
