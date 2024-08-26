@@ -92,11 +92,11 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (Utf8View, Utf8View) => {
             let mod_str = args[0].as_string_view();
             let match_str = args[1].as_string_view();
-            let res =
-                regexp_is_match::<StringViewArray, StringViewArray, StringViewArray>(
-                    mod_str, match_str, None,
-                )
-                .map_err(|error| error)?;
+            let res = regexp_is_match::<
+                StringViewArray,
+                StringViewArray,
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
 
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -106,9 +106,8 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
             let res = regexp_is_match::<
                 StringViewArray,
                 GenericStringArray<i32>,
-                StringViewArray,
-            >(mod_str, match_str, None)
-            .map_err(|error| error)?;
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
 
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -118,9 +117,8 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
             let res = regexp_is_match::<
                 StringViewArray,
                 GenericStringArray<i64>,
-                StringViewArray,
-            >(mod_str, match_str, None)
-            .map_err(|error| error)?;
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
 
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -130,9 +128,8 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
             let res = regexp_is_match::<
                 GenericStringArray<i32>,
                 StringViewArray,
-                StringViewArray,
-            >(mod_str, match_str, None)
-            .map_err(|error| error)?;
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
 
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -142,9 +139,8 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
             let res = regexp_is_match::<
                 GenericStringArray<i32>,
                 GenericStringArray<i32>,
-                StringViewArray,
-            >(mod_str, match_str, None)
-            .map_err(|error| error)?;
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
 
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -154,9 +150,8 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
             let res = regexp_is_match::<
                 GenericStringArray<i32>,
                 GenericStringArray<i64>,
-                StringViewArray,
-            >(mod_str, match_str, None)
-            .map_err(|error| error)?;
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
 
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -166,9 +161,8 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
             let res = regexp_is_match::<
                 GenericStringArray<i64>,
                 StringViewArray,
-                StringViewArray,
-            >(mod_str, match_str, None)
-            .map_err(|error| error)?;
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
 
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -178,9 +172,8 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
             let res = regexp_is_match::<
                 GenericStringArray<i64>,
                 GenericStringArray<i32>,
-                StringViewArray,
-            >(mod_str, match_str, None)
-            .map_err(|error| error)?;
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
 
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -190,9 +183,8 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
             let res = regexp_is_match::<
                 GenericStringArray<i64>,
                 GenericStringArray<i64>,
-                StringViewArray,
-            >(mod_str, match_str, None)
-            .map_err(|error| error)?;
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
 
             Ok(Arc::new(res) as ArrayRef)
         }

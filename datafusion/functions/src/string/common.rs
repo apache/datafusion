@@ -482,8 +482,11 @@ where
     }))
 }
 
+#[cfg(doc)]
+use arrow::array::LargeStringArray;
 /// Perform SQL `array ~ regex_array` operation on
 /// [`StringArray`] / [`LargeStringArray`] / [`StringViewArray`].
+///
 /// If `regex_array` element has an empty value, the corresponding result value is always true.
 ///
 /// `flags_array` are optional [`StringArray`] / [`LargeStringArray`] / [`StringViewArray`] flag,
@@ -494,15 +497,15 @@ where
 /// It is inspired / copied from `regexp_is_match_utf8` [arrow-rs].
 ///
 /// [arrow-rs]: https://github.com/apache/arrow-rs/blob/8c956a9f9ab26c14072740cce64c2b99cb039b13/arrow-string/src/regexp.rs#L31-L37
-pub fn regexp_is_match<'a, ArrayType1, ArrayType2, ArrayType3>(
-    array: &'a ArrayType1,
-    regex_array: &'a ArrayType2,
-    flags_array: Option<&'a ArrayType3>,
-) -> datafusion_common::Result<BooleanArray, DataFusionError>
+pub fn regexp_is_match<'a, S1, S2, S3>(
+    array: &'a S1,
+    regex_array: &'a S2,
+    flags_array: Option<&'a S3>,
+) -> Result<BooleanArray, DataFusionError>
 where
-    &'a ArrayType1: StringArrayType<'a>,
-    &'a ArrayType2: StringArrayType<'a>,
-    &'a ArrayType3: StringArrayType<'a>,
+    &'a S1: StringArrayType<'a>,
+    &'a S2: StringArrayType<'a>,
+    &'a S3: StringArrayType<'a>,
 {
     if array.len() != regex_array.len() {
         return Err(DataFusionError::Execution(
@@ -559,7 +562,7 @@ where
             }
             Ok(())
         })
-        .collect::<datafusion_common::Result<Vec<()>, DataFusionError>>()?;
+        .collect::<Result<Vec<()>, DataFusionError>>()?;
 
     let data = unsafe {
         ArrayDataBuilder::new(DataType::Boolean)
