@@ -48,6 +48,10 @@ impl MemoryPool for UnboundedMemoryPool {
     fn reserved(&self) -> usize {
         self.used.load(Ordering::Relaxed)
     }
+
+    fn pool_size(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// A [`MemoryPool`] that implements a greedy first-come first-serve limit.
@@ -99,6 +103,10 @@ impl MemoryPool for GreedyMemoryPool {
 
     fn reserved(&self) -> usize {
         self.used.load(Ordering::Relaxed)
+    }
+
+    fn pool_size(&self) -> Option<usize> {
+        Some(self.pool_size)
     }
 }
 
@@ -232,6 +240,10 @@ impl MemoryPool for FairSpillPool {
     fn reserved(&self) -> usize {
         let state = self.state.lock();
         state.spillable + state.unspillable
+    }
+
+    fn pool_size(&self) -> Option<usize> {
+        Some(self.pool_size)
     }
 }
 
@@ -408,6 +420,10 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
     fn reserved(&self) -> usize {
         self.inner.reserved()
     }
+
+    fn pool_size(&self) -> Option<usize> {
+        self.inner.pool_size()
+    }
 }
 
 fn provide_top_memory_consumers_to_error_msg(
@@ -424,7 +440,8 @@ mod tests {
 
     #[test]
     fn test_fair() {
-        let pool = Arc::new(FairSpillPool::new(100)) as _;
+        let pool: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(100)) as _;
+        assert_eq!(pool.pool_size(), Some(100));
 
         let mut r1 = MemoryConsumer::new("unspillable").register(&pool);
         // Can grow beyond capacity of pool
