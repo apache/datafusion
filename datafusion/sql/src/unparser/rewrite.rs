@@ -164,6 +164,8 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
     for expr in &sort.expr {
         if let Expr::Sort(s) = expr {
             collects.push(s.expr.as_ref().clone());
+        } else {
+            panic!("sort expression must be of type Sort");
         }
     }
 
