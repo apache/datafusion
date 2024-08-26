@@ -228,4 +228,9 @@ impl RuntimeConfig {
     pub fn with_temp_file_path(self, path: impl Into<PathBuf>) -> Self {
         self.with_disk_manager(DiskManagerConfig::new_specified(vec![path.into()]))
     }
+
+    /// Build a `RuntimeEnv` object from the configuration
+    pub fn build(self) -> Result<RuntimeEnv> {
+        RuntimeEnv::new(self)
+    }
 }
