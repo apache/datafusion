@@ -59,10 +59,7 @@ pub(super) fn normalize_union_schema(plan: &LogicalPlan) -> Result<LogicalPlan> 
 
     let transformed_plan = plan.transform_up(|plan| match plan {
         LogicalPlan::Union(mut union) => {
-            let schema = match Arc::try_unwrap(union.schema) {
-                Ok(inner) => inner,
-                Err(schema) => (*schema).clone(),
-            };
+            let schema = Arc::unwrap_or_clone(union.schema);
             let schema = schema.strip_qualifiers();
 
             union.schema = Arc::new(schema);

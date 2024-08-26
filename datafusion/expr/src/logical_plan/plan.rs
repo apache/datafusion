@@ -1160,10 +1160,7 @@ impl LogicalPlan {
         Ok(if let LogicalPlan::Prepare(prepare_lp) = plan_with_values {
             param_values.verify(&prepare_lp.data_types)?;
             // try and take ownership of the input if is not shared, clone otherwise
-            match Arc::try_unwrap(prepare_lp.input) {
-                Ok(input) => input,
-                Err(arc_input) => arc_input.as_ref().clone(),
-            }
+            Arc::unwrap_or_clone(prepare_lp.input)
         } else {
             plan_with_values
         })
