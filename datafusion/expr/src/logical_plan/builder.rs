@@ -211,7 +211,7 @@ impl LogicalPlanBuilder {
                     };
                     common_type = Some(new_type);
                 } else {
-                    common_type = Some(data_type.clone());
+                    common_type = Some(data_type);
                 }
             }
             field_types.push(common_type.unwrap_or(DataType::Utf8));
@@ -220,7 +220,7 @@ impl LogicalPlanBuilder {
         for row in &mut values {
             for (j, field_type) in field_types.iter().enumerate() {
                 if let Expr::Literal(ScalarValue::Null) = row[j] {
-                    row[j] = Expr::Literal(ScalarValue::try_from(field_type.clone())?);
+                    row[j] = Expr::Literal(ScalarValue::try_from(field_type)?);
                 } else {
                     row[j] =
                         std::mem::take(&mut row[j]).cast_to(field_type, &empty_schema)?;
@@ -552,20 +552,17 @@ impl LogicalPlanBuilder {
 
         // Collect sort columns that are missing in the input plan's schema
         let mut missing_cols: Vec<Column> = vec![];
-        exprs
-            .clone()
-            .into_iter()
-            .try_for_each::<_, Result<()>>(|expr| {
-                let columns = expr.column_refs();
+        exprs.iter().try_for_each::<_, Result<()>>(|expr| {
+            let columns = expr.column_refs();
 
-                columns.into_iter().for_each(|c| {
-                    if !schema.has_column(c) {
-                        missing_cols.push(c.clone());
-                    }
-                });
+            columns.into_iter().for_each(|c| {
+                if !schema.has_column(c) {
+                    missing_cols.push(c.clone());
+                }
+            });
 
-                Ok(())
-            })?;
+            Ok(())
+        })?;
 
         if missing_cols.is_empty() {
             return Ok(Self::new(LogicalPlan::Sort(Sort {
@@ -710,7 +707,7 @@ impl LogicalPlanBuilder {
 
     pub(crate) fn normalize(
         plan: &LogicalPlan,
-        column: impl Into<Column> + Clone,
+        column: impl Into<Column>,
     ) -> Result<Column> {
         let schema = plan.schema();
         let fallback_schemas = plan.fallback_normalize_schemas();
@@ -1536,7 +1533,7 @@ pub fn get_unnested_columns(
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => {
             let new_field = Arc::new(Field::new(
-                col_name.clone(),
+                col_name,
                 field.data_type().clone(),
                 // Unnesting may produce NULLs even if the list is not null.
                 // For example: unnset([1], []) -> 1, null
