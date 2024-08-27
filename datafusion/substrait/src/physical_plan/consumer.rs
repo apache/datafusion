@@ -192,6 +192,18 @@ fn to_field(name: &String, r#type: &Type) -> Result<Field> {
                 ),
             }
         }
+        Kind::Binary(binary) => {
+            nullable = is_nullable(binary.nullability);
+            match binary.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Binary),
+                LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeBinary),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::BinaryView),
+                _ => substrait_err!(
+                    "Invalid type variation found for substrait binary type class: {}",
+                    binary.type_variation_reference
+                ),
+            }
+        }
         _ => substrait_err!(
             "Unsupported kind: {:?} in the type with name {}",
             kind,

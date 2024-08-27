@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::r#type::{
-    Boolean, Fp64, Kind, Nullability, String as SubstraitString, Struct, I64,
+    Binary, Boolean, Fp64, Kind, Nullability, String as SubstraitString, Struct, I64,
 };
 use substrait::proto::read_rel::local_files::file_or_files::ParquetReadOptions;
 use substrait::proto::read_rel::local_files::file_or_files::{FileFormat, PathType};
@@ -172,6 +172,24 @@ fn to_substrait_type(data_type: &DataType, nullable: bool) -> Result<Type> {
         }),
         DataType::Utf8View => Ok(Type {
             kind: Some(Kind::String(SubstraitString {
+                type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
+        DataType::Binary => Ok(Type {
+            kind: Some(Kind::Binary(Binary {
+                type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
+        DataType::LargeBinary => Ok(Type {
+            kind: Some(Kind::Binary(Binary {
+                type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
+        DataType::BinaryView => Ok(Type {
+            kind: Some(Kind::Binary(Binary {
                 type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
                 nullability,
             })),
