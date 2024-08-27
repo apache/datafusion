@@ -173,14 +173,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ];
                 // user-defined function (UDF) should have precedence
-                if let Some(fm) = self.schema_provider.get_function_meta("date_part") {
-                    Ok(Expr::ScalarUDF(ScalarUDF::new(fm, args)))
+                let function_expr = if let Some(fm) =
+                    self.schema_provider.get_function_meta("date_part")
+                {
+                    Expr::ScalarUDF(ScalarUDF::new(fm, args))
                 } else {
-                    Ok(Expr::ScalarFunction(ScalarFunction::new(
+                    Expr::ScalarFunction(ScalarFunction::new(
                         BuiltinScalarFunction::DatePart,
                         args,
-                    )))
-                }
+                    ))
+                };
+                Ok(Expr::Cast(Cast::new(
+                    Box::new(function_expr),
+                    DataType::Decimal128(28, 10),
+                )))
             }
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
             SQLExpr::Interval(interval) => {
