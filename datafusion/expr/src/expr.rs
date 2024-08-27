@@ -631,6 +631,11 @@ impl Sort {
             nulls_first: !self.nulls_first,
         }
     }
+
+    // TODO (https://github.com/apache/datafusion/issues/12193) remove when transition is complete
+    pub fn to_expr(self) -> Expr {
+        Expr::Sort(self)
+    }
 }
 
 // TODO (https://github.com/apache/datafusion/issues/12193) remove when transition is complete
@@ -1404,8 +1409,8 @@ impl Expr {
     /// # use datafusion_expr::col;
     /// let sort_expr = col("foo").sort(true, true); // SORT ASC NULLS_FIRST
     /// ```
-    pub fn sort(self, asc: bool, nulls_first: bool) -> Expr {
-        Expr::Sort(Sort::new(Box::new(self), asc, nulls_first))
+    pub fn sort(self, asc: bool, nulls_first: bool) -> Sort {
+        Sort::new(Box::new(self), asc, nulls_first)
     }
 
     /// Return `IsTrue(Box(self))`

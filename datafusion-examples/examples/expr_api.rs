@@ -99,7 +99,7 @@ fn expr_fn_demo() -> Result<()> {
     // such as `FIRST_VALUE(price FILTER quantity > 100 ORDER BY ts )
     let agg = first_value
         .call(vec![col("price")])
-        .order_by(vec![col("ts").sort(false, false)])
+        .order_by(vec![col("ts").sort(false, false).to_expr()])
         .filter(col("quantity").gt(lit(100)))
         .build()?; // build the aggregate
     assert_eq!(

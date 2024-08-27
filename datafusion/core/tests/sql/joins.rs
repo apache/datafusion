@@ -38,7 +38,7 @@ async fn join_change_in_planner() -> Result<()> {
         .map(|e| {
             let ascending = true;
             let nulls_first = false;
-            e.sort(ascending, nulls_first)
+            e.sort(ascending, nulls_first).to_expr()
         })
         .collect::<Vec<_>>()];
     register_unbounded_file_with_ordering(
@@ -106,7 +106,7 @@ async fn join_no_order_on_filter() -> Result<()> {
         .map(|e| {
             let ascending = true;
             let nulls_first = false;
-            e.sort(ascending, nulls_first)
+            e.sort(ascending, nulls_first).to_expr()
         })
         .collect::<Vec<_>>()];
     register_unbounded_file_with_ordering(

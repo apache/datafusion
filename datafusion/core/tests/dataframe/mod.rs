@@ -75,7 +75,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
         .table("t1")
         .await?
         .aggregate(vec![col("b")], vec![count(wildcard())])?
-        .sort(vec![count(wildcard()).sort(true, false)])?
+        .sort(vec![count(wildcard()).sort(true, false).to_expr()])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -452,7 +452,7 @@ async fn sort_on_ambiguous_column() -> Result<()> {
             &["a"],
             None,
         )?
-        .sort(vec![col("b").sort(true, true)])
+        .sort(vec![col("b").sort(true, true).to_expr()])
         .unwrap_err();
 
     let expected = "Schema error: Ambiguous reference to unqualified field b";

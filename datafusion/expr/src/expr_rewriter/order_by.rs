@@ -335,6 +335,6 @@ mod test {
     fn sort(expr: Expr) -> Expr {
         let asc = true;
         let nulls_first = true;
-        expr.sort(asc, nulls_first)
+        expr.sort(asc, nulls_first).to_expr()
     }
 }

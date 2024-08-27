@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
     ctx.register_csv(
         "ordered_table",
         &format!("{testdata}/window_1.csv"),
-        CsvReadOptions::new().file_sort_order_expr(vec![sort_expr]),
+        CsvReadOptions::new().file_sort_order(vec![sort_expr]),
     )
     .await?;
 

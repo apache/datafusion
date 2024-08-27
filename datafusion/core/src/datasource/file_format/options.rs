@@ -40,8 +40,7 @@ use datafusion_common::{
 };
 
 use async_trait::async_trait;
-use datafusion_expr::expr::sort_vec_vec_from_expr;
-use datafusion_expr::{Expr, SortExpr};
+use datafusion_expr::SortExpr;
 
 /// Options that control the reading of CSV files.
 ///
@@ -202,13 +201,6 @@ impl<'a> CsvReadOptions<'a> {
     /// Configure if file has known sort order
     pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
-        self
-    }
-
-    /// Configure if file has known sort order
-    // TODO (https://github.com/apache/datafusion/issues/12193) remove when transition is complete
-    pub fn file_sort_order_expr(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
-        self.file_sort_order = sort_vec_vec_from_expr(file_sort_order);
         self
     }
 }

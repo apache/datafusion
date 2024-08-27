@@ -791,8 +791,8 @@ impl DataFrame {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.sort(vec![
-    ///   col("a").sort(true, true),   // a ASC, nulls first
-    ///   col("b").sort(false, false), // b DESC, nulls last
+    ///   col("a").sort(true, true).to_expr(),   // a ASC, nulls first
+    ///   col("b").sort(false, false).to_expr(), // b DESC, nulls last
     ///  ])?;
     /// # Ok(())
     /// # }
@@ -1319,7 +1319,7 @@ impl DataFrame {
     /// let ctx = SessionContext::new();
     /// // Sort the data by column "b" and write it to a new location
     /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
-    ///   .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///   .sort(vec![col("b").sort(true, true).to_expr()])? // sort by b asc, nulls first
     ///   .write_csv(
     ///     "output.csv",
     ///     DataFrameWriteOptions::new(),
@@ -1379,7 +1379,7 @@ impl DataFrame {
     /// let ctx = SessionContext::new();
     /// // Sort the data by column "b" and write it to a new location
     /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
-    ///   .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///   .sort(vec![col("b").sort(true, true).to_expr()])? // sort by b asc, nulls first
     ///   .write_json(
     ///     "output.json",
     ///     DataFrameWriteOptions::new(),
@@ -2403,7 +2403,10 @@ mod tests {
 
             Expr::WindowFunction(w)
                 .null_treatment(NullTreatment::IgnoreNulls)
-                .order_by(vec![col("c2").sort(true, true), col("c3").sort(true, true)])
+                .order_by(vec![
+                    col("c2").sort(true, true).to_expr(),
+                    col("c3").sort(true, true).to_expr(),
+                ])
                 .window_frame(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -2493,7 +2496,7 @@ mod tests {
             .unwrap()
             .distinct()
             .unwrap()
-            .sort(vec![col("c1").sort(true, true)])
+            .sort(vec![col("c1").sort(true, true).to_expr()])
             .unwrap();
 
         let df_results = plan.clone().collect().await?;
@@ -2524,7 +2527,7 @@ mod tests {
             .distinct()
             .unwrap()
             // try to sort on some value not present in input to distinct
-            .sort(vec![col("c2").sort(true, true)])
+            .sort(vec![col("c2").sort(true, true).to_expr()])
             .unwrap_err();
         assert_eq!(err.strip_backtrace(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
 
@@ -2571,10 +2574,10 @@ mod tests {
             .distinct_on(
                 vec![col("c1")],
                 vec![col("c1")],
-                Some(vec![col("c1").sort(true, true)]),
+                Some(vec![col("c1").sort(true, true).to_expr()]),
             )
             .unwrap()
-            .sort(vec![col("c1").sort(true, true)])
+            .sort(vec![col("c1").sort(true, true).to_expr()])
             .unwrap();
 
         let df_results = plan.clone().collect().await?;
@@ -2605,11 +2608,11 @@ mod tests {
             .distinct_on(
                 vec![col("c1")],
                 vec![col("c1")],
-                Some(vec![col("c1").sort(true, true)]),
+                Some(vec![col("c1").sort(true, true).to_expr()]),
             )
             .unwrap()
             // try to sort on some value not present in input to distinct
-            .sort(vec![col("c2").sort(true, true)])
+            .sort(vec![col("c2").sort(true, true).to_expr()])
             .unwrap_err();
         assert_eq!(err.strip_backtrace(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
 
@@ -3015,7 +3018,7 @@ mod tests {
             )?
             .sort(vec![
                 // make the test deterministic
-                col("t1.c1").sort(true, true),
+                col("t1.c1").sort(true, true).to_expr(),
             ])?
             .limit(0, Some(1))?;
 
@@ -3092,7 +3095,7 @@ mod tests {
             )?
             .sort(vec![
                 // make the test deterministic
-                col("t1.c1").sort(true, true),
+                col("t1.c1").sort(true, true).to_expr(),
             ])?
             .limit(0, Some(1))?;
 
@@ -3125,9 +3128,9 @@ mod tests {
             .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
             .sort(vec![
                 // make the test deterministic
-                col("c1").sort(true, true),
-                col("c2").sort(true, true),
-                col("c3").sort(true, true),
+                col("c1").sort(true, true).to_expr(),
+                col("c2").sort(true, true).to_expr(),
+                col("c3").sort(true, true).to_expr(),
             ])?
             .limit(0, Some(1))?
             .with_column("sum", col("c2") + col("c3"))?;
@@ -3205,12 +3208,12 @@ mod tests {
             )?
             .sort(vec![
                 // make the test deterministic
-                col("t1.c1").sort(true, true),
-                col("t1.c2").sort(true, true),
-                col("t1.c3").sort(true, true),
-                col("t2.c1").sort(true, true),
-                col("t2.c2").sort(true, true),
-                col("t2.c3").sort(true, true),
+                col("t1.c1").sort(true, true).to_expr(),
+                col("t1.c2").sort(true, true).to_expr(),
+                col("t1.c3").sort(true, true).to_expr(),
+                col("t2.c1").sort(true, true).to_expr(),
+                col("t2.c2").sort(true, true).to_expr(),
+                col("t2.c3").sort(true, true).to_expr(),
             ])?
             .limit(0, Some(1))?;
 
@@ -3283,9 +3286,9 @@ mod tests {
             .limit(0, Some(1))?
             .sort(vec![
                 // make the test deterministic
-                col("c1").sort(true, true),
-                col("c2").sort(true, true),
-                col("c3").sort(true, true),
+                col("c1").sort(true, true).to_expr(),
+                col("c2").sort(true, true).to_expr(),
+                col("c3").sort(true, true).to_expr(),
             ])?
             .select_columns(&["c1"])?;
 

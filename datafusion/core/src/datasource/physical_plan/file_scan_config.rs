@@ -997,7 +997,7 @@ mod tests {
                     File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort(true, false).to_expr()],
                 expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
             },
             // same input but file '2' is in the middle
@@ -1014,7 +1014,7 @@ mod tests {
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                     File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort(true, false).to_expr()],
                 expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
             },
             TestCase {
@@ -1029,7 +1029,7 @@ mod tests {
                     File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                 ],
-                sort: vec![col("value").sort(false, true)],
+                sort: vec![col("value").sort(false, true).to_expr()],
                 expected_result: Ok(vec![vec!["1", "0"], vec!["2"]]),
             },
             // reject nullable sort columns
@@ -1045,7 +1045,7 @@ mod tests {
                     File::new("1", "2023-01-01", vec![Some((0.50, 1.00))]),
                     File::new("2", "2023-01-02", vec![Some((0.00, 1.00))]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort(true, false).to_expr()],
                 expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\nbuild min rows\ncaused by\ncreate sorting columns\ncaused by\nError during planning: cannot sort by nullable column")
             },
             TestCase {
@@ -1060,7 +1060,7 @@ mod tests {
                     File::new("1", "2023-01-01", vec![Some((0.50, 0.99))]),
                     File::new("2", "2023-01-02", vec![Some((1.00, 1.49))]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort(true, false).to_expr()],
                 expected_result: Ok(vec![vec!["0", "1", "2"]]),
             },
             TestCase {
@@ -1075,7 +1075,7 @@ mod tests {
                     File::new("1", "2023-01-01", vec![Some((0.00, 0.49))]),
                     File::new("2", "2023-01-02", vec![Some((0.00, 0.49))]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort(true, false).to_expr()],
                 expected_result: Ok(vec![vec!["0"], vec!["1"], vec!["2"]]),
             },
             TestCase {
@@ -1086,7 +1086,7 @@ mod tests {
                     false,
                 )]),
                 files: vec![],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort(true, false).to_expr()],
                 expected_result: Ok(vec![]),
             },
             TestCase {
@@ -1101,7 +1101,7 @@ mod tests {
                     File::new("1", "2023-01-01", vec![Some((0.00, 0.49))]),
                     File::new("2", "2023-01-02", vec![None]),
                 ],
-                sort: vec![col("value").sort(true, false)],
+                sort: vec![col("value").sort(true, false).to_expr()],
                 expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\ncollect min/max values\ncaused by\nget min/max for column: 'value'\ncaused by\nError during planning: statistics not found"),
             },
         ];

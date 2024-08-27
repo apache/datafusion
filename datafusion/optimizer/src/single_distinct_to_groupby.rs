@@ -645,7 +645,7 @@ mod tests {
         let expr = count_udaf()
             .call(vec![col("a")])
             .distinct()
-            .order_by(vec![col("a").sort(true, false)])
+            .order_by(vec![col("a").sort(true, false).to_expr()])
             .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
@@ -666,7 +666,7 @@ mod tests {
             .call(vec![col("a")])
             .distinct()
             .filter(col("a").gt(lit(5)))
-            .order_by(vec![col("a").sort(true, false)])
+            .order_by(vec![col("a").sort(true, false).to_expr()])
             .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?

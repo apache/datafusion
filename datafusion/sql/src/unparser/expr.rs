@@ -1527,7 +1527,7 @@ mod tests {
         case, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
         table_scan, try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl,
-        Signature, Volatility, WindowFrame, WindowFunctionDefinition,
+        Signature, SortExpr, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
     use datafusion_functions_aggregate::count::count_udaf;
@@ -1945,7 +1945,7 @@ mod tests {
     fn expr_to_unparsed_ok() -> Result<()> {
         let tests: Vec<(Expr, &str)> = vec![
             ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
-            (col("a").sort(true, true), r#"a ASC NULLS FIRST"#),
+            (col("a").sort(true, true).to_expr(), r#"a ASC NULLS FIRST"#),
         ];
 
         for (expr, expected) in tests {
@@ -2047,7 +2047,7 @@ mod tests {
 
     #[test]
     fn customer_dialect_support_nulls_first_in_ort() -> Result<()> {
-        let tests: Vec<(Expr, &str, bool)> = vec![
+        let tests: Vec<(SortExpr, &str, bool)> = vec![
             (col("a").sort(true, true), r#"a ASC NULLS FIRST"#, true),
             (col("a").sort(true, true), r#"a ASC"#, false),
         ];
@@ -2057,7 +2057,7 @@ mod tests {
                 .with_supports_nulls_first_in_sort(supports_nulls_first_in_sort)
                 .build();
             let unparser = Unparser::new(&dialect);
-            let ast = unparser.expr_to_unparsed(&expr)?;
+            let ast = unparser.expr_to_unparsed(&expr.to_expr())?;
 
             let actual = format!("{}", ast);
 

@@ -130,7 +130,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("b")], vec![count(wildcard())])?
             .project(vec![count(wildcard())])?
-            .sort(vec![count(wildcard()).sort(true, false)])?
+            .sort(vec![count(wildcard()).sort(true, false).to_expr()])?
             .build()?;
         let expected = "Sort: count(*) ASC NULLS LAST [count(*):Int64]\
         \n  Projection: count(*) [count(*):Int64]\

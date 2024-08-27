@@ -483,7 +483,7 @@ pub fn generate_sort_key(
     partition_by.iter().for_each(|e| {
         // By default, create sort key with ASC is true and NULLS LAST to be consistent with
         // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
-        let e = e.clone().sort(true, false);
+        let e = e.clone().sort(true, false).to_expr();
         if let Some(pos) = normalized_order_by_keys.iter().position(|key| key.eq(&e)) {
             let order_by_key = &order_by[pos];
             if !final_sort_keys.contains(order_by_key) {

@@ -871,7 +871,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         count(lit(1)),
         count_distinct(lit(1)),
         first_value(lit(1), None),
-        first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
+        first_value(lit(1), Some(vec![lit(2).sort(true, true).to_expr()])),
         avg(lit(1.5)),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
@@ -2249,7 +2249,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, false)])
+    .order_by(vec![col("col2").sort(true, false).to_expr()])
     .window_frame(WindowFrame::new(Some(false)))
     .build()
     .unwrap();
@@ -2262,7 +2262,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(false, true)])
+    .order_by(vec![col("col2").sort(false, true).to_expr()])
     .window_frame(WindowFrame::new(Some(false)))
     .build()
     .unwrap();
@@ -2281,7 +2281,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(false, false)])
+    .order_by(vec![col("col2").sort(false, false).to_expr()])
     .window_frame(range_number_frame)
     .build()
     .unwrap();
@@ -2298,7 +2298,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, true)])
+    .order_by(vec![col("col2").sort(true, true).to_expr()])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
@@ -2348,7 +2348,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, true)])
+    .order_by(vec![col("col2").sort(true, true).to_expr()])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
@@ -2425,7 +2425,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, true)])
+    .order_by(vec![col("col2").sort(true, true).to_expr()])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
