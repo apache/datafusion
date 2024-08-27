@@ -38,7 +38,7 @@ use crate::variation_const::{
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::common::{
@@ -1474,6 +1474,12 @@ fn to_substrait_type(
                 nullability,
             })),
         }),
+        DataType::Utf8View => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::String(r#type::String {
+                type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
         DataType::List(inner) => {
             let inner_type =
                 to_substrait_type(inner.data_type(), inner.is_nullable(), extensions)?;
@@ -1926,6 +1932,10 @@ fn to_substrait_literal(
             LiteralType::String(s.clone()),
             LARGE_CONTAINER_TYPE_VARIATION_REF,
         ),
+        ScalarValue::Utf8View(Some(s)) => (
+            LiteralType::String(s.clone()),
+            VIEW_CONTAINER_TYPE_VARIATION_REF,
+        ),
         ScalarValue::Decimal128(v, p, s) if v.is_some() => (
             LiteralType::Decimal(Decimal {
                 value: v.unwrap().to_le_bytes().to_vec(),
@@ -2353,6 +2363,7 @@ mod test {
         round_trip_type(DataType::LargeBinary)?;
         round_trip_type(DataType::Utf8)?;
         round_trip_type(DataType::LargeUtf8)?;
+        round_trip_type(DataType::Utf8View)?;
         round_trip_type(DataType::Decimal128(10, 2))?;
         round_trip_type(DataType::Decimal256(30, 2))?;
 

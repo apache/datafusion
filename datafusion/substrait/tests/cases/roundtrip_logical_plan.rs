@@ -717,7 +717,8 @@ async fn all_type_literal() -> Result<()> {
             binary_col = arrow_cast('binary', 'Binary') AND
             large_binary_col = arrow_cast('large_binary', 'LargeBinary') AND
             utf8_col = arrow_cast('utf8', 'Utf8') AND
-            large_utf8_col = arrow_cast('large_utf8', 'LargeUtf8');",
+            large_utf8_col = arrow_cast('large_utf8', 'LargeUtf8') AND
+            view_utf8_col = arrow_cast('utf8_view', 'Utf8View');",
     )
         .await
 }
@@ -1234,6 +1235,7 @@ async fn create_all_type_context() -> Result<SessionContext> {
         Field::new("fixed_size_binary_col", DataType::FixedSizeBinary(42), true),
         Field::new("utf8_col", DataType::Utf8, true),
         Field::new("large_utf8_col", DataType::LargeUtf8, true),
+        Field::new("view_utf8_col", DataType::Utf8View, true),
         Field::new_list("list_col", Field::new("item", DataType::Int64, true), true),
         Field::new_list(
             "large_list_col",
