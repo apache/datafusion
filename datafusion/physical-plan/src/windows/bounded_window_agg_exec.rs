@@ -852,7 +852,7 @@ impl SortedSearch {
     }
 }
 
-fn create_schema(
+pub fn create_schema(
     input_schema: &Schema,
     window_expr: &[Arc<dyn WindowExpr>],
 ) -> Result<Schema> {
