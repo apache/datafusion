@@ -603,6 +603,11 @@ SELECT map_keys(map(column8, column9)) FROM t;
 [[4]]
 [[1, 2]]
 
+query ?
+SELECT map_keys(Map{});
+----
+[]
+
 
 statement ok
 drop table map_array_table_1;
