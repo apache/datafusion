@@ -746,16 +746,10 @@ impl SortExec {
             // When a theoretically unnecessary sort becomes a top-K (which
             // sometimes arises as an intermediate state before full removal),
             // its execution mode should become `Bounded`.
-            let sort_requirement = PhysicalSortRequirement::from_sort_exprs(self.expr());
-            if self
-                .input()
-                .equivalence_properties()
-                .ordering_satisfy_requirement(&sort_requirement)
-            {
+            if self.cache.execution_mode == ExecutionMode::Unbounded {
                 cache.execution_mode = ExecutionMode::Bounded;
             }
         }
-
         SortExec {
             input: Arc::clone(&self.input),
             expr: self.expr.clone(),
@@ -800,19 +794,16 @@ impl SortExec {
         preserve_partitioning: bool,
     ) -> PlanProperties {
         // Determine execution mode:
+        let input_satisfies_sort_req =
+            input.equivalence_properties().ordering_satisfy_requirement(
+                PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter()).as_slice(),
+            );
         let mode = match input.execution_mode() {
-            ExecutionMode::Unbounded
-                if input.equivalence_properties().ordering_satisfy_requirement(
-                    PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter())
-                        .as_slice(),
-                ) =>
-            {
+            ExecutionMode::Unbounded if input_satisfies_sort_req => {
                 ExecutionMode::Unbounded
             }
-            ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
-                ExecutionMode::PipelineBreaking
-            }
             ExecutionMode::Bounded => ExecutionMode::Bounded,
+            _ => ExecutionMode::PipelineBreaking,
         };
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
@@ -906,12 +897,10 @@ impl ExecutionPlan for SortExec {
 
         trace!("End SortExec's input.execute for partition: {}", partition);
 
-        let sort_satisfied = self
-            .input
-            .equivalence_properties()
-            .ordering_satisfy_requirement(
-                PhysicalSortRequirement::from_sort_exprs(self.expr.iter()).as_slice(),
-            );
+        let sort_satisfied = matches!(
+            self.cache.execution_mode,
+            ExecutionMode::Bounded | ExecutionMode::Unbounded
+        );
 
         match (sort_satisfied, self.fetch.as_ref()) {
             (true, Some(fetch)) => Ok(Box::pin(TopKStream {
@@ -931,7 +920,6 @@ impl ExecutionPlan for SortExec {
                     &self.metrics_set,
                     partition,
                 )?;
-
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
@@ -956,7 +944,6 @@ impl ExecutionPlan for SortExec {
                     &self.metrics_set,
                     context.runtime_env(),
                 );
-
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     futures::stream::once(async move {
