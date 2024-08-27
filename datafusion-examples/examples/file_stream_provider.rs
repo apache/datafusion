@@ -100,7 +100,7 @@ mod non_windows {
     ) {
         // Timeout for a long period of BrokenPipe error
         let broken_pipe_timeout = Duration::from_secs(10);
-        let sa = file_path.clone();
+        let sa = file_path;
         // Spawn a new thread to write to the FIFO file
         #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
         tasks.spawn_blocking(move || {

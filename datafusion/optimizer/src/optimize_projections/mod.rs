@@ -1336,8 +1336,8 @@ mod tests {
         let right_table = test_table_scan_with_name("r")?;
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(UserDefinedCrossJoin::new(
-                Arc::new(left_table.clone()),
-                Arc::new(right_table.clone()),
+                Arc::new(left_table),
+                Arc::new(right_table),
             )),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)

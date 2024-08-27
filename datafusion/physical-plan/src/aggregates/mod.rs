@@ -2220,7 +2220,7 @@ mod tests {
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups,
-            aggregates.clone(),
+            aggregates,
             vec![None, None],
             Arc::clone(&blocking_exec) as Arc<dyn ExecutionPlan>,
             schema,

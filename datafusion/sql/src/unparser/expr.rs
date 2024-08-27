@@ -1864,7 +1864,7 @@ mod tests {
                 r#"EXISTS (SELECT * FROM t WHERE (t.a = 1))"#,
             ),
             (
-                not_exists(Arc::new(dummy_logical_plan.clone())),
+                not_exists(Arc::new(dummy_logical_plan)),
                 r#"NOT EXISTS (SELECT * FROM t WHERE (t.a = 1))"#,
             ),
             (

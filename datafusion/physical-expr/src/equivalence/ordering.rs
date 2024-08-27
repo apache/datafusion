@@ -272,7 +272,7 @@ mod tests {
         // Crude ordering doesn't satisfy finer ordering. should return false
         let mut eq_properties_crude =
             EquivalenceProperties::new(Arc::clone(&input_schema));
-        eq_properties_crude.oeq_class.push(crude.clone());
+        eq_properties_crude.oeq_class.push(crude);
         assert!(!eq_properties_crude.ordering_satisfy(&finer));
         Ok(())
     }

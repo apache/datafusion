@@ -2582,7 +2582,7 @@ mod tests {
             &a,
             &b,
             Operator::RegexIMatch,
-            regex_expected.clone(),
+            regex_expected,
         )?;
         apply_logic_op(
             &Arc::new(schema.clone()),
@@ -2596,7 +2596,7 @@ mod tests {
             &a,
             &b,
             Operator::RegexNotIMatch,
-            regex_not_expected.clone(),
+            regex_not_expected,
         )?;
 
         Ok(())

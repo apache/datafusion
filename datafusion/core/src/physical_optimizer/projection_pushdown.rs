@@ -1692,12 +1692,9 @@ mod tests {
         ]));
         Arc::new(
             CsvExec::builder(
-                FileScanConfig::new(
-                    ObjectStoreUrl::parse("test:///").unwrap(),
-                    schema.clone(),
-                )
-                .with_file(PartitionedFile::new("x".to_string(), 100))
-                .with_projection(Some(vec![0, 1, 2, 3, 4])),
+                FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema)
+                    .with_file(PartitionedFile::new("x".to_string(), 100))
+                    .with_projection(Some(vec![0, 1, 2, 3, 4])),
             )
             .with_has_header(false)
             .with_delimeter(0)
@@ -1719,12 +1716,9 @@ mod tests {
         ]));
         Arc::new(
             CsvExec::builder(
-                FileScanConfig::new(
-                    ObjectStoreUrl::parse("test:///").unwrap(),
-                    schema.clone(),
-                )
-                .with_file(PartitionedFile::new("x".to_string(), 100))
-                .with_projection(Some(vec![3, 2, 1])),
+                FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema)
+                    .with_file(PartitionedFile::new("x".to_string(), 100))
+                    .with_projection(Some(vec![3, 2, 1])),
             )
             .with_has_header(false)
             .with_delimeter(0)

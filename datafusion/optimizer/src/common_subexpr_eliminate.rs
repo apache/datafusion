@@ -1431,7 +1431,7 @@ mod test {
     fn nested_aliases() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 (col("a") + col("b") - col("c")).alias("alias1") * (col("a") + col("b")),
                 col("a") + col("b"),
@@ -1842,7 +1842,7 @@ mod test {
         let config = &OptimizerContext::new();
         let _common_expr_1 = config.alias_generator().next(CSE_PREFIX);
         let common_expr_2 = config.alias_generator().next(CSE_PREFIX);
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 (col("a") + col("b")).alias(common_expr_2.clone()),
                 col("c"),
@@ -1886,7 +1886,7 @@ mod test {
         let extracted_short_circuit_leg_1 = (col("a") + col("b")).eq(lit(0));
         let not_extracted_short_circuit_leg_2 = (col("a") - col("b")).eq(lit(0));
         let extracted_short_circuit_leg_3 = (col("a") * col("b")).eq(lit(0));
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 extracted_short_circuit.clone().alias("c1"),
                 extracted_short_circuit.alias("c2"),
@@ -1899,7 +1899,7 @@ mod test {
                     .alias("c4"),
                 extracted_short_circuit_leg_3
                     .clone()
-                    .or(extracted_short_circuit_leg_3.clone())
+                    .or(extracted_short_circuit_leg_3)
                     .alias("c5"),
             ])?
             .build()?;
@@ -1920,7 +1920,7 @@ mod test {
         let extracted_child = col("a") + col("b");
         let rand = rand_func().call(vec![]);
         let not_extracted_volatile = extracted_child + rand;
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 not_extracted_volatile.clone().alias("c1"),
                 not_extracted_volatile.alias("c2"),
@@ -1947,7 +1947,7 @@ mod test {
         let not_extracted_short_circuit_leg_2 = col("b").eq(lit(0));
         let not_extracted_volatile_short_circuit_2 =
             rand.eq(lit(0)).or(not_extracted_short_circuit_leg_2);
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 not_extracted_volatile_short_circuit_1.clone().alias("c1"),
                 not_extracted_volatile_short_circuit_1.alias("c2"),

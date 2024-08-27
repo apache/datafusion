@@ -404,7 +404,7 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
         PhysicalGroupBy::new_single(groups.clone()),
-        aggregates.clone(),
+        aggregates,
         vec![None],
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
@@ -433,7 +433,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
         PhysicalGroupBy::new_single(groups.clone()),
-        aggregates.clone(),
+        aggregates,
         vec![None],
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
@@ -469,7 +469,7 @@ fn rountrip_aggregate_with_sort() -> Result<()> {
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
         PhysicalGroupBy::new_single(groups.clone()),
-        aggregates.clone(),
+        aggregates,
         vec![None],
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
@@ -536,7 +536,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::new_single(groups.clone()),
-            aggregates.clone(),
+            aggregates,
             vec![None],
             Arc::new(EmptyExec::new(schema.clone())),
             schema,
@@ -640,7 +640,7 @@ fn roundtrip_coalesce_with_fetch() -> Result<()> {
     )))?;
 
     roundtrip_test(Arc::new(
-        CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema.clone())), 8096)
+        CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema)), 8096)
             .with_fetch(Some(10)),
     ))
 }
@@ -991,18 +991,16 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         )),
         input,
     )?);
-    let aggr_expr = AggregateExprBuilder::new(
-        max_udaf(),
-        vec![udf_expr.clone() as Arc<dyn PhysicalExpr>],
-    )
-    .schema(schema.clone())
-    .alias("max")
-    .build()?;
+    let aggr_expr =
+        AggregateExprBuilder::new(max_udaf(), vec![udf_expr as Arc<dyn PhysicalExpr>])
+            .schema(schema.clone())
+            .alias("max")
+            .build()?;
 
     let window = Arc::new(WindowAggExec::try_new(
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr.clone(),
-            &[col("author", &schema.clone())?],
+            &[col("author", &schema)?],
             &[],
             Arc::new(WindowFrame::new(None)),
         ))],
@@ -1013,10 +1011,10 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     let aggregate = Arc::new(AggregateExec::try_new(
         AggregateMode::Final,
         PhysicalGroupBy::new(vec![], vec![], vec![]),
-        vec![aggr_expr.clone()],
+        vec![aggr_expr],
         vec![None],
         window,
-        schema.clone(),
+        schema,
     )?);
 
     let ctx = SessionContext::new();
@@ -1054,7 +1052,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         Arc::new(BinaryExpr::new(
             col("published", &schema)?,
             Operator::And,
-            Arc::new(BinaryExpr::new(udf_expr.clone(), Operator::Gt, lit(0))),
+            Arc::new(BinaryExpr::new(udf_expr, Operator::Gt, lit(0))),
         )),
         input,
     )?);
@@ -1083,7 +1081,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         vec![aggr_expr],
         vec![None],
         window,
-        schema.clone(),
+        schema,
     )?);
 
     let ctx = SessionContext::new();
@@ -1158,7 +1156,7 @@ fn roundtrip_json_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema.clone(),
+        schema,
         Some(sort_order),
     )))
 }
@@ -1197,7 +1195,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         Arc::new(DataSinkExec::new(
             input,
             data_sink,
-            schema.clone(),
+            schema,
             Some(sort_order),
         )),
         &ctx,
@@ -1253,7 +1251,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema.clone(),
+        schema,
         Some(sort_order),
     )))
 }
@@ -1342,7 +1340,7 @@ fn roundtrip_interleave() -> Result<()> {
     )?;
     let right = RepartitionExec::try_new(
         Arc::new(EmptyExec::new(Arc::new(schema_right))),
-        partition.clone(),
+        partition,
     )?;
     let inputs: Vec<Arc<dyn ExecutionPlan>> = vec![Arc::new(left), Arc::new(right)];
     let interleave = InterleaveExec::try_new(inputs)?;

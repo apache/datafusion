@@ -2075,7 +2075,7 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new("scalar", DataType::UInt32, false),
             Field::new_list("strings", string_field, false),
-            Field::new_list("structs", struct_field_in_list.clone(), false),
+            Field::new_list("structs", struct_field_in_list, false),
             Field::new(
                 "struct_singular",
                 DataType::Struct(Fields::from(vec![
