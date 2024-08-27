@@ -99,7 +99,7 @@ async fn blocked_approach_aggregate_test() {
 
     let n_batch_size = 10;
     let mut rng = thread_rng();
-    let mut all_batch_sizes = (1..=50_usize).into_iter().collect::<Vec<_>>();
+    let mut all_batch_sizes = (1..=50_usize).collect::<Vec<_>>();
     all_batch_sizes.shuffle(&mut rng);
     let batch_sizes = &all_batch_sizes[0..n_batch_size];
 
