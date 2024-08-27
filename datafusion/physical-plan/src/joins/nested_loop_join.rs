@@ -316,6 +316,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 self.right().output_partitioning().partition_count(),
             )
         });
+
         let outer_table = self.right.execute(partition, context)?;
 
         Ok(Box::pin(NestedLoopJoinStream {
@@ -471,6 +472,12 @@ impl NestedLoopJoinStream {
         // Get or initialize visited_left_side bitmap if required by join type
         let visited_left_side = left_data.bitmap();
 
+        // Check is_exhausted before polling the outer_table, such that when the outer table
+        // does not support `FusedStream`, Self will not poll it again
+        if self.is_exhausted {
+            return Poll::Ready(None);
+        }
+
         self.outer_table
             .poll_next_unpin(cx)
             .map(|maybe_batch| match maybe_batch {
@@ -501,8 +508,7 @@ impl NestedLoopJoinStream {
                 }
                 Some(err) => Some(err),
                 None => {
-                    if need_produce_result_in_final(self.join_type) && !self.is_exhausted
-                    {
+                    if need_produce_result_in_final(self.join_type) {
                         // At this stage `visited_left_side` won't be updated, so it's
                         // safe to report about probe completion.
                         //
