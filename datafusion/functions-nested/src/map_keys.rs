@@ -67,7 +67,7 @@ impl ScalarUDFImpl for MapKeysFunc {
         let map_fields = get_map_entry_field(map_type)?;
         Ok(DataType::List(Arc::new(Field::new(
             "item",
-            map_fields.first().unwrap().data_type().to_owned(),
+            map_fields.first().unwrap().data_type().clone(),
             false,
         ))))
     }
@@ -83,7 +83,7 @@ impl ScalarUDFImpl for MapKeysFunc {
         if arg_types.len() != 1 {
             return exec_err!("map_keys expects single argument");
         }
-        Ok(vec![arg_types[0].to_owned()])
+        Ok(vec![arg_types[0].clone()])
     }
 }
 
