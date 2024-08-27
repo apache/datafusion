@@ -3517,14 +3517,14 @@ impl fmt::Display for ScalarValue {
             | ScalarValue::FixedSizeBinary(_, e)
             | ScalarValue::LargeBinary(e)
             | ScalarValue::BinaryView(e) => match e {
-                Some(l) => write!(
-                    f,
-                    "{}",
-                    l.iter()
-                        .map(|v| format!("{v}"))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                )?,
+                Some(l) => {
+                    let data = l.iter().map(|v| format!("{v}")).collect::<Vec<_>>();
+                    if data.len() > 10 {
+                        write!(f, "{},...", data[..10].join(","))?;
+                    } else {
+                        write!(f, "{}", data.join(","))?;
+                    }
+                }
                 None => write!(f, "NULL")?,
             },
             ScalarValue::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
@@ -3648,6 +3648,12 @@ fn fmt_list(arr: ArrayRef, f: &mut fmt::Formatter) -> fmt::Result {
 
 impl fmt::Debug for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fn fmt_binary(data: &[u8]) -> String {
+            data.iter()
+                .map(|v| format!("{v}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        }
         match self {
             ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({self})"),
             ScalarValue::Decimal256(_, _, _) => write!(f, "Decimal256({self})"),
@@ -3681,18 +3687,28 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::Utf8View(Some(_)) => write!(f, "Utf8View(\"{self}\")"),
             ScalarValue::LargeUtf8(None) => write!(f, "LargeUtf8({self})"),
             ScalarValue::LargeUtf8(Some(_)) => write!(f, "LargeUtf8(\"{self}\")"),
-            ScalarValue::Binary(None) => write!(f, "Binary({self})"),
-            ScalarValue::Binary(Some(_)) => write!(f, "Binary(\"{self}\")"),
-            ScalarValue::BinaryView(None) => write!(f, "BinaryView({self})"),
-            ScalarValue::BinaryView(Some(_)) => write!(f, "BinaryView(\"{self}\")"),
+            ScalarValue::Binary(None) => write!(f, "Binary(NULL)"),
+            ScalarValue::Binary(Some(b)) => {
+                write!(f, "Binary(\"{}\")", fmt_binary(b.as_slice()))
+            }
+            ScalarValue::BinaryView(None) => write!(f, "BinaryView(NULL)"),
+            ScalarValue::BinaryView(Some(b)) => {
+                write!(f, "BinaryView(\"{}\")", fmt_binary(b.as_slice()))
+            }
             ScalarValue::FixedSizeBinary(size, None) => {
-                write!(f, "FixedSizeBinary({size}, {self})")
+                write!(f, "FixedSizeBinary({size}, NULL)")
             }
-            ScalarValue::FixedSizeBinary(size, Some(_)) => {
-                write!(f, "FixedSizeBinary({size}, \"{self}\")")
+            ScalarValue::FixedSizeBinary(size, Some(b)) => {
+                write!(
+                    f,
+                    "FixedSizeBinary({size}, \"{}\")",
+                    fmt_binary(b.as_slice())
+                )
             }
-            ScalarValue::LargeBinary(None) => write!(f, "LargeBinary({self})"),
-            ScalarValue::LargeBinary(Some(_)) => write!(f, "LargeBinary(\"{self}\")"),
+            ScalarValue::LargeBinary(None) => write!(f, "LargeBinary(NULL)"),
+            ScalarValue::LargeBinary(Some(b)) => {
+                write!(f, "LargeBinary(\"{}\")", fmt_binary(b.as_slice()))
+            }
             ScalarValue::FixedSizeList(_) => write!(f, "FixedSizeList({self})"),
             ScalarValue::List(_) => write!(f, "List({self})"),
             ScalarValue::LargeList(_) => write!(f, "LargeList({self})"),
