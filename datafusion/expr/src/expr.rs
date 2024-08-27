@@ -633,6 +633,32 @@ impl Sort {
     }
 }
 
+// TODO (https://github.com/apache/datafusion/issues/12193) remove when transition is complete
+pub fn sort_vec_to_expr(sorts: Vec<Sort>) -> Vec<Expr> {
+    sorts.into_iter().map(Expr::Sort).collect()
+}
+
+// TODO (https://github.com/apache/datafusion/issues/12193) remove when transition is complete
+pub fn sort_vec_vec_to_expr(sorts: Vec<Vec<Sort>>) -> Vec<Vec<Expr>> {
+    sorts.into_iter().map(sort_vec_to_expr).collect()
+}
+
+// TODO (https://github.com/apache/datafusion/issues/12193) remove when transition is complete
+pub fn sort_vec_from_expr(exprs: Vec<Expr>) -> Vec<Sort> {
+    exprs
+        .into_iter()
+        .map(|expr| match expr {
+            Expr::Sort(s) => s,
+            _ => panic!("Expression must be a Expr::Sort: {}", expr),
+        })
+        .collect()
+}
+
+// TODO (https://github.com/apache/datafusion/issues/12193) remove when transition is complete
+pub fn sort_vec_vec_from_expr(exprs: Vec<Vec<Expr>>) -> Vec<Vec<Sort>> {
+    exprs.into_iter().map(sort_vec_from_expr).collect()
+}
+
 /// Aggregate function
 ///
 /// See also  [`ExprFunctionExt`] to set these fields on `Expr`

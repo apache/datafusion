@@ -31,7 +31,6 @@ use crate::datasource::{
 };
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
-use crate::logical_expr::Expr;
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::TableOptions;
@@ -41,6 +40,8 @@ use datafusion_common::{
 };
 
 use async_trait::async_trait;
+use datafusion_expr::expr::sort_vec_vec_from_expr;
+use datafusion_expr::{Expr, SortExpr};
 
 /// Options that control the reading of CSV files.
 ///
@@ -84,7 +85,7 @@ pub struct CsvReadOptions<'a> {
     /// File compression type
     pub file_compression_type: FileCompressionType,
     /// Indicates how the file is sorted
-    pub file_sort_order: Vec<Vec<Expr>>,
+    pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
 impl<'a> Default for CsvReadOptions<'a> {
@@ -199,8 +200,15 @@ impl<'a> CsvReadOptions<'a> {
     }
 
     /// Configure if file has known sort order
-    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
+        self
+    }
+
+    /// Configure if file has known sort order
+    // TODO (https://github.com/apache/datafusion/issues/12193) remove when transition is complete
+    pub fn file_sort_order_expr(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+        self.file_sort_order = sort_vec_vec_from_expr(file_sort_order);
         self
     }
 }
@@ -231,7 +239,7 @@ pub struct ParquetReadOptions<'a> {
     /// based on data in file.
     pub schema: Option<&'a Schema>,
     /// Indicates how the file is sorted
-    pub file_sort_order: Vec<Vec<Expr>>,
+    pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
 impl<'a> Default for ParquetReadOptions<'a> {
@@ -278,7 +286,7 @@ impl<'a> ParquetReadOptions<'a> {
     }
 
     /// Configure if file has known sort order
-    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
         self
     }
@@ -397,7 +405,7 @@ pub struct NdJsonReadOptions<'a> {
     /// Flag indicating whether this file may be unbounded (as in a FIFO file).
     pub infinite: bool,
     /// Indicates how the file is sorted
-    pub file_sort_order: Vec<Vec<Expr>>,
+    pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
 impl<'a> Default for NdJsonReadOptions<'a> {
@@ -452,7 +460,7 @@ impl<'a> NdJsonReadOptions<'a> {
     }
 
     /// Configure if file has known sort order
-    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
         self
     }

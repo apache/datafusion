@@ -33,8 +33,8 @@ use crate::datasource::{
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::TableType;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
+use datafusion_expr::{SortExpr, TableType};
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
@@ -51,6 +51,7 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_expr::expr::sort_vec_vec_to_expr;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -222,7 +223,7 @@ pub struct ListingOptions {
     ///       ordering (encapsulated by a `Vec<Expr>`). If there aren't
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
-    pub file_sort_order: Vec<Vec<Expr>>,
+    pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
 impl ListingOptions {
@@ -385,7 +386,7 @@ impl ListingOptions {
     ///
     /// assert_eq!(listing_options.file_sort_order, file_sort_order);
     /// ```
-    pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+    pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
         self
     }
@@ -713,7 +714,10 @@ impl ListingTable {
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
     fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
-        create_ordering(&self.table_schema, &self.options.file_sort_order)
+        create_ordering(
+            &self.table_schema,
+            &sort_vec_vec_to_expr(self.options.file_sort_order.clone()),
+        )
     }
 }
 
@@ -909,8 +913,7 @@ impl TableProvider for ListingTable {
             keep_partition_by_columns,
         };
 
-        let unsorted: Vec<Vec<Expr>> = vec![];
-        let order_requirements = if self.options().file_sort_order != unsorted {
+        let order_requirements = if !self.options().file_sort_order.is_empty() {
             // Multiple sort orders in outer vec are equivalent, so we pass only the first one
             let ordering = self
                 .try_create_output_ordering()?
@@ -1065,6 +1068,7 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::ExecutionPlanProperties;
 
+    use datafusion_expr::expr::sort_vec_vec_from_expr;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -1155,16 +1159,10 @@ mod tests {
 
         use crate::datasource::file_format::parquet::ParquetFormat;
         use datafusion_physical_plan::expressions::col as physical_col;
-        use std::ops::Add;
 
         // (file_sort_order, expected_result)
         let cases = vec![
             (vec![], Ok(vec![])),
-            // not a sort expr
-            (
-                vec![vec![col("string_col")]],
-                Err("Expected Expr::Sort in output_ordering, but got string_col"),
-            ),
             // sort expr, but non column
             (
                 vec![vec![
@@ -1209,7 +1207,9 @@ mod tests {
         ];
 
         for (file_sort_order, expected_result) in cases {
-            let options = options.clone().with_file_sort_order(file_sort_order);
+            let options = options
+                .clone()
+                .with_file_sort_order(sort_vec_vec_from_expr(file_sort_order));
 
             let config = ListingTableConfig::new(table_path.clone())
                 .with_listing_options(options)

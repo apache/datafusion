@@ -67,6 +67,7 @@ use datafusion_expr::{
 use datafusion_expr::{AggregateUDF, Unnest};
 
 use self::to_proto::{serialize_expr, serialize_exprs};
+use datafusion_expr::expr::{sort_vec_to_expr, sort_vec_vec_from_expr};
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -414,7 +415,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )
                     .with_collect_stat(scan.collect_stat)
                     .with_target_partitions(scan.target_partitions as usize)
-                    .with_file_sort_order(all_sort_orders);
+                    .with_file_sort_order(sort_vec_vec_from_expr(all_sort_orders));
 
                 let config =
                     ListingTableConfig::new_with_multi_paths(table_paths.clone())
@@ -984,7 +985,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     let mut exprs_vec: Vec<LogicalExprNodeCollection> = vec![];
                     for order in &options.file_sort_order {
                         let expr_vec = LogicalExprNodeCollection {
-                            logical_expr_nodes: serialize_exprs(order, extension_codec)?,
+                            logical_expr_nodes: serialize_exprs(
+                                &sort_vec_to_expr(order.clone()),
+                                extension_codec,
+                            )?,
                         };
                         exprs_vec.push(expr_vec);
                     }

@@ -33,6 +33,7 @@ use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_expr::expr::sort_vec_vec_from_expr;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 #[derive(Debug, Default)]
@@ -114,7 +115,7 @@ impl TableProviderFactory for ListingTableFactory {
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
-            .with_file_sort_order(cmd.order_exprs.clone());
+            .with_file_sort_order(sort_vec_vec_from_expr(cmd.order_exprs.clone()));
 
         options
             .validate_partitions(session_state, &table_path)
