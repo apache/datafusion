@@ -402,6 +402,24 @@ impl ExecutionPlan for SortMergeJoinExec {
             &self.schema,
         )
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = SortMergeJoinExec::try_new(
+            self.left.clone(),
+            self.right.clone(),
+            self.on.clone(),
+            self.filter.clone(),
+            self.join_type(),
+            self.sort_options.clone(),
+            self.null_equals_null,
+        )?;
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 /// Metrics for SortMergeJoinExec

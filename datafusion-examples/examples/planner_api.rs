@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::error::Result;
 use datafusion::physical_plan::displayable;
 use datafusion::physical_planner::DefaultPhysicalPlanner;
 use datafusion::prelude::*;
+use datafusion::{error::Result, physical_plan::ExecutionPlan};
 use datafusion_expr::{LogicalPlan, PlanType};
 
 /// This example demonstrates the process of converting logical plan
@@ -82,7 +82,33 @@ async fn to_physical_plan_in_one_api_demo(
             .plan
     );
 
+    let traversal = extract_node_ids_from_execution_plan_tree(physical_plan.as_ref());
+    let expected_traversal = vec![
+        Some(0),
+        Some(1),
+        Some(2),
+        Some(3),
+        Some(4),
+        Some(5),
+        Some(6),
+        Some(7),
+        Some(8),
+        Some(9),
+    ];
+    assert_eq!(expected_traversal, traversal);
     Ok(())
+}
+
+fn extract_node_ids_from_execution_plan_tree(
+    physical_plan: &dyn ExecutionPlan,
+) -> Vec<Option<usize>> {
+    let mut traversed_nodes: Vec<Option<usize>> = vec![];
+    for child in physical_plan.children() {
+        let node_ids = extract_node_ids_from_execution_plan_tree(child.as_ref());
+        traversed_nodes.extend(node_ids);
+    }
+    traversed_nodes.push(physical_plan.properties().node_id());
+    traversed_nodes
 }
 
 /// Converts a logical plan into a physical plan by utilizing the analyzer,
@@ -117,12 +143,6 @@ async fn to_physical_plan_step_by_step_demo(
         .query_planner()
         .create_physical_plan(&optimized_logical_plan, &ctx.state())
         .await?;
-    println!(
-        "Final physical plan:\n\n{}\n\n",
-        displayable(physical_plan.as_ref())
-            .to_stringified(false, PlanType::InitialPhysicalPlan)
-            .plan
-    );
 
     // Call the physical optimizer with an existing physical plan (in this
     // case the plan is already optimized, but an unoptimized plan would
