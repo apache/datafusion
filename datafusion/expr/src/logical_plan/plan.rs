@@ -51,7 +51,6 @@ use datafusion_common::{
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
-use crate::logical_plan::tree_node::unwrap_arc;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -770,7 +769,7 @@ impl LogicalPlan {
                 ..
             }) => {
                 // Update schema with unnested column type.
-                unnest_with_options(unwrap_arc(input), exec_columns, options)
+                unnest_with_options(Arc::unwrap_or_clone(input), exec_columns, options)
             }
         }
     }

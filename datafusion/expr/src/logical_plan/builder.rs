@@ -41,9 +41,8 @@ use crate::utils::{
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, logical_plan::tree_node::unwrap_arc, DmlStatement, Expr,
-    ExprSchemable, Operator, RecursiveQuery, TableProviderFilterPushDown, TableSource,
-    WriteOp,
+    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
+    TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
@@ -376,7 +375,7 @@ impl LogicalPlanBuilder {
         self,
         expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        project(unwrap_arc(self.plan), expr).map(Self::new)
+        project(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
     }
 
     /// Select the given column indices
@@ -429,7 +428,7 @@ impl LogicalPlanBuilder {
 
     /// Apply an alias
     pub fn alias(self, alias: impl Into<TableReference>) -> Result<Self> {
-        subquery_alias(unwrap_arc(self.plan), alias).map(Self::new)
+        subquery_alias(Arc::unwrap_or_clone(self.plan), alias).map(Self::new)
     }
 
     /// Add missing sort columns to all downstream projection
@@ -484,7 +483,7 @@ impl LogicalPlanBuilder {
                     Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
                 }
                 expr.extend(missing_exprs);
-                project(unwrap_arc(input), expr)
+                project(Arc::unwrap_or_clone(input), expr)
             }
             _ => {
                 let is_distinct =
@@ -580,8 +579,11 @@ impl LogicalPlanBuilder {
         let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
 
         let is_distinct = false;
-        let plan =
-            Self::add_missing_columns(unwrap_arc(self.plan), &missing_cols, is_distinct)?;
+        let plan = Self::add_missing_columns(
+            Arc::unwrap_or_clone(self.plan),
+            &missing_cols,
+            is_distinct,
+        )?;
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &plan)?,
             input: Arc::new(plan),
@@ -595,12 +597,12 @@ impl LogicalPlanBuilder {
 
     /// Apply a union, preserving duplicate rows
     pub fn union(self, plan: LogicalPlan) -> Result<Self> {
-        union(unwrap_arc(self.plan), plan).map(Self::new)
+        union(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
     }
 
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
-        let left_plan: LogicalPlan = unwrap_arc(self.plan);
+        let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
         let right_plan: LogicalPlan = plan;
 
         Ok(Self::new(LogicalPlan::Distinct(Distinct::All(Arc::new(
@@ -1064,7 +1066,7 @@ impl LogicalPlanBuilder {
 
     /// Build the plan
     pub fn build(self) -> Result<LogicalPlan> {
-        Ok(unwrap_arc(self.plan))
+        Ok(Arc::unwrap_or_clone(self.plan))
     }
 
     /// Apply a join with the expression on constraint.
@@ -1138,7 +1140,7 @@ impl LogicalPlanBuilder {
 
     /// Unnest the given column.
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
-        unnest(unwrap_arc(self.plan), vec![column.into()]).map(Self::new)
+        unnest(Arc::unwrap_or_clone(self.plan), vec![column.into()]).map(Self::new)
     }
 
     /// Unnest the given column given [`UnnestOptions`]
@@ -1147,8 +1149,12 @@ impl LogicalPlanBuilder {
         column: impl Into<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        unnest_with_options(unwrap_arc(self.plan), vec![column.into()], options)
-            .map(Self::new)
+        unnest_with_options(
+            Arc::unwrap_or_clone(self.plan),
+            vec![column.into()],
+            options,
+        )
+        .map(Self::new)
     }
 
     /// Unnest the given columns with the given [`UnnestOptions`]
@@ -1157,7 +1163,8 @@ impl LogicalPlanBuilder {
         columns: Vec<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        unnest_with_options(unwrap_arc(self.plan), columns, options).map(Self::new)
+        unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
+            .map(Self::new)
     }
 }
 

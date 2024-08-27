@@ -26,7 +26,6 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::combine_limit;
 use datafusion_common::Result;
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
 
 /// Optimization rule that tries to push down `LIMIT`.
@@ -83,7 +82,7 @@ impl OptimizerRule for PushDownLimit {
             })));
         };
 
-        match unwrap_arc(input) {
+        match Arc::unwrap_or_clone(input) {
             LogicalPlan::TableScan(mut scan) => {
                 let rows_needed = if fetch != 0 { fetch + skip } else { 0 };
                 let new_fetch = scan

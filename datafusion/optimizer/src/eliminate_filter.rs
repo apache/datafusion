@@ -19,7 +19,6 @@
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::{EmptyRelation, Expr, Filter, LogicalPlan};
 use std::sync::Arc;
 
@@ -65,7 +64,7 @@ impl OptimizerRule for EliminateFilter {
                 input,
                 ..
             }) => match v {
-                Some(true) => Ok(Transformed::yes(unwrap_arc(input))),
+                Some(true) => Ok(Transformed::yes(Arc::unwrap_or_clone(input))),
                 Some(false) | None => Ok(Transformed::yes(LogicalPlan::EmptyRelation(
                     EmptyRelation {
                         produce_one_row: false,
