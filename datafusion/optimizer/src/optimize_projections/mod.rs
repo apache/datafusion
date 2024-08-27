@@ -816,7 +816,7 @@ mod tests {
     use std::vec;
 
     use crate::optimize_projections::OptimizeProjections;
-    use crate::optimizer::{assert_schema_is_the_same, Optimizer};
+    use crate::optimizer::Optimizer;
     use crate::test::{
         assert_fields_eq, assert_optimized_plan_eq, scan_empty, test_table_scan,
         test_table_scan_fields, test_table_scan_with_name,
@@ -1039,7 +1039,44 @@ mod tests {
 
         let expected = "Projection: test.a AS alias\
         \n  TableScan: test projection=[a]";
-        assert_optimized_plan_equal(plan, expected)
+        assert_optimized_plan_equal(plan, expected)?;
+
+        // SELECT "test.a" FROM (SELECT a AS "test.a" FROM test)
+        let table_scan = test_table_scan_with_name("test")?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("test.a")])?
+            .project(vec![Expr::Column(Column::new_unqualified("test.a"))])?
+            .build()?;
+
+        let expected = "Projection: test.a AS test.a\
+        \n  TableScan: test projection=[a]";
+        assert_optimized_plan_equal(plan, expected)?;
+
+        // SELECT "public.test.a" FROM (SELECT a AS "public.test.a" FROM public.test)
+        let table_scan = test_table_scan_with_name("public.test")?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("public.test.a")])?
+            .project(vec![Expr::Column(Column::new_unqualified("public.test.a"))])?
+            .build()?;
+
+        let expected = "Projection: public.test.a AS public.test.a\
+        \n  TableScan: public.test projection=[a]";
+        assert_optimized_plan_equal(plan, expected)?;
+
+        // SELECT "datafusion.public.test.a" FROM (SELECT a AS "datafusion.public.test.a" FROM datafusion.public.test)
+        let table_scan = test_table_scan_with_name("datafusion.public.test")?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a").alias("datafusion.public.test.a")])?
+            .project(vec![Expr::Column(Column::new_unqualified(
+                "datafusion.public.test.a",
+            ))])?
+            .build()?;
+
+        let expected = "Projection: datafusion.public.test.a AS datafusion.public.test.a\
+        \n  TableScan: datafusion.public.test projection=[a]";
+        assert_optimized_plan_equal(plan, expected)?;
+
+        Ok(())
     }
 
     #[test]
@@ -1973,54 +2010,5 @@ mod tests {
         let optimized_plan =
             optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
         Ok(optimized_plan)
-    }
-
-    #[test]
-    fn test_subquery() -> Result<()> {
-        fn assert_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
-            // check schema
-            let prev_schema = plan.schema().clone();
-            let new_plan = optimize(plan)?;
-            assert_schema_is_the_same("", &prev_schema, &new_plan)?;
-
-            let actual = format!("{new_plan}");
-            assert_eq!(&actual, expected);
-
-            Ok(())
-        }
-
-        // SELECT "test.a" FROM (SELECT a AS "test.a" FROM test)
-        let table_scan = test_table_scan_with_name("test")?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a").alias("test.a")])?
-            .project(vec![Expr::Column(Column::new_unqualified("test.a"))])?
-            .build()?;
-        let expected = "Projection: test.a AS test.a\
-        \n  TableScan: test projection=[a]";
-        assert_eq(plan, expected)?;
-
-        // SELECT "public.test.a" FROM (SELECT a AS "public.test.a" FROM public.test)
-        let table_scan = test_table_scan_with_name("public.test")?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a").alias("public.test.a")])?
-            .project(vec![Expr::Column(Column::new_unqualified("public.test.a"))])?
-            .build()?;
-        let expected = "Projection: public.test.a AS public.test.a\
-        \n  TableScan: public.test projection=[a]";
-        assert_eq(plan, expected)?;
-
-        // SELECT "datafusion.public.test.a" FROM (SELECT a AS "datafusion.public.test.a" FROM datafusion.public.test)
-        let table_scan = test_table_scan_with_name("datafusion.public.test")?;
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a").alias("datafusion.public.test.a")])?
-            .project(vec![Expr::Column(Column::new_unqualified(
-                "datafusion.public.test.a",
-            ))])?
-            .build()?;
-        let expected = "Projection: datafusion.public.test.a AS datafusion.public.test.a\
-        \n  TableScan: datafusion.public.test projection=[a]";
-        assert_eq(plan, expected)?;
-
-        Ok(())
     }
 }
