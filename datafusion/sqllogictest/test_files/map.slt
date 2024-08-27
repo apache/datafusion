@@ -568,6 +568,42 @@ select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7)
 [] [[4, , 6]] []
 [] [] [[1, , 3]]
 
+# Tests for map_keys
+
+query ?
+SELECT map_keys(MAP { 'a': 1, 2: 3 });
+----
+[a, 2]
+
+query ?
+SELECT map_keys(MAP {'a':1, 'b':2, 'c':3 }) FROM t;
+----
+[a, b, c]
+[a, b, c]
+[a, b, c]
+
+query ?
+SELECT map_keys(Map{column1: column2, column3: column4}) FROM t;
+----
+[a, k1]
+[b, k3]
+[d, k5]
+
+query ?
+SELECT map_keys(map(column5, column6)) FROM t;
+----
+[k1, k2]
+[k3]
+[k5]
+
+query ?
+SELECT map_keys(map(column8, column9)) FROM t;
+----
+[[1, 2, 3]]
+[[4]]
+[[1, 2]]
+
+
 statement ok
 drop table map_array_table_1;
 
