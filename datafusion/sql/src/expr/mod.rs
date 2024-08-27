@@ -27,6 +27,7 @@ mod substring;
 mod unary_op;
 mod value;
 
+use crate::expr::expr::ScalarUDF;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -167,15 +168,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
             SQLExpr::Extract { field, expr } => {
-                Ok(Expr::ScalarFunction(ScalarFunction::new(
-                    BuiltinScalarFunction::DatePart,
-                    vec![
-                        Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
-                        self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
-                    ],
-                )))
+                let args = vec![
+                    Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
+                ];
+                // user-defined function (UDF) should have precedence
+                if let Some(fm) = self.schema_provider.get_function_meta("date_part") {
+                    Ok(Expr::ScalarUDF(ScalarUDF::new(fm, args)))
+                } else {
+                    Ok(Expr::ScalarFunction(ScalarFunction::new(
+                        BuiltinScalarFunction::DatePart,
+                        args,
+                    )))
+                }
             }
-
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
             SQLExpr::Interval(interval) => {
                 self.sql_interval_to_expr(false, interval, schema, planner_context)
