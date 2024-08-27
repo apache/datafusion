@@ -59,6 +59,7 @@
 //!
 
 use std::fmt::Debug;
+use std::ops::Deref;
 use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
@@ -97,7 +98,8 @@ use datafusion::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
-use datafusion_expr::Projection;
+use datafusion_expr::tree_node::replace_sort_expression;
+use datafusion_expr::{Projection, SortExpr};
 use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
 
@@ -375,7 +377,7 @@ impl OptimizerRule for TopKOptimizerRule {
                         node: Arc::new(TopKPlanNode {
                             k: *fetch,
                             input: input.as_ref().clone(),
-                            expr: expr[0].clone(),
+                            expr: expr[0].unwrap_sort().clone(),
                         }),
                     })));
                 }
@@ -392,7 +394,7 @@ struct TopKPlanNode {
     input: LogicalPlan,
     /// The sort expression (this example only supports a single sort
     /// expr)
-    expr: Expr,
+    expr: SortExpr,
 }
 
 impl Debug for TopKPlanNode {
@@ -418,7 +420,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        vec![self.expr.clone()]
+        vec![self.expr.expr.deref().clone()]
     }
 
     /// For example: `TopK: k=10`
@@ -436,7 +438,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         Ok(Self {
             k: self.k,
             input: inputs.swap_remove(0),
-            expr: exprs.swap_remove(0),
+            expr: replace_sort_expression(self.expr.clone(), exprs.swap_remove(0)),
         })
     }
 }

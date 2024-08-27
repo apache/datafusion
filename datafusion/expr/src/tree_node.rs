@@ -386,3 +386,10 @@ fn transform_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
 ) -> Result<Transformed<Vec<Expr>>> {
     ve.into_iter().map_until_stop_and_collect(f)
 }
+
+pub fn replace_sort_expression(sort: Sort, new_expr: Expr) -> Sort {
+    Sort {
+        expr: Box::new(new_expr),
+        ..sort
+    }
+}
