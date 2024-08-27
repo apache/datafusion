@@ -716,11 +716,27 @@ async fn all_type_literal() -> Result<()> {
             date32_col = arrow_cast('2020-01-01', 'Date32') AND
             binary_col = arrow_cast('binary', 'Binary') AND
             large_binary_col = arrow_cast('large_binary', 'LargeBinary') AND
+            view_binary_col = arrow_cast(arrow_cast('binary_view', 'Binary'), 'BinaryView') AND
             utf8_col = arrow_cast('utf8', 'Utf8') AND
             large_utf8_col = arrow_cast('large_utf8', 'LargeUtf8') AND
             view_utf8_col = arrow_cast('utf8_view', 'Utf8View');",
     )
         .await
+}
+
+/// Arrow-cast does not currently handle direct casting from utf8 to binaryView.
+#[tokio::test]
+async fn binaryview_type_literal_needs_casting_fix() -> Result<()> {
+    let err = roundtrip_all_types(
+        "select * from data where
+            view_binary_col = arrow_cast('binary_view', 'BinaryView');",
+    )
+    .await;
+
+    assert!(
+        matches!(err, Err(e) if e.to_string().contains("Unsupported CAST from Utf8 to BinaryView"))
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -1232,6 +1248,7 @@ async fn create_all_type_context() -> Result<SessionContext> {
         Field::new("date64_col", DataType::Date64, true),
         Field::new("binary_col", DataType::Binary, true),
         Field::new("large_binary_col", DataType::LargeBinary, true),
+        Field::new("view_binary_col", DataType::BinaryView, true),
         Field::new("fixed_size_binary_col", DataType::FixedSizeBinary(42), true),
         Field::new("utf8_col", DataType::Utf8, true),
         Field::new("large_utf8_col", DataType::LargeUtf8, true),
