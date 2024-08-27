@@ -1207,6 +1207,7 @@ mod tests {
         ScalarValue,
     };
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::disk_manager::DiskManagerConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -2483,6 +2484,131 @@ mod tests {
             "| 3   | 1                 |",
             "| 4   | 1                 |",
             "+-----+-------------------+",
+        ];
+        assert_batches_eq!(expected, &output);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_blocked_approach() -> Result<()> {
+        // Define data
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::UInt32, false),
+            Field::new("a2", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        let input_data = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
+                    Arc::new(UInt32Array::from(vec![4, 4, 3, 2])),
+                    Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
+                    Arc::new(UInt32Array::from(vec![4, 4, 3, 2])),
+                    Arc::new(Float64Array::from(vec![4.0, 3.0, 2.0, 1.0])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
+                    Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
+                    Arc::new(Float64Array::from(vec![5.0, 4.0, 3.0, 2.0])),
+                ],
+            )
+            .unwrap(),
+        ];
+
+        // Define plan
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (col("a1", &schema)?, "a1".to_string()),
+            (col("a2", &schema)?, "a2".to_string()),
+        ]);
+
+        let aggr_expr =
+            vec![
+                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias(String::from("AVG(b)"))
+                    .build()?,
+            ];
+
+        let input = Arc::new(MemoryExec::try_new(
+            &[input_data],
+            Arc::clone(&schema),
+            None,
+        )?);
+
+        let partial_aggr_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggr_expr.clone(),
+            vec![None],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&schema),
+        )?);
+
+        let merge = Arc::new(CoalescePartitionsExec::new(partial_aggr_exec));
+
+        let final_group_by = PhysicalGroupBy::new_single(vec![
+            (col("a1", &schema)?, "a1".to_string()),
+            (col("a2", &schema)?, "a2".to_string()),
+        ]);
+
+        let merged_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            final_group_by,
+            aggr_expr,
+            vec![None],
+            merge,
+            schema,
+        )?);
+
+        // Define task context
+        let mut session_config = SessionConfig::default();
+        session_config = session_config.set(
+            "datafusion.execution.enable_aggregation_group_states_blocked_approach",
+            ScalarValue::Boolean(Some(true)),
+        );
+        session_config = session_config.set(
+            "datafusion.execution.batch_size",
+            ScalarValue::UInt64(Some(1)),
+        );
+
+        let runtime = Arc::new(
+            RuntimeEnv::new(
+                RuntimeConfig::default().with_disk_manager(DiskManagerConfig::Disabled),
+            )
+            .unwrap(),
+        );
+        let ctx = TaskContext::default()
+            .with_session_config(session_config)
+            .with_runtime(runtime);
+
+        // Run and check
+        let output = collect(merged_aggregate.execute(0, Arc::new(ctx))?).await?;
+
+        let expected = [
+            "+----+----+--------+",
+            "| a1 | a2 | AVG(b) |",
+            "+----+----+--------+",
+            "| 2  | 4  | 2.5    |",
+            "| 3  | 4  | 2.5    |",
+            "| 3  | 3  | 3.0    |",
+            "| 4  | 2  | 2.5    |",
+            "| 2  | 2  | 5.0    |",
+            "| 4  | 4  | 2.0    |",
+            "+----+----+--------+",
         ];
         assert_batches_eq!(expected, &output);
 
