@@ -35,6 +35,11 @@ use substrait::proto::ReadRel;
 use substrait::proto::Rel;
 use substrait::proto::{extensions, NamedStruct, Type};
 
+use crate::variation_const::{
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
+    VIEW_CONTAINER_TYPE_VARIATION_REF,
+};
+
 /// Convert DataFusion ExecutionPlan to Substrait Rel
 pub fn to_substrait_rel(
     plan: &dyn ExecutionPlan,
@@ -155,7 +160,19 @@ fn to_substrait_type(data_type: &DataType, nullable: bool) -> Result<Type> {
         }),
         DataType::Utf8 => Ok(Type {
             kind: Some(Kind::String(SubstraitString {
-                type_variation_reference: 0,
+                type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
+        DataType::LargeUtf8 => Ok(Type {
+            kind: Some(Kind::String(SubstraitString {
+                type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
+        DataType::Utf8View => Ok(Type {
+            kind: Some(Kind::String(SubstraitString {
+                type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
