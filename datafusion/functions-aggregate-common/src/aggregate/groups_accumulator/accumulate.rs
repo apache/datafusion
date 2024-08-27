@@ -715,12 +715,12 @@ fn ensure_enough_room_for_nulls(
     block_size: Option<usize>,
     default_value: bool,
 ) {
-    let block_size = block_size.unwrap_or(usize::MAX);
+    let calc_block_size = block_size.unwrap_or(usize::MAX);
     // In blocked mode, we ensure the blks are enough first,
     // and then ensure slots in blks are enough.
     let (mut cur_blk_idx, exist_slots) = if builder_blocks.num_blocks() > 0 {
         let cur_blk_idx = builder_blocks.num_blocks() - 1;
-        let exist_slots = (builder_blocks.num_blocks() - 1) * block_size
+        let exist_slots = (builder_blocks.num_blocks() - 1) * calc_block_size
             + builder_blocks.current().unwrap().len();
 
         (cur_blk_idx, exist_slots)
@@ -735,12 +735,14 @@ fn ensure_enough_room_for_nulls(
 
     // Ensure blks are enough
     let exist_blks = builder_blocks.num_blocks();
-    let new_blks =
-        (total_num_groups.saturating_add(block_size - 1) / block_size) - exist_blks;
+    let new_blks = (total_num_groups.saturating_add(calc_block_size - 1)
+        / calc_block_size)
+        - exist_blks;
     if new_blks > 0 {
+        let prealloc_size = block_size.unwrap_or(0).min(MAX_PREALLOC_BLOCK_SIZE);
         for _ in 0..new_blks {
             builder_blocks.push_block(BooleanBufferBuilder::new(
-                block_size.min(MAX_PREALLOC_BLOCK_SIZE),
+                calc_block_size.min(prealloc_size),
             ));
         }
     }
@@ -749,7 +751,7 @@ fn ensure_enough_room_for_nulls(
     let mut new_slots = total_num_groups - exist_slots;
 
     // Expand current blk.
-    let cur_blk_rest_slots = block_size - builder_blocks[cur_blk_idx].len();
+    let cur_blk_rest_slots = calc_block_size - builder_blocks[cur_blk_idx].len();
     if cur_blk_rest_slots >= new_slots {
         builder_blocks[cur_blk_idx].append_n(new_slots, default_value);
         return;
@@ -761,14 +763,14 @@ fn ensure_enough_room_for_nulls(
     cur_blk_idx += 1;
 
     // Expand blks
-    let expand_blks = new_slots / block_size;
+    let expand_blks = new_slots / calc_block_size;
     for _ in 0..expand_blks {
-        builder_blocks[cur_blk_idx].append_n(block_size, default_value);
+        builder_blocks[cur_blk_idx].append_n(calc_block_size, default_value);
         cur_blk_idx += 1;
     }
 
     // Expand the last blk.
-    let last_expand_slots = new_slots % block_size;
+    let last_expand_slots = new_slots % calc_block_size;
     if last_expand_slots > 0 {
         builder_blocks
             .current_mut()

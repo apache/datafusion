@@ -736,13 +736,13 @@ pub fn ensure_enough_room_for_values<T: Clone>(
     block_size: Option<usize>,
     default_value: T,
 ) {
-    let block_size = block_size.unwrap_or(usize::MAX);
+    let calc_block_size = block_size.unwrap_or(usize::MAX);
     // In blocked mode, we ensure the blks are enough first,
     // and then ensure slots in blks are enough.
     let (mut cur_blk_idx, exist_slots) = if values.num_blocks() > 0 {
         let cur_blk_idx = values.num_blocks() - 1;
         let exist_slots =
-            (values.num_blocks() - 1) * block_size + values.current().unwrap().len();
+            (values.num_blocks() - 1) * calc_block_size + values.current().unwrap().len();
 
         (cur_blk_idx, exist_slots)
     } else {
@@ -756,13 +756,13 @@ pub fn ensure_enough_room_for_values<T: Clone>(
 
     // Ensure blks are enough.
     let exist_blks = values.num_blocks();
-    let new_blks =
-        total_num_groups.saturating_add(block_size - 1) / block_size - exist_blks;
+    let new_blks = total_num_groups.saturating_add(calc_block_size - 1) / calc_block_size
+        - exist_blks;
 
     if new_blks > 0 {
+        let prealloc_size = block_size.unwrap_or(0).min(MAX_PREALLOC_BLOCK_SIZE);
         for _ in 0..new_blks {
-            values
-                .push_block(Vec::with_capacity(block_size.min(MAX_PREALLOC_BLOCK_SIZE)));
+            values.push_block(Vec::with_capacity(calc_block_size.min(prealloc_size)));
         }
     }
 
@@ -770,7 +770,7 @@ pub fn ensure_enough_room_for_values<T: Clone>(
     let mut new_slots = total_num_groups - exist_slots;
 
     // Expand current blk.
-    let cur_blk_rest_slots = block_size - values[cur_blk_idx].len();
+    let cur_blk_rest_slots = calc_block_size - values[cur_blk_idx].len();
     if cur_blk_rest_slots >= new_slots {
         // We just need to expand current blocks.
         values[cur_blk_idx].extend(iter::repeat(default_value.clone()).take(new_slots));
@@ -784,14 +784,15 @@ pub fn ensure_enough_room_for_values<T: Clone>(
     cur_blk_idx += 1;
 
     // Expand whole blks
-    let expand_blks = new_slots / block_size;
+    let expand_blks = new_slots / calc_block_size;
     for _ in 0..expand_blks {
-        values[cur_blk_idx].extend(iter::repeat(default_value.clone()).take(block_size));
+        values[cur_blk_idx]
+            .extend(iter::repeat(default_value.clone()).take(calc_block_size));
         cur_blk_idx += 1;
     }
 
     // Expand the last blk if needed
-    let last_expand_slots = new_slots % block_size;
+    let last_expand_slots = new_slots % calc_block_size;
     if last_expand_slots > 0 {
         values
             .current_mut()
