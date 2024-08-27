@@ -766,6 +766,29 @@ impl ExecutionPlan for ParquetExec {
             schema_adapter_factory: self.schema_adapter_factory.clone(),
         }))
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let new_cache = self.cache.clone().with_node_id(_node_id);
+
+        let new_plan = Self {
+            base_config: self.base_config.clone(),
+            projected_statistics: self.projected_statistics.clone(),
+            metrics: self.metrics.clone(),
+            predicate: self.predicate.clone(),
+            pruning_predicate: self.pruning_predicate.clone(),
+            page_pruning_predicate: self.page_pruning_predicate.clone(),
+            metadata_size_hint: self.metadata_size_hint,
+            parquet_file_reader_factory: self.parquet_file_reader_factory.clone(),
+            cache: new_cache,
+            table_parquet_options: self.table_parquet_options.clone(),
+            schema_adapter_factory: self.schema_adapter_factory.clone(),
+        };
+
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 fn should_enable_page_index(

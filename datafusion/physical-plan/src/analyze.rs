@@ -204,6 +204,21 @@ impl ExecutionPlan for AnalyzeExec {
             futures::stream::once(output),
         )))
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = AnalyzeExec::new(
+            self.verbose,
+            self.show_statistics,
+            self.input.clone(),
+            self.schema.clone(),
+        );
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 /// Creates the output of AnalyzeExec as a RecordBatch

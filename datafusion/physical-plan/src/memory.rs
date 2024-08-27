@@ -153,6 +153,20 @@ impl ExecutionPlan for MemoryExec {
             self.projection.clone(),
         ))
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = MemoryExec::try_new(
+            &self.partitions.clone(),
+            self.schema.clone(),
+            self.projection.clone(),
+        )?;
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 impl MemoryExec {

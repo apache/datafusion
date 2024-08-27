@@ -66,6 +66,7 @@ pub mod joins;
 pub mod limit;
 pub mod memory;
 pub mod metrics;
+pub mod node_id;
 pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;
@@ -80,7 +81,6 @@ pub mod unnest;
 pub mod values;
 pub mod windows;
 pub mod work_table;
-
 pub mod udaf {
     pub use datafusion_physical_expr_functions_aggregate::aggregate::AggregateFunctionExpr;
 }
