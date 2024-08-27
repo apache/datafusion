@@ -897,10 +897,12 @@ impl ExecutionPlan for SortExec {
 
         trace!("End SortExec's input.execute for partition: {}", partition);
 
-        let sort_satisfied = matches!(
-            self.cache.execution_mode,
-            ExecutionMode::Bounded | ExecutionMode::Unbounded
-        );
+        let sort_satisfied = self
+            .input
+            .equivalence_properties()
+            .ordering_satisfy_requirement(
+                PhysicalSortRequirement::from_sort_exprs(self.expr.iter()).as_slice(),
+            );
 
         match (sort_satisfied, self.fetch.as_ref()) {
             (true, Some(fetch)) => Ok(Box::pin(TopKStream {
