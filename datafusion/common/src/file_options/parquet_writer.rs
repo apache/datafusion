@@ -565,7 +565,7 @@ mod tests {
                 column_options_with_non_defaults(&parquet_options),
             )]
             .into(),
-            key_value_metadata: [(key.clone(), value.clone())].into(),
+            key_value_metadata: [(key, value)].into(),
         };
 
         let writer_props = WriterPropertiesBuilder::try_from(&table_parquet_opts)
