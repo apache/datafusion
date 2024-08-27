@@ -131,7 +131,6 @@ impl OptimizerRule for EliminateDuplicatedExpr {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::expr::sort_vec_to_expr;
     use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder};
     use std::sync::Arc;
 
@@ -147,7 +146,7 @@ mod tests {
     fn eliminate_sort_expr() -> Result<()> {
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![col("a"), col("a"), col("b"), col("c")])?
+            .sort_by(vec![col("a"), col("a"), col("b"), col("c")])?
             .limit(5, Some(10))?
             .build()?;
         let expected = "Limit: skip=5, fetch=10\
@@ -166,7 +165,7 @@ mod tests {
             col("b").sort(false, true),
         ];
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(sort_vec_to_expr(sort_exprs))?
+            .sort(sort_exprs)?
             .limit(5, Some(10))?
             .build()?;
         let expected = "Limit: skip=5, fetch=10\

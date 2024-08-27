@@ -182,7 +182,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])?
             .limit(0, Some(2))?
-            .sort(vec![col("a")])?
+            .sort_by(vec![col("a")])?
             .limit(2, Some(1))?
             .build()?;
 
@@ -202,7 +202,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])?
             .limit(0, Some(2))?
-            .sort(vec![col("a")])?
+            .sort_by(vec![col("a")])?
             .limit(0, Some(1))?
             .build()?;
 
@@ -220,7 +220,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])?
             .limit(2, Some(1))?
-            .sort(vec![col("a")])?
+            .sort_by(vec![col("a")])?
             .limit(3, Some(1))?
             .build()?;
 

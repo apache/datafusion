@@ -27,7 +27,7 @@ use datafusion::common::{
     DFSchemaRef,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
+use datafusion::logical_expr::expr::{sort_vec_from_expr, Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     expr::find_df_window_func, Aggregate, BinaryExpr, Case, EmptyRelation, Expr,
@@ -486,7 +486,7 @@ pub async fn from_substrait_rel(
                 let sorts =
                     from_substrait_sorts(ctx, &sort.sorts, input.schema(), extensions)
                         .await?;
-                input.sort(sorts)?.build()
+                input.sort(sort_vec_from_expr(sorts))?.build()
             } else {
                 not_impl_err!("Sort without an input is not valid")
             }

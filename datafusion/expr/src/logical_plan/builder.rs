@@ -23,10 +23,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::Alias;
+use crate::expr::{sort_vec_from_expr, sort_vec_to_expr, Alias};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
-    normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
+    normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
     rewrite_sort_cols_by_aggs,
 };
 use crate::logical_plan::{
@@ -42,7 +42,7 @@ use crate::utils::{
 };
 use crate::{
     and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
-    TableProviderFilterPushDown, TableSource, WriteOp,
+    SortExpr, TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
@@ -541,19 +541,34 @@ impl LogicalPlanBuilder {
         plan_err!("For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list")
     }
 
+    /// Apply a sort by provided expressions with default direction
+    pub fn sort_by(
+        self,
+        expr: impl IntoIterator<Item = impl Into<Expr>> + Clone,
+    ) -> Result<Self> {
+        self.sort(
+            expr.into_iter()
+                .map(|e| e.into().sort(true, false))
+                .collect::<Vec<SortExpr>>(),
+        )
+    }
+
     /// Apply a sort
     pub fn sort(
         self,
-        exprs: impl IntoIterator<Item = impl Into<Expr>> + Clone,
+        exprs: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
     ) -> Result<Self> {
-        let exprs = rewrite_sort_cols_by_aggs(exprs, &self.plan)?;
+        let sorts = sort_vec_from_expr(rewrite_sort_cols_by_aggs(
+            sort_vec_to_expr(exprs.into_iter().map(|s| s.into()).collect()),
+            &self.plan,
+        )?);
 
         let schema = self.plan.schema();
 
         // Collect sort columns that are missing in the input plan's schema
         let mut missing_cols: Vec<Column> = vec![];
-        exprs.iter().try_for_each::<_, Result<()>>(|expr| {
-            let columns = expr.column_refs();
+        sorts.iter().try_for_each::<_, Result<()>>(|sort| {
+            let columns = sort.expr.column_refs();
 
             columns.into_iter().for_each(|c| {
                 if !schema.has_column(c) {
@@ -566,7 +581,7 @@ impl LogicalPlanBuilder {
 
         if missing_cols.is_empty() {
             return Ok(Self::new(LogicalPlan::Sort(Sort {
-                expr: normalize_cols(exprs, &self.plan)?,
+                expr: sort_vec_to_expr(normalize_sorts(sorts, &self.plan)?),
                 input: self.plan,
                 fetch: None,
             })));
@@ -582,7 +597,7 @@ impl LogicalPlanBuilder {
             is_distinct,
         )?;
         let sort_plan = LogicalPlan::Sort(Sort {
-            expr: normalize_cols(exprs, &plan)?,
+            expr: sort_vec_to_expr(normalize_sorts(sorts, &plan)?),
             input: Arc::new(plan),
             fetch: None,
         });
@@ -1708,8 +1723,8 @@ mod tests {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
                 .sort(vec![
-                    Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
-                    Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
+                    expr::Sort::new(Box::new(col("state")), true, true),
+                    expr::Sort::new(Box::new(col("salary")), false, false),
                 ])?
                 .build()?;
 
@@ -2135,8 +2150,8 @@ mod tests {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
                 .sort(vec![
-                    Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
-                    Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
+                    expr::Sort::new(Box::new(col("state")), true, true),
+                    expr::Sort::new(Box::new(col("salary")), false, false),
                 ])?
                 .build()?;
 

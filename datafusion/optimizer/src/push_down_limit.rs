@@ -347,7 +347,7 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![col("a")])?
+            .sort_by(vec![col("a")])?
             .limit(0, Some(10))?
             .build()?;
 
@@ -364,7 +364,7 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![col("a")])?
+            .sort_by(vec![col("a")])?
             .limit(5, Some(10))?
             .build()?;
 

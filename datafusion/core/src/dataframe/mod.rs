@@ -62,6 +62,7 @@ use datafusion_functions_aggregate::expr_fn::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_expr::expr::sort_vec_from_expr;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -798,7 +799,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn sort(self, expr: Vec<Expr>) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan).sort(expr)?.build()?;
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .sort(sort_vec_from_expr(expr))?
+            .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,

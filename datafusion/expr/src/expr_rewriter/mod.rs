@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Unnest};
+use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
@@ -114,6 +114,20 @@ pub fn normalize_cols(
     exprs
         .into_iter()
         .map(|e| normalize_col(e.into(), plan))
+        .collect()
+}
+
+pub fn normalize_sorts(
+    sorts: impl IntoIterator<Item = impl Into<Sort>>,
+    plan: &LogicalPlan,
+) -> Result<Vec<Sort>> {
+    sorts
+        .into_iter()
+        .map(|e| {
+            let sort = e.into();
+            normalize_col(*sort.expr, plan)
+                .map(|expr| Sort::new(Box::new(expr), sort.asc, sort.nulls_first))
+        })
         .collect()
 }
 

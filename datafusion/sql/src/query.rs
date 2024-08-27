@@ -20,6 +20,7 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{not_impl_err, plan_err, Constraints, Result, ScalarValue};
+use datafusion_expr::expr::sort_vec_from_expr;
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
     Operator,
@@ -131,7 +132,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let distinct_on = distinct_on.clone().with_sort_expr(order_by)?;
             Ok(LogicalPlan::Distinct(Distinct::On(distinct_on)))
         } else {
-            LogicalPlanBuilder::from(plan).sort(order_by)?.build()
+            LogicalPlanBuilder::from(plan)
+                .sort(sort_vec_from_expr(order_by))?
+                .build()
         }
     }
 

@@ -67,7 +67,9 @@ use datafusion_expr::{
 use datafusion_expr::{AggregateUDF, Unnest};
 
 use self::to_proto::{serialize_expr, serialize_exprs};
-use datafusion_expr::expr::{sort_vec_to_expr, sort_vec_vec_from_expr};
+use datafusion_expr::expr::{
+    sort_vec_from_expr, sort_vec_to_expr, sort_vec_vec_from_expr,
+};
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -479,7 +481,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(sort.input, ctx, extension_codec)?;
                 let sort_expr: Vec<Expr> =
                     from_proto::parse_exprs(&sort.expr, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input).sort(sort_expr)?.build()
+                LogicalPlanBuilder::from(input)
+                    .sort(sort_vec_from_expr(sort_expr))?
+                    .build()
             }
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion::logical_expr::Partitioning;

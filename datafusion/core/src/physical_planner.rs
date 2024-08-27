@@ -2030,7 +2030,7 @@ mod tests {
             .filter(col("c7").lt(lit(5_u8)))?
             .project(vec![col("c1"), col("c2")])?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .sort(vec![col("c1").sort(true, true).to_expr()])?
+            .sort(vec![col("c1").sort(true, true)])?
             .limit(3, Some(10))?
             .build()?;
 
