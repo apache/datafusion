@@ -1401,9 +1401,9 @@ mod tests {
 
     #[test]
     fn test_group_window_expr_by_sort_keys() -> Result<()> {
-        let age_asc = expr::Sort::new(Box::new(col("age")), true, true);
-        let name_desc = expr::Sort::new(Box::new(col("name")), false, true);
-        let created_at_desc = expr::Sort::new(Box::new(col("created_at")), false, true);
+        let age_asc = expr::Sort::new(col("age"), true, true);
+        let name_desc = expr::Sort::new(col("name"), false, true);
+        let created_at_desc = expr::Sort::new(col("created_at"), false, true);
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
@@ -1463,12 +1463,12 @@ mod tests {
             for nulls_first_ in nulls_first_or_last {
                 let order_by = &[
                     Sort {
-                        expr: Box::new(col("age")),
+                        expr: col("age"),
                         asc: asc_,
                         nulls_first: nulls_first_,
                     },
                     Sort {
-                        expr: Box::new(col("name")),
+                        expr: col("name"),
                         asc: asc_,
                         nulls_first: nulls_first_,
                     },
@@ -1477,7 +1477,7 @@ mod tests {
                 let expected = vec![
                     (
                         Sort {
-                            expr: Box::new(col("age")),
+                            expr: col("age"),
                             asc: asc_,
                             nulls_first: nulls_first_,
                         },
@@ -1485,7 +1485,7 @@ mod tests {
                     ),
                     (
                         Sort {
-                            expr: Box::new(col("name")),
+                            expr: col("name"),
                             asc: asc_,
                             nulls_first: nulls_first_,
                         },
@@ -1493,7 +1493,7 @@ mod tests {
                     ),
                     (
                         Sort {
-                            expr: Box::new(col("created_at")),
+                            expr: col("created_at"),
                             asc: true,
                             nulls_first: false,
                         },

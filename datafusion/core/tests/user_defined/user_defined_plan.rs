@@ -419,7 +419,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        vec![self.expr.expr.as_ref().clone()]
+        vec![self.expr.expr.clone()]
     }
 
     /// For example: `TopK: k=10`

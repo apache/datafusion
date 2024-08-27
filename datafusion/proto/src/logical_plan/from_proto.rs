@@ -645,12 +645,7 @@ pub fn parse_sort(
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Sort, Error> {
     Ok(Sort::new(
-        Box::new(parse_required_expr(
-            sort.expr.as_ref(),
-            registry,
-            "expr",
-            codec,
-        )?),
+        parse_required_expr(sort.expr.as_ref(), registry, "expr", codec)?,
         sort.asc,
         sort.nulls_first,
     ))
