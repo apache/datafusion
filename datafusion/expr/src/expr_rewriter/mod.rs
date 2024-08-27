@@ -349,7 +349,6 @@ mod test {
     use std::ops::Add;
 
     use super::*;
-    use crate::expr::Sort;
     use crate::{col, lit, Cast};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
@@ -510,12 +509,6 @@ mod test {
 
         // change literal type from i32 to i64
         test_rewrite(col("a").add(lit(1i32)), col("a").add(lit(1i64)));
-
-        // SortExpr a+1 ==> b + 2
-        test_rewrite(
-            Expr::Sort(Sort::new(Box::new(col("a").add(lit(1i32))), true, false)),
-            Expr::Sort(Sort::new(Box::new(col("b").add(lit(2i64))), true, false)),
-        );
     }
 
     /// rewrites `expr_from` to `rewrite_to` using
@@ -538,15 +531,8 @@ mod test {
         };
         let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
 
-        let original_name = match &expr_from {
-            Expr::Sort(Sort { expr, .. }) => expr.schema_name().to_string(),
-            expr => expr.schema_name().to_string(),
-        };
-
-        let new_name = match &expr {
-            Expr::Sort(Sort { expr, .. }) => expr.schema_name().to_string(),
-            expr => expr.schema_name().to_string(),
-        };
+        let original_name = expr_from.schema_name().to_string();
+        let new_name = expr.schema_name().to_string();
 
         assert_eq!(
             original_name, new_name,

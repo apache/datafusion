@@ -226,15 +226,15 @@ impl SortedData {
     }
 
     /// Return the sort expression to use for this data, depending on the type
-    fn sort_expr(&self) -> Vec<datafusion_expr::Expr> {
+    fn sort_expr(&self) -> Vec<datafusion_expr::SortExpr> {
         match self {
             Self::I32 { .. } | Self::F64 { .. } | Self::Str { .. } => {
-                vec![datafusion_expr::col("x").sort(true, true).to_expr()]
+                vec![datafusion_expr::col("x").sort(true, true)]
             }
             Self::I64Str { .. } => {
                 vec![
-                    datafusion_expr::col("x").sort(true, true).to_expr(),
-                    datafusion_expr::col("y").sort(true, true).to_expr(),
+                    datafusion_expr::col("x").sort(true, true),
+                    datafusion_expr::col("y").sort(true, true),
                 ]
             }
         }

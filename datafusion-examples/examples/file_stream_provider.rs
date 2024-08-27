@@ -39,7 +39,7 @@ mod non_windows {
     use datafusion::datasource::TableProvider;
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::{exec_err, Result};
-    use datafusion_expr::Expr;
+    use datafusion_expr::SortExpr;
 
     // Number of lines written to FIFO
     const TEST_BATCH_SIZE: usize = 5;
@@ -49,7 +49,7 @@ mod non_windows {
     fn fifo_table(
         schema: SchemaRef,
         path: impl Into<PathBuf>,
-        sort: Vec<Vec<Expr>>,
+        sort: Vec<Vec<SortExpr>>,
     ) -> Arc<dyn TableProvider> {
         let source = FileStreamProvider::new_file(schema, path.into())
             .with_batch_size(TEST_BATCH_SIZE)
@@ -157,7 +157,7 @@ mod non_windows {
         ]));
 
         // Specify the ordering:
-        let order = vec![vec![datafusion_expr::col("a1").sort(true, false).to_expr()]];
+        let order = vec![vec![datafusion_expr::col("a1").sort(true, false)]];
 
         let provider = fifo_table(schema.clone(), fifo_path, order.clone());
         ctx.register_table("fifo", provider)?;

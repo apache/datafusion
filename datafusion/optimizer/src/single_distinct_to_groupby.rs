@@ -624,14 +624,14 @@ mod tests {
             vec![col("a")],
             false,
             None,
-            Some(vec![col("a")]),
+            Some(vec![col("a").sort(true, false)]),
             None,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![expr, count_distinct(col("b"))])?
             .build()?;
         // Do nothing
-        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a) ORDER BY [test.a], count(DISTINCT test.b)]] [c:UInt32, sum(test.a) ORDER BY [test.a]:UInt64;N, count(DISTINCT test.b):Int64]\
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a) ORDER BY [test.a ASC NULLS LAST], count(DISTINCT test.b)]] [c:UInt32, sum(test.a) ORDER BY [test.a ASC NULLS LAST]:UInt64;N, count(DISTINCT test.b):Int64]\
                             \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(plan, expected)
@@ -645,7 +645,7 @@ mod tests {
         let expr = count_udaf()
             .call(vec![col("a")])
             .distinct()
-            .order_by(vec![col("a").sort(true, false).to_expr()])
+            .order_by(vec![col("a").sort(true, false)])
             .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
@@ -666,7 +666,7 @@ mod tests {
             .call(vec![col("a")])
             .distinct()
             .filter(col("a").gt(lit(5)))
-            .order_by(vec![col("a").sort(true, false).to_expr()])
+            .order_by(vec![col("a").sort(true, false)])
             .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?

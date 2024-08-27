@@ -59,7 +59,7 @@ use datafusion_common::{
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Sort, Unnest, WildcardOptions,
+    Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -871,7 +871,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         count(lit(1)),
         count_distinct(lit(1)),
         first_value(lit(1), None),
-        first_value(lit(1), Some(vec![lit(2).sort(true, true).to_expr()])),
+        first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
         avg(lit(1.5)),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
@@ -1938,14 +1938,6 @@ fn roundtrip_try_cast() {
 }
 
 #[test]
-fn roundtrip_sort_expr() {
-    let test_expr = Expr::Sort(Sort::new(Box::new(lit(1.0_f32)), true, true));
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
 fn roundtrip_negative() {
     let test_expr = Expr::Negative(Box::new(lit(1.0_f32)));
 
@@ -2249,7 +2241,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, false).to_expr()])
+    .order_by(vec![col("col2").sort(true, false)])
     .window_frame(WindowFrame::new(Some(false)))
     .build()
     .unwrap();
@@ -2262,7 +2254,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(false, true).to_expr()])
+    .order_by(vec![col("col2").sort(false, true)])
     .window_frame(WindowFrame::new(Some(false)))
     .build()
     .unwrap();
@@ -2281,7 +2273,7 @@ fn roundtrip_window() {
         vec![],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(false, false).to_expr()])
+    .order_by(vec![col("col2").sort(false, false)])
     .window_frame(range_number_frame)
     .build()
     .unwrap();
@@ -2298,7 +2290,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, true).to_expr()])
+    .order_by(vec![col("col2").sort(true, true)])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
@@ -2348,7 +2340,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, true).to_expr()])
+    .order_by(vec![col("col2").sort(true, true)])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
@@ -2425,7 +2417,7 @@ fn roundtrip_window() {
         vec![col("col1")],
     ))
     .partition_by(vec![col("col1")])
-    .order_by(vec![col("col2").sort(true, true).to_expr()])
+    .order_by(vec![col("col2").sort(true, true)])
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();

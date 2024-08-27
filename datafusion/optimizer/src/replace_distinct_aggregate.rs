@@ -21,7 +21,6 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Result};
-use datafusion_expr::expr::sort_vec_from_expr;
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{col, ExprFunctionExt, LogicalPlanBuilder};
@@ -145,7 +144,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     // truncate the sort_expr to the length of on_expr
                     sort_expr.truncate(expr_cnt);
 
-                    lpb.sort(sort_vec_from_expr(sort_expr))?.build()?
+                    lpb.sort(sort_expr)?.build()?
                 } else {
                     lpb.build()?
                 };

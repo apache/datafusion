@@ -283,22 +283,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let func_deps = schema.functional_dependencies();
             // Find whether ties are possible in the given ordering
             let is_ordering_strict = order_by.iter().find_map(|orderby_expr| {
-                if let Expr::Sort(sort_expr) = orderby_expr {
-                    if let Expr::Column(col) = sort_expr.expr.as_ref() {
-                        let idx = schema.index_of_column(col).ok()?;
-                        return if func_deps.iter().any(|dep| {
-                            dep.source_indices == vec![idx]
-                                && dep.mode == Dependency::Single
-                        }) {
-                            Some(true)
-                        } else {
-                            Some(false)
-                        };
-                    }
-                    Some(false)
-                } else {
-                    panic!("order_by expression must be of type Sort");
+                if let Expr::Column(col) = orderby_expr.expr.as_ref() {
+                    let idx = schema.index_of_column(col).ok()?;
+                    return if func_deps.iter().any(|dep| {
+                        dep.source_indices == vec![idx] && dep.mode == Dependency::Single
+                    }) {
+                        Some(true)
+                    } else {
+                        Some(false)
+                    };
                 }
+                Some(false)
             });
 
             let window_frame = window

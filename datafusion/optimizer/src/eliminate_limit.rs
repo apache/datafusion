@@ -189,7 +189,7 @@ mod tests {
         // After remove global-state, we don't record the parent <skip, fetch>
         // So, bottom don't know parent info, so can't eliminate.
         let expected = "Limit: skip=2, fetch=1\
-        \n  Sort: test.a, fetch=3\
+        \n  Sort: test.a ASC NULLS LAST, fetch=3\
         \n    Limit: skip=0, fetch=2\
         \n      Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
         \n        TableScan: test";
@@ -207,7 +207,7 @@ mod tests {
             .build()?;
 
         let expected = "Limit: skip=0, fetch=1\
-            \n  Sort: test.a\
+            \n  Sort: test.a ASC NULLS LAST\
             \n    Limit: skip=0, fetch=2\
             \n      Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
             \n        TableScan: test";
@@ -225,7 +225,7 @@ mod tests {
             .build()?;
 
         let expected = "Limit: skip=3, fetch=1\
-        \n  Sort: test.a\
+        \n  Sort: test.a ASC NULLS LAST\
         \n    Limit: skip=2, fetch=1\
         \n      Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]\
         \n        TableScan: test";

@@ -20,7 +20,7 @@ use arrow_array::builder::{ListBuilder, StringBuilder};
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Field};
 use datafusion::prelude::*;
-use datafusion_common::{assert_contains, DFSchema, ScalarValue};
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::ExprFunctionExt;
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_aggregate::first_last::first_value_udaf;
@@ -168,35 +168,20 @@ fn test_list_range() {
 }
 
 #[tokio::test]
-async fn test_aggregate_error() {
-    let err = first_value_udaf()
-        .call(vec![col("props")])
-        // not a sort column
-        .order_by(vec![col("id")])
-        .build()
-        .unwrap_err()
-        .to_string();
-    assert_contains!(
-        err,
-        "Error during planning: ORDER BY expressions must be Expr::Sort"
-    );
-}
-
-#[tokio::test]
 async fn test_aggregate_ext_order_by() {
     let agg = first_value_udaf().call(vec![col("props")]);
 
     // ORDER BY id ASC
     let agg_asc = agg
         .clone()
-        .order_by(vec![col("id").sort(true, true).to_expr()])
+        .order_by(vec![col("id").sort(true, true)])
         .build()
         .unwrap()
         .alias("asc");
 
     // ORDER BY id DESC
     let agg_desc = agg
-        .order_by(vec![col("id").sort(false, true).to_expr()])
+        .order_by(vec![col("id").sort(false, true)])
         .build()
         .unwrap()
         .alias("desc");
@@ -230,7 +215,7 @@ async fn test_aggregate_ext_order_by() {
 async fn test_aggregate_ext_filter() {
     let agg = first_value_udaf()
         .call(vec![col("i")])
-        .order_by(vec![col("i").sort(true, true).to_expr()])
+        .order_by(vec![col("i").sort(true, true)])
         .filter(col("i").is_not_null())
         .build()
         .unwrap()
@@ -277,7 +262,7 @@ async fn test_aggregate_ext_distinct() {
 async fn test_aggregate_ext_null_treatment() {
     let agg = first_value_udaf()
         .call(vec![col("i")])
-        .order_by(vec![col("i").sort(true, true).to_expr()]);
+        .order_by(vec![col("i").sort(true, true)]);
 
     let agg_respect = agg
         .clone()

@@ -27,11 +27,11 @@ use datafusion::common::{
     DFSchemaRef,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::expr::{sort_vec_to_expr, Exists, InSubquery, Sort};
+use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     expr::find_df_window_func, Aggregate, BinaryExpr, Case, EmptyRelation, Expr,
-    ExprSchemable, LogicalPlan, Operator, Projection, Values,
+    ExprSchemable, LogicalPlan, Operator, Projection, SortExpr, Values,
 };
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 use url::Url;
@@ -986,7 +986,7 @@ pub async fn from_substrait_agg_func(
     input_schema: &DFSchema,
     extensions: &Extensions,
     filter: Option<Box<Expr>>,
-    order_by: Option<Vec<Expr>>,
+    order_by: Option<Vec<SortExpr>>,
     distinct: bool,
 ) -> Result<Arc<Expr>> {
     let args =
@@ -1237,7 +1237,7 @@ pub async fn from_substrait_rex(
                     extensions,
                 )
                 .await?,
-                order_by: sort_vec_to_expr(order_by),
+                order_by,
                 window_frame: datafusion::logical_expr::WindowFrame::new_bounds(
                     bound_units,
                     from_substrait_bound(&window.lower_bound, true)?,

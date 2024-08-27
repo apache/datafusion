@@ -4408,10 +4408,7 @@ fn plan_create_index() {
             assert_eq!(using, Some("btree".to_string()));
             assert_eq!(
                 columns,
-                vec![
-                    col("name").sort(true, false).to_expr(),
-                    col("age").sort(false, true).to_expr(),
-                ]
+                vec![col("name").sort(true, false), col("age").sort(false, true),]
             );
             assert!(unique);
             assert!(if_not_exists);

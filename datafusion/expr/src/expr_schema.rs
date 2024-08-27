@@ -18,7 +18,7 @@
 use super::{Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, Alias, BinaryExpr, Cast, InList, InSubquery, Placeholder,
-    ScalarFunction, Sort, TryCast, Unnest, WindowFunction,
+    ScalarFunction, TryCast, Unnest, WindowFunction,
 };
 use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::{
@@ -107,7 +107,7 @@ impl ExprSchemable for Expr {
                 },
                 _ => expr.get_type(schema),
             },
-            Expr::Sort(Sort { expr, .. }) | Expr::Negative(expr) => expr.get_type(schema),
+            Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
@@ -280,10 +280,9 @@ impl ExprSchemable for Expr {
     /// column that does not exist in the schema.
     fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool> {
         match self {
-            Expr::Alias(Alias { expr, .. })
-            | Expr::Not(expr)
-            | Expr::Negative(expr)
-            | Expr::Sort(Sort { expr, .. }) => expr.nullable(input_schema),
+            Expr::Alias(Alias { expr, .. }) | Expr::Not(expr) | Expr::Negative(expr) => {
+                expr.nullable(input_schema)
+            }
 
             Expr::InList(InList { expr, list, .. }) => {
                 // Avoid inspecting too many expressions.
@@ -422,9 +421,7 @@ impl ExprSchemable for Expr {
                 },
                 _ => expr.data_type_and_nullable(schema),
             },
-            Expr::Sort(Sort { expr, .. }) | Expr::Negative(expr) => {
-                expr.data_type_and_nullable(schema)
-            }
+            Expr::Negative(expr) => expr.data_type_and_nullable(schema),
             Expr::Column(c) => schema
                 .data_type_and_nullable(c)
                 .map(|(d, n)| (d.clone(), n)),

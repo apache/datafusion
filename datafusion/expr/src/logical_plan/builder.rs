@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{sort_vec_from_expr, sort_vec_to_expr, Alias};
+use crate::expr::{Alias, Sort as SortExpr};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -42,7 +42,7 @@ use crate::utils::{
 };
 use crate::{
     and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
-    SortExpr, TableProviderFilterPushDown, TableSource, WriteOp,
+    TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
@@ -556,12 +556,9 @@ impl LogicalPlanBuilder {
     /// Apply a sort
     pub fn sort(
         self,
-        exprs: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
+        sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
     ) -> Result<Self> {
-        let sorts = sort_vec_from_expr(rewrite_sort_cols_by_aggs(
-            sort_vec_to_expr(exprs.into_iter().map(|s| s.into()).collect()),
-            &self.plan,
-        )?);
+        let sorts = rewrite_sort_cols_by_aggs(sorts, &self.plan)?;
 
         let schema = self.plan.schema();
 
@@ -581,7 +578,7 @@ impl LogicalPlanBuilder {
 
         if missing_cols.is_empty() {
             return Ok(Self::new(LogicalPlan::Sort(Sort {
-                expr: sort_vec_to_expr(normalize_sorts(sorts, &self.plan)?),
+                expr: normalize_sorts(sorts, &self.plan)?,
                 input: self.plan,
                 fetch: None,
             })));
@@ -597,7 +594,7 @@ impl LogicalPlanBuilder {
             is_distinct,
         )?;
         let sort_plan = LogicalPlan::Sort(Sort {
-            expr: sort_vec_to_expr(normalize_sorts(sorts, &plan)?),
+            expr: normalize_sorts(sorts, &plan)?,
             input: Arc::new(plan),
             fetch: None,
         });
@@ -633,7 +630,7 @@ impl LogicalPlanBuilder {
         self,
         on_expr: Vec<Expr>,
         select_expr: Vec<Expr>,
-        sort_expr: Option<Vec<Expr>>,
+        sort_expr: Option<Vec<SortExpr>>,
     ) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Distinct(Distinct::On(
             DistinctOn::try_new(on_expr, select_expr, sort_expr, self.plan)?,

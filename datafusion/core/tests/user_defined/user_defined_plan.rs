@@ -59,7 +59,6 @@
 //!
 
 use std::fmt::Debug;
-use std::ops::Deref;
 use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
@@ -377,7 +376,7 @@ impl OptimizerRule for TopKOptimizerRule {
                         node: Arc::new(TopKPlanNode {
                             k: *fetch,
                             input: input.as_ref().clone(),
-                            expr: expr[0].unwrap_sort().clone(),
+                            expr: expr[0].clone(),
                         }),
                     })));
                 }
@@ -420,7 +419,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        vec![self.expr.expr.deref().clone()]
+        vec![self.expr.expr.as_ref().clone()]
     }
 
     /// For example: `TopK: k=10`

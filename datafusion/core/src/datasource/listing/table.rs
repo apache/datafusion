@@ -51,7 +51,6 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use datafusion_expr::expr::sort_vec_vec_to_expr;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -714,10 +713,7 @@ impl ListingTable {
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
     fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
-        create_ordering(
-            &self.table_schema,
-            &sort_vec_vec_to_expr(self.options.file_sort_order.clone()),
-        )
+        create_ordering(&self.table_schema, &self.options.file_sort_order)
     }
 }
 
@@ -1068,7 +1064,6 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::ExecutionPlanProperties;
 
-    use datafusion_expr::expr::sort_vec_vec_from_expr;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -1159,6 +1154,7 @@ mod tests {
 
         use crate::datasource::file_format::parquet::ParquetFormat;
         use datafusion_physical_plan::expressions::col as physical_col;
+        use std::ops::Add;
 
         // (file_sort_order, expected_result)
         let cases = vec![
@@ -1207,9 +1203,7 @@ mod tests {
         ];
 
         for (file_sort_order, expected_result) in cases {
-            let options = options.clone().with_file_sort_order(sort_vec_vec_from_expr(
-                sort_vec_vec_to_expr(file_sort_order),
-            ));
+            let options = options.clone().with_file_sort_order(file_sort_order);
 
             let config = ListingTableConfig::new(table_path.clone())
                 .with_listing_options(options)

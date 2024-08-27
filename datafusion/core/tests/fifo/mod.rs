@@ -38,7 +38,7 @@ mod unix_test {
     };
     use datafusion_common::instant::Instant;
     use datafusion_common::{exec_err, Result};
-    use datafusion_expr::Expr;
+    use datafusion_expr::SortExpr;
 
     use futures::StreamExt;
     use nix::sys::stat;
@@ -51,7 +51,7 @@ mod unix_test {
     fn fifo_table(
         schema: SchemaRef,
         path: impl Into<PathBuf>,
-        sort: Vec<Vec<Expr>>,
+        sort: Vec<Vec<SortExpr>>,
     ) -> Arc<dyn TableProvider> {
         let source = FileStreamProvider::new_file(schema, path.into())
             .with_batch_size(TEST_BATCH_SIZE)
@@ -247,7 +247,7 @@ mod unix_test {
         ]));
 
         // Specify the ordering:
-        let order = vec![vec![datafusion_expr::col("a1").sort(true, false).to_expr()]];
+        let order = vec![vec![datafusion_expr::col("a1").sort(true, false)]];
 
         // Set unbounded sorted files read configuration
         let provider = fifo_table(schema.clone(), left_fifo.clone(), order.clone());

@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use core::fmt;
-
 use datafusion_expr::ScalarUDF;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
@@ -24,7 +22,7 @@ use sqlparser::ast::{
     ObjectName, TimezoneInfo, UnaryOperator,
 };
 use std::sync::Arc;
-use std::{fmt::Display, vec};
+use std::vec;
 
 use super::dialect::{DateFieldExtractStyle, IntervalStyle};
 use super::Unparser;
@@ -45,33 +43,6 @@ use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
-
-/// DataFusion's Exprs can represent either an `Expr` or an `OrderByExpr`
-pub enum Unparsed {
-    // SQL Expression
-    Expr(ast::Expr),
-    // SQL ORDER BY expression (e.g. `col ASC NULLS FIRST`)
-    OrderByExpr(ast::OrderByExpr),
-}
-
-impl Unparsed {
-    pub fn into_order_by_expr(self) -> Result<ast::OrderByExpr> {
-        if let Unparsed::OrderByExpr(order_by_expr) = self {
-            Ok(order_by_expr)
-        } else {
-            internal_err!("Expected Sort expression to be converted an OrderByExpr")
-        }
-    }
-}
-
-impl Display for Unparsed {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Unparsed::Expr(expr) => write!(f, "{}", expr),
-            Unparsed::OrderByExpr(order_by_expr) => write!(f, "{}", order_by_expr),
-        }
-    }
-}
 
 /// Convert a DataFusion [`Expr`] to [`ast::Expr`]
 ///
@@ -106,13 +77,9 @@ pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     unparser.expr_to_sql(expr)
 }
 
-/// Convert a DataFusion [`Expr`] to [`Unparsed`]
-///
-/// This function is similar to expr_to_sql, but it supports converting more [`Expr`] types like
-/// `Sort` expressions to `OrderByExpr` expressions.
-pub fn expr_to_unparsed(expr: &Expr) -> Result<Unparsed> {
+pub fn sort_to_sql(sort: &Sort) -> Result<ast::OrderByExpr> {
     let unparser = Unparser::default();
-    unparser.expr_to_unparsed(expr)
+    unparser.sort_to_sql(sort)
 }
 
 const LOWEST: &BinaryOperator = &BinaryOperator::Or;
@@ -286,7 +253,7 @@ impl Unparser<'_> {
                 };
                 let order_by: Vec<ast::OrderByExpr> = order_by
                     .iter()
-                    .map(|expr| expr_to_unparsed(expr)?.into_order_by_expr())
+                    .map(sort_to_sql)
                     .collect::<Result<Vec<_>>>()?;
 
                 let start_bound = self.convert_bound(&window_frame.start_bound)?;
@@ -413,11 +380,6 @@ impl Unparser<'_> {
                     negated: *negated,
                 })
             }
-            Expr::Sort(Sort {
-                expr: _,
-                asc: _,
-                nulls_first: _,
-            }) => plan_err!("Sort expression should be handled by expr_to_unparsed"),
             Expr::IsNull(expr) => {
                 Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql_inner(expr)?)))
             }
@@ -534,36 +496,26 @@ impl Unparser<'_> {
         }
     }
 
-    /// This function can convert more [`Expr`] types than `expr_to_sql`,
-    /// returning an [`Unparsed`] like `Sort` expressions to `OrderByExpr`
-    /// expressions.
-    pub fn expr_to_unparsed(&self, expr: &Expr) -> Result<Unparsed> {
-        match expr {
-            Expr::Sort(Sort {
-                expr,
-                asc,
-                nulls_first,
-            }) => {
-                let sql_parser_expr = self.expr_to_sql(expr)?;
+    pub fn sort_to_sql(&self, sort: &Sort) -> Result<ast::OrderByExpr> {
+        let Sort {
+            expr,
+            asc,
+            nulls_first,
+        } = sort;
+        let sql_parser_expr = self.expr_to_sql(expr)?;
 
-                let nulls_first = if self.dialect.supports_nulls_first_in_sort() {
-                    Some(*nulls_first)
-                } else {
-                    None
-                };
+        let nulls_first = if self.dialect.supports_nulls_first_in_sort() {
+            Some(*nulls_first)
+        } else {
+            None
+        };
 
-                Ok(Unparsed::OrderByExpr(ast::OrderByExpr {
-                    expr: sql_parser_expr,
-                    asc: Some(*asc),
-                    nulls_first,
-                    with_fill: None,
-                }))
-            }
-            _ => {
-                let sql_parser_expr = self.expr_to_sql(expr)?;
-                Ok(Unparsed::Expr(sql_parser_expr))
-            }
-        }
+        Ok(ast::OrderByExpr {
+            expr: sql_parser_expr,
+            asc: Some(*asc),
+            nulls_first,
+            with_fill: None,
+        })
     }
 
     fn scalar_function_to_sql_overrides(
@@ -1527,7 +1479,7 @@ mod tests {
         case, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
         table_scan, try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl,
-        Signature, SortExpr, Volatility, WindowFrame, WindowFunctionDefinition,
+        Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
     use datafusion_functions_aggregate::count::count_udaf;
@@ -1809,11 +1761,7 @@ mod tests {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     args: vec![wildcard()],
                     partition_by: vec![],
-                    order_by: vec![Expr::Sort(Sort::new(
-                        Box::new(col("a")),
-                        false,
-                        true,
-                    ))],
+                    order_by: vec![Sort::new(Box::new(col("a")), false, true)],
                     window_frame: WindowFrame::new_bounds(
                         datafusion_expr::WindowFrameUnits::Range,
                         datafusion_expr::WindowFrameBound::Preceding(
@@ -1942,24 +1890,6 @@ mod tests {
     }
 
     #[test]
-    fn expr_to_unparsed_ok() -> Result<()> {
-        let tests: Vec<(Expr, &str)> = vec![
-            ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
-            (col("a").sort(true, true).to_expr(), r#"a ASC NULLS FIRST"#),
-        ];
-
-        for (expr, expected) in tests {
-            let ast = expr_to_unparsed(&expr)?;
-
-            let actual = format!("{}", ast);
-
-            assert_eq!(actual, expected);
-        }
-
-        Ok(())
-    }
-
-    #[test]
     fn custom_dialect_with_identifier_quote_style() -> Result<()> {
         let dialect = CustomDialectBuilder::new()
             .with_identifier_quote_style('\'')
@@ -2047,7 +1977,7 @@ mod tests {
 
     #[test]
     fn customer_dialect_support_nulls_first_in_ort() -> Result<()> {
-        let tests: Vec<(SortExpr, &str, bool)> = vec![
+        let tests: Vec<(Sort, &str, bool)> = vec![
             (col("a").sort(true, true), r#"a ASC NULLS FIRST"#, true),
             (col("a").sort(true, true), r#"a ASC"#, false),
         ];
@@ -2057,7 +1987,7 @@ mod tests {
                 .with_supports_nulls_first_in_sort(supports_nulls_first_in_sort)
                 .build();
             let unparser = Unparser::new(&dialect);
-            let ast = unparser.expr_to_unparsed(&expr.to_expr())?;
+            let ast = unparser.sort_to_sql(&expr)?;
 
             let actual = format!("{}", ast);
 
