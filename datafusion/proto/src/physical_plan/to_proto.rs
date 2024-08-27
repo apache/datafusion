@@ -29,7 +29,7 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
-use datafusion::physical_plan::{AggregateExpr, Partitioning, PhysicalExpr, WindowExpr};
+use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion::{
     datasource::{
         file_format::{csv::CsvSink, json::JsonSink},
@@ -49,58 +49,50 @@ use crate::protobuf::{
 use super::PhysicalExtensionCodec;
 
 pub fn serialize_physical_aggr_expr(
-    aggr_expr: Arc<dyn AggregateExpr>,
+    aggr_expr: Arc<AggregateFunctionExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
     let expressions = serialize_physical_exprs(aggr_expr.expressions(), codec)?;
     let ordering_req = aggr_expr.order_bys().unwrap_or(&[]).to_vec();
     let ordering_req = serialize_physical_sort_exprs(ordering_req, codec)?;
 
-    if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-        let name = a.fun().name().to_string();
-        let mut buf = Vec::new();
-        codec.try_encode_udaf(a.fun(), &mut buf)?;
-        Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
-                protobuf::PhysicalAggregateExprNode {
-                    aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
-                    expr: expressions,
-                    ordering_req,
-                    distinct: a.is_distinct(),
-                    ignore_nulls: a.ignore_nulls(),
-                    fun_definition: (!buf.is_empty()).then_some(buf)
-                },
-            )),
-        })
-    } else {
-        unreachable!("No other types exists besides AggergationFunctionExpr");
-    }
+    let name = aggr_expr.fun().name().to_string();
+    let mut buf = Vec::new();
+    codec.try_encode_udaf(aggr_expr.fun(), &mut buf)?;
+    Ok(protobuf::PhysicalExprNode {
+        expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
+            protobuf::PhysicalAggregateExprNode {
+                aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
+                expr: expressions,
+                ordering_req,
+                distinct: aggr_expr.is_distinct(),
+                ignore_nulls: aggr_expr.ignore_nulls(),
+                fun_definition: (!buf.is_empty()).then_some(buf)
+            },
+        )),
+    })
 }
 
 fn serialize_physical_window_aggr_expr(
-    aggr_expr: &dyn AggregateExpr,
+    aggr_expr: &AggregateFunctionExpr,
     _window_frame: &WindowFrame,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<(physical_window_expr_node::WindowFunction, Option<Vec<u8>>)> {
-    if let Some(a) = aggr_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-        if a.is_distinct() || a.ignore_nulls() {
-            // TODO
-            return not_impl_err!(
-                "Distinct aggregate functions not supported in window expressions"
-            );
-        }
-
-        let mut buf = Vec::new();
-        codec.try_encode_udaf(a.fun(), &mut buf)?;
-        Ok((
-            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
-                a.fun().name().to_string(),
-            ),
-            (!buf.is_empty()).then_some(buf),
-        ))
-    } else {
-        unreachable!("No other types exists besides AggergationFunctionExpr");
+    if aggr_expr.is_distinct() || aggr_expr.ignore_nulls() {
+        // TODO
+        return not_impl_err!(
+            "Distinct aggregate functions not supported in window expressions"
+        );
     }
+
+    let mut buf = Vec::new();
+    codec.try_encode_udaf(aggr_expr.fun(), &mut buf)?;
+    Ok((
+        physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+            aggr_expr.fun().name().to_string(),
+        ),
+        (!buf.is_empty()).then_some(buf),
+    ))
 }
 
 pub fn serialize_physical_window_expr(

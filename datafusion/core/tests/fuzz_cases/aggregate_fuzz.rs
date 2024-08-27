@@ -25,7 +25,7 @@ use arrow::util::pretty::pretty_format_batches;
 use arrow_array::types::Int64Type;
 use datafusion::common::Result;
 use datafusion::datasource::MemTable;
-use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
+use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
