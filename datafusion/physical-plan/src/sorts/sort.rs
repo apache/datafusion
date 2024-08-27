@@ -799,6 +799,22 @@ impl SortExec {
         sort_exprs: LexOrdering,
         preserve_partitioning: bool,
     ) -> PlanProperties {
+        // Determine execution mode:
+        let mode = match input.execution_mode() {
+            ExecutionMode::Unbounded
+                if input.equivalence_properties().ordering_satisfy_requirement(
+                    PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter())
+                        .as_slice(),
+                ) =>
+            {
+                ExecutionMode::Unbounded
+            }
+            ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
+                ExecutionMode::PipelineBreaking
+            }
+            ExecutionMode::Bounded => ExecutionMode::Bounded,
+        };
+
         // Calculate equivalence properties; i.e. reset the ordering equivalence
         // class with the new ordering:
         let eq_properties = input
@@ -809,14 +825,6 @@ impl SortExec {
         // Get output partitioning:
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);
-
-        // Determine execution mode:
-        let mode = match input.execution_mode() {
-            ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
-                ExecutionMode::PipelineBreaking
-            }
-            ExecutionMode::Bounded => ExecutionMode::Bounded,
-        };
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
     }
