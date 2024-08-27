@@ -47,10 +47,9 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::{DiskManager, TaskContext};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{
-    AggregateExpr, GroupsAccumulatorAdapter, PhysicalSortExpr,
-};
+use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -406,7 +405,7 @@ pub(crate) struct GroupedHashAggregateStream {
     /// processed. Reused across batches here to avoid reallocations
     current_group_indices: Vec<usize>,
 
-    /// Accumulators, one for each `AggregateExpr` in the query
+    /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
     /// For example, if the query has aggregates, `SUM(x)`,
     /// `COUNT(y)`, there will be two accumulators, each one
@@ -650,7 +649,7 @@ fn enable_spilling(disk_manager: &DiskManager) -> bool {
 /// that is supported by the aggregate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
-    agg_expr: &Arc<dyn AggregateExpr>,
+    agg_expr: &Arc<AggregateFunctionExpr>,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     if agg_expr.groups_accumulator_supported() {
         agg_expr.create_groups_accumulator()

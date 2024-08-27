@@ -42,10 +42,11 @@ use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::{Column, UnKnownColumn},
-    physical_exprs_contains, AggregateExpr, EquivalenceProperties, LexOrdering,
-    LexRequirement, PhysicalExpr, PhysicalSortRequirement,
+    physical_exprs_contains, EquivalenceProperties, LexOrdering, LexRequirement,
+    PhysicalExpr, PhysicalSortRequirement,
 };
 
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use itertools::Itertools;
 
 pub mod group_values;
@@ -253,7 +254,7 @@ pub struct AggregateExec {
     /// Group by expressions
     group_by: PhysicalGroupBy,
     /// Aggregate expressions
-    aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
     /// FILTER (WHERE clause) expression for each aggregate expression
     filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
@@ -280,7 +281,10 @@ impl AggregateExec {
     /// Function used in `ConvertFirstLast` optimizer rule,
     /// where we need parts of the new value, others cloned from the old one
     /// Rewrites aggregate exec with new aggregate expressions.
-    pub fn with_new_aggr_exprs(&self, aggr_expr: Vec<Arc<dyn AggregateExpr>>) -> Self {
+    pub fn with_new_aggr_exprs(
+        &self,
+        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+    ) -> Self {
         Self {
             aggr_expr,
             // clone the rest of the fields
@@ -306,7 +310,7 @@ impl AggregateExec {
     pub fn try_new(
         mode: AggregateMode,
         group_by: PhysicalGroupBy,
-        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
@@ -343,7 +347,7 @@ impl AggregateExec {
     fn try_new_with_schema(
         mode: AggregateMode,
         group_by: PhysicalGroupBy,
-        mut aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        mut aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
@@ -451,7 +455,7 @@ impl AggregateExec {
     }
 
     /// Aggregate expressions
-    pub fn aggr_expr(&self) -> &[Arc<dyn AggregateExpr>] {
+    pub fn aggr_expr(&self) -> &[Arc<AggregateFunctionExpr>] {
         &self.aggr_expr
     }
 
@@ -788,7 +792,7 @@ impl ExecutionPlan for AggregateExec {
 fn create_schema(
     input_schema: &Schema,
     group_expr: &[(Arc<dyn PhysicalExpr>, String)],
-    aggr_expr: &[Arc<dyn AggregateExpr>],
+    aggr_expr: &[Arc<AggregateFunctionExpr>],
     contains_null_expr: bool,
     mode: AggregateMode,
 ) -> Result<Schema> {
@@ -834,7 +838,7 @@ fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
 ///
 /// # Parameters
 ///
-/// - `aggr_expr`: A reference to an `Arc<dyn AggregateExpr>` representing the
+/// - `aggr_expr`: A reference to an `Arc<AggregateFunctionExpr>` representing the
 ///   aggregate expression.
 /// - `group_by`: A reference to a `PhysicalGroupBy` instance representing the
 ///   physical GROUP BY expression.
@@ -846,7 +850,7 @@ fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
 /// A `LexOrdering` instance indicating the lexical ordering requirement for
 /// the aggregate expression.
 fn get_aggregate_expr_req(
-    aggr_expr: &Arc<dyn AggregateExpr>,
+    aggr_expr: &Arc<AggregateFunctionExpr>,
     group_by: &PhysicalGroupBy,
     agg_mode: &AggregateMode,
 ) -> LexOrdering {
@@ -894,7 +898,7 @@ fn get_aggregate_expr_req(
 /// the aggregator requirement is incompatible.
 fn finer_ordering(
     existing_req: &LexOrdering,
-    aggr_expr: &Arc<dyn AggregateExpr>,
+    aggr_expr: &Arc<AggregateFunctionExpr>,
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
@@ -912,7 +916,7 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 ///
 /// # Parameters
 ///
-/// - `aggr_exprs`: A slice of `Arc<dyn AggregateExpr>` containing all the
+/// - `aggr_exprs`: A slice of `Arc<AggregateFunctionExpr>` containing all the
 ///   aggregate expressions.
 /// - `group_by`: A reference to a `PhysicalGroupBy` instance representing the
 ///   physical GROUP BY expression.
@@ -926,7 +930,7 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 /// A `LexRequirement` instance, which is the requirement that satisfies all the
 /// aggregate requirements. Returns an error in case of conflicting requirements.
 pub fn get_finer_aggregate_exprs_requirement(
-    aggr_exprs: &mut [Arc<dyn AggregateExpr>],
+    aggr_exprs: &mut [Arc<AggregateFunctionExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
@@ -996,10 +1000,10 @@ pub fn get_finer_aggregate_exprs_requirement(
 
 /// returns physical expressions for arguments to evaluate against a batch
 /// The expressions are different depending on `mode`:
-/// * Partial: AggregateExpr::expressions
-/// * Final: columns of `AggregateExpr::state_fields()`
+/// * Partial: AggregateFunctionExpr::expressions
+/// * Final: columns of `AggregateFunctionExpr::state_fields()`
 pub fn aggregate_expressions(
-    aggr_expr: &[Arc<dyn AggregateExpr>],
+    aggr_expr: &[Arc<AggregateFunctionExpr>],
     mode: &AggregateMode,
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
@@ -1035,12 +1039,12 @@ pub fn aggregate_expressions(
 }
 
 /// uses `state_fields` to build a vec of physical column expressions required to merge the
-/// AggregateExpr' accumulator's state.
+/// AggregateFunctionExpr' accumulator's state.
 ///
 /// `index_base` is the starting physical column index for the next expanded state field.
 fn merge_expressions(
     index_base: usize,
-    expr: &Arc<dyn AggregateExpr>,
+    expr: &Arc<AggregateFunctionExpr>,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
     expr.state_fields().map(|fields| {
         fields
@@ -1054,7 +1058,7 @@ fn merge_expressions(
 pub type AccumulatorItem = Box<dyn Accumulator>;
 
 pub fn create_accumulators(
-    aggr_expr: &[Arc<dyn AggregateExpr>],
+    aggr_expr: &[Arc<AggregateFunctionExpr>],
 ) -> Result<Vec<AccumulatorItem>> {
     aggr_expr
         .iter()
@@ -1219,8 +1223,8 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use crate::common::collect;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::Literal;
-    use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1497,13 +1501,12 @@ mod tests {
             groups: vec![vec![false]],
         };
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> =
-            vec![
-                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
-                    .schema(Arc::clone(&input_schema))
-                    .alias("AVG(b)")
-                    .build()?,
-            ];
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
+                .schema(Arc::clone(&input_schema))
+                .alias("AVG(b)")
+                .build()?,
+        ];
 
         let task_ctx = if spill {
             // set to an appropriate value to trigger spill
@@ -1794,7 +1797,7 @@ mod tests {
     }
 
     // Median(a)
-    fn test_median_agg_expr(schema: SchemaRef) -> Result<Arc<dyn AggregateExpr>> {
+    fn test_median_agg_expr(schema: SchemaRef) -> Result<Arc<AggregateFunctionExpr>> {
         AggregateExprBuilder::new(median_udaf(), vec![col("a", &schema)?])
             .schema(schema)
             .alias("MEDIAN(a)")
@@ -1820,17 +1823,16 @@ mod tests {
         };
 
         // something that allocates within the aggregator
-        let aggregates_v0: Vec<Arc<dyn AggregateExpr>> =
+        let aggregates_v0: Vec<Arc<AggregateFunctionExpr>> =
             vec![test_median_agg_expr(Arc::clone(&input_schema))?];
 
         // use fast-path in `row_hash.rs`.
-        let aggregates_v2: Vec<Arc<dyn AggregateExpr>> =
-            vec![
-                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
-                    .schema(Arc::clone(&input_schema))
-                    .alias("AVG(b)")
-                    .build()?,
-            ];
+        let aggregates_v2: Vec<Arc<AggregateFunctionExpr>> = vec![
+            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
+                .schema(Arc::clone(&input_schema))
+                .alias("AVG(b)")
+                .build()?,
+        ];
 
         for (version, groups, aggregates) in [
             (0, groups_none, aggregates_v0),
@@ -1884,13 +1886,12 @@ mod tests {
 
         let groups = PhysicalGroupBy::default();
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> =
-            vec![
-                AggregateExprBuilder::new(avg_udaf(), vec![col("a", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias("AVG(a)")
-                    .build()?,
-            ];
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+            AggregateExprBuilder::new(avg_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("AVG(a)")
+                .build()?,
+        ];
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
@@ -1924,13 +1925,12 @@ mod tests {
         let groups =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> =
-            vec![
-                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias("AVG(b)")
-                    .build()?,
-            ];
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("AVG(b)")
+                .build()?,
+        ];
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
@@ -1975,7 +1975,7 @@ mod tests {
     fn test_first_value_agg_expr(
         schema: &Schema,
         sort_options: SortOptions,
-    ) -> Result<Arc<dyn AggregateExpr>> {
+    ) -> Result<Arc<AggregateFunctionExpr>> {
         let ordering_req = [PhysicalSortExpr {
             expr: col("b", schema)?,
             options: sort_options,
@@ -1993,7 +1993,7 @@ mod tests {
     fn test_last_value_agg_expr(
         schema: &Schema,
         sort_options: SortOptions,
-    ) -> Result<Arc<dyn AggregateExpr>> {
+    ) -> Result<Arc<AggregateFunctionExpr>> {
         let ordering_req = [PhysicalSortExpr {
             expr: col("b", schema)?,
             options: sort_options,
@@ -2048,7 +2048,7 @@ mod tests {
             descending: false,
             nulls_first: false,
         };
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = if is_first_acc {
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = if is_first_acc {
             vec![test_first_value_agg_expr(&schema, sort_options)?]
         } else {
             vec![test_last_value_agg_expr(&schema, sort_options)?]
@@ -2213,7 +2213,7 @@ mod tests {
         };
         let groups = PhysicalGroupBy::new_single(vec![(col_a, "a".to_string())]);
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
             test_first_value_agg_expr(&schema, option_desc)?,
             test_last_value_agg_expr(&schema, option_desc)?,
         ];
@@ -2271,7 +2271,7 @@ mod tests {
             ],
         );
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> =
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> =
             vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
                 .schema(Arc::clone(&schema))
                 .alias("1")

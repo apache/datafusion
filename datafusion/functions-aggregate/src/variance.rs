@@ -18,10 +18,11 @@
 //! [`VarianceSample`]: variance sample aggregations.
 //! [`VariancePopulation`]: variance population aggregations.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 
 use arrow::{
-    array::{ArrayRef, Float64Array, UInt64Array},
+    array::{Array, ArrayRef, BooleanArray, Float64Array, UInt64Array},
+    buffer::NullBuffer,
     compute::kernels::cast,
     datatypes::{DataType, Field},
 };
@@ -32,9 +33,12 @@ use datafusion_common::{
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
-    Accumulator, AggregateUDFImpl, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, Volatility,
 };
-use datafusion_functions_aggregate_common::stats::StatsType;
+use datafusion_functions_aggregate_common::{
+    aggregate::groups_accumulator::{accumulate::accumulate, EmitToExt},
+    stats::StatsType,
+};
 
 make_udaf_expr_and_func!(
     VarianceSample,
@@ -122,6 +126,17 @@ impl AggregateUDFImpl for VarianceSample {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn groups_accumulator_supported(&self, acc_args: AccumulatorArgs) -> bool {
+        !acc_args.is_distinct
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        Ok(Box::new(VarianceGroupsAccumulator::new(StatsType::Sample)))
+    }
 }
 
 pub struct VariancePopulation {
@@ -196,6 +211,19 @@ impl AggregateUDFImpl for VariancePopulation {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn groups_accumulator_supported(&self, acc_args: AccumulatorArgs) -> bool {
+        !acc_args.is_distinct
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        Ok(Box::new(VarianceGroupsAccumulator::new(
+            StatsType::Population,
+        )))
+    }
 }
 
 /// An accumulator to compute variance
@@ -239,6 +267,36 @@ impl VarianceAccumulator {
     }
 }
 
+#[inline]
+fn merge(
+    count: u64,
+    mean: f64,
+    m2: f64,
+    count2: u64,
+    mean2: f64,
+    m22: f64,
+) -> (u64, f64, f64) {
+    let new_count = count + count2;
+    let new_mean =
+        mean * count as f64 / new_count as f64 + mean2 * count2 as f64 / new_count as f64;
+    let delta = mean - mean2;
+    let new_m2 =
+        m2 + m22 + delta * delta * count as f64 * count2 as f64 / new_count as f64;
+
+    (new_count, new_mean, new_m2)
+}
+
+#[inline]
+fn update(count: u64, mean: f64, m2: f64, value: f64) -> (u64, f64, f64) {
+    let new_count = count + 1;
+    let delta1 = value - mean;
+    let new_mean = delta1 / new_count as f64 + mean;
+    let delta2 = value - new_mean;
+    let new_m2 = m2 + delta1 * delta2;
+
+    (new_count, new_mean, new_m2)
+}
+
 impl Accumulator for VarianceAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
@@ -253,15 +311,8 @@ impl Accumulator for VarianceAccumulator {
         let arr = downcast_value!(values, Float64Array).iter().flatten();
 
         for value in arr {
-            let new_count = self.count + 1;
-            let delta1 = value - self.mean;
-            let new_mean = delta1 / new_count as f64 + self.mean;
-            let delta2 = value - new_mean;
-            let new_m2 = self.m2 + delta1 * delta2;
-
-            self.count += 1;
-            self.mean = new_mean;
-            self.m2 = new_m2;
+            (self.count, self.mean, self.m2) =
+                update(self.count, self.mean, self.m2, value)
         }
 
         Ok(())
@@ -296,17 +347,14 @@ impl Accumulator for VarianceAccumulator {
             if c == 0_u64 {
                 continue;
             }
-            let new_count = self.count + c;
-            let new_mean = self.mean * self.count as f64 / new_count as f64
-                + means.value(i) * c as f64 / new_count as f64;
-            let delta = self.mean - means.value(i);
-            let new_m2 = self.m2
-                + m2s.value(i)
-                + delta * delta * self.count as f64 * c as f64 / new_count as f64;
-
-            self.count = new_count;
-            self.mean = new_mean;
-            self.m2 = new_m2;
+            (self.count, self.mean, self.m2) = merge(
+                self.count,
+                self.mean,
+                self.m2,
+                c,
+                means.value(i),
+                m2s.value(i),
+            )
         }
         Ok(())
     }
@@ -342,5 +390,185 @@ impl Accumulator for VarianceAccumulator {
 
     fn supports_retract_batch(&self) -> bool {
         true
+    }
+}
+
+#[derive(Debug)]
+pub struct VarianceGroupsAccumulator {
+    m2s: Vec<f64>,
+    means: Vec<f64>,
+    counts: Vec<u64>,
+    stats_type: StatsType,
+}
+
+impl VarianceGroupsAccumulator {
+    pub fn new(s_type: StatsType) -> Self {
+        Self {
+            m2s: Vec::new(),
+            means: Vec::new(),
+            counts: Vec::new(),
+            stats_type: s_type,
+        }
+    }
+
+    fn resize(&mut self, total_num_groups: usize) {
+        self.m2s.resize(total_num_groups, 0.0);
+        self.means.resize(total_num_groups, 0.0);
+        self.counts.resize(total_num_groups, 0);
+    }
+
+    fn merge<F>(
+        group_indices: &[usize],
+        counts: &UInt64Array,
+        means: &Float64Array,
+        m2s: &Float64Array,
+        opt_filter: Option<&BooleanArray>,
+        mut value_fn: F,
+    ) where
+        F: FnMut(usize, u64, f64, f64) + Send,
+    {
+        assert_eq!(counts.null_count(), 0);
+        assert_eq!(means.null_count(), 0);
+        assert_eq!(m2s.null_count(), 0);
+
+        match opt_filter {
+            None => {
+                group_indices
+                    .iter()
+                    .zip(counts.values().iter())
+                    .zip(means.values().iter())
+                    .zip(m2s.values().iter())
+                    .for_each(|(((&group_index, &count), &mean), &m2)| {
+                        value_fn(group_index, count, mean, m2);
+                    });
+            }
+            Some(filter) => {
+                group_indices
+                    .iter()
+                    .zip(counts.values().iter())
+                    .zip(means.values().iter())
+                    .zip(m2s.values().iter())
+                    .zip(filter.iter())
+                    .for_each(
+                        |((((&group_index, &count), &mean), &m2), filter_value)| {
+                            if let Some(true) = filter_value {
+                                value_fn(group_index, count, mean, m2);
+                            }
+                        },
+                    );
+            }
+        }
+    }
+
+    pub fn variance(
+        &mut self,
+        emit_to: datafusion_expr::EmitTo,
+    ) -> (Vec<f64>, NullBuffer) {
+        let mut counts = emit_to.take_needed(&mut self.counts);
+        // means are only needed for updating m2s and are not needed for the final result.
+        // But we still need to take them to ensure the internal state is consistent.
+        let _ = emit_to.take_needed(&mut self.means);
+        let m2s = emit_to.take_needed(&mut self.m2s);
+
+        if let StatsType::Sample = self.stats_type {
+            counts.iter_mut().for_each(|count| {
+                *count -= 1;
+            });
+        }
+        let nulls = NullBuffer::from_iter(counts.iter().map(|&count| count != 0));
+        let variance = m2s
+            .iter()
+            .zip(counts)
+            .map(|(m2, count)| m2 / count as f64)
+            .collect();
+        (variance, nulls)
+    }
+}
+
+impl GroupsAccumulator for VarianceGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow::array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = &cast(&values[0], &DataType::Float64)?;
+        let values = downcast_value!(values, Float64Array);
+
+        self.resize(total_num_groups);
+        accumulate(group_indices, values, opt_filter, |group_index, value| {
+            let (new_count, new_mean, new_m2) = update(
+                self.counts[group_index],
+                self.means[group_index],
+                self.m2s[group_index],
+                value,
+            );
+            self.counts[group_index] = new_count;
+            self.means[group_index] = new_mean;
+            self.m2s[group_index] = new_m2;
+        });
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow::array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 3, "two arguments to merge_batch");
+        // first batch is counts, second is partial means, third is partial m2s
+        let partial_counts = downcast_value!(values[0], UInt64Array);
+        let partial_means = downcast_value!(values[1], Float64Array);
+        let partial_m2s = downcast_value!(values[2], Float64Array);
+
+        self.resize(total_num_groups);
+        Self::merge(
+            group_indices,
+            partial_counts,
+            partial_means,
+            partial_m2s,
+            opt_filter,
+            |group_index, partial_count, partial_mean, partial_m2| {
+                let (new_count, new_mean, new_m2) = merge(
+                    self.counts[group_index],
+                    self.means[group_index],
+                    self.m2s[group_index],
+                    partial_count,
+                    partial_mean,
+                    partial_m2,
+                );
+                self.counts[group_index] = new_count;
+                self.means[group_index] = new_mean;
+                self.m2s[group_index] = new_m2;
+            },
+        );
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
+        let (variances, nulls) = self.variance(emit_to);
+        Ok(Arc::new(Float64Array::new(variances.into(), Some(nulls))))
+    }
+
+    fn state(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<Vec<ArrayRef>> {
+        let counts = emit_to.take_needed(&mut self.counts);
+        let means = emit_to.take_needed(&mut self.means);
+        let m2s = emit_to.take_needed(&mut self.m2s);
+
+        Ok(vec![
+            Arc::new(UInt64Array::new(counts.into(), None)),
+            Arc::new(Float64Array::new(means.into(), None)),
+            Arc::new(Float64Array::new(m2s.into(), None)),
+        ])
+    }
+
+    fn size(&self) -> usize {
+        self.m2s.capacity() * std::mem::size_of::<f64>()
+            + self.means.capacity() * std::mem::size_of::<f64>()
+            + self.counts.capacity() * std::mem::size_of::<u64>()
     }
 }

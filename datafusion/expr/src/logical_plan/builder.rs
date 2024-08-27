@@ -41,9 +41,8 @@ use crate::utils::{
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, logical_plan::tree_node::unwrap_arc, DmlStatement, Expr,
-    ExprSchemable, Operator, RecursiveQuery, TableProviderFilterPushDown, TableSource,
-    WriteOp,
+    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
+    TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
@@ -212,7 +211,7 @@ impl LogicalPlanBuilder {
                     };
                     common_type = Some(new_type);
                 } else {
-                    common_type = Some(data_type.clone());
+                    common_type = Some(data_type);
                 }
             }
             field_types.push(common_type.unwrap_or(DataType::Utf8));
@@ -221,7 +220,7 @@ impl LogicalPlanBuilder {
         for row in &mut values {
             for (j, field_type) in field_types.iter().enumerate() {
                 if let Expr::Literal(ScalarValue::Null) = row[j] {
-                    row[j] = Expr::Literal(ScalarValue::try_from(field_type.clone())?);
+                    row[j] = Expr::Literal(ScalarValue::try_from(field_type)?);
                 } else {
                     row[j] =
                         std::mem::take(&mut row[j]).cast_to(field_type, &empty_schema)?;
@@ -376,7 +375,7 @@ impl LogicalPlanBuilder {
         self,
         expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        project(unwrap_arc(self.plan), expr).map(Self::new)
+        project(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
     }
 
     /// Select the given column indices
@@ -429,7 +428,7 @@ impl LogicalPlanBuilder {
 
     /// Apply an alias
     pub fn alias(self, alias: impl Into<TableReference>) -> Result<Self> {
-        subquery_alias(unwrap_arc(self.plan), alias).map(Self::new)
+        subquery_alias(Arc::unwrap_or_clone(self.plan), alias).map(Self::new)
     }
 
     /// Add missing sort columns to all downstream projection
@@ -484,7 +483,7 @@ impl LogicalPlanBuilder {
                     Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
                 }
                 expr.extend(missing_exprs);
-                project(unwrap_arc(input), expr)
+                project(Arc::unwrap_or_clone(input), expr)
             }
             _ => {
                 let is_distinct =
@@ -553,20 +552,17 @@ impl LogicalPlanBuilder {
 
         // Collect sort columns that are missing in the input plan's schema
         let mut missing_cols: Vec<Column> = vec![];
-        exprs
-            .clone()
-            .into_iter()
-            .try_for_each::<_, Result<()>>(|expr| {
-                let columns = expr.column_refs();
+        exprs.iter().try_for_each::<_, Result<()>>(|expr| {
+            let columns = expr.column_refs();
 
-                columns.into_iter().for_each(|c| {
-                    if !schema.has_column(c) {
-                        missing_cols.push(c.clone());
-                    }
-                });
+            columns.into_iter().for_each(|c| {
+                if !schema.has_column(c) {
+                    missing_cols.push(c.clone());
+                }
+            });
 
-                Ok(())
-            })?;
+            Ok(())
+        })?;
 
         if missing_cols.is_empty() {
             return Ok(Self::new(LogicalPlan::Sort(Sort {
@@ -580,8 +576,11 @@ impl LogicalPlanBuilder {
         let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
 
         let is_distinct = false;
-        let plan =
-            Self::add_missing_columns(unwrap_arc(self.plan), &missing_cols, is_distinct)?;
+        let plan = Self::add_missing_columns(
+            Arc::unwrap_or_clone(self.plan),
+            &missing_cols,
+            is_distinct,
+        )?;
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &plan)?,
             input: Arc::new(plan),
@@ -595,12 +594,12 @@ impl LogicalPlanBuilder {
 
     /// Apply a union, preserving duplicate rows
     pub fn union(self, plan: LogicalPlan) -> Result<Self> {
-        union(unwrap_arc(self.plan), plan).map(Self::new)
+        union(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
     }
 
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
-        let left_plan: LogicalPlan = unwrap_arc(self.plan);
+        let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
         let right_plan: LogicalPlan = plan;
 
         Ok(Self::new(LogicalPlan::Distinct(Distinct::All(Arc::new(
@@ -708,7 +707,7 @@ impl LogicalPlanBuilder {
 
     pub(crate) fn normalize(
         plan: &LogicalPlan,
-        column: impl Into<Column> + Clone,
+        column: impl Into<Column>,
     ) -> Result<Column> {
         let schema = plan.schema();
         let fallback_schemas = plan.fallback_normalize_schemas();
@@ -1064,7 +1063,7 @@ impl LogicalPlanBuilder {
 
     /// Build the plan
     pub fn build(self) -> Result<LogicalPlan> {
-        Ok(unwrap_arc(self.plan))
+        Ok(Arc::unwrap_or_clone(self.plan))
     }
 
     /// Apply a join with the expression on constraint.
@@ -1138,7 +1137,7 @@ impl LogicalPlanBuilder {
 
     /// Unnest the given column.
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
-        unnest(unwrap_arc(self.plan), vec![column.into()]).map(Self::new)
+        unnest(Arc::unwrap_or_clone(self.plan), vec![column.into()]).map(Self::new)
     }
 
     /// Unnest the given column given [`UnnestOptions`]
@@ -1147,8 +1146,12 @@ impl LogicalPlanBuilder {
         column: impl Into<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        unnest_with_options(unwrap_arc(self.plan), vec![column.into()], options)
-            .map(Self::new)
+        unnest_with_options(
+            Arc::unwrap_or_clone(self.plan),
+            vec![column.into()],
+            options,
+        )
+        .map(Self::new)
     }
 
     /// Unnest the given columns with the given [`UnnestOptions`]
@@ -1157,7 +1160,8 @@ impl LogicalPlanBuilder {
         columns: Vec<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        unnest_with_options(unwrap_arc(self.plan), columns, options).map(Self::new)
+        unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
+            .map(Self::new)
     }
 }
 
@@ -1331,7 +1335,17 @@ pub fn validate_unique_names<'a>(
     })
 }
 
-/// Union two logical plans.
+/// Union two [`LogicalPlan`]s.
+///
+/// Constructs the UNION plan, but does not perform type-coercion. Therefore the
+/// subtree expressions will not be properly typed until the optimizer pass.
+///
+/// If a properly typed UNION plan is needed, refer to [`TypeCoercionRewriter::coerce_union`]
+/// or alternatively, merge the union input schema using [`coerce_union_schema`] and
+/// apply the expression rewrite with [`coerce_plan_expr_for_schema`].
+///
+/// [`TypeCoercionRewriter::coerce_union`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/struct.TypeCoercionRewriter.html#method.coerce_union
+/// [`coerce_union_schema`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/fn.coerce_union_schema.html
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
     // Temporarily use the schema from the left input and later rely on the analyzer to
     // coerce the two schemas into a common one.
@@ -1519,7 +1533,7 @@ pub fn get_unnested_columns(
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => {
             let new_field = Arc::new(Field::new(
-                col_name.clone(),
+                col_name,
                 field.data_type().clone(),
                 // Unnesting may produce NULLs even if the list is not null.
                 // For example: unnset([1], []) -> 1, null

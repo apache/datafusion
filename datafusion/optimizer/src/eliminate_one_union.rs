@@ -16,9 +16,11 @@
 // under the License.
 
 //! [`EliminateOneUnion`]  eliminates single element `Union`
+
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{tree_node::Transformed, Result};
-use datafusion_expr::logical_plan::{tree_node::unwrap_arc, LogicalPlan, Union};
+use datafusion_expr::logical_plan::{LogicalPlan, Union};
+use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
 
@@ -48,9 +50,9 @@ impl OptimizerRule for EliminateOneUnion {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Union(Union { mut inputs, .. }) if inputs.len() == 1 => {
-                Ok(Transformed::yes(unwrap_arc(inputs.pop().unwrap())))
-            }
+            LogicalPlan::Union(Union { mut inputs, .. }) if inputs.len() == 1 => Ok(
+                Transformed::yes(Arc::unwrap_or_clone(inputs.pop().unwrap())),
+            ),
             _ => Ok(Transformed::no(plan)),
         }
     }
