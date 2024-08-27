@@ -143,6 +143,12 @@ async fn to_physical_plan_step_by_step_demo(
         .query_planner()
         .create_physical_plan(&optimized_logical_plan, &ctx.state())
         .await?;
+    println!(
+        "Final physical plan:\n\n{}\n\n",
+        displayable(physical_plan.as_ref())
+            .to_stringified(false, PlanType::InitialPhysicalPlan)
+            .plan
+    );
 
     // Call the physical optimizer with an existing physical plan (in this
     // case the plan is already optimized, but an unoptimized plan would
