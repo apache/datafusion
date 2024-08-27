@@ -764,7 +764,7 @@ pub fn to_substrait_agg_measure(
     match expr {
         Expr::AggregateFunction(expr::AggregateFunction { func, args, distinct, filter, order_by, null_treatment: _, }) => {
                     let sorts = if let Some(order_by) = order_by {
-                        order_by.iter().map(|expr| to_substrait_sort_field(ctx, expr, schema, extensions)).collect::<Result<Vec<_>>>()?
+                        order_by.iter().map(|expr| to_substrait_sort_field(ctx, expr.unwrap_sort(), schema, extensions)).collect::<Result<Vec<_>>>()?
                     } else {
                         vec![]
                     };
@@ -808,31 +808,26 @@ pub fn to_substrait_agg_measure(
 /// Converts sort expression to corresponding substrait `SortField`
 fn to_substrait_sort_field(
     ctx: &SessionContext,
-    expr: &Expr,
+    sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
 ) -> Result<SortField> {
-    match expr {
-        Expr::Sort(sort) => {
-            let sort_kind = match (sort.asc, sort.nulls_first) {
-                (true, true) => SortDirection::AscNullsFirst,
-                (true, false) => SortDirection::AscNullsLast,
-                (false, true) => SortDirection::DescNullsFirst,
-                (false, false) => SortDirection::DescNullsLast,
-            };
-            Ok(SortField {
-                expr: Some(to_substrait_rex(
-                    ctx,
-                    sort.expr.deref(),
-                    schema,
-                    0,
-                    extensions,
-                )?),
-                sort_kind: Some(SortKind::Direction(sort_kind.into())),
-            })
-        }
-        _ => exec_err!("expects to receive sort expression"),
-    }
+    let sort_kind = match (sort.asc, sort.nulls_first) {
+        (true, true) => SortDirection::AscNullsFirst,
+        (true, false) => SortDirection::AscNullsLast,
+        (false, true) => SortDirection::DescNullsFirst,
+        (false, false) => SortDirection::DescNullsLast,
+    };
+    Ok(SortField {
+        expr: Some(to_substrait_rex(
+            ctx,
+            sort.expr.deref(),
+            schema,
+            0,
+            extensions,
+        )?),
+        sort_kind: Some(SortKind::Direction(sort_kind.into())),
+    })
 }
 
 /// Return Substrait scalar function with two arguments

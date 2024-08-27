@@ -27,7 +27,7 @@ use datafusion::common::{
     DFSchemaRef,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::expr::{sort_vec_from_expr, Exists, InSubquery, Sort};
+use datafusion::logical_expr::expr::{sort_vec_to_expr, Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     expr::find_df_window_func, Aggregate, BinaryExpr, Case, EmptyRelation, Expr,
@@ -486,7 +486,7 @@ pub async fn from_substrait_rel(
                 let sorts =
                     from_substrait_sorts(ctx, &sort.sorts, input.schema(), extensions)
                         .await?;
-                input.sort(sort_vec_from_expr(sorts))?.build()
+                input.sort(sorts)?.build()
             } else {
                 not_impl_err!("Sort without an input is not valid")
             }
@@ -900,8 +900,8 @@ pub async fn from_substrait_sorts(
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
     extensions: &Extensions,
-) -> Result<Vec<Expr>> {
-    let mut sorts: Vec<Expr> = vec![];
+) -> Result<Vec<Sort>> {
+    let mut sorts: Vec<Sort> = vec![];
     for s in substrait_sorts {
         let expr =
             from_substrait_rex(ctx, s.expr.as_ref().unwrap(), input_schema, extensions)
@@ -935,11 +935,11 @@ pub async fn from_substrait_sorts(
             None => not_impl_err!("Sort without sort kind is invalid"),
         };
         let (asc, nulls_first) = asc_nullfirst.unwrap();
-        sorts.push(Expr::Sort(Sort {
+        sorts.push(Sort {
             expr: Box::new(expr),
             asc,
             nulls_first,
-        }));
+        });
     }
     Ok(sorts)
 }
@@ -1237,7 +1237,7 @@ pub async fn from_substrait_rex(
                     extensions,
                 )
                 .await?,
-                order_by,
+                order_by: sort_vec_to_expr(order_by),
                 window_frame: datafusion::logical_expr::WindowFrame::new_bounds(
                     bound_units,
                     from_substrait_bound(&window.lower_bound, true)?,

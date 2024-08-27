@@ -1413,6 +1413,14 @@ impl Expr {
         Sort::new(Box::new(self), asc, nulls_first)
     }
 
+    // TODO (https://github.com/apache/datafusion/issues/12193) remove when transition is complete
+    pub fn unwrap_sort(&self) -> &Sort {
+        match self {
+            Expr::Sort(sort) => sort,
+            _ => panic!("Expression must be a Expr::Sort: {}", self),
+        }
+    }
+
     /// Return `IsTrue(Box(self))`
     pub fn is_true(self) -> Expr {
         Expr::IsTrue(Box::new(self))
