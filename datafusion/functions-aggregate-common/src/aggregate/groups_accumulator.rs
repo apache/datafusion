@@ -29,6 +29,7 @@ use std::{
     fmt::{self, Debug},
     iter,
     ops::{Index, IndexMut},
+    usize,
 };
 
 use arrow::{
@@ -43,8 +44,7 @@ use datafusion_common::{
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
-pub const BLOCKED_INDEX_HIGH_32_BITS_MASK: u64 = 0xffffffff00000000;
-pub const BLOCKED_INDEX_LOW_32_BITS_MASK: u64 = 0x00000000ffffffff;
+pub const MAX_PREALLOC_BLOCK_SIZE: usize = 8192;
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -477,8 +477,8 @@ impl BlockedGroupIndex {
 
     #[inline]
     pub fn new_blocked(raw_index: usize) -> Self {
-        let block_id = ((raw_index as u64 >> 32) & BLOCKED_INDEX_LOW_32_BITS_MASK) as u32;
-        let block_offset = (raw_index as u64) & BLOCKED_INDEX_LOW_32_BITS_MASK;
+        let block_id = ((raw_index as u64 >> 32) & 0x00000000ffffffff) as u32;
+        let block_offset = (raw_index as u64) & 0x00000000ffffffff;
 
         Self {
             block_id,
@@ -719,52 +719,6 @@ pub(crate) fn slice_and_maybe_filter(
     }
 }
 
-pub fn ensure_enough_room_for_values<T: Clone>(
-    values: &mut VecBlocks<T>,
-    total_num_groups: usize,
-    block_size: Option<usize>,
-    default_value: T,
-) {
-    match block_size {
-        Some(blk_size) => ensure_enough_room_for_blocked_values(
-            values,
-            total_num_groups,
-            blk_size,
-            default_value,
-        ),
-        None => {
-            ensure_enough_room_for_flat_values(values, total_num_groups, default_value)
-        }
-    }
-}
-
-/// Expend flat values to a big enough size for holding `total_num_groups` groups.
-///
-/// For example,
-///
-/// before expanding:
-///   values: [x, x, x, x, x, x]
-///   total_num_groups: 8
-///
-/// After expanding:
-///   values: [x, x, x, x, x, x, default, default]
-///
-pub fn ensure_enough_room_for_flat_values<T: Clone>(
-    values: &mut VecBlocks<T>,
-    total_num_groups: usize,
-    default_value: T,
-) {
-    // It flat mode, we just a single builder, and grow it constantly.
-    if values.num_blocks() == 0 {
-        values.push_block(Vec::new());
-    }
-
-    values
-        .current_mut()
-        .unwrap()
-        .resize(total_num_groups, default_value);
-}
-
 /// Expend blocked values to a big enough size for holding `total_num_groups` groups.
 ///
 /// For example,
@@ -776,12 +730,13 @@ pub fn ensure_enough_room_for_flat_values<T: Clone>(
 /// After expanding:
 ///   values: [x, x, x], [x, x, x], [default, default, default]
 ///
-pub fn ensure_enough_room_for_blocked_values<T: Clone>(
+pub fn ensure_enough_room_for_values<T: Clone>(
     values: &mut VecBlocks<T>,
     total_num_groups: usize,
-    block_size: usize,
+    block_size: Option<usize>,
     default_value: T,
 ) {
+    let block_size = block_size.unwrap_or(usize::MAX);
     // In blocked mode, we ensure the blks are enough first,
     // and then ensure slots in blks are enough.
     let (mut cur_blk_idx, exist_slots) = if values.num_blocks() > 0 {
@@ -801,10 +756,13 @@ pub fn ensure_enough_room_for_blocked_values<T: Clone>(
 
     // Ensure blks are enough.
     let exist_blks = values.num_blocks();
-    let new_blks = (total_num_groups + block_size - 1) / block_size - exist_blks;
+    let new_blks =
+        total_num_groups.saturating_add(block_size - 1) / block_size - exist_blks;
+
     if new_blks > 0 {
         for _ in 0..new_blks {
-            values.push_block(Vec::with_capacity(block_size));
+            values
+                .push_block(Vec::with_capacity(block_size.min(MAX_PREALLOC_BLOCK_SIZE)));
         }
     }
 
@@ -847,32 +805,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ensure_room_for_blocked_values() {
+    fn test_ensure_room_for_values() {
         let mut blocks = VecBlocks::new();
         let block_size = 4;
 
         // 0 total_num_groups, should be no blocks
-        ensure_enough_room_for_blocked_values(&mut blocks, 0, block_size, 0);
+        ensure_enough_room_for_values(&mut blocks, 0, Some(block_size), 0);
         assert_eq!(blocks.num_blocks(), 0);
         assert_eq!(blocks.len(), 0);
 
         // 0 -> 3 total_num_groups, blocks should look like:
         // [d, d, d, empty]
-        ensure_enough_room_for_blocked_values(&mut blocks, 3, block_size, 0);
+        ensure_enough_room_for_values(&mut blocks, 3, Some(block_size), 0);
         assert_eq!(blocks.num_blocks(), 1);
         assert_eq!(blocks.len(), 3);
 
         // 3 -> 8 total_num_groups, blocks should look like:
         // [d, d, d, d], [d, d, d, d]
-        ensure_enough_room_for_blocked_values(&mut blocks, 8, block_size, 0);
+        ensure_enough_room_for_values(&mut blocks, 8, Some(block_size), 0);
         assert_eq!(blocks.num_blocks(), 2);
         assert_eq!(blocks.len(), 8);
 
         // 8 -> 13 total_num_groups, blocks should look like:
         // [d, d, d, d], [d, d, d, d], [d, d, d, d], [d, empty, empty, empty]
-        ensure_enough_room_for_blocked_values(&mut blocks, 13, block_size, 0);
+        ensure_enough_room_for_values(&mut blocks, 13, Some(block_size), 0);
         assert_eq!(blocks.num_blocks(), 4);
         assert_eq!(blocks.len(), 13);
+
+        // Block size none, it means we will always use one single block
+        // [] -> [d, d, d,...,d]
+        blocks.clear();
+        ensure_enough_room_for_values(&mut blocks, 42, None, 0);
+        assert_eq!(blocks.num_blocks(), 1);
+        assert_eq!(blocks.len(), 42);
     }
 
     #[test]
@@ -959,27 +924,24 @@ mod tests {
         assert!(origin.is_empty());
     }
 
-    // #[test]
-    // fn test_take_need_from_blocks() {
-    //     let block1 = vec![1, 2, 3, 4];
-    //     let block2 = vec![5, 6, 7, 8];
+    #[test]
+    fn test_take_need_from_blocks() {
+        let block1 = vec![1, 2, 3, 4];
+        let block2 = vec![5, 6, 7, 8];
 
-    //     let mut values = VecBlocks::new();
-    //     values.push_block(block1.clone());
-    //     values.push_block(block2.clone());
+        let mut values = VecBlocks::new();
+        values.push_block(block1.clone());
+        values.push_block(block2.clone());
 
-    //     // Test emit block
-    //     let emit = EmitTo::NextBlock(false);
-    //     let actual =
-    //         emit.take_needed_from_blocks(&mut values, GroupStatesMode::Blocked(4));
-    //     assert_eq!(actual, block1);
+        // Test emit block
+        let emit = EmitTo::NextBlock(false);
+        let actual = emit.take_needed_from_blocks(&mut values);
+        assert_eq!(actual, block1);
 
-    //     let actual =
-    //         emit.take_needed_from_blocks(&mut values, GroupStatesMode::Blocked(4));
-    //     assert_eq!(actual, block2);
+        let actual = emit.take_needed_from_blocks(&mut values);
+        assert_eq!(actual, block2);
 
-    //     let actual =
-    //         emit.take_needed_from_blocks(&mut values, GroupStatesMode::Blocked(4));
-    //     assert!(actual.is_empty());
-    // }
+        let actual = emit.take_needed_from_blocks(&mut values);
+        assert!(actual.is_empty());
+    }
 }

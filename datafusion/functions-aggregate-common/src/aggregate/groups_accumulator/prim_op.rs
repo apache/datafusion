@@ -16,6 +16,7 @@
 // under the License.
 
 use std::sync::Arc;
+use std::usize;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
 use arrow::buffer::NullBuffer;

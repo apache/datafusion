@@ -19,13 +19,18 @@
 //!
 //! [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 
+use std::usize;
+
 use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowPrimitiveType;
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
-use crate::aggregate::groups_accumulator::{BlockedGroupIndex, Blocks};
+use crate::aggregate::groups_accumulator::{
+    BlockedGroupIndex, Blocks, MAX_PREALLOC_BLOCK_SIZE,
+};
+
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -703,53 +708,14 @@ fn initialize_builder(
     builder
 }
 
+/// Similar as the [initialize_builder] but designed for the blocked version accumulator
 fn ensure_enough_room_for_nulls(
     builder_blocks: &mut Blocks<BooleanBufferBuilder>,
     total_num_groups: usize,
     block_size: Option<usize>,
     default_value: bool,
 ) {
-    match block_size {
-        Some(blk_size) => ensure_enough_room_for_blocked_nulls(
-            builder_blocks,
-            total_num_groups,
-            blk_size,
-            default_value,
-        ),
-        None => ensure_enough_room_for_flat_nulls(
-            builder_blocks,
-            total_num_groups,
-            default_value,
-        ),
-    }
-}
-
-/// Similar as the [initialize_builder]
-fn ensure_enough_room_for_flat_nulls(
-    builder_blocks: &mut Blocks<BooleanBufferBuilder>,
-    total_num_groups: usize,
-
-    default_value: bool,
-) {
-    // It flat mode, we just a single builder, and grow it constantly.
-    if builder_blocks.num_blocks() == 0 {
-        builder_blocks.push_block(BooleanBufferBuilder::new(0));
-    }
-
-    let builder = builder_blocks.current_mut().unwrap();
-    if builder.len() < total_num_groups {
-        let new_groups = total_num_groups - builder.len();
-        builder.append_n(new_groups, default_value);
-    }
-}
-
-/// Similar as the [initialize_builder] but designed for the blocked version accumulator
-fn ensure_enough_room_for_blocked_nulls(
-    builder_blocks: &mut Blocks<BooleanBufferBuilder>,
-    total_num_groups: usize,
-    block_size: usize,
-    default_value: bool,
-) {
+    let block_size = block_size.unwrap_or(usize::MAX);
     // In blocked mode, we ensure the blks are enough first,
     // and then ensure slots in blks are enough.
     let (mut cur_blk_idx, exist_slots) = if builder_blocks.num_blocks() > 0 {
@@ -769,10 +735,13 @@ fn ensure_enough_room_for_blocked_nulls(
 
     // Ensure blks are enough
     let exist_blks = builder_blocks.num_blocks();
-    let new_blks = (total_num_groups + block_size - 1) / block_size - exist_blks;
+    let new_blks =
+        (total_num_groups.saturating_add(block_size - 1) / block_size) - exist_blks;
     if new_blks > 0 {
         for _ in 0..new_blks {
-            builder_blocks.push_block(BooleanBufferBuilder::new(block_size));
+            builder_blocks.push_block(BooleanBufferBuilder::new(
+                block_size.min(MAX_PREALLOC_BLOCK_SIZE),
+            ));
         }
     }
 
@@ -1492,35 +1461,44 @@ mod test {
     }
 
     #[test]
-    fn test_ensure_room_for_blocked_nulls() {
+    fn test_ensure_room_for_nulls() {
         let mut blocks: Blocks<BooleanBufferBuilder> = Blocks::new();
         let block_size = 4;
 
+        // Block size < usize::MAX
         // 0 total_num_groups, should be no blocks
-        ensure_enough_room_for_blocked_nulls(&mut blocks, 0, block_size, false);
+        ensure_enough_room_for_nulls(&mut blocks, 0, Some(block_size), false);
         assert_eq!(blocks.num_blocks(), 0);
         let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
         assert_eq!(total_len, 0);
 
         // 0 -> 3 total_num_groups, blocks should look like:
         // [d, d, d, empty]
-        ensure_enough_room_for_blocked_nulls(&mut blocks, 3, block_size, false);
+        ensure_enough_room_for_nulls(&mut blocks, 3, Some(block_size), false);
         assert_eq!(blocks.num_blocks(), 1);
         let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
         assert_eq!(total_len, 3);
 
         // 3 -> 8 total_num_groups, blocks should look like:
         // [d, d, d, d], [d, d, d, d]
-        ensure_enough_room_for_blocked_nulls(&mut blocks, 8, block_size, false);
+        ensure_enough_room_for_nulls(&mut blocks, 8, Some(block_size), false);
         assert_eq!(blocks.num_blocks(), 2);
         let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
         assert_eq!(total_len, 8);
 
         // 8 -> 13 total_num_groups, blocks should look like:
         // [d, d, d, d], [d, d, d, d], [d, d, d, d], [d, empty, empty, empty]
-        ensure_enough_room_for_blocked_nulls(&mut blocks, 13, block_size, false);
+        ensure_enough_room_for_nulls(&mut blocks, 13, Some(block_size), false);
         assert_eq!(blocks.num_blocks(), 4);
         let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
         assert_eq!(total_len, 13);
+
+        // Block size none, it means we will always use one single block
+        // [] -> [d, d, d,...,d]
+        blocks.clear();
+        ensure_enough_room_for_nulls(&mut blocks, 42, None, false);
+        assert_eq!(blocks.num_blocks(), 1);
+        let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
+        assert_eq!(total_len, 42);
     }
 }
