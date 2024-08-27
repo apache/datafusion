@@ -376,11 +376,10 @@ SELECT MAP {'a':1, 'b':2, 'c':3 }['a'] FROM t;
 1
 1
 
-# TODO(https://github.com/sqlparser-rs/sqlparser-rs/pull/1361): support parsing an empty map. Enable this after upgrading sqlparser-rs.
-# query ?
-# SELECT MAP {};
-# ----
-# {}
+query ?
+SELECT MAP {};
+----
+{}
 
 # values contain null
 query ?
