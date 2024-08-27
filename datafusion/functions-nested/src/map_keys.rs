@@ -66,7 +66,7 @@ impl ScalarUDFImpl for MapKeysFunc {
         let map_type = &arg_types[0];
         let map_fields = get_map_entry_field(map_type)?;
         Ok(DataType::List(Arc::new(Field::new(
-            "keys",
+            "item",
             map_fields.first().unwrap().data_type().to_owned(),
             false,
         ))))
@@ -97,12 +97,10 @@ fn map_keys_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         _ => return exec_err!("Argument for map_extract should be a map"),
     };
 
-    Ok(Arc::new(
-        ListArray::new(
-            Arc::new(Field::new("keys", map_array.key_type().clone(), false)),
-            map_array.offsets().clone(),
-            Arc::clone(map_array.keys()),
-            None
-        )
-    ))
+    Ok(Arc::new(ListArray::new(
+        Arc::new(Field::new("item", map_array.key_type().clone(), false)),
+        map_array.offsets().clone(),
+        Arc::clone(map_array.keys()),
+        None,
+    )))
 }
