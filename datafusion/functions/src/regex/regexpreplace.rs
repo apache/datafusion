@@ -513,10 +513,12 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                     )?;
 
                     if regexp_replace_result.data_type() == &DataType::Utf8 {
-                        let string_view_array = as_string_array(&regexp_replace_result)?.to_owned();
+                        let string_view_array =
+                            as_string_array(&regexp_replace_result)?.to_owned();
 
-                        let mut builder = StringViewBuilder::with_capacity(string_view_array.len())
-                            .with_block_size(1024 * 1024 * 2);
+                        let mut builder =
+                            StringViewBuilder::with_capacity(string_view_array.len())
+                                .with_block_size(1024 * 1024 * 2);
 
                         for val in string_view_array.iter() {
                             if let Some(val) = val {
