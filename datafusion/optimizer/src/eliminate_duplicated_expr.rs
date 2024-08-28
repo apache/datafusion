@@ -51,15 +51,13 @@ impl OptimizerRule for EliminateDuplicatedExpr {
         match plan {
             LogicalPlan::Sort(sort) => {
                 let len = sort.expr.len();
-                let mut first_sort_by_expr: IndexMap<Expr, SortExpr> =
+                let mut first_sort_by_expr: IndexMap<&Expr, &SortExpr> =
                     IndexMap::default();
                 for s in &sort.expr {
-                    first_sort_by_expr
-                        .entry(s.expr.as_ref().clone())
-                        .or_insert(s.clone());
+                    first_sort_by_expr.entry(s.expr.as_ref()).or_insert(s);
                 }
                 let unique_exprs: Vec<SortExpr> =
-                    first_sort_by_expr.into_values().collect();
+                    first_sort_by_expr.into_values().cloned().collect();
 
                 let transformed = if len != unique_exprs.len() {
                     Transformed::yes
