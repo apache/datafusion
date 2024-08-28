@@ -582,7 +582,7 @@ pub fn spark_cast(
     arg: ColumnarValue,
     data_type: &DataType,
     eval_mode: EvalMode,
-    timezone: String,
+    timezone: &str,
     allow_incompat: bool,
 ) -> DataFusionResult<ColumnarValue> {
     match arg {
@@ -1414,7 +1414,7 @@ impl PhysicalExpr for Cast {
             arg,
             &self.data_type,
             self.eval_mode,
-            self.timezone.clone(),
+            &self.timezone,
             self.allow_incompat,
         )
     }

@@ -30,6 +30,7 @@ pub mod spark_hash;
 mod structs;
 mod temporal;
 pub mod timezone;
+mod to_json;
 pub mod utils;
 mod xxhash64;
 
@@ -39,6 +40,7 @@ pub use if_expr::IfExpr;
 pub use regexp::RLike;
 pub use structs::{CreateNamedStruct, GetStructField};
 pub use temporal::{DateTruncExpr, HourExpr, MinuteExpr, SecondExpr, TimestampTruncExpr};
+pub use to_json::ToJson;
 
 /// Spark supports three evaluation modes when evaluating expressions, which affect
 /// the behavior when processing input values that are invalid or would result in an
