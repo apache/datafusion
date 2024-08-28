@@ -49,7 +49,9 @@ use datafusion_functions_aggregate::{
 };
 use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
 use rstest::rstest;
-use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
+use sqlparser::dialect::{
+    Dialect, GenericDialect, HiveDialect, MySqlDialect, PostgreSqlDialect,
+};
 
 mod cases;
 mod common;
@@ -2682,6 +2684,14 @@ fn quick_test_with_options(sql: &str, expected: &str, options: ParserOptions) {
     assert_eq!(format!("{plan}"), expected);
 }
 
+fn pg_quick_test(sql: &str, expected: &str) {
+    let dialect = &PostgreSqlDialect {};
+    let plan =
+        logical_plan_with_dialect_and_options(sql, dialect, ParserOptions::default())
+            .unwrap();
+    assert_eq!(format!("{plan}"), expected);
+}
+
 fn prepare_stmt_quick_test(
     sql: &str,
     expected_plan: &str,
@@ -2750,34 +2760,67 @@ fn join_with_aliases() {
 
 #[test]
 fn negative_interval_plus_interval_in_projection() {
-    let sql = "select -interval '2 days' + interval '5 days';";
+    let sql = "select -interval 2 day + interval 5 day;";
     let expected =
     "Projection: IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: -2, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\")\n  EmptyRelation";
     quick_test(sql, expected);
 }
 
 #[test]
+fn pg_negative_interval_plus_interval_in_projection() {
+    let sql = "select -interval '2 days' + interval '5 days';";
+    let expected =
+    "Projection: IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: -2, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\")\n  EmptyRelation";
+    pg_quick_test(sql, expected);
+}
+
+#[test]
 fn complex_interval_expression_in_projection() {
-    let sql = "select -interval '2 days' + interval '5 days'+ (-interval '3 days' + interval '5 days');";
+    let sql =
+        "select -interval 2 day + interval 5 day + (-interval 3 day + interval 5 day);";
     let expected =
     "Projection: IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: -2, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: -3, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\")\n  EmptyRelation";
     quick_test(sql, expected);
 }
 
 #[test]
+fn pg_complex_interval_expression_in_projection() {
+    let sql = "select -interval '2 days' + interval '5 days'+ (-interval '3 days' + interval '5 days');";
+    let expected =
+    "Projection: IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: -2, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: -3, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\")\n  EmptyRelation";
+    pg_quick_test(sql, expected);
+}
+
+#[test]
 fn negative_sum_intervals_in_projection() {
-    let sql = "select -((interval '2 days' + interval '5 days') + -(interval '4 days' + interval '7 days'));";
+    let sql = "select -((interval 2 day + interval 5 day) + -(interval 4 day + interval 7 day));";
     let expected =
     "Projection: (- IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 2, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\") + (- IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 4, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 7, nanoseconds: 0 }\")))\n  EmptyRelation";
     quick_test(sql, expected);
 }
 
 #[test]
+fn pg_negative_sum_intervals_in_projection() {
+    let sql = "select -((interval '2 days' + interval '5 days') + -(interval '4 days' + interval '7 days'));";
+    let expected =
+    "Projection: (- IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 2, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\") + (- IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 4, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 7, nanoseconds: 0 }\")))\n  EmptyRelation";
+    pg_quick_test(sql, expected);
+}
+
+#[test]
 fn date_plus_interval_in_projection() {
-    let sql = "select t_date32 + interval '5 days' FROM test";
+    let sql = "select t_date32 + interval 5 day FROM test";
     let expected =
         "Projection: test.t_date32 + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\")\n  TableScan: test";
     quick_test(sql, expected);
+}
+
+#[test]
+fn pg_date_plus_interval_in_projection() {
+    let sql = "select t_date32 + interval '5 days' FROM test";
+    let expected =
+        "Projection: test.t_date32 + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\")\n  TableScan: test";
+    pg_quick_test(sql, expected);
 }
 
 #[test]

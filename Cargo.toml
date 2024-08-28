@@ -134,7 +134,8 @@ rand = "0.8"
 regex = "1.8"
 rstest = "0.22.0"
 serde_json = "1"
-sqlparser = { version = "0.50.0", features = ["visitor"] }
+#sqlparser = { version = "0.50.0", features = ["visitor"] }
+sqlparser = { git = "https://github.com/samuelcolvin/sqlparser-rs", rev = "6c2a971", features = ["visitor"] }
 tempfile = "3"
 thiserror = "1.0.44"
 tokio = { version = "1.36", features = ["macros", "rt", "sync"] }

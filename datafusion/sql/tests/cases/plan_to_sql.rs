@@ -30,7 +30,7 @@ use datafusion_sql::unparser::dialect::{
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 
 use datafusion_functions::core::planner::CoreFunctionPlanner;
-use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
+use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect};
 use sqlparser::parser::Parser;
 
 use crate::common::{MockContextProvider, MockSessionState};
@@ -481,11 +481,17 @@ fn test_table_references_in_plan_to_sql() {
         assert_eq!(format!("{}", sql), expected_sql)
     }
 
-    test("catalog.schema.table", "SELECT catalog.\"schema\".\"table\".id, catalog.\"schema\".\"table\".\"value\" FROM catalog.\"schema\".\"table\"");
-    test("schema.table", "SELECT \"schema\".\"table\".id, \"schema\".\"table\".\"value\" FROM \"schema\".\"table\"");
+    test(
+        "catalog.schema.table",
+        r#"SELECT "catalog"."schema"."table".id, "catalog"."schema"."table"."value" FROM "catalog"."schema"."table""#,
+    );
+    test(
+        "schema.table",
+        r#"SELECT "schema"."table".id, "schema"."table"."value" FROM "schema"."table""#,
+    );
     test(
         "table",
-        "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"",
+        r#"SELECT "table".id, "table"."value" FROM "table""#,
     );
 }
 
@@ -507,10 +513,10 @@ fn test_table_scan_with_no_projection_in_plan_to_sql() {
 
     test(
         "catalog.schema.table",
-        "SELECT * FROM catalog.\"schema\".\"table\"",
+        r#"SELECT * FROM "catalog"."schema"."table""#,
     );
-    test("schema.table", "SELECT * FROM \"schema\".\"table\"");
-    test("table", "SELECT * FROM \"table\"");
+    test("schema.table", r#"SELECT * FROM "schema"."table""#);
+    test("table", r#"SELECT * FROM "table""#);
 }
 
 #[test]
@@ -590,8 +596,8 @@ fn test_pretty_roundtrip() -> Result<()> {
     Ok(())
 }
 
-fn sql_round_trip(query: &str, expect: &str) {
-    let statement = Parser::new(&GenericDialect {})
+fn sql_round_trip(query: &str, expect: &str, dialect: &dyn Dialect) {
+    let statement = Parser::new(dialect)
         .try_with_sql(query)
         .unwrap()
         .parse_statement()
@@ -610,15 +616,35 @@ fn sql_round_trip(query: &str, expect: &str) {
 #[test]
 fn test_interval_lhs_eq() {
     sql_round_trip(
+        "select interval 2 second = interval 2 second",
+        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' = INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+        &GenericDialect {}
+    );
+}
+
+#[test]
+fn test_interval_lhs_eq_pg() {
+    sql_round_trip(
         "select interval '2 seconds' = interval '2 seconds'",
         "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' = INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+        &PostgreSqlDialect {}
     );
 }
 
 #[test]
 fn test_interval_lhs_lt() {
     sql_round_trip(
+        "select interval 2 second < interval 2 second",
+        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' < INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+        &GenericDialect {}
+    );
+}
+
+#[test]
+fn test_interval_lhs_lt_pg() {
+    sql_round_trip(
         "select interval '2 seconds' < interval '2 seconds'",
         "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' < INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+        &PostgreSqlDialect {}
     );
 }

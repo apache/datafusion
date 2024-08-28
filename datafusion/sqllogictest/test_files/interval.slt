@@ -292,7 +292,7 @@ select -interval '1 year' - '1 month' - '1 day' - '1 hour' - '1 minute' - '1 sec
 
 # Interval string literal + date
 query D
-select interval '1 month' + '1 day' + '2012-01-01'::date;
+select interval 1 month + interval 1 day + '2012-01-01'::date;
 ----
 2012-02-02
 
@@ -304,18 +304,15 @@ select ( interval '1 month' + '1 day' ) + '2012-01-01'::date;
 
 # Interval nested string literal + date
 query D
-select interval '1 year' + '1 month' + '1 day' + '2012-01-01'::date
+select interval 1 year +  interval 1 month + interval 1 day + '2012-01-01'::date
 ----
 2013-02-02
 
 # Interval nested string literal subtraction + date
 query D
-select interval '1 year' - '1 month' + '1 day' + '2012-01-01'::date
+select interval 1 year - interval 1 month + interval 1 day + '2012-01-01'::date
 ----
 2012-12-02
-
-
-
 
 # Use interval SQL type
 query TT
@@ -569,7 +566,7 @@ select '1 month'::interval - ts from t;
 
 # interval + date
 query D
-select interval '1 month' + '2012-01-01'::date;
+select interval 1 month + '2012-01-01'::date;
 ----
 2012-02-01
 
