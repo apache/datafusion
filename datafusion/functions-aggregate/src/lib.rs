@@ -62,6 +62,7 @@ pub mod array_agg;
 pub mod correlation;
 pub mod count;
 pub mod covariance;
+pub mod distance;
 pub mod first_last;
 pub mod hyperloglog;
 pub mod median;
@@ -107,6 +108,7 @@ pub mod expr_fn {
     pub use super::count::count_distinct;
     pub use super::covariance::covar_pop;
     pub use super::covariance::covar_samp;
+    pub use super::distance::dis;
     pub use super::first_last::first_value;
     pub use super::first_last::last_value;
     pub use super::grouping::grouping;
@@ -138,6 +140,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         covariance::covar_samp_udaf(),
         covariance::covar_pop_udaf(),
         correlation::corr_udaf(),
+        distance::dis_udaf(),
         sum::sum_udaf(),
         min_max::max_udaf(),
         min_max::min_udaf(),
