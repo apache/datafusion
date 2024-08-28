@@ -23,7 +23,8 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Aggregate, Expr, Sort, SortExpr};
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexSet;
+use std::hash::{Hash, Hasher};
 /// Optimization rule that eliminate duplicated expr.
 #[derive(Default)]
 pub struct EliminateDuplicatedExpr;
@@ -32,6 +33,21 @@ impl EliminateDuplicatedExpr {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
+    }
+}
+// use this structure to avoid initial clone
+#[derive(Eq, Clone, Debug)]
+struct SortExprWrapper {
+    expr: SortExpr,
+}
+impl PartialEq for SortExprWrapper {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr.expr == other.expr.expr
+    }
+}
+impl Hash for SortExprWrapper {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.expr.hash(state);
     }
 }
 impl OptimizerRule for EliminateDuplicatedExpr {
@@ -51,13 +67,14 @@ impl OptimizerRule for EliminateDuplicatedExpr {
         match plan {
             LogicalPlan::Sort(sort) => {
                 let len = sort.expr.len();
-                let mut first_sort_by_expr: IndexMap<&Expr, &SortExpr> =
-                    IndexMap::default();
-                for s in &sort.expr {
-                    first_sort_by_expr.entry(s.expr.as_ref()).or_insert(s);
-                }
-                let unique_exprs: Vec<SortExpr> =
-                    first_sort_by_expr.into_values().cloned().collect();
+                let unique_exprs: Vec<_> = sort
+                    .expr
+                    .into_iter()
+                    .map(|e| SortExprWrapper { expr: e })
+                    .collect::<IndexSet<_>>()
+                    .into_iter()
+                    .map(|wrapper| wrapper.expr)
+                    .collect();
 
                 let transformed = if len != unique_exprs.len() {
                     Transformed::yes
