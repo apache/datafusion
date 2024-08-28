@@ -18,8 +18,10 @@
 use std::any::Any;
 
 use arrow::array::types::Date32Type;
+use arrow::compute::kernels::cast_utils::string_to_datetime;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
+use chrono::Utc;
 
 use crate::datetime::common::*;
 use datafusion_common::{exec_err, internal_datafusion_err, Result};
@@ -36,6 +38,20 @@ impl Default for ToDateFunc {
     }
 }
 
+pub fn string_to_timestamp_millis(s: &str) -> Result<i64> {
+    Ok(string_to_datetime(&Utc, s)?
+        .naive_utc()
+        .and_utc()
+        .timestamp_millis())
+}
+
+fn string_to_timestamp_millis_formatted(s: &str, format: &str) -> Result<i64> {
+    Ok(string_to_datetime_formatted(&Utc, s, format)?
+        .naive_utc()
+        .and_utc()
+        .timestamp_millis())
+}
+
 impl ToDateFunc {
     pub fn new() -> Self {
         Self {
@@ -48,8 +64,8 @@ impl ToDateFunc {
             1 => handle::<Date32Type, _, Date32Type>(
                 args,
                 |s| {
-                    string_to_timestamp_nanos_shim(s)
-                        .map(|n| n / (1_000_000 * 24 * 60 * 60 * 1_000))
+                    string_to_timestamp_millis(s)
+                        .map(|n| n / (24 * 60 * 60 * 1_000))
                         .and_then(|v| {
                             v.try_into().map_err(|_| {
                                 internal_datafusion_err!("Unable to cast to Date32 for converting from i64 to i32 failed")
@@ -61,8 +77,8 @@ impl ToDateFunc {
             2.. => handle_multiple::<Date32Type, _, Date32Type, _>(
                 args,
                 |s, format| {
-                    string_to_timestamp_nanos_formatted(s, format)
-                        .map(|n| n / (1_000_000 * 24 * 60 * 60 * 1_000))
+                    string_to_timestamp_millis_formatted(s, format)
+                        .map(|n| n / (24 * 60 * 60 * 1_000))
                         .and_then(|v| {
                             v.try_into().map_err(|_| {
                                 internal_datafusion_err!("Unable to cast to Date32 for converting from i64 to i32 failed")
@@ -116,5 +132,43 @@ impl ScalarUDFImpl for ToDateFunc {
                 exec_err!("Unsupported data type {:?} for function to_date", other)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    use super::ToDateFunc;
+
+    #[test]
+    fn test_year_9999() {
+        let date_str = "9999-12-31";
+        let date_scalar = ScalarValue::Utf8(Some(date_str.to_string()));
+
+        let res = ToDateFunc::new().invoke(&[ColumnarValue::Scalar(date_scalar)]);
+
+        assert!(res.is_ok(), "Could not convert '{}' to Date", date_str);
+    }
+
+    #[test]
+    fn test_year_9999_formatted() {
+        let date_str = "99991231";
+        let format_str = "%Y%m%d";
+        let date_scalar = ScalarValue::Utf8(Some(date_str.to_string()));
+        let format_scalar = ScalarValue::Utf8(Some(format_str.to_string()));
+
+        let res = ToDateFunc::new().invoke(&[
+            ColumnarValue::Scalar(date_scalar),
+            ColumnarValue::Scalar(format_scalar),
+        ]);
+
+        assert!(
+            res.is_ok(),
+            "Could not convert '{}' with fornat string '{}'to Date",
+            date_str,
+            format_str
+        );
     }
 }
