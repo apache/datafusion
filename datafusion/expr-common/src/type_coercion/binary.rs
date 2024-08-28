@@ -986,7 +986,10 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 
 /// This will be deprecated when binary operators native support
 /// for Utf8View (use `string_coercion` instead).
-fn regex_comparison_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn regex_comparison_string_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         // If Utf8View is in any side, we coerce to Utf8.
