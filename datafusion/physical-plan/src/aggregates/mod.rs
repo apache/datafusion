@@ -111,9 +111,9 @@ impl AggregateMode {
 /// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
 /// In the case of a simple `GROUP BY a, b` clause, this will contain the expression [a, b]
 /// and a single group [false, false].
-/// In the case of `GROUP BY GROUPING SET/CUBE/ROLLUP` the planner will expand the expression
+/// In the case of `GROUP BY GROUPING SETS/CUBE/ROLLUP` the planner will expand the expression
 /// into multiple groups, using null expressions to align each group.
-/// For example, with a group by clause `GROUP BY GROUPING SET ((a,b),(a),(b))` the planner should
+/// For example, with a group by clause `GROUP BY GROUPING SETS ((a,b),(a),(b))` the planner should
 /// create a `PhysicalGroupBy` like
 /// ```text
 /// PhysicalGroupBy {
