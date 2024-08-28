@@ -666,7 +666,7 @@ pub async fn from_substrait_rel(
                     substrait_datafusion_err!("No base schema provided for Virtual Table")
                 })?;
 
-                let schema = from_substrait_named_struct(base_schema, extensions)?;
+                let schema = from_substrait_named_struct(base_schema, extensions, None)?;
 
                 if vt.values.is_empty() {
                     return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -1589,6 +1589,8 @@ fn next_struct_field_name(
 fn from_substrait_named_struct(
     base_schema: &NamedStruct,
     extensions: &Extensions,
+    // optional qualifier to apply to every field in the schema
+    field_qualifier: Option<TableReference>,
 ) -> Result<DFSchemaRef> {
     let mut name_idx = 0;
     let fields = from_substrait_struct_type(
@@ -1606,7 +1608,12 @@ fn from_substrait_named_struct(
                                 base_schema.names.len()
                             );
     }
-    Ok(DFSchemaRef::new(DFSchema::try_from(Schema::new(fields?))?))
+    let mut df_schema = DFSchema::try_from(Schema::new(fields?))?;
+    match field_qualifier {
+        None => (),
+        Some(fq) => df_schema = df_schema.replace_qualifier(fq),
+    }
+    Ok(DFSchemaRef::new(df_schema))
 }
 
 fn from_substrait_bound(
