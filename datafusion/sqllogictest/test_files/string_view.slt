@@ -803,6 +803,7 @@ Xiangpeng (empty)   Xiangpeng NULL  Xia
 Raphael   Raphael   Raphael   NULL  Raphael
 NULL      NULL      NULL      NULL  NULL
 
+-
 ## Ensure no casts for CHARACTER_LENGTH
 query TT
 EXPLAIN SELECT
