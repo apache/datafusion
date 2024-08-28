@@ -28,10 +28,9 @@ use arrow_array::{
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::{Field, Fields};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 
 use core::any::type_name;
-use datafusion_common::error::_internal_err;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 
@@ -261,11 +260,11 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
             match field_data_type {
                 DataType::Struct(fields) => Ok(fields),
                 _ => {
-                    _internal_err!("Expected a Struct type, got {:?}", field_data_type)
+                    internal_err!("Expected a Struct type, got {:?}", field_data_type)
                 }
             }
         }
-        _ => _internal_err!("Expected a Map type, got {:?}", data_type),
+        _ => internal_err!("Expected a Map type, got {:?}", data_type),
     }
 }
 

@@ -43,7 +43,7 @@ pub mod length;
 pub mod make_array;
 pub mod map;
 pub mod map_extract;
-mod map_keys;
+pub mod map_keys;
 pub mod planner;
 pub mod position;
 pub mod range;
