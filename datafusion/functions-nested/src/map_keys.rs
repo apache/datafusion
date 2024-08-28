@@ -94,7 +94,7 @@ fn map_keys_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let map_array = match args[0].data_type() {
         DataType::Map(_, _) => as_map_array(&args[0])?,
-        _ => return exec_err!("Argument for map_extract should be a map"),
+        _ => return exec_err!("Argument for map_keys should be a map"),
     };
 
     Ok(Arc::new(ListArray::new(
