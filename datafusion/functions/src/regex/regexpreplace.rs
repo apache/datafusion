@@ -285,9 +285,6 @@ where
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => exec_err!(
-            "regexp_replace was called with {other:?} arguments. It requires at least 3 and at most 4."
-        ),
     }
 }
 
