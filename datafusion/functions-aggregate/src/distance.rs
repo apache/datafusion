@@ -194,8 +194,7 @@ impl Accumulator for DistanceAccumulator {
             let value1 = unwrap_or_internal_err!(value1);
             let value2 = unwrap_or_internal_err!(value2);
 
-            let diff = value1 - value2;
-            self.sum_of_squares -= diff.powi(2);
+            self.sum_of_squares -= (value1 - value2).powi(2);
         }
 
         Ok(())
