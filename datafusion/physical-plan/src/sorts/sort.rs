@@ -742,13 +742,11 @@ impl SortExec {
     /// can be dropped.
     pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
         let mut cache = self.cache.clone();
-        if fetch.is_some() {
+        if fetch.is_some() && self.cache.execution_mode == ExecutionMode::Unbounded {
             // When a theoretically unnecessary sort becomes a top-K (which
             // sometimes arises as an intermediate state before full removal),
             // its execution mode should become `Bounded`.
-            if self.cache.execution_mode == ExecutionMode::Unbounded {
-                cache.execution_mode = ExecutionMode::Bounded;
-            }
+            cache.execution_mode = ExecutionMode::Bounded;
         }
         SortExec {
             input: Arc::clone(&self.input),
