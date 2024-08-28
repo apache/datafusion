@@ -1213,7 +1213,9 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::disk_manager::DiskManagerConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
-    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_execution::runtime_env::{
+        RuntimeConfig, RuntimeEnv, RuntimeEnvBuilder,
+    };
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
     use datafusion_functions_aggregate::count::count_udaf;
