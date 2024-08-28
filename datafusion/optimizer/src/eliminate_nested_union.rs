@@ -21,7 +21,6 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::{Distinct, LogicalPlan, Union};
 use itertools::Itertools;
 use std::sync::Arc;
@@ -69,7 +68,7 @@ impl OptimizerRule for EliminateNestedUnion {
                 })))
             }
             LogicalPlan::Distinct(Distinct::All(nested_plan)) => {
-                match unwrap_arc(nested_plan) {
+                match Arc::unwrap_or_clone(nested_plan) {
                     LogicalPlan::Union(Union { inputs, schema }) => {
                         let inputs = inputs
                             .into_iter()
@@ -96,16 +95,17 @@ impl OptimizerRule for EliminateNestedUnion {
 }
 
 fn extract_plans_from_union(plan: Arc<LogicalPlan>) -> Vec<LogicalPlan> {
-    match unwrap_arc(plan) {
-        LogicalPlan::Union(Union { inputs, .. }) => {
-            inputs.into_iter().map(unwrap_arc).collect::<Vec<_>>()
-        }
+    match Arc::unwrap_or_clone(plan) {
+        LogicalPlan::Union(Union { inputs, .. }) => inputs
+            .into_iter()
+            .map(Arc::unwrap_or_clone)
+            .collect::<Vec<_>>(),
         plan => vec![plan],
     }
 }
 
 fn extract_plan_from_distinct(plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
-    match unwrap_arc(plan) {
+    match Arc::unwrap_or_clone(plan) {
         LogicalPlan::Distinct(Distinct::All(plan)) => plan,
         plan => Arc::new(plan),
     }

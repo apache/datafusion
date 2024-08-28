@@ -463,7 +463,7 @@ pub fn expand_qualified_wildcard(
 /// if bool is true SortExpr comes from `PARTITION BY` column, if false comes from `ORDER BY` column
 type WindowSortKey = Vec<(Expr, bool)>;
 
-/// Generate a sort key for a given window expr's partition_by and order_bu expr
+/// Generate a sort key for a given window expr's partition_by and order_by expr
 pub fn generate_sort_key(
     partition_by: &[Expr],
     order_by: &[Expr],
@@ -569,7 +569,7 @@ pub fn compare_sort_expr(
             }
             Ordering::Equal
         }
-        _ => Ordering::Equal,
+        _ => panic!("Sort expressions must be of type Sort"),
     }
 }
 

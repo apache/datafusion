@@ -295,8 +295,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Some(false)
                         };
                     }
+                    Some(false)
+                } else {
+                    panic!("order_by expression must be of type Sort");
                 }
-                Some(false)
             });
 
             let window_frame = window

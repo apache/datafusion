@@ -41,7 +41,6 @@ use crate::utils::NamePreserver;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
 /// inside the [`LogicalPlan`]. This rule:
@@ -181,7 +180,7 @@ fn optimize_projections(
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
 
             return optimize_projections(
-                unwrap_arc(aggregate.input),
+                Arc::unwrap_or_clone(aggregate.input),
                 config,
                 necessary_indices,
             )?
@@ -221,7 +220,7 @@ fn optimize_projections(
                 child_reqs.with_exprs(&input_schema, &new_window_expr)?;
 
             return optimize_projections(
-                unwrap_arc(window.input),
+                Arc::unwrap_or_clone(window.input),
                 config,
                 required_indices.clone(),
             )?
@@ -488,7 +487,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     }
 
-    let LogicalPlan::Projection(prev_projection) = unwrap_arc(input) else {
+    let LogicalPlan::Projection(prev_projection) = Arc::unwrap_or_clone(input) else {
         // We know it is a `LogicalPlan::Projection` from check above
         unreachable!();
     };
@@ -766,8 +765,8 @@ fn rewrite_projection_given_requirements(
 
     // rewrite the children projection, and if they are changed rewrite the
     // projection down
-    optimize_projections(unwrap_arc(input), config, required_indices)?.transform_data(
-        |input| {
+    optimize_projections(Arc::unwrap_or_clone(input), config, required_indices)?
+        .transform_data(|input| {
             if is_projection_unnecessary(&input, &exprs_used)? {
                 Ok(Transformed::yes(input))
             } else {
@@ -775,8 +774,7 @@ fn rewrite_projection_given_requirements(
                     .map(LogicalPlan::Projection)
                     .map(Transformed::yes)
             }
-        },
-    )
+        })
 }
 
 /// Projection is unnecessary, when
