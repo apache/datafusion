@@ -122,12 +122,11 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_replace::<i32>(&[
+                regexp_replace::<i32, _, _>(
                     Arc::clone(&data),
                     Arc::clone(&regex),
                     Arc::clone(&replacement),
-                    Arc::clone(&flags),
-                ])
+                    Some(&Arc::clone(&flags)))
                 .expect("regexp_replace should work on valid values"),
             )
         })
