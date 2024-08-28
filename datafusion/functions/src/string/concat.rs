@@ -22,7 +22,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Utf8;
 
 use datafusion_common::cast::as_string_array;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{lit, ColumnarValue, Expr, Volatility};
@@ -46,7 +46,7 @@ impl ConcatFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
-            signature: Signature::variadic(vec![Utf8], Volatility::Immutable),
+            signature: Signature::variadic(vec![Utf8, Utf8View], Volatility::Immutable),
         }
     }
 }
@@ -64,8 +64,15 @@ impl ScalarUDFImpl for ConcatFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Utf8)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+        Ok(match &arg_types[0] {
+            Utf8 => Utf8,
+            Utf8View => Utf8View,
+            other => {
+                exec_err!("CONCAT function cannot use {other} as a return type");
+            }
+        })
     }
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.

@@ -863,6 +863,27 @@ XIANGPENG
 RAPHAEL
 NULL
 
+## Should run CONCAT() successfully
+query T
+SELECT
+  concat(column1_utf8view, column2_utf8view) as c
+FROM test;
+----
+AndrewX
+XiangpengXiangpeng
+RaphaelR
+R
+
+## ensure no cast CONCAT to utf8 from utf8view
+query TT
+EXPLAIN SELECT
+  concat(column1_utf8view, column2_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: concat(test.column1_utf8view, test.column2_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
+
 ## Ensure no casts for LPAD
 query TT
 EXPLAIN SELECT
@@ -1307,3 +1328,4 @@ select column2|| ' ' ||column3 from temp;
 ----
 rust fast
 datafusion cool
+
