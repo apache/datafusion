@@ -24,7 +24,7 @@ use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_schema::{DataType, Field, SchemaBuilder};
 
-use datafusion_common::scalar::first_array_for_list;
+use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
@@ -60,7 +60,6 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         );
     }
 
-    let data_type = args[0].data_type();
     let can_evaluate_to_const = can_evaluate_to_const(args);
 
     // check the keys array is unique
@@ -69,36 +68,46 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     match &args[0] {
         ColumnarValue::Array(_) => {
-            for i in 0..key_array.len() {
-                let row_keys = key_array.slice(i, 1);
-                let row_keys = first_array_for_list(row_keys.as_ref());
-                check_unique_keys(row_keys.as_ref())?;
-            }
+            let row_keys = match key_array.data_type() {
+                DataType::List(_) => list_to_arrays::<i32>(keys.clone()),
+                DataType::LargeList(_) => list_to_arrays::<i64>(keys.clone()),
+                DataType::FixedSizeList(_, _) => fixed_size_list_to_arrays(keys.clone()),
+                data_type => {
+                    return exec_err!(
+                        "Expected list, large_list or fixed_size_list, got {:?}",
+                        data_type
+                    );
+                }
+            };
+
+            row_keys
+                .iter()
+                .try_for_each(|key| check_unique_keys(key.as_ref()))?;
         }
         ColumnarValue::Scalar(_) => {
             check_unique_keys(key_array)?;
         }
     }
 
-    fn check_unique_keys(array: &dyn Array) -> Result<()> {
-        let mut seen_keys = HashSet::with_capacity(array.len());
-
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                return exec_err!("map key cannot be null");
-            }
-
-            let key = ScalarValue::try_from_array(array, i)?;
-            if seen_keys.contains(&key) {
-                return exec_err!("map key must be unique, duplicate key found: {}", key);
-            }
-            seen_keys.insert(key);
-        }
-        Ok(())
-    }
-
     let values = get_first_array_ref(&args[1])?;
-    make_map_batch_internal(keys, values, can_evaluate_to_const, data_type)
+    make_map_batch_internal(keys, values, can_evaluate_to_const, args[0].data_type())
+}
+
+fn check_unique_keys(array: &dyn Array) -> Result<()> {
+    let mut seen_keys = HashSet::with_capacity(array.len());
+
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            return exec_err!("map key cannot be null");
+        }
+
+        let key = ScalarValue::try_from_array(array, i)?;
+        if seen_keys.contains(&key) {
+            return exec_err!("map key must be unique, duplicate key found: {}", key);
+        }
+        seen_keys.insert(key);
+    }
+    Ok(())
 }
 
 fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
@@ -310,8 +319,8 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     let mut offset_buffer = vec![O::zero()];
     let mut running_offset = O::zero();
 
-    let keys = datafusion_common::utils::list_to_arrays::<O>(keys);
-    let values = datafusion_common::utils::list_to_arrays::<O>(values);
+    let keys = list_to_arrays::<O>(keys);
+    let values = list_to_arrays::<O>(values);
 
     let mut key_array_vec = vec![];
     let mut value_array_vec = vec![];
