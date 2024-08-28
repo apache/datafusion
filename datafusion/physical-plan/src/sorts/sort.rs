@@ -792,14 +792,11 @@ impl SortExec {
         preserve_partitioning: bool,
     ) -> PlanProperties {
         // Determine execution mode:
-        let sort_satisfied =
-            input.equivalence_properties().ordering_satisfy_requirement(
-                PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter()).as_slice(),
-            );
+        let sort_satisfied = input.equivalence_properties().ordering_satisfy_requirement(
+            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter()).as_slice(),
+        );
         let mode = match input.execution_mode() {
-            ExecutionMode::Unbounded if sort_satisfied => {
-                ExecutionMode::Unbounded
-            }
+            ExecutionMode::Unbounded if sort_satisfied => ExecutionMode::Unbounded,
             ExecutionMode::Bounded => ExecutionMode::Bounded,
             _ => ExecutionMode::PipelineBreaking,
         };
