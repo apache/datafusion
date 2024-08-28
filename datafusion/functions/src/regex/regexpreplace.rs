@@ -59,6 +59,7 @@ impl RegexpReplaceFunc {
                     Exact(vec![Utf8, Utf8, Utf8]),
                     Exact(vec![Utf8View, Utf8, Utf8]),
                     Exact(vec![Utf8, Utf8, Utf8, Utf8]),
+                    Exact(vec![Utf8View, Utf8, Utf8, Utf8]),
                 ],
                 Volatility::Immutable,
             ),
