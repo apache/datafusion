@@ -792,12 +792,12 @@ impl SortExec {
         preserve_partitioning: bool,
     ) -> PlanProperties {
         // Determine execution mode:
-        let input_satisfies_sort_req =
+        let sort_satisfied =
             input.equivalence_properties().ordering_satisfy_requirement(
                 PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter()).as_slice(),
             );
         let mode = match input.execution_mode() {
-            ExecutionMode::Unbounded if input_satisfies_sort_req => {
+            ExecutionMode::Unbounded if sort_satisfied => {
                 ExecutionMode::Unbounded
             }
             ExecutionMode::Bounded => ExecutionMode::Bounded,
@@ -1035,8 +1035,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
-    use datafusion_common::Result;
-    use datafusion_common::{assert_batches_eq, ScalarValue};
+    use datafusion_common::{assert_batches_eq, Result, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeConfig;
     use datafusion_execution::RecordBatchStream;
