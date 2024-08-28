@@ -29,7 +29,8 @@ use datafusion_physical_plan::ExecutionPlan;
 use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_expr::{physical_exprs_equal, AggregateExpr, PhysicalExpr};
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr};
 
 /// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
@@ -124,7 +125,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
 
 type GroupExprsRef<'a> = (
     &'a PhysicalGroupBy,
-    &'a [Arc<dyn AggregateExpr>],
+    &'a [Arc<AggregateFunctionExpr>],
     &'a [Option<Arc<dyn PhysicalExpr>>],
 );
 

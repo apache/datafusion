@@ -20,7 +20,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
-use datafusion_expr::logical_plan::{tree_node::unwrap_arc, EmptyRelation, LogicalPlan};
+use datafusion_expr::logical_plan::{EmptyRelation, LogicalPlan};
 use std::sync::Arc;
 
 /// Optimizer rule to replace `LIMIT 0` or `LIMIT` whose ancestor LIMIT's skip is
@@ -74,7 +74,9 @@ impl OptimizerRule for EliminateLimit {
                     }
                 } else if limit.skip == 0 {
                     // input also can be Limit, so we should apply again.
-                    return Ok(self.rewrite(unwrap_arc(limit.input), _config).unwrap());
+                    return Ok(self
+                        .rewrite(Arc::unwrap_or_clone(limit.input), _config)
+                        .unwrap());
                 }
                 Ok(Transformed::no(LogicalPlan::Limit(limit)))
             }

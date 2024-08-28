@@ -104,10 +104,8 @@ fn roundtrip_json_test(_proto: &protobuf::LogicalExprNode) {}
 fn roundtrip_expr_test(initial_struct: Expr, ctx: SessionContext) {
     let extension_codec = DefaultLogicalExtensionCodec {};
     let proto: protobuf::LogicalExprNode =
-        match serialize_expr(&initial_struct, &extension_codec) {
-            Ok(p) => p,
-            Err(e) => panic!("Error serializing expression: {:?}", e),
-        };
+        serialize_expr(&initial_struct, &extension_codec)
+            .unwrap_or_else(|e| panic!("Error serializing expression: {:?}", e));
     let round_trip: Expr =
         from_proto::parse_expr(&proto, &ctx, &extension_codec).unwrap();
 
