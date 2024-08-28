@@ -474,7 +474,7 @@ Raphafl
 NULL
 
 # Should run REGEXP_REPLACE with ScalarArray value for utf8view
-query I
+query T
 SELECT
   REGEXP_REPLACE(column1_utf8view, lower(column1_utf8view), 'bar') AS k
 FROM test;
