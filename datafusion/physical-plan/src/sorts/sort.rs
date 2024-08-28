@@ -22,12 +22,11 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use crate::common::spawn_buffered;
 use crate::expressions::PhysicalSortExpr;
+use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
@@ -51,11 +50,11 @@ use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::{RecordBatchStream, TaskContext};
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
 
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
 struct ExternalSorterMetrics {
@@ -900,11 +899,12 @@ impl ExecutionPlan for SortExec {
             );
 
         match (sort_satisfied, self.fetch.as_ref()) {
-            (true, Some(fetch)) => Ok(Box::pin(TopKStream {
+            (true, Some(fetch)) => Ok(Box::pin(LimitStream::new(
                 input,
-                schema: self.schema(),
-                fetch: *fetch,
-            })),
+                0,
+                Some(*fetch),
+                BaselineMetrics::new(&self.metrics_set, partition),
+            ))),
             (true, None) => Ok(input),
             (false, Some(fetch)) => {
                 let mut topk = TopK::try_new(
@@ -970,46 +970,6 @@ impl ExecutionPlan for SortExec {
 
     fn fetch(&self) -> Option<usize> {
         self.fetch
-    }
-}
-
-struct TopKStream {
-    input: SendableRecordBatchStream,
-    schema: SchemaRef,
-    fetch: usize,
-}
-
-impl Stream for TopKStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        match ready!(self.input.poll_next_unpin(cx)) {
-            Some(Ok(batch)) => {
-                if self.fetch > 0 {
-                    if self.fetch >= batch.num_rows() {
-                        self.fetch -= batch.num_rows();
-                        Poll::Ready(Some(Ok(batch)))
-                    } else {
-                        let batch = batch.slice(0, self.fetch);
-                        self.fetch = 0;
-                        Poll::Ready(Some(Ok(batch)))
-                    }
-                } else {
-                    debug_assert_eq!(self.fetch, 0);
-                    Poll::Ready(None)
-                }
-            }
-            other => Poll::Ready(other),
-        }
-    }
-}
-
-impl RecordBatchStream for TopKStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
     }
 }
 
