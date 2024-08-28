@@ -1009,11 +1009,9 @@ mod tests {
             .options()
             .execution
             .sort_spill_reservation_bytes;
-        let runtime = Arc::new(
-            RuntimeEnvBuilder::new()
-                .with_memory_limit(sort_spill_reservation_bytes + 12288, 1.0)
-                .build()?,
-        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(sort_spill_reservation_bytes + 12288, 1.0)
+            .build_arc()?;
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(session_config)
@@ -1087,14 +1085,12 @@ mod tests {
                 .execution
                 .sort_spill_reservation_bytes;
 
-            let runtime = Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_limit(
-                        sort_spill_reservation_bytes + avg_batch_size * (partitions - 1),
-                        1.0,
-                    )
-                    .build()?,
-            );
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(
+                    sort_spill_reservation_bytes + avg_batch_size * (partitions - 1),
+                    1.0,
+                )
+                .build_arc()?;
             let task_ctx = Arc::new(
                 TaskContext::default()
                     .with_runtime(runtime)

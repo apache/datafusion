@@ -219,13 +219,13 @@ where
 /// // configure a memory limit of 1GB with 20%  slop
 ///  let runtime_env = RuntimeEnvBuilder::new()
 ///     .with_memory_limit(1024 * 1024 * 1024, 0.80)
-///     .build()
+///     .build_arc()
 ///     .unwrap();
 ///
 /// // Create a SessionState using the config and runtime_env
 /// let state = SessionStateBuilder::new()
 ///   .with_config(config)
-///   .with_runtime_env(Arc::new(runtime_env))
+///   .with_runtime_env(runtime_env)
 ///   // include support for built in functions and configurations
 ///   .with_default_features()
 ///   .build();
@@ -1758,7 +1758,7 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")
