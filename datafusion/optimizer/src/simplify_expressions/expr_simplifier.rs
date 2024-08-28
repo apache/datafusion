@@ -3407,32 +3407,32 @@ mod tests {
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], false),
         );
-        assert_eq!(simplify(expr.clone()), lit(false));
+        assert_eq!(simplify(expr), lit(false));
 
         // 2. c1 IN (1,2,3,4) AND c1 IN (4,5,6,7) -> c1 = 4
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], false),
         );
-        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(4)));
+        assert_eq!(simplify(expr), col("c1").eq(lit(4)));
 
         // 3. c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) -> true
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
         );
-        assert_eq!(simplify(expr.clone()), lit(true));
+        assert_eq!(simplify(expr), lit(true));
 
         // 3.5 c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (4, 5, 6, 7) -> c1 != 4 (4 overlaps)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
         );
-        assert_eq!(simplify(expr.clone()), col("c1").not_eq(lit(4)));
+        assert_eq!(simplify(expr), col("c1").not_eq(lit(4)));
 
         // 4. c1 NOT IN (1,2,3,4) AND c1 NOT IN (4,5,6,7) -> c1 NOT IN (1,2,3,4,5,6,7)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
         );
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             in_list(
                 col("c1"),
                 vec![lit(1), lit(2), lit(3), lit(4), lit(5), lit(6), lit(7)],
@@ -3445,7 +3445,7 @@ mod tests {
             in_list(col("c1"), vec![lit(2), lit(3), lit(4), lit(5)], false),
         );
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             in_list(
                 col("c1"),
                 vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
@@ -3459,7 +3459,7 @@ mod tests {
             vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
             true,
         ));
-        assert_eq!(simplify(expr.clone()), lit(false));
+        assert_eq!(simplify(expr), lit(false));
 
         // 7. c1 NOT IN (1,2,3,4) AND c1 IN (1,2,3,4,5) -> c1 = 5
         let expr =
@@ -3468,14 +3468,14 @@ mod tests {
                 vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
                 false,
             ));
-        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(5)));
+        assert_eq!(simplify(expr), col("c1").eq(lit(5)));
 
         // 8. c1 IN (1,2,3,4) AND c1 NOT IN (5,6,7,8) -> c1 IN (1,2,3,4)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
         );
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false)
         );
 
@@ -3493,7 +3493,7 @@ mod tests {
         ))
         .and(in_list(col("c1"), vec![lit(3), lit(6)], false));
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             col("c1").eq(lit(3)).or(col("c1").eq(lit(6)))
         );
 
@@ -3507,7 +3507,7 @@ mod tests {
                 ))
                 .and(in_list(col("c1"), vec![lit(8), lit(9), lit(10)], false)),
         );
-        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(8)));
+        assert_eq!(simplify(expr), col("c1").eq(lit(8)));
 
         // Contains non-InList expression
         // c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9) -> c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9)
@@ -3622,7 +3622,7 @@ mod tests {
         let expr_x = col("c3").gt(lit(3_i64));
         let expr_y = (col("c4") + lit(2_u32)).lt(lit(10_u32));
         let expr_z = col("c1").in_list(vec![lit("a"), lit("b")], true);
-        let expr = expr_x.clone().and(expr_y.clone().or(expr_z));
+        let expr = expr_x.clone().and(expr_y.or(expr_z));
 
         // All guaranteed null
         let guarantees = vec![
@@ -3698,7 +3698,7 @@ mod tests {
             col("c4"),
             NullableInterval::from(ScalarValue::UInt32(Some(3))),
         )];
-        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        let output = simplify_with_guarantee(expr, guarantees);
         assert_eq!(&output, &expr_x);
     }
 

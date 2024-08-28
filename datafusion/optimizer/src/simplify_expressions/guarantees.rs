@@ -225,12 +225,12 @@ mod tests {
 
         // x IS NULL => guaranteed false
         let expr = col("x").is_null();
-        let output = expr.clone().rewrite(&mut rewriter).data().unwrap();
+        let output = expr.rewrite(&mut rewriter).data().unwrap();
         assert_eq!(output, lit(false));
 
         // x IS NOT NULL => guaranteed true
         let expr = col("x").is_not_null();
-        let output = expr.clone().rewrite(&mut rewriter).data().unwrap();
+        let output = expr.rewrite(&mut rewriter).data().unwrap();
         assert_eq!(output, lit(true));
     }
 

@@ -24,7 +24,6 @@ use crate::join_key_set::JoinKeySet;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::expr::{BinaryExpr, Expr};
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{
     CrossJoin, Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
@@ -114,7 +113,7 @@ impl OptimizerRule for EliminateCrossJoin {
                 input, predicate, ..
             } = filter;
             flatten_join_inputs(
-                unwrap_arc(input),
+                Arc::unwrap_or_clone(input),
                 &mut possible_join_keys,
                 &mut all_inputs,
             )?;
@@ -217,12 +216,28 @@ fn flatten_join_inputs(
                 );
             }
             possible_join_keys.insert_all_owned(join.on);
-            flatten_join_inputs(unwrap_arc(join.left), possible_join_keys, all_inputs)?;
-            flatten_join_inputs(unwrap_arc(join.right), possible_join_keys, all_inputs)?;
+            flatten_join_inputs(
+                Arc::unwrap_or_clone(join.left),
+                possible_join_keys,
+                all_inputs,
+            )?;
+            flatten_join_inputs(
+                Arc::unwrap_or_clone(join.right),
+                possible_join_keys,
+                all_inputs,
+            )?;
         }
         LogicalPlan::CrossJoin(join) => {
-            flatten_join_inputs(unwrap_arc(join.left), possible_join_keys, all_inputs)?;
-            flatten_join_inputs(unwrap_arc(join.right), possible_join_keys, all_inputs)?;
+            flatten_join_inputs(
+                Arc::unwrap_or_clone(join.left),
+                possible_join_keys,
+                all_inputs,
+            )?;
+            flatten_join_inputs(
+                Arc::unwrap_or_clone(join.right),
+                possible_join_keys,
+                all_inputs,
+            )?;
         }
         _ => {
             all_inputs.push(plan);

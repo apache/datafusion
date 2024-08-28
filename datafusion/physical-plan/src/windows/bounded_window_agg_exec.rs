@@ -1311,7 +1311,7 @@ mod tests {
                 &args,
                 &partitionby_exprs,
                 &orderby_exprs,
-                Arc::new(window_frame.clone()),
+                Arc::new(window_frame),
                 &input.schema(),
                 false,
             )?],
@@ -1484,7 +1484,7 @@ mod tests {
         let partitions = vec![
             Arc::new(TestStreamPartition {
                 schema: Arc::clone(&schema),
-                batches: batches.clone(),
+                batches,
                 idx: 0,
                 state: PolingState::BatchReturn,
                 sleep_duration: per_batch_wait_duration,

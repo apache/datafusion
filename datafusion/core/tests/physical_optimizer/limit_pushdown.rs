@@ -54,7 +54,7 @@ impl PartitionStream for DummyStreamPartition {
 fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero(
 ) -> datafusion_common::Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(schema.clone())?;
+    let streaming_table = streaming_table_exec(schema)?;
     let global_limit = global_limit_exec(streaming_table, 0, Some(5));
 
     let initial = get_plan_string(&global_limit);
@@ -79,7 +79,7 @@ fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero(
 fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_limit_when_skip_is_nonzero(
 ) -> datafusion_common::Result<()> {
     let schema = create_schema();
-    let streaming_table = streaming_table_exec(schema.clone())?;
+    let streaming_table = streaming_table_exec(schema)?;
     let global_limit = global_limit_exec(streaming_table, 2, Some(5));
 
     let initial = get_plan_string(&global_limit);
@@ -107,7 +107,7 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
     let schema = create_schema();
     let streaming_table = streaming_table_exec(schema.clone())?;
     let repartition = repartition_exec(streaming_table)?;
-    let filter = filter_exec(schema.clone(), repartition)?;
+    let filter = filter_exec(schema, repartition)?;
     let coalesce_batches = coalesce_batches_exec(filter);
     let local_limit = local_limit_exec(coalesce_batches, 5);
     let coalesce_partitions = coalesce_partitions_exec(local_limit);
@@ -146,7 +146,7 @@ fn pushes_global_limit_exec_through_projection_exec() -> datafusion_common::Resu
     let schema = create_schema();
     let streaming_table = streaming_table_exec(schema.clone())?;
     let filter = filter_exec(schema.clone(), streaming_table)?;
-    let projection = projection_exec(schema.clone(), filter)?;
+    let projection = projection_exec(schema, filter)?;
     let global_limit = global_limit_exec(projection, 0, Some(5));
 
     let initial = get_plan_string(&global_limit);
@@ -178,7 +178,7 @@ fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batc
     let schema = create_schema();
     let streaming_table = streaming_table_exec(schema.clone()).unwrap();
     let coalesce_batches = coalesce_batches_exec(streaming_table);
-    let projection = projection_exec(schema.clone(), coalesce_batches)?;
+    let projection = projection_exec(schema, coalesce_batches)?;
     let global_limit = global_limit_exec(projection, 0, Some(5));
 
     let initial = get_plan_string(&global_limit);
@@ -256,7 +256,7 @@ fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions(
     let schema = create_schema();
     let streaming_table = streaming_table_exec(schema.clone())?;
     let repartition = repartition_exec(streaming_table)?;
-    let filter = filter_exec(schema.clone(), repartition)?;
+    let filter = filter_exec(schema, repartition)?;
     let coalesce_partitions = coalesce_partitions_exec(filter);
     let global_limit = global_limit_exec(coalesce_partitions, 0, Some(5));
 
@@ -398,9 +398,7 @@ fn streaming_table_exec(
 ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
     Ok(Arc::new(StreamingTableExec::try_new(
         schema.clone(),
-        vec![Arc::new(DummyStreamPartition {
-            schema: schema.clone(),
-        }) as _],
+        vec![Arc::new(DummyStreamPartition { schema }) as _],
         None,
         None,
         true,

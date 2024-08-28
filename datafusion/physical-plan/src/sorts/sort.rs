@@ -1034,7 +1034,7 @@ mod tests {
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::{assert_batches_eq, Result, ScalarValue};
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::RuntimeConfig;
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnvBuilder};
     use datafusion_execution::RecordBatchStream;
     use datafusion_physical_expr::expressions::{Column, Literal};
     use datafusion_physical_expr::EquivalenceProperties;
@@ -1188,9 +1188,11 @@ mod tests {
             .options()
             .execution
             .sort_spill_reservation_bytes;
-        let rt_config = RuntimeConfig::new()
-            .with_memory_limit(sort_spill_reservation_bytes + 12288, 1.0);
-        let runtime = Arc::new(RuntimeEnv::new(rt_config)?);
+        let runtime = Arc::new(
+            RuntimeEnvBuilder::new()
+                .with_memory_limit(sort_spill_reservation_bytes + 12288, 1.0)
+                .build()?,
+        );
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(session_config)
@@ -1264,11 +1266,14 @@ mod tests {
                 .execution
                 .sort_spill_reservation_bytes;
 
-            let rt_config = RuntimeConfig::new().with_memory_limit(
-                sort_spill_reservation_bytes + avg_batch_size * (partitions - 1),
-                1.0,
+            let runtime = Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_limit(
+                        sort_spill_reservation_bytes + avg_batch_size * (partitions - 1),
+                        1.0,
+                    )
+                    .build()?,
             );
-            let runtime = Arc::new(RuntimeEnv::new(rt_config)?);
             let task_ctx = Arc::new(
                 TaskContext::default()
                     .with_runtime(runtime)
