@@ -1040,7 +1040,6 @@ Rap  (empty) Raph
 NULL NULL    NULL
 
 ## Ensure no casts for RPAD
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   RPAD(column1_utf8view, 1) as c1,
@@ -1070,7 +1069,6 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for SPLIT_PART
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   SPLIT_PART(column1_utf8view, 'f', 1) as c1,
@@ -1082,7 +1080,6 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for STRPOS
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   STRPOS(column1_utf8view, 'f') as c,
@@ -1094,7 +1091,6 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for SUBSTR
-## TODO file ticket
 query TT
 EXPLAIN SELECT
   SUBSTR(column1_utf8view, 1) as c,
@@ -1224,6 +1220,48 @@ AndrewAndrew AndrewAndrew AndrewAndrew
 XiangpengXiangpeng XiangpengXiangpeng XiangpengXiangpeng
 RaphaelRaphael RaphaelRaphael RaphaelRaphael
 NULL NULL NULL
+
+## Ensure no casts for binary operators
+## TODO: https://github.com/apache/datafusion/issues/12180
+# `~` operator (regex match)
+query TT
+EXPLAIN SELECT
+  column1_utf8view ~ 'foo' AS c1
+FROM test;
+----
+logical_plan
+01)Projection: CAST(test.column1_utf8view AS Utf8) LIKE Utf8("%foo%") AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+# `~*` operator (regex match case-insensitive)
+query TT
+EXPLAIN SELECT
+  column1_utf8view ~* 'foo' AS c1
+FROM test;
+----
+logical_plan
+01)Projection: CAST(test.column1_utf8view AS Utf8) ILIKE Utf8("%foo%") AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+# `!~~` operator (not like match)
+query TT
+EXPLAIN SELECT
+  column1_utf8view !~~ 'an' AS c1
+FROM test;
+----
+logical_plan
+01)Projection: CAST(test.column1_utf8view AS Utf8) !~~ Utf8("an") AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+# `!~~*` operator (not like match case-insensitive)
+query TT
+EXPLAIN SELECT
+  column1_utf8view !~~* 'an' AS c1
+FROM test;
+----
+logical_plan
+01)Projection: CAST(test.column1_utf8view AS Utf8) !~~* Utf8("an") AS c1
+02)--TableScan: test projection=[column1_utf8view]
 
 statement ok
 drop table test;
