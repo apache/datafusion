@@ -126,7 +126,8 @@ fn criterion_benchmark(c: &mut Criterion) {
                     Arc::clone(&data),
                     Arc::clone(&regex),
                     Arc::clone(&replacement),
-                    Some(&Arc::clone(&flags)))
+                    Some(&Arc::clone(&flags)),
+                )
                 .expect("regexp_replace should work on valid values"),
             )
         })
