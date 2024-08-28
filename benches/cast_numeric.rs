@@ -31,14 +31,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         DataType::Int8,
         EvalMode::Legacy,
         timezone.clone(),
+        false,
     );
     let cast_i32_to_i16 = Cast::new(
         expr.clone(),
         DataType::Int16,
         EvalMode::Legacy,
         timezone.clone(),
+        false,
     );
-    let cast_i32_to_i64 = Cast::new(expr, DataType::Int64, EvalMode::Legacy, timezone);
+    let cast_i32_to_i64 = Cast::new(expr, DataType::Int64, EvalMode::Legacy, timezone, false);
 
     let mut group = c.benchmark_group("cast_int_to_int");
     group.bench_function("cast_i32_to_i8", |b| {
