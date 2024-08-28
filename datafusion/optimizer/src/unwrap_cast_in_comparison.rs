@@ -627,7 +627,7 @@ mod tests {
             Box::new(DataType::Int32),
             Box::new(ScalarValue::LargeUtf8(Some("value".to_owned()))),
         );
-        let expr_input = cast(col("largestr"), dict.data_type()).eq(lit(dict.clone()));
+        let expr_input = cast(col("largestr"), dict.data_type()).eq(lit(dict));
         let expected =
             col("largestr").eq(lit(ScalarValue::LargeUtf8(Some("value".to_owned()))));
         assert_eq!(optimize_test(expr_input, &schema), expected);

@@ -2443,7 +2443,7 @@ mod tests {
             Statistics {
                 num_rows: Absent,
                 total_byte_size: Absent,
-                column_statistics: dummy_column_stats.clone(),
+                column_statistics: dummy_column_stats,
             },
             &join_on,
         );

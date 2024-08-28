@@ -1165,7 +1165,7 @@ impl SessionContext {
         // check schema uniqueness
         let mut batches = batches.into_iter().peekable();
         let schema = if let Some(batch) = batches.peek() {
-            batch.schema().clone()
+            batch.schema()
         } else {
             Arc::new(Schema::empty())
         };
