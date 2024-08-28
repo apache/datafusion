@@ -19,12 +19,15 @@
 
 use crate::utils::{downcast_arg, make_scalar_function};
 use arrow_array::{
-    Array, ArrayRef, ListArray, LargeListArray, OffsetSizeTrait, Float64Array,
+    Array, ArrayRef, Float64Array, LargeListArray, ListArray, OffsetSizeTrait,
 };
 use arrow_schema::DataType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List, Float64};
+use arrow_schema::DataType::{FixedSizeList, Float64, LargeList, List};
 use core::any::type_name;
-use datafusion_common::cast::{as_generic_list_array, as_int32_array, as_int64_array, as_float32_array, as_float64_array};
+use datafusion_common::cast::{
+    as_float32_array, as_float64_array, as_generic_list_array, as_int32_array,
+    as_int64_array,
+};
 use datafusion_common::DataFusionError;
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -89,12 +92,8 @@ pub fn array_distance_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     match (&args[0].data_type(), &args[1].data_type()) {
-        (List(_), List(_)) => {
-            general_array_distance::<i32>(args)
-        }
-        (LargeList(_), LargeList(_)) => {
-            general_array_distance::<i64>(args)
-        }
+        (List(_), List(_)) => general_array_distance::<i32>(args),
+        (LargeList(_), LargeList(_)) => general_array_distance::<i64>(args),
         (array_type1, array_type2) => {
             exec_err!("array_distance does not support types '{array_type1:?}' and '{array_type2:?}'")
         }
@@ -173,18 +172,18 @@ fn compute_array_distance(
     let values1 = convert_to_f64_array(&value1)?;
     let values2 = convert_to_f64_array(&value2)?;
 
-    if values1.len()!= values2.len() {
+    if values1.len() != values2.len() {
         return exec_err!("Both arrays must have the same length");
     }
 
     let sum_squares: f64 = values1
-       .iter()
-       .zip(values2.iter())
-       .map(|(v1, v2)| {
+        .iter()
+        .zip(values2.iter())
+        .map(|(v1, v2)| {
             let diff = v1.unwrap_or(0.0) - v2.unwrap_or(0.0);
             diff * diff
         })
-       .sum();
+        .sum();
 
     Ok(Some(sum_squares.sqrt()))
 }
@@ -195,17 +194,20 @@ fn convert_to_f64_array(array: &ArrayRef) -> Result<Float64Array> {
         DataType::Float64 => Ok(as_float64_array(array)?.clone()),
         DataType::Float32 => {
             let array = as_float32_array(array)?;
-            let converted: Float64Array = array.iter().map(|v| v.map(|v| v as f64)).collect();
+            let converted: Float64Array =
+                array.iter().map(|v| v.map(|v| v as f64)).collect();
             Ok(converted)
         }
         DataType::Int64 => {
             let array = as_int64_array(array)?;
-            let converted: Float64Array = array.iter().map(|v| v.map(|v| v as f64)).collect();
+            let converted: Float64Array =
+                array.iter().map(|v| v.map(|v| v as f64)).collect();
             Ok(converted)
         }
         DataType::Int32 => {
             let array = as_int32_array(array)?;
-            let converted: Float64Array = array.iter().map(|v| v.map(|v| v as f64)).collect();
+            let converted: Float64Array =
+                array.iter().map(|v| v.map(|v| v as f64)).collect();
             Ok(converted)
         }
         _ => exec_err!("Unsupported array type for conversion to Float64Array"),
