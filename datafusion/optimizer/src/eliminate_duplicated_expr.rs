@@ -37,17 +37,15 @@ impl EliminateDuplicatedExpr {
 }
 // use this structure to avoid initial clone
 #[derive(Eq, Clone, Debug)]
-struct SortExprWrapper {
-    expr: SortExpr,
-}
+struct SortExprWrapper(SortExpr);
 impl PartialEq for SortExprWrapper {
     fn eq(&self, other: &Self) -> bool {
-        self.expr.expr == other.expr.expr
+        self.0.expr == other.0.expr
     }
 }
 impl Hash for SortExprWrapper {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.expr.expr.hash(state);
+        self.0.expr.hash(state);
     }
 }
 impl OptimizerRule for EliminateDuplicatedExpr {
@@ -70,10 +68,10 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                 let unique_exprs: Vec<_> = sort
                     .expr
                     .into_iter()
-                    .map(|e| SortExprWrapper { expr: e })
+                    .map(SortExprWrapper)
                     .collect::<IndexSet<_>>()
                     .into_iter()
-                    .map(|wrapper| wrapper.expr)
+                    .map(|wrapper| wrapper.0)
                     .collect();
 
                 let transformed = if len != unique_exprs.len() {
