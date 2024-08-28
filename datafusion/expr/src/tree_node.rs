@@ -403,14 +403,7 @@ pub fn transform_sort_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
 }
 
 pub fn replace_sort_expressions(sorts: Vec<Sort>, new_expr: Vec<Expr>) -> Vec<Sort> {
-    if sorts.len() != new_expr.len() {
-        panic!(
-            "Incorrect number of new_expr, expected {}, got {}",
-            sorts.len(),
-            new_expr.len()
-        );
-    }
-
+    assert_eq!(sorts.len(), new_expr.len());
     let mut new_sorts = Vec::with_capacity(sorts.len());
     for (i, expr) in new_expr.into_iter().enumerate() {
         new_sorts.push(replace_sort_expression(sorts[i].clone(), expr));
