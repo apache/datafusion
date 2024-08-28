@@ -41,7 +41,7 @@ use url::Url;
 /// Execution runtime environment that manages system resources such
 /// as memory, disk, cache and storage.
 ///
-/// A [`RuntimeEnv`] is created from a [`RuntimeConfig`] and has the
+/// A [`RuntimeEnv`] is created from a [`RuntimeEnvBuilder`] and has the
 /// following resource management functionality:
 ///
 /// * [`MemoryPool`]: Manage memory
@@ -147,13 +147,17 @@ impl RuntimeEnv {
 
 impl Default for RuntimeEnv {
     fn default() -> Self {
-        RuntimeEnv::new(RuntimeConfig::new()).unwrap()
+        RuntimeEnvBuilder::new().build().unwrap()
     }
 }
 
+/// Please see: <https://github.com/apache/datafusion/issues/12156>
+/// This a type alias for backwards compatibility.
+pub type RuntimeConfig = RuntimeEnvBuilder;
+
 #[derive(Clone)]
 /// Execution runtime configuration
-pub struct RuntimeConfig {
+pub struct RuntimeEnvBuilder {
     /// DiskManager to manage temporary disk file usage
     pub disk_manager: DiskManagerConfig,
     /// [`MemoryPool`] from which to allocate memory
@@ -166,13 +170,13 @@ pub struct RuntimeConfig {
     pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
 }
 
-impl Default for RuntimeConfig {
+impl Default for RuntimeEnvBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RuntimeConfig {
+impl RuntimeEnvBuilder {
     /// New with default values
     pub fn new() -> Self {
         Self {
@@ -229,8 +233,17 @@ impl RuntimeConfig {
         self.with_disk_manager(DiskManagerConfig::new_specified(vec![path.into()]))
     }
 
-    /// Build a `RuntimeEnv` object from the configuration
+    /// Build a RuntimeEnv
     pub fn build(self) -> Result<RuntimeEnv> {
-        RuntimeEnv::new(self)
+        let memory_pool = self
+            .memory_pool
+            .unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
+
+        Ok(RuntimeEnv {
+            memory_pool,
+            disk_manager: DiskManager::try_new(self.disk_manager)?,
+            cache_manager: CacheManager::try_new(&self.cache_manager)?,
+            object_store_registry: self.object_store_registry,
+        })
     }
 }

@@ -644,7 +644,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
@@ -1019,8 +1019,11 @@ mod tests {
         ];
 
         for join_type in join_types {
-            let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
-            let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            let runtime = Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_limit(100, 1.0)
+                    .build()?,
+            );
             let task_ctx = TaskContext::default().with_runtime(runtime);
             let task_ctx = Arc::new(task_ctx);
 

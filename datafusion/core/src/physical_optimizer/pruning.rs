@@ -1369,7 +1369,6 @@ fn build_predicate_expression(
             let change_expr = in_list
                 .list()
                 .iter()
-                .cloned()
                 .map(|e| {
                     Arc::new(phys_expr::BinaryExpr::new(
                         in_list.expr().clone(),

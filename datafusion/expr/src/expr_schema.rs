@@ -184,7 +184,7 @@ impl ExprSchemable for Expr {
                                 err,
                                 utils::generate_signature_error_msg(
                                     fun.name(),
-                                    fun.signature().clone(),
+                                    fun.signature(),
                                     &data_types
                                 )
                             )
@@ -199,7 +199,7 @@ impl ExprSchemable for Expr {
                                     err,
                                     utils::generate_signature_error_msg(
                                         fun.name(),
-                                        fun.signature().clone(),
+                                        fun.signature(),
                                         &data_types
                                     )
                                 )

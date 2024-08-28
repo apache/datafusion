@@ -1242,10 +1242,9 @@ mod tests {
     #[test]
     fn into() {
         // Demonstrate how to convert back and forth between Schema, SchemaRef, DFSchema, and DFSchemaRef
-        let metadata = test_metadata();
         let arrow_schema = Schema::new_with_metadata(
             vec![Field::new("c0", DataType::Int64, true)],
-            metadata.clone(),
+            test_metadata(),
         );
         let arrow_schema_ref = Arc::new(arrow_schema.clone());
 
