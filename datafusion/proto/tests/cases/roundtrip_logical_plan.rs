@@ -2434,7 +2434,7 @@ fn roundtrip_window() {
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
     ))
-    .window_frame(row_number_frame.clone())
+    .window_frame(row_number_frame)
     .build()
     .unwrap();
 

@@ -296,8 +296,7 @@ mod tests {
         let array3d_1 = Arc::new(array_into_list_array_nullable(array2d_1)) as ArrayRef;
         let array3d_2 = array_into_list_array_nullable(array2d_2.to_owned());
         let res =
-            align_array_dimensions::<i32>(vec![array1d_1, Arc::new(array3d_2.clone())])
-                .unwrap();
+            align_array_dimensions::<i32>(vec![array1d_1, Arc::new(array3d_2)]).unwrap();
 
         let expected = as_list_array(&array3d_1).unwrap();
         let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());

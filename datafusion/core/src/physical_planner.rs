@@ -701,7 +701,7 @@ impl DefaultPhysicalPlanner {
                 let initial_aggr = Arc::new(AggregateExec::try_new(
                     AggregateMode::Partial,
                     groups.clone(),
-                    aggregates.clone(),
+                    aggregates,
                     filters.clone(),
                     input_exec,
                     physical_input_schema.clone(),
@@ -2569,7 +2569,7 @@ mod tests {
 
     impl NoOpExecutionPlan {
         fn new(schema: SchemaRef) -> Self {
-            let cache = Self::compute_properties(schema.clone());
+            let cache = Self::compute_properties(schema);
             Self { cache }
         }
 
