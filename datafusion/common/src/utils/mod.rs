@@ -444,12 +444,12 @@ pub fn arrays_into_list_array(
 }
 
 /// Helper function to convert a ListArray into a vector of ArrayRefs.
-pub fn list_to_arrays<O: OffsetSizeTrait>(a: ArrayRef) -> Vec<ArrayRef> {
+pub fn list_to_arrays<O: OffsetSizeTrait>(a: &ArrayRef) -> Vec<ArrayRef> {
     a.as_list::<O>().iter().flatten().collect::<Vec<_>>()
 }
 
 /// Helper function to convert a FixedSizeListArray into a vector of ArrayRefs.
-pub fn fixed_size_list_to_arrays(a: ArrayRef) -> Vec<ArrayRef> {
+pub fn fixed_size_list_to_arrays(a: &ArrayRef) -> Vec<ArrayRef> {
     a.as_fixed_size_list().iter().flatten().collect::<Vec<_>>()
 }
 

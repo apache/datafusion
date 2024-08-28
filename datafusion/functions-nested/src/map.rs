@@ -69,9 +69,9 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     match &args[0] {
         ColumnarValue::Array(_) => {
             let row_keys = match key_array.data_type() {
-                DataType::List(_) => list_to_arrays::<i32>(keys.clone()),
-                DataType::LargeList(_) => list_to_arrays::<i64>(keys.clone()),
-                DataType::FixedSizeList(_, _) => fixed_size_list_to_arrays(keys.clone()),
+                DataType::List(_) => list_to_arrays::<i32>(&keys),
+                DataType::LargeList(_) => list_to_arrays::<i64>(&keys),
+                DataType::FixedSizeList(_, _) => fixed_size_list_to_arrays(&keys),
                 data_type => {
                     return exec_err!(
                         "Expected list, large_list or fixed_size_list, got {:?}",
@@ -319,8 +319,8 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     let mut offset_buffer = vec![O::zero()];
     let mut running_offset = O::zero();
 
-    let keys = list_to_arrays::<O>(keys);
-    let values = list_to_arrays::<O>(values);
+    let keys = list_to_arrays::<O>(&keys);
+    let values = list_to_arrays::<O>(&values);
 
     let mut key_array_vec = vec![];
     let mut value_array_vec = vec![];
