@@ -21,11 +21,15 @@ use crate::Expr;
 use datafusion_common::ScalarValue;
 
 /// Create a literal expression
+// TODO address needless_pass_by_value & remove the suppression. Maybe change Literal::lit to move self?
+#[allow(clippy::needless_pass_by_value)]
 pub fn lit<T: Literal>(n: T) -> Expr {
     n.lit()
 }
 
 /// Create a literal timestamp expression
+// TODO address needless_pass_by_value & remove the suppression. See lit() above.
+#[allow(clippy::needless_pass_by_value)]
 pub fn lit_timestamp_nano<T: TimestampLiteral>(n: T) -> Expr {
     n.lit_timestamp_nano()
 }

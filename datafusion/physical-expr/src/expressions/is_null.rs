@@ -25,7 +25,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use arrow_array::{Array, ArrayRef, BooleanArray, Int8Array, UnionArray};
+use arrow_array::{Array, BooleanArray, Int8Array, UnionArray};
 use arrow_buffer::{BooleanBuffer, ScalarBuffer};
 use arrow_ord::cmp;
 
@@ -78,7 +78,7 @@ impl PhysicalExpr for IsNullExpr {
         let arg = self.arg.evaluate(batch)?;
         match arg {
             ColumnarValue::Array(array) => {
-                Ok(ColumnarValue::Array(Arc::new(compute_is_null(array)?)))
+                Ok(ColumnarValue::Array(Arc::new(compute_is_null(&array)?)))
             }
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Boolean(Some(scalar.is_null())),
@@ -105,7 +105,7 @@ impl PhysicalExpr for IsNullExpr {
 
 /// workaround <https://github.com/apache/arrow-rs/issues/6017>,
 /// this can be replaced with a direct call to `arrow::compute::is_null` once it's fixed.
-pub(crate) fn compute_is_null(array: ArrayRef) -> Result<BooleanArray> {
+pub(crate) fn compute_is_null(array: &dyn Array) -> Result<BooleanArray> {
     if let Some(union_array) = array.as_any().downcast_ref::<UnionArray>() {
         if let Some(offsets) = union_array.offsets() {
             dense_union_is_null(union_array, offsets)
@@ -113,17 +113,17 @@ pub(crate) fn compute_is_null(array: ArrayRef) -> Result<BooleanArray> {
             sparse_union_is_null(union_array)
         }
     } else {
-        compute::is_null(array.as_ref()).map_err(Into::into)
+        compute::is_null(array).map_err(Into::into)
     }
 }
 
 /// workaround <https://github.com/apache/arrow-rs/issues/6017>,
 /// this can be replaced with a direct call to `arrow::compute::is_not_null` once it's fixed.
-pub(crate) fn compute_is_not_null(array: ArrayRef) -> Result<BooleanArray> {
+pub(crate) fn compute_is_not_null(array: &dyn Array) -> Result<BooleanArray> {
     if array.as_any().is::<UnionArray>() {
         compute::not(&compute_is_null(array)?).map_err(Into::into)
     } else {
-        compute::is_not_null(array.as_ref()).map_err(Into::into)
+        compute::is_not_null(array).map_err(Into::into)
     }
 }
 
@@ -243,8 +243,7 @@ mod tests {
         let array =
             UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
 
-        let array_ref = Arc::new(array) as ArrayRef;
-        let result = compute_is_null(array_ref).unwrap();
+        let result = compute_is_null(&array).unwrap();
 
         let expected =
             &BooleanArray::from(vec![false, true, false, false, true, true, false]);
@@ -272,8 +271,7 @@ mod tests {
             UnionArray::try_new(union_fields(), type_ids, Some(offsets), children)
                 .unwrap();
 
-        let array_ref = Arc::new(array) as ArrayRef;
-        let result = compute_is_null(array_ref).unwrap();
+        let result = compute_is_null(&array).unwrap();
 
         let expected = &BooleanArray::from(vec![false, true, false, true, false, true]);
         assert_eq!(expected, &result);

@@ -120,7 +120,7 @@ impl BuiltInWindowFunction {
                     "{}",
                     utils::generate_signature_error_msg(
                         &format!("{self}"),
-                        self.signature(),
+                        &self.signature(),
                         input_expr_types,
                     )
                 )

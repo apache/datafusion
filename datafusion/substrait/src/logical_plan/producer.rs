@@ -771,7 +771,7 @@ pub fn to_substrait_agg_measure(
                     for arg in args {
                         arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(ctx, arg, schema, 0, extensions)?)) });
                     }
-                    let function_anchor = extensions.register_function(func.name().to_string());
+                    let function_anchor = extensions.register_function(func.name());
                     Ok(Measure {
                         measure: Some(AggregateFunction {
                             function_reference: function_anchor,
@@ -831,7 +831,7 @@ pub fn make_binary_op_scalar_func(
     op: Operator,
     extensions: &mut Extensions,
 ) -> Expression {
-    let function_anchor = extensions.register_function(operator_to_name(op).to_string());
+    let function_anchor = extensions.register_function(operator_to_name(op));
     Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
@@ -902,7 +902,7 @@ pub fn to_substrait_rex(
             };
 
             if *negated {
-                let function_anchor = extensions.register_function("not".to_string());
+                let function_anchor = extensions.register_function("not");
 
                 Ok(Expression {
                     rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -933,7 +933,7 @@ pub fn to_substrait_rex(
                 });
             }
 
-            let function_anchor = extensions.register_function(fun.name().to_string());
+            let function_anchor = extensions.register_function(fun.name());
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference: function_anchor,
@@ -1104,7 +1104,7 @@ pub fn to_substrait_rex(
             null_treatment: _,
         }) => {
             // function reference
-            let function_anchor = extensions.register_function(fun.to_string());
+            let function_anchor = extensions.register_function(&fun.to_string());
             // arguments
             let mut arguments: Vec<FunctionArgument> = vec![];
             for arg in args {
@@ -1181,7 +1181,7 @@ pub fn to_substrait_rex(
                 }))),
             };
             if *negated {
-                let function_anchor = extensions.register_function("not".to_string());
+                let function_anchor = extensions.register_function("not");
 
                 Ok(Expression {
                     rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -1420,9 +1420,8 @@ fn to_substrait_type(
                     // Substrait doesn't currently support this type, so we represent it as a UDT
                     Ok(substrait::proto::Type {
                         kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
-                            type_reference: extensions.register_type(
-                                INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string(),
-                            ),
+                            type_reference: extensions
+                                .register_type(INTERVAL_MONTH_DAY_NANO_TYPE_NAME),
                             type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                             nullability,
                             type_parameters: vec![],
@@ -1595,9 +1594,9 @@ fn make_substrait_like_expr(
     extensions: &mut Extensions,
 ) -> Result<Expression> {
     let function_anchor = if ignore_case {
-        extensions.register_function("ilike".to_string())
+        extensions.register_function("ilike")
     } else {
-        extensions.register_function("like".to_string())
+        extensions.register_function("like")
     };
     let expr = to_substrait_rex(ctx, expr, schema, col_ref_offset, extensions)?;
     let pattern = to_substrait_rex(ctx, pattern, schema, col_ref_offset, extensions)?;
@@ -1628,7 +1627,7 @@ fn make_substrait_like_expr(
     };
 
     if negated {
-        let function_anchor = extensions.register_function("not".to_string());
+        let function_anchor = extensions.register_function("not");
 
         Ok(Expression {
             rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -1887,7 +1886,7 @@ fn to_substrait_literal(
             (
                 LiteralType::UserDefined(UserDefined {
                     type_reference: extensions
-                        .register_type(INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string()),
+                        .register_type(INTERVAL_MONTH_DAY_NANO_TYPE_NAME),
                     type_parameters: vec![],
                     val: Some(user_defined::Val::Value(ProtoAny {
                         type_url: INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string(),
@@ -2072,7 +2071,7 @@ fn to_substrait_unary_scalar_fn(
     col_ref_offset: usize,
     extensions: &mut Extensions,
 ) -> Result<Expression> {
-    let function_anchor = extensions.register_function(fn_name.to_string());
+    let function_anchor = extensions.register_function(fn_name);
     let substrait_expr = to_substrait_rex(ctx, arg, schema, col_ref_offset, extensions)?;
 
     Ok(Expression {
@@ -2155,6 +2154,7 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
 
 #[cfg(test)]
 mod test {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use crate::logical_plan::consumer::{
         from_substrait_literal_without_names, from_substrait_type_without_names,
@@ -2267,9 +2267,9 @@ mod test {
         let c2 = Field::new("c2", DataType::Utf8, true);
         round_trip_literal(
             ScalarStructBuilder::new()
-                .with_scalar(c0.to_owned(), ScalarValue::Boolean(Some(true)))
-                .with_scalar(c1.to_owned(), ScalarValue::Int32(Some(1)))
-                .with_scalar(c2.to_owned(), ScalarValue::Utf8(None))
+                .with_scalar(c0.to_owned(), &ScalarValue::Boolean(Some(true)))
+                .with_scalar(c1.to_owned(), &ScalarValue::Int32(Some(1)))
+                .with_scalar(c2.to_owned(), &ScalarValue::Utf8(None))
                 .build()?,
         )?;
         round_trip_literal(ScalarStructBuilder::new_null(vec![c0, c1, c2]))?;

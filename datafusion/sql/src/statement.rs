@@ -219,7 +219,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 hivevar,
                 variables,
                 value,
-            } => self.set_variable_to_plan(local, hivevar, &variables, value),
+            } => self.set_variable_to_plan(local, hivevar, &variables, &value),
 
             Statement::CreateTable(CreateTable {
                 query,
@@ -460,14 +460,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 full,
                 db_name,
                 filter,
-            } => self.show_tables_to_plan(extended, full, db_name, filter),
+            } => self.show_tables_to_plan(extended, full, &db_name, &filter),
 
             Statement::ShowColumns {
                 extended,
                 full,
                 table_name,
                 filter,
-            } => self.show_columns_to_plan(extended, full, table_name, filter),
+            } => self.show_columns_to_plan(extended, full, table_name, &filter),
 
             Statement::Insert(Insert {
                 or,
@@ -540,7 +540,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
                 }
-                self.update_to_plan(table, assignments, from, selection)
+                self.update_to_plan(table, &assignments, from, selection)
             }
 
             Statement::Delete(Delete {
@@ -842,8 +842,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         extended: bool,
         full: bool,
-        db_name: Option<Ident>,
-        filter: Option<ShowStatementFilter>,
+        db_name: &Option<Ident>,
+        filter: &Option<ShowStatementFilter>,
     ) -> Result<LogicalPlan> {
         if self.has_table("information_schema", "tables") {
             // we only support the basic "SHOW TABLES"
@@ -1068,8 +1068,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return plan_err!("Option {key} is specified multiple times");
             }
 
-            let Some(value_string) = self.value_normalizer.normalize(value.clone())
-            else {
+            let Some(value_string) = self.value_normalizer.normalize(&value) else {
                 return plan_err!("Unsupported Value {}", value);
             };
 
@@ -1182,7 +1181,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         local: bool,
         hivevar: bool,
         variables: &OneOrManyWithParens<ObjectName>,
-        value: Vec<SQLExpr>,
+        value: &[SQLExpr],
     ) -> Result<LogicalPlan> {
         if local {
             return not_impl_err!("LOCAL is not supported");
@@ -1244,16 +1243,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
-        let table_ref = self.object_name_to_table_reference(table_name.clone())?;
+        let table_name_string = object_name_to_string(&table_name);
+        let table_ref = self.object_name_to_table_reference(table_name)?;
         let table_source = self.context_provider.get_table_source(table_ref.clone())?;
         let schema = (*table_source.schema()).clone();
         let schema = DFSchema::try_from(schema)?;
-        let scan = LogicalPlanBuilder::scan(
-            object_name_to_string(&table_name),
-            table_source,
-            None,
-        )?
-        .build()?;
+        let scan =
+            LogicalPlanBuilder::scan(table_name_string, table_source, None)?.build()?;
         let mut planner_context = PlannerContext::new();
 
         let source = match predicate_expr {
@@ -1285,7 +1281,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn update_to_plan(
         &self,
         table: TableWithJoins,
-        assignments: Vec<Assignment>,
+        assignments: &[Assignment],
         from: Option<TableWithJoins>,
         predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
@@ -1523,7 +1519,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         extended: bool,
         full: bool,
         sql_table_name: ObjectName,
-        filter: Option<ShowStatementFilter>,
+        filter: &Option<ShowStatementFilter>,
     ) -> Result<LogicalPlan> {
         if filter.is_some() {
             return plan_err!("SHOW COLUMNS with WHERE or LIKE is not supported");

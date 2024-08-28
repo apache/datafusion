@@ -263,7 +263,7 @@ impl Statistics {
     /// parameter to compute global statistics in a multi-partition setting.
     pub fn with_fetch(
         mut self,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         fetch: Option<usize>,
         skip: usize,
         n_partitions: usize,
@@ -317,7 +317,7 @@ impl Statistics {
                 ..
             } => check_num_rows(fetch.and_then(|v| v.checked_mul(n_partitions)), false),
         };
-        self.column_statistics = Statistics::unknown_column(&schema);
+        self.column_statistics = Statistics::unknown_column(schema);
         self.total_byte_size = Precision::Absent;
         Ok(self)
     }

@@ -33,7 +33,7 @@ pub struct PriorityMap {
 
 impl PriorityMap {
     pub fn new(
-        key_type: DataType,
+        key_type: &DataType,
         val_type: DataType,
         capacity: usize,
         descending: bool,
@@ -119,7 +119,7 @@ mod tests {
     fn should_append() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec!["1"]));
         let vals: ArrayRef = Arc::new(Int64Array::from(vec![1]));
-        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 1, false)?;
+        let mut agg = PriorityMap::new(&DataType::Utf8, DataType::Int64, 1, false)?;
         agg.set_batch(ids, vals);
         agg.insert(0)?;
 
@@ -143,7 +143,7 @@ mod tests {
     fn should_ignore_higher_group() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec!["1", "2"]));
         let vals: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
-        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 1, false)?;
+        let mut agg = PriorityMap::new(&DataType::Utf8, DataType::Int64, 1, false)?;
         agg.set_batch(ids, vals);
         agg.insert(0)?;
         agg.insert(1)?;
@@ -168,7 +168,7 @@ mod tests {
     fn should_ignore_lower_group() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec!["2", "1"]));
         let vals: ArrayRef = Arc::new(Int64Array::from(vec![2, 1]));
-        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 1, true)?;
+        let mut agg = PriorityMap::new(&DataType::Utf8, DataType::Int64, 1, true)?;
         agg.set_batch(ids, vals);
         agg.insert(0)?;
         agg.insert(1)?;
@@ -193,7 +193,7 @@ mod tests {
     fn should_ignore_higher_same_group() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec!["1", "1"]));
         let vals: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
-        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 2, false)?;
+        let mut agg = PriorityMap::new(&DataType::Utf8, DataType::Int64, 2, false)?;
         agg.set_batch(ids, vals);
         agg.insert(0)?;
         agg.insert(1)?;
@@ -218,7 +218,7 @@ mod tests {
     fn should_ignore_lower_same_group() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec!["1", "1"]));
         let vals: ArrayRef = Arc::new(Int64Array::from(vec![2, 1]));
-        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 2, true)?;
+        let mut agg = PriorityMap::new(&DataType::Utf8, DataType::Int64, 2, true)?;
         agg.set_batch(ids, vals);
         agg.insert(0)?;
         agg.insert(1)?;
@@ -243,7 +243,7 @@ mod tests {
     fn should_accept_lower_group() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec!["2", "1"]));
         let vals: ArrayRef = Arc::new(Int64Array::from(vec![2, 1]));
-        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 1, false)?;
+        let mut agg = PriorityMap::new(&DataType::Utf8, DataType::Int64, 1, false)?;
         agg.set_batch(ids, vals);
         agg.insert(0)?;
         agg.insert(1)?;
@@ -268,7 +268,7 @@ mod tests {
     fn should_accept_higher_group() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec!["1", "2"]));
         let vals: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
-        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 1, true)?;
+        let mut agg = PriorityMap::new(&DataType::Utf8, DataType::Int64, 1, true)?;
         agg.set_batch(ids, vals);
         agg.insert(0)?;
         agg.insert(1)?;
@@ -293,7 +293,7 @@ mod tests {
     fn should_accept_lower_for_group() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec!["1", "1"]));
         let vals: ArrayRef = Arc::new(Int64Array::from(vec![2, 1]));
-        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 2, false)?;
+        let mut agg = PriorityMap::new(&DataType::Utf8, DataType::Int64, 2, false)?;
         agg.set_batch(ids, vals);
         agg.insert(0)?;
         agg.insert(1)?;
@@ -318,7 +318,7 @@ mod tests {
     fn should_accept_higher_for_group() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec!["1", "1"]));
         let vals: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
-        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 2, true)?;
+        let mut agg = PriorityMap::new(&DataType::Utf8, DataType::Int64, 2, true)?;
         agg.set_batch(ids, vals);
         agg.insert(0)?;
         agg.insert(1)?;
@@ -343,7 +343,7 @@ mod tests {
     fn should_handle_null_ids() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec![Some("1"), None, None]));
         let vals: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
-        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 2, true)?;
+        let mut agg = PriorityMap::new(&DataType::Utf8, DataType::Int64, 2, true)?;
         agg.set_batch(ids, vals);
         agg.insert(0)?;
         agg.insert(1)?;

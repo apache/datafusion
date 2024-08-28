@@ -64,7 +64,7 @@ async fn main() {
     //
     // Note the predicate does not automatically coerce types or simplify
     // expressions. See expr_api.rs examples for how to do this if required
-    let predicate = create_pruning_predicate(expr, &my_catalog.schema);
+    let predicate = create_pruning_predicate(&expr, &my_catalog.schema);
 
     // Evaluate the predicate for the three files in the catalog
     let prune_results = predicate.prune(&my_catalog).unwrap();
@@ -184,10 +184,10 @@ impl PruningStatistics for MyCatalog {
     }
 }
 
-fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate {
+fn create_pruning_predicate(expr: &Expr, schema: &SchemaRef) -> PruningPredicate {
     let df_schema = DFSchema::try_from(schema.as_ref().clone()).unwrap();
     let props = ExecutionProps::new();
-    let physical_expr = create_physical_expr(&expr, &df_schema, &props).unwrap();
+    let physical_expr = create_physical_expr(expr, &df_schema, &props).unwrap();
     PruningPredicate::try_new(physical_expr, schema.clone()).unwrap()
 }
 

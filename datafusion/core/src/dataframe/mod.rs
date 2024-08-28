@@ -1120,7 +1120,7 @@ impl DataFrame {
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        execute_stream_partitioned(plan, task_ctx)
+        execute_stream_partitioned(&plan, &task_ctx)
     }
 
     /// Returns the `DFSchema` describing the output of this DataFrame.

@@ -772,16 +772,16 @@ struct PartialJoinStatistics {
 
 /// Estimate the statistics for the given join's output.
 pub(crate) fn estimate_join_statistics(
-    left: Arc<dyn ExecutionPlan>,
-    right: Arc<dyn ExecutionPlan>,
-    on: JoinOn,
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    on: &JoinOn,
     join_type: &JoinType,
     schema: &Schema,
 ) -> Result<Statistics> {
     let left_stats = left.statistics()?;
     let right_stats = right.statistics()?;
 
-    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
+    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, on);
     let (num_rows, column_statistics) = match join_stats {
         Some(stats) => (Precision::Inexact(stats.num_rows), stats.column_statistics),
         None => (Precision::Absent, Statistics::unknown_column(schema)),
@@ -822,12 +822,12 @@ fn estimate_join_cardinality(
     match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
             let ij_cardinality = estimate_inner_join_cardinality(
-                Statistics {
+                &Statistics {
                     num_rows: left_stats.num_rows,
                     total_byte_size: Precision::Absent,
                     column_statistics: left_col_stats,
                 },
-                Statistics {
+                &Statistics {
                     num_rows: right_stats.num_rows,
                     total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,
@@ -903,11 +903,11 @@ fn estimate_join_cardinality(
 /// a very conservative implementation that can quickly give up if there is not
 /// enough input statistics.
 fn estimate_inner_join_cardinality(
-    left_stats: Statistics,
-    right_stats: Statistics,
+    left_stats: &Statistics,
+    right_stats: &Statistics,
 ) -> Option<Precision<usize>> {
     // Immediately return if inputs considered as non-overlapping
-    if let Some(estimation) = estimate_disjoint_inputs(&left_stats, &right_stats) {
+    if let Some(estimation) = estimate_disjoint_inputs(left_stats, right_stats) {
         return Some(estimation);
     };
 
@@ -1349,7 +1349,7 @@ pub(crate) fn append_right_indices(
     preserve_order_for_right: bool,
 ) -> (UInt64Array, UInt32Array) {
     if preserve_order_for_right {
-        append_probe_indices_in_order(left_indices, right_indices, adjust_range)
+        append_probe_indices_in_order(&left_indices, &right_indices, adjust_range)
     } else {
         let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
 
@@ -1448,8 +1448,8 @@ where
 /// - A `PrimitiveArray` of `UInt64Type` with the newly constructed build indices.
 /// - A `PrimitiveArray` of `UInt32Type` with the newly constructed probe indices.
 fn append_probe_indices_in_order(
-    build_indices: PrimitiveArray<UInt64Type>,
-    probe_indices: PrimitiveArray<UInt32Type>,
+    build_indices: &PrimitiveArray<UInt64Type>,
+    probe_indices: &PrimitiveArray<UInt32Type>,
     range: Range<usize>,
 ) -> (PrimitiveArray<UInt64Type>, PrimitiveArray<UInt32Type>) {
     // Builders for new indices:
@@ -2017,12 +2017,12 @@ mod tests {
 
             assert_eq!(
                 estimate_inner_join_cardinality(
-                    Statistics {
+                    &Statistics {
                         num_rows: Inexact(left_num_rows),
                         total_byte_size: Absent,
                         column_statistics: left_col_stats.clone(),
                     },
-                    Statistics {
+                    &Statistics {
                         num_rows: Inexact(right_num_rows),
                         total_byte_size: Absent,
                         column_statistics: right_col_stats.clone(),
@@ -2072,12 +2072,12 @@ mod tests {
         // count is 200, so we are going to pick it.
         assert_eq!(
             estimate_inner_join_cardinality(
-                Statistics {
+                &Statistics {
                     num_rows: Precision::Inexact(400),
                     total_byte_size: Precision::Absent,
                     column_statistics: left_col_stats,
                 },
-                Statistics {
+                &Statistics {
                     num_rows: Precision::Inexact(400),
                     total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,
@@ -2106,12 +2106,12 @@ mod tests {
 
         assert_eq!(
             estimate_inner_join_cardinality(
-                Statistics {
+                &Statistics {
                     num_rows: Precision::Inexact(100),
                     total_byte_size: Precision::Absent,
                     column_statistics: left_col_stats,
                 },
-                Statistics {
+                &Statistics {
                     num_rows: Precision::Inexact(100),
                     total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,

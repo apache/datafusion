@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![allow(clippy::needless_pass_by_value)] // OK in tests
+
 mod aggregate_fuzz;
 mod distinct_count_string_fuzz;
 mod join_fuzz;

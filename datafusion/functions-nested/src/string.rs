@@ -241,31 +241,31 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let delimiters = as_string_array(&args[1])?;
     let delimiters: Vec<Option<&str>> = delimiters.iter().collect();
 
-    let mut null_string = String::from("");
+    let mut null_string = "";
     let mut with_null_string = false;
     if args.len() == 3 {
-        null_string = as_string_array(&args[2])?.value(0).to_string();
+        null_string = as_string_array(&args[2])?.value(0);
         with_null_string = true;
     }
 
     /// Creates a single string from single element of a ListArray (which is
     /// itself another Array)
-    fn compute_array_to_string(
-        arg: &mut String,
-        arr: ArrayRef,
-        delimiter: String,
-        null_string: String,
+    fn compute_array_to_string<'a>(
+        arg: &'a mut String,
+        arr: &ArrayRef,
+        delimiter: &str,
+        null_string: &str,
         with_null_string: bool,
-    ) -> Result<&mut String> {
+    ) -> Result<&'a mut String> {
         match arr.data_type() {
             List(..) => {
-                let list_array = as_list_array(&arr)?;
+                let list_array = as_list_array(arr)?;
                 for i in 0..list_array.len() {
                     compute_array_to_string(
                         arg,
-                        list_array.value(i),
-                        delimiter.clone(),
-                        null_string.clone(),
+                        &list_array.value(i),
+                        delimiter,
+                        null_string,
                         with_null_string,
                     )?;
                 }
@@ -273,13 +273,13 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Ok(arg)
             }
             LargeList(..) => {
-                let list_array = as_large_list_array(&arr)?;
+                let list_array = as_large_list_array(arr)?;
                 for i in 0..list_array.len() {
                     compute_array_to_string(
                         arg,
-                        list_array.value(i),
-                        delimiter.clone(),
-                        null_string.clone(),
+                        &list_array.value(i),
+                        delimiter,
+                        null_string,
                         with_null_string,
                     )?;
                 }
@@ -289,14 +289,14 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             Dictionary(_key_type, value_type) => {
                 // Call cast to unwrap the dictionary. This could be optimized if we wanted
                 // to accept the overhead of extra code
-                let values = cast(&arr, value_type.as_ref()).map_err(|e| {
+                let values = cast(arr, value_type.as_ref()).map_err(|e| {
                     DataFusionError::from(e).context(
                         "Casting dictionary to values in compute_array_to_string",
                     )
                 })?;
                 compute_array_to_string(
                     arg,
-                    values,
+                    &values,
                     delimiter,
                     null_string,
                     with_null_string,
@@ -323,8 +323,8 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     fn generate_string_array<O: OffsetSizeTrait>(
         list_arr: &GenericListArray<O>,
-        delimiters: Vec<Option<&str>>,
-        null_string: String,
+        delimiters: &[Option<&str>],
+        null_string: &str,
         with_null_string: bool,
     ) -> Result<StringArray> {
         let mut res: Vec<Option<String>> = Vec::new();
@@ -333,9 +333,9 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 let mut arg = String::from("");
                 let s = compute_array_to_string(
                     &mut arg,
-                    arr,
-                    delimiter.to_string(),
-                    null_string.clone(),
+                    &arr,
+                    delimiter,
+                    null_string,
                     with_null_string,
                 )?
                 .clone();
@@ -359,7 +359,7 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let list_array = as_list_array(&arr)?;
             generate_string_array::<i32>(
                 list_array,
-                delimiters,
+                &delimiters,
                 null_string,
                 with_null_string,
             )?
@@ -368,7 +368,7 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let list_array = as_large_list_array(&arr)?;
             generate_string_array::<i64>(
                 list_array,
-                delimiters,
+                &delimiters,
                 null_string,
                 with_null_string,
             )?
@@ -381,8 +381,8 @@ pub(super) fn array_to_string_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let delimiter = delimiters[0].unwrap();
             let s = compute_array_to_string(
                 &mut arg,
-                Arc::clone(arr),
-                delimiter.to_string(),
+                arr,
+                delimiter,
                 null_string,
                 with_null_string,
             )?

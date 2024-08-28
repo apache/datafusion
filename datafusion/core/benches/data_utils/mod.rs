@@ -17,6 +17,8 @@
 
 //! This module provides the in-memory table for more realistic benchmarking.
 
+#![allow(clippy::needless_pass_by_value)] // OK in benchmark helper functions
+
 use arrow::{
     array::Float32Array,
     array::Float64Array,

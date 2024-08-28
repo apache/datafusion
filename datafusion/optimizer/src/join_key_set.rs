@@ -156,6 +156,7 @@ impl<'a> Equivalent<(Expr, Expr)> for ExprPair<'a> {
 
 #[cfg(test)]
 mod test {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use crate::join_key_set::JoinKeySet;
     use datafusion_expr::{col, Expr};
 

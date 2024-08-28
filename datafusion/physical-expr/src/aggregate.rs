@@ -505,8 +505,8 @@ impl AggregateFunctionExpr {
     /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
     pub fn with_new_expressions(
         &self,
-        _args: Vec<Arc<dyn PhysicalExpr>>,
-        _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        _args: &[Arc<dyn PhysicalExpr>],
+        _order_by_exprs: &[Arc<dyn PhysicalExpr>],
     ) -> Option<Arc<AggregateFunctionExpr>> {
         None
     }

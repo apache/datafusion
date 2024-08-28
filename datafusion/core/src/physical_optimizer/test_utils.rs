@@ -17,6 +17,8 @@
 
 //! Collection of testing utility functions that are leveraged by the query optimizer rules
 
+#![allow(clippy::needless_pass_by_value)] // OK in tests
+
 use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;

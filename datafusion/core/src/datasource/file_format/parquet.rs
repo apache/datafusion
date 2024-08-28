@@ -340,7 +340,7 @@ impl FileFormat for ParquetFormat {
     ) -> Result<Statistics> {
         let stats = fetch_statistics(
             store.as_ref(),
-            table_schema,
+            &table_schema,
             object,
             self.metadata_size_hint(),
         )
@@ -479,7 +479,7 @@ async fn fetch_schema(
 /// See [`statistics_from_parquet_meta`] for more details
 async fn fetch_statistics(
     store: &dyn ObjectStore,
-    table_schema: SchemaRef,
+    table_schema: &SchemaRef,
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
 ) -> Result<Statistics> {
@@ -493,11 +493,11 @@ async fn fetch_statistics(
 /// using the row group statistics in the parquet metadata.
 pub fn statistics_from_parquet_meta_calc(
     metadata: &ParquetMetaData,
-    table_schema: SchemaRef,
+    table_schema: &SchemaRef,
 ) -> Result<Statistics> {
     let row_groups_metadata = metadata.row_groups();
 
-    let mut statistics = Statistics::new_unknown(&table_schema);
+    let mut statistics = Statistics::new_unknown(table_schema);
     let mut has_statistics = false;
     let mut num_rows = 0_usize;
     let mut total_byte_size = 0_usize;
@@ -521,7 +521,7 @@ pub fn statistics_from_parquet_meta_calc(
     )?;
 
     statistics.column_statistics = if has_statistics {
-        let (mut max_accs, mut min_accs) = create_max_min_accs(&table_schema);
+        let (mut max_accs, mut min_accs) = create_max_min_accs(table_schema);
         let mut null_counts_array =
             vec![Precision::Exact(0); table_schema.fields().len()];
 
@@ -555,13 +555,13 @@ pub fn statistics_from_parquet_meta_calc(
             });
 
         get_col_stats(
-            &table_schema,
-            null_counts_array,
+            table_schema,
+            &null_counts_array,
             &mut max_accs,
             &mut min_accs,
         )
     } else {
-        Statistics::unknown_column(&table_schema)
+        Statistics::unknown_column(table_schema)
     };
 
     Ok(statistics)
@@ -577,7 +577,7 @@ pub fn statistics_from_parquet_meta_calc(
 )]
 pub async fn statistics_from_parquet_meta(
     metadata: &ParquetMetaData,
-    table_schema: SchemaRef,
+    table_schema: &SchemaRef,
 ) -> Result<Statistics> {
     statistics_from_parquet_meta_calc(metadata, table_schema)
 }
@@ -867,13 +867,13 @@ type ColSender = Sender<ArrowLeafColumn>;
 /// Returns join handles for each columns serialization task along with a send channel
 /// to send arrow arrays to each serialization task.
 fn spawn_column_parallel_row_group_writer(
-    schema: Arc<Schema>,
-    parquet_props: Arc<WriterProperties>,
+    schema: &Arc<Schema>,
+    parquet_props: &Arc<WriterProperties>,
     max_buffer_size: usize,
     pool: &Arc<dyn MemoryPool>,
 ) -> Result<(Vec<ColumnWriterTask>, Vec<ColSender>)> {
-    let schema_desc = arrow_to_parquet_schema(&schema)?;
-    let col_writers = get_column_writers(&schema_desc, &parquet_props, &schema)?;
+    let schema_desc = arrow_to_parquet_schema(schema)?;
+    let col_writers = get_column_writers(&schema_desc, parquet_props, schema)?;
     let num_columns = col_writers.len();
 
     let mut col_writer_tasks = Vec::with_capacity(num_columns);
@@ -967,6 +967,7 @@ fn spawn_rg_join_and_finalize_task(
 /// on the next row group in parallel. So, parquet serialization is parallelized
 /// across both columns and row_groups, with a theoretical max number of parallel tasks
 /// given by n_columns * num_row_groups.
+#[allow(clippy::needless_pass_by_value)] // https://github.com/rust-lang/rust-clippy/issues/13321
 fn spawn_parquet_parallel_serialization_task(
     mut data: Receiver<RecordBatch>,
     serialize_tx: Sender<SpawnedTask<RBStreamSerializeResult>>,
@@ -980,8 +981,8 @@ fn spawn_parquet_parallel_serialization_task(
         let max_row_group_rows = writer_props.max_row_group_size();
         let (mut column_writer_handles, mut col_array_channels) =
             spawn_column_parallel_row_group_writer(
-                schema.clone(),
-                writer_props.clone(),
+                &schema,
+                &writer_props,
                 max_buffer_rb,
                 &pool,
             )?;
@@ -1024,8 +1025,8 @@ fn spawn_parquet_parallel_serialization_task(
 
                     (column_writer_handles, col_array_channels) =
                         spawn_column_parallel_row_group_writer(
-                            schema.clone(),
-                            writer_props.clone(),
+                            &schema,
+                            &writer_props,
                             max_buffer_rb,
                             &pool,
                         )?;
@@ -1230,6 +1231,7 @@ pub(crate) mod test_util {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::super::test_util::scan_format;
     use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
     use crate::physical_plan::collect;
@@ -1289,8 +1291,7 @@ mod tests {
         let format = ParquetFormat::default();
         let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
 
-        let stats =
-            fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
+        let stats = fetch_statistics(store.as_ref(), &schema, &meta[0], None).await?;
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -1298,7 +1299,7 @@ mod tests {
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
         assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
-        let stats = fetch_statistics(store.as_ref(), schema, &meta[1], None).await?;
+        let stats = fetch_statistics(store.as_ref(), &schema, &meta[1], None).await?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
         let c2_stats = &stats.column_statistics[1];
@@ -1478,8 +1479,7 @@ mod tests {
             .unwrap();
 
         let stats =
-            fetch_statistics(store.upcast().as_ref(), schema.clone(), &meta[0], Some(9))
-                .await?;
+            fetch_statistics(store.upcast().as_ref(), &schema, &meta[0], Some(9)).await?;
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -1506,13 +1506,9 @@ mod tests {
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
             .unwrap();
-        let stats = fetch_statistics(
-            store.upcast().as_ref(),
-            schema.clone(),
-            &meta[0],
-            Some(size_hint),
-        )
-        .await?;
+        let stats =
+            fetch_statistics(store.upcast().as_ref(), &schema, &meta[0], Some(size_hint))
+                .await?;
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -1559,7 +1555,7 @@ mod tests {
 
         // Fetch statistics for first file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
-        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
+        let stats = statistics_from_parquet_meta_calc(&pq_meta, &schema)?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
 
         // column c_dic
@@ -1606,7 +1602,7 @@ mod tests {
 
         // Fetch statistics for first file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
-        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
+        let stats = statistics_from_parquet_meta_calc(&pq_meta, &schema)?;
         //
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1
@@ -1628,7 +1624,7 @@ mod tests {
 
         // Fetch statistics for second file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[1], None).await?;
-        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
+        let stats = statistics_from_parquet_meta_calc(&pq_meta, &schema)?;
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1: missing from the file so the table treats all 3 rows as null
         let c1_stats = &stats.column_statistics[0];

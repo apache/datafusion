@@ -436,7 +436,7 @@ impl GroupedHashAggregateStream {
     /// Create a new GroupedHashAggregateStream
     pub fn new(
         agg: &AggregateExec,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
         debug!("Creating GroupedHashAggregateStream");
@@ -445,7 +445,7 @@ impl GroupedHashAggregateStream {
         let agg_filter_expr = agg.filter_expr.clone();
 
         let batch_size = context.session_config().batch_size();
-        let input = agg.input.execute(partition, Arc::clone(&context))?;
+        let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
 
         let timer = baseline_metrics.elapsed_compute().timer();
@@ -626,7 +626,7 @@ impl Stream for GroupedHashAggregateStream {
                             extract_ok!(self.spill_previous_if_necessary(&batch));
 
                             // Do the grouping
-                            extract_ok!(self.group_aggregate_batch(batch));
+                            extract_ok!(self.group_aggregate_batch(&batch));
 
                             self.update_skip_aggregation_probe(input_rows);
 
@@ -675,7 +675,7 @@ impl Stream for GroupedHashAggregateStream {
                             if let Some(probe) = self.skip_aggregation_probe.as_mut() {
                                 probe.record_skipped(&batch);
                             }
-                            let states = self.transform_to_states(batch)?;
+                            let states = self.transform_to_states(&batch)?;
                             return Poll::Ready(Some(Ok(
                                 states.record_output(&self.baseline_metrics)
                             )));
@@ -739,27 +739,27 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 
 impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
-    fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<()> {
+    fn group_aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
         // Evaluate the grouping expressions
         let group_by_values = if self.spill_state.is_stream_merging {
-            evaluate_group_by(&self.spill_state.merging_group_by, &batch)?
+            evaluate_group_by(&self.spill_state.merging_group_by, batch)?
         } else {
-            evaluate_group_by(&self.group_by, &batch)?
+            evaluate_group_by(&self.group_by, batch)?
         };
 
         // Evaluate the aggregation expressions.
         let input_values = if self.spill_state.is_stream_merging {
-            evaluate_many(&self.spill_state.merging_aggregate_arguments, &batch)?
+            evaluate_many(&self.spill_state.merging_aggregate_arguments, batch)?
         } else {
-            evaluate_many(&self.aggregate_arguments, &batch)?
+            evaluate_many(&self.aggregate_arguments, batch)?
         };
 
         // Evaluate the filter expressions, if any, against the inputs
         let filter_values = if self.spill_state.is_stream_merging {
             let filter_expressions = vec![None; self.accumulators.len()];
-            evaluate_optional(&filter_expressions, &batch)?
+            evaluate_optional(&filter_expressions, batch)?
         } else {
-            evaluate_optional(&self.filter_expressions, &batch)?
+            evaluate_optional(&self.filter_expressions, batch)?
         };
 
         for group_values in &group_by_values {
@@ -1054,10 +1054,10 @@ impl GroupedHashAggregateStream {
     }
 
     /// Transforms input batch to intermediate aggregate state, without grouping it
-    fn transform_to_states(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let group_values = evaluate_group_by(&self.group_by, &batch)?;
-        let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
-        let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
+    fn transform_to_states(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let group_values = evaluate_group_by(&self.group_by, batch)?;
+        let input_values = evaluate_many(&self.aggregate_arguments, batch)?;
+        let filter_values = evaluate_optional(&self.filter_expressions, batch)?;
 
         let mut output = group_values.first().cloned().ok_or_else(|| {
             internal_datafusion_err!("group_values expected to have at least one element")

@@ -365,7 +365,7 @@ impl DataSink for MemSink {
 
 #[cfg(test)]
 mod tests {
-
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use crate::datasource::provider_as_source;
     use crate::physical_plan::collect;

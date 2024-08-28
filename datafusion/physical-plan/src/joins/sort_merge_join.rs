@@ -395,9 +395,9 @@ impl ExecutionPlan for SortMergeJoinExec {
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         estimate_join_statistics(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
-            self.on.clone(),
+            &self.left,
+            &self.right,
+            &self.on,
             &self.join_type,
             &self.schema,
         )
@@ -896,7 +896,7 @@ impl SMJStream {
         }
     }
 
-    fn free_reservation(&mut self, buffered_batch: BufferedBatch) -> Result<()> {
+    fn free_reservation(&mut self, buffered_batch: &BufferedBatch) -> Result<()> {
         // Shrink memory usage for in-memory batches only
         if buffered_batch.spill_file.is_none() && buffered_batch.batch.is_some() {
             self.reservation
@@ -924,8 +924,8 @@ impl SMJStream {
                 if let Some(batch) = buffered_batch.batch {
                     spill_record_batches(
                         vec![batch],
-                        spill_file.path().into(),
-                        Arc::clone(&self.buffered_schema),
+                        spill_file.path(),
+                        &self.buffered_schema,
                     )?;
                     buffered_batch.spill_file = Some(spill_file);
                     buffered_batch.batch = None;
@@ -962,7 +962,7 @@ impl SMJStream {
                             if let Some(buffered_batch) =
                                 self.buffered_data.batches.pop_front()
                             {
-                                self.free_reservation(buffered_batch)?;
+                                self.free_reservation(&buffered_batch)?;
                             }
                         } else {
                             // If the head batch is not fully processed, break the loop.

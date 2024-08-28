@@ -395,11 +395,8 @@ impl ExternalSorter {
 
         let spill_file = self.runtime.disk_manager.create_tmp_file("Sorting")?;
         let batches = std::mem::take(&mut self.in_mem_batches);
-        let spilled_rows = spill_record_batches(
-            batches,
-            spill_file.path().into(),
-            Arc::clone(&self.schema),
-        )?;
+        let spilled_rows =
+            spill_record_batches(batches, spill_file.path(), &self.schema)?;
         let used = self.reservation.free();
         self.metrics.spill_count.add(1);
         self.metrics.spilled_bytes.add(used);
@@ -913,7 +910,7 @@ impl ExecutionPlan for SortExec {
                     self.expr.clone(),
                     *fetch,
                     context.session_config().batch_size(),
-                    context.runtime_env(),
+                    &context.runtime_env(),
                     &self.metrics_set,
                     partition,
                 )?;
@@ -961,7 +958,7 @@ impl ExecutionPlan for SortExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
+        Statistics::with_fetch(self.input.statistics()?, &self.schema(), self.fetch, 0, 1)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

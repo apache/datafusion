@@ -149,7 +149,7 @@ where
 ///
 /// Note: This is split into a separate function as higher-rank trait bounds currently
 /// cause type inference to misbehave
-fn make_hash_set<T>(array: T) -> ArrayHashSet
+fn make_hash_set<T>(array: &T) -> ArrayHashSet
 where
     T: ArrayAccessor,
     T::Item: IsEqual,
@@ -183,26 +183,26 @@ where
 /// Creates a `Box<dyn Set>` for the given list of `IN` expressions and `batch`
 fn make_set(array: &dyn Array) -> Result<Arc<dyn Set>> {
     Ok(downcast_primitive_array! {
-        array => Arc::new(ArraySet::new(array, make_hash_set(array))),
+        array => Arc::new(ArraySet::new(array, make_hash_set(&array))),
         DataType::Boolean => {
             let array = as_boolean_array(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(&array)))
         },
         DataType::Utf8 => {
             let array = as_string_array(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(&array)))
         }
         DataType::LargeUtf8 => {
             let array = as_largestring_array(array);
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(&array)))
         }
         DataType::Binary => {
             let array = as_generic_binary_array::<i32>(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(&array)))
         }
         DataType::LargeBinary => {
             let array = as_generic_binary_array::<i64>(array)?;
-            Arc::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(&array)))
         }
         DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
         d => return not_impl_err!("DataType::{d} not supported in InList")

@@ -1200,7 +1200,7 @@ impl SymmetricHashJoinStream {
                     return Poll::Ready(Ok(StatefulStreamResult::Continue));
                 }
                 self.set_state(SHJStreamState::PullLeft);
-                Poll::Ready(self.process_batch_from_right(batch))
+                Poll::Ready(self.process_batch_from_right(&batch))
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
@@ -1229,7 +1229,7 @@ impl SymmetricHashJoinStream {
                     return Poll::Ready(Ok(StatefulStreamResult::Continue));
                 }
                 self.set_state(SHJStreamState::PullRight);
-                Poll::Ready(self.process_batch_from_left(batch))
+                Poll::Ready(self.process_batch_from_left(&batch))
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
@@ -1258,7 +1258,7 @@ impl SymmetricHashJoinStream {
                 if batch.num_rows() == 0 {
                     return Poll::Ready(Ok(StatefulStreamResult::Continue));
                 }
-                Poll::Ready(self.process_batch_after_right_end(batch))
+                Poll::Ready(self.process_batch_after_right_end(&batch))
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
@@ -1289,7 +1289,7 @@ impl SymmetricHashJoinStream {
                 if batch.num_rows() == 0 {
                     return Poll::Ready(Ok(StatefulStreamResult::Continue));
                 }
-                Poll::Ready(self.process_batch_after_left_end(batch))
+                Poll::Ready(self.process_batch_after_left_end(&batch))
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
@@ -1319,7 +1319,7 @@ impl SymmetricHashJoinStream {
 
     fn process_batch_from_right(
         &mut self,
-        batch: RecordBatch,
+        batch: &RecordBatch,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.perform_join_for_given_side(batch, JoinSide::Right)
             .map(|maybe_batch| {
@@ -1333,7 +1333,7 @@ impl SymmetricHashJoinStream {
 
     fn process_batch_from_left(
         &mut self,
-        batch: RecordBatch,
+        batch: &RecordBatch,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.perform_join_for_given_side(batch, JoinSide::Left)
             .map(|maybe_batch| {
@@ -1347,14 +1347,14 @@ impl SymmetricHashJoinStream {
 
     fn process_batch_after_left_end(
         &mut self,
-        right_batch: RecordBatch,
+        right_batch: &RecordBatch,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.process_batch_from_right(right_batch)
     }
 
     fn process_batch_after_right_end(
         &mut self,
-        left_batch: RecordBatch,
+        left_batch: &RecordBatch,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.process_batch_from_left(left_batch)
     }
@@ -1436,7 +1436,7 @@ impl SymmetricHashJoinStream {
     /// 5. Combines the results and returns a combined batch or `None` if no batch was produced.
     fn perform_join_for_given_side(
         &mut self,
-        probe_batch: RecordBatch,
+        probe_batch: &RecordBatch,
         probe_side: JoinSide,
     ) -> Result<Option<RecordBatch>> {
         let (
@@ -1466,7 +1466,7 @@ impl SymmetricHashJoinStream {
         probe_side_metrics.input_batches.add(1);
         probe_side_metrics.input_rows.add(probe_batch.num_rows());
         // Update the internal state of the hash joiner for the build side:
-        probe_hash_joiner.update_internal_state(&probe_batch, &self.random_state)?;
+        probe_hash_joiner.update_internal_state(probe_batch, &self.random_state)?;
         // Join the two sides:
         let equal_result = join_with_probe_batch(
             build_hash_joiner,
@@ -1474,7 +1474,7 @@ impl SymmetricHashJoinStream {
             &self.schema,
             self.join_type,
             self.filter.as_ref(),
-            &probe_batch,
+            probe_batch,
             &self.column_indices,
             &self.random_state,
             self.null_equals_null,
@@ -1495,7 +1495,7 @@ impl SymmetricHashJoinStream {
             calculate_filter_expr_intervals(
                 &build_hash_joiner.input_buffer,
                 build_side_sorted_filter_expr,
-                &probe_batch,
+                probe_batch,
                 probe_side_sorted_filter_expr,
             )?;
             let prune_length = build_hash_joiner

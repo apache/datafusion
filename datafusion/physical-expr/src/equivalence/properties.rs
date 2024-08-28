@@ -1604,6 +1604,7 @@ pub fn calculate_union(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use std::ops::Not;
 
     use super::*;

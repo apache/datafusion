@@ -121,7 +121,7 @@ pub fn create_physical_expr(
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
         Expr::ScalarVariable(_, variable_names) => {
             if is_system_variables(variable_names) {
-                match execution_props.get_var_provider(VarType::System) {
+                match execution_props.get_var_provider(&VarType::System) {
                     Some(provider) => {
                         let scalar_value = provider.get_value(variable_names.clone())?;
                         Ok(Arc::new(Literal::new(scalar_value)))
@@ -129,7 +129,7 @@ pub fn create_physical_expr(
                     _ => plan_err!("No system variable provider found"),
                 }
             } else {
-                match execution_props.get_var_provider(VarType::UserDefined) {
+                match execution_props.get_var_provider(&VarType::UserDefined) {
                     Some(provider) => {
                         let scalar_value = provider.get_value(variable_names.clone())?;
                         Ok(Arc::new(Literal::new(scalar_value)))

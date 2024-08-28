@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![allow(clippy::needless_pass_by_value)] // OK in tests
+
 use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
 use datafusion_common::config::ConfigOptions;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};

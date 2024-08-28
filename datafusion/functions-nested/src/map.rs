@@ -93,7 +93,7 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 
     let values = get_first_array_ref(&args[1])?;
-    make_map_batch_internal(keys, values, can_evaluate_to_const, args[0].data_type())
+    make_map_batch_internal(keys, values, can_evaluate_to_const, &args[0].data_type())
 }
 
 fn check_unique_keys(array: &dyn Array) -> Result<()> {
@@ -125,7 +125,7 @@ fn make_map_batch_internal(
     keys: ArrayRef,
     values: ArrayRef,
     can_evaluate_to_const: bool,
-    data_type: DataType,
+    data_type: &DataType,
 ) -> Result<ColumnarValue> {
     if keys.len() != values.len() {
         return exec_err!("map requires key and value lists to have the same length");
@@ -133,9 +133,9 @@ fn make_map_batch_internal(
 
     if !can_evaluate_to_const {
         return if let DataType::LargeList(..) = data_type {
-            make_map_array_internal::<i64>(keys, values)
+            make_map_array_internal::<i64>(&keys, &values)
         } else {
-            make_map_array_internal::<i32>(keys, values)
+            make_map_array_internal::<i32>(&keys, &values)
         };
     }
 
@@ -145,9 +145,10 @@ fn make_map_batch_internal(
     let mut entry_offsets_buffer = VecDeque::new();
     entry_offsets_buffer.push_back(0);
 
-    entry_struct_buffer.push_back((Arc::clone(&key_field), Arc::clone(&keys)));
-    entry_struct_buffer.push_back((Arc::clone(&value_field), Arc::clone(&values)));
-    entry_offsets_buffer.push_back(keys.len() as u32);
+    let keys_len = keys.len();
+    entry_struct_buffer.push_back((key_field, keys));
+    entry_struct_buffer.push_back((value_field, values));
+    entry_offsets_buffer.push_back(keys_len as u32);
 
     let entry_struct: Vec<(Arc<Field>, ArrayRef)> = entry_struct_buffer.into();
     let entry_struct = StructArray::from(entry_struct);
@@ -308,14 +309,14 @@ fn get_element_type(data_type: &DataType) -> Result<&DataType> {
 /// ```text
 
 fn make_map_array_internal<O: OffsetSizeTrait>(
-    keys: ArrayRef,
-    values: ArrayRef,
+    keys: &ArrayRef,
+    values: &ArrayRef,
 ) -> Result<ColumnarValue> {
     let mut offset_buffer = vec![O::zero()];
     let mut running_offset = O::zero();
 
-    let keys = list_to_arrays::<O>(&keys);
-    let values = list_to_arrays::<O>(&values);
+    let keys = list_to_arrays::<O>(keys);
+    let values = list_to_arrays::<O>(values);
 
     let mut key_array_vec = vec![];
     let mut value_array_vec = vec![];

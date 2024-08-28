@@ -639,7 +639,7 @@ impl BinaryExpr {
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            StringConcat => concat_elements(left, right),
+            StringConcat => concat_elements(&left, &right),
             AtArrow | ArrowAt => {
                 unreachable!("ArrowAt and AtArrow should be rewritten to function")
             }
@@ -647,7 +647,7 @@ impl BinaryExpr {
     }
 }
 
-fn concat_elements(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<ArrayRef> {
+fn concat_elements(left: &Arc<dyn Array>, right: &Arc<dyn Array>) -> Result<ArrayRef> {
     Ok(match left.data_type() {
         DataType::Utf8 => Arc::new(concat_elements_utf8(
             left.as_string::<i32>(),
@@ -683,6 +683,7 @@ pub fn binary(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use crate::expressions::{col, lit, try_cast, Column, Literal};
     use datafusion_common::plan_datafusion_err;

@@ -102,6 +102,7 @@ impl PartitionEvaluator for CumeDistEvaluator {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use datafusion_common::cast::as_float64_array;
 

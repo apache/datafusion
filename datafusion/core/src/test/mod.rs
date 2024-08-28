@@ -17,6 +17,8 @@
 
 //! Common unit test utility methods
 
+#![allow(clippy::needless_pass_by_value)] // OK in tests
+
 use std::any::Any;
 use std::fs::File;
 use std::io::prelude::*;

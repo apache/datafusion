@@ -349,6 +349,7 @@ impl SavedName {
 
 #[cfg(test)]
 mod test {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use std::ops::Add;
 
     use super::*;

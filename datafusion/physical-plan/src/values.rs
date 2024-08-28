@@ -50,7 +50,7 @@ impl ValuesExec {
     /// create a new values exec from data as expr
     pub fn try_new(
         schema: SchemaRef,
-        data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+        data: &[Vec<Arc<dyn PhysicalExpr>>],
     ) -> Result<Self> {
         if data.is_empty() {
             return plan_err!("Values list cannot be empty");
@@ -219,7 +219,7 @@ mod tests {
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {
         let schema = test::aggr_test_schema();
-        let empty = ValuesExec::try_new(schema, vec![]);
+        let empty = ValuesExec::try_new(schema, &[]);
         assert!(empty.is_err());
         Ok(())
     }
@@ -260,9 +260,9 @@ mod tests {
             DataType::UInt32,
             false,
         )]));
-        let _ = ValuesExec::try_new(Arc::clone(&schema), vec![vec![lit(1u32)]]).unwrap();
+        let _ = ValuesExec::try_new(Arc::clone(&schema), &[vec![lit(1u32)]]).unwrap();
         // Test that a null value is rejected
-        let _ = ValuesExec::try_new(schema, vec![vec![lit(ScalarValue::UInt32(None))]])
+        let _ = ValuesExec::try_new(schema, &[vec![lit(ScalarValue::UInt32(None))]])
             .unwrap_err();
     }
 }

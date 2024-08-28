@@ -366,8 +366,8 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                     // wrap OOM message in top consumers
                     DataFusionError::ResourcesExhausted(
                         provide_top_memory_consumers_to_error_msg(
-                            e,
-                            self.report_top(self.top.into()),
+                            &e,
+                            &self.report_top(self.top.into()),
                         ),
                     )
                 }
@@ -389,8 +389,8 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 }
 
 fn provide_top_memory_consumers_to_error_msg(
-    error_msg: String,
-    top_consumers: String,
+    error_msg: &str,
+    top_consumers: &str,
 ) -> String {
     format!("Additional allocation failed with top memory consumers (across reservations) as: {}. Error: {}", top_consumers, error_msg)
 }
@@ -583,6 +583,7 @@ mod tests {
 
     #[test]
     fn test_tracked_consumers_pool_deregister() {
+        #[allow(clippy::needless_pass_by_value)] // OK in tests
         fn test_per_pool_type(pool: Arc<dyn MemoryPool>) {
             // Baseline: see the 2 memory consumers
             let mut r0 = MemoryConsumer::new("r0").register(&pool);

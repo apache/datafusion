@@ -678,6 +678,7 @@ fn flatten_list_cols_from_indices(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use arrow::datatypes::Field;
     use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};

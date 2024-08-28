@@ -16,6 +16,9 @@
 // under the License.
 
 //! Parquet integration tests
+
+#![allow(clippy::needless_pass_by_value)] // OK in tests
+
 use crate::parquet::utils::MetricsFinder;
 use arrow::array::Decimal128Array;
 use arrow::{

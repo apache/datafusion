@@ -81,12 +81,12 @@ struct RepartitionExecState {
 
 impl RepartitionExecState {
     fn new(
-        input: Arc<dyn ExecutionPlan>,
-        partitioning: Partitioning,
-        metrics: ExecutionPlanMetricsSet,
+        input: &Arc<dyn ExecutionPlan>,
+        partitioning: &Partitioning,
+        metrics: &ExecutionPlanMetricsSet,
         preserve_order: bool,
-        name: String,
-        context: Arc<TaskContext>,
+        name: &str,
+        context: &Arc<TaskContext>,
     ) -> Self {
         let num_input_partitions = input.output_partitioning().partition_count();
         let num_output_partitions = partitioning.partition_count();
@@ -131,15 +131,15 @@ impl RepartitionExecState {
                 })
                 .collect();
 
-            let r_metrics = RepartitionMetrics::new(i, num_output_partitions, &metrics);
+            let r_metrics = RepartitionMetrics::new(i, num_output_partitions, metrics);
 
             let input_task = SpawnedTask::spawn(RepartitionExec::pull_from_input(
-                Arc::clone(&input),
+                Arc::clone(input),
                 i,
                 txs.clone(),
                 partitioning.clone(),
                 r_metrics,
-                Arc::clone(&context),
+                Arc::clone(context),
             ));
 
             // In a separate task, wait for each input to be done
@@ -581,15 +581,15 @@ impl ExecutionPlan for RepartitionExec {
         let stream = futures::stream::once(async move {
             let num_input_partitions = input.output_partitioning().partition_count();
 
-            let input_captured = Arc::clone(&input);
-            let metrics_captured = metrics.clone();
-            let name_captured = name.clone();
-            let context_captured = Arc::clone(&context);
+            let input_captured = &input;
+            let metrics_captured = &metrics;
+            let name_captured = &name;
+            let context_captured = &context;
             let state = lazy_state
                 .get_or_init(|| async move {
                     Mutex::new(RepartitionExecState::new(
                         input_captured,
-                        partitioning,
+                        &partitioning,
                         metrics_captured,
                         preserve_order,
                         name_captured,

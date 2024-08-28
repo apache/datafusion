@@ -253,7 +253,7 @@ impl ExecutionPlan for UnionExec {
 
         Ok(stats
             .into_iter()
-            .reduce(stats_union)
+            .reduce(|a, b| stats_union(a, &b))
             .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
     }
 
@@ -438,7 +438,7 @@ impl ExecutionPlan for InterleaveExec {
 
         Ok(stats
             .into_iter()
-            .reduce(stats_union)
+            .reduce(|a, b| stats_union(a, &b))
             .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
     }
 
@@ -559,7 +559,7 @@ impl Stream for CombinedRecordBatchStream {
 
 fn col_stats_union(
     mut left: ColumnStatistics,
-    right: ColumnStatistics,
+    right: &ColumnStatistics,
 ) -> ColumnStatistics {
     left.distinct_count = Precision::Absent;
     left.min_value = left.min_value.min(&right.min_value);
@@ -569,13 +569,13 @@ fn col_stats_union(
     left
 }
 
-fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
+fn stats_union(mut left: Statistics, right: &Statistics) -> Statistics {
     left.num_rows = left.num_rows.add(&right.num_rows);
     left.total_byte_size = left.total_byte_size.add(&right.total_byte_size);
     left.column_statistics = left
         .column_statistics
         .into_iter()
-        .zip(right.column_statistics)
+        .zip(right.column_statistics.iter())
         .map(|(a, b)| col_stats_union(a, b))
         .collect::<Vec<_>>();
     left
@@ -583,6 +583,7 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use crate::collect;
     use crate::memory::MemoryExec;
@@ -697,7 +698,7 @@ mod tests {
             ],
         };
 
-        let result = stats_union(left, right);
+        let result = stats_union(left, &right);
         let expected = Statistics {
             num_rows: Precision::Exact(12),
             total_byte_size: Precision::Exact(52),

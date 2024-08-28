@@ -313,7 +313,7 @@ impl<'a> DFParser<'a> {
                 break;
             }
             if expecting_statement_delimiter {
-                return parser.expected("end of statement", parser.parser.peek_token());
+                return parser.expected("end of statement", &parser.parser.peek_token());
             }
 
             let statement = parser.parse_statement()?;
@@ -335,7 +335,7 @@ impl<'a> DFParser<'a> {
     fn expected<T>(
         &self,
         expected: &str,
-        found: TokenWithLocation,
+        found: &TokenWithLocation,
     ) -> Result<T, ParserError> {
         parser_err!(format!("Expected {expected}, found: {found}"))
     }
@@ -562,7 +562,7 @@ impl<'a> DFParser<'a> {
                 let identifier = self.parser.parse_identifier(false)?;
                 partitions.push(identifier.to_string());
             } else {
-                return self.expected("partition name", self.parser.peek_token());
+                return self.expected("partition name", &self.parser.peek_token());
             }
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
@@ -571,7 +571,7 @@ impl<'a> DFParser<'a> {
             } else if !comma {
                 return self.expected(
                     "',' or ')' after partition definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
         }
@@ -643,7 +643,7 @@ impl<'a> DFParser<'a> {
             } else {
                 return self.expected(
                     "column name or constraint definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
             let comma = self.parser.consume_token(&Token::Comma);
@@ -653,7 +653,7 @@ impl<'a> DFParser<'a> {
             } else if !comma {
                 return self.expected(
                     "',' or ')' after column definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
         }
@@ -678,7 +678,7 @@ impl<'a> DFParser<'a> {
                 } else {
                     return self.expected(
                         "constraint details after CONSTRAINT <name>",
-                        self.parser.peek_token(),
+                        &self.parser.peek_token(),
                     );
                 }
             } else if let Some(option) = self.parser.parse_optional_column_option()? {
@@ -832,7 +832,7 @@ impl<'a> DFParser<'a> {
         let token = self.parser.next_token();
         match &token.token {
             Token::Word(w) => parse_file_type(&w.value),
-            _ => self.expected("one of ARROW, PARQUET, NDJSON, or CSV", token),
+            _ => self.expected("one of ARROW, PARQUET, NDJSON, or CSV", &token),
         }
     }
 
@@ -855,7 +855,7 @@ impl<'a> DFParser<'a> {
             } else if !comma {
                 return self.expected(
                     "',' or ')' after option definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
         }
@@ -865,6 +865,7 @@ impl<'a> DFParser<'a> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use sqlparser::ast::Expr::Identifier;
     use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident};

@@ -152,12 +152,12 @@ impl MinMaxStatistics {
         Self::new(
             &min_max_sort_order,
             &min_max_schema,
-            RecordBatch::try_new(Arc::clone(&min_max_schema), min_values).map_err(
+            &RecordBatch::try_new(Arc::clone(&min_max_schema), min_values).map_err(
                 |e| {
                     DataFusionError::ArrowError(e, Some("\ncreate min batch".to_string()))
                 },
             )?,
-            RecordBatch::try_new(Arc::clone(&min_max_schema), max_values).map_err(
+            &RecordBatch::try_new(Arc::clone(&min_max_schema), max_values).map_err(
                 |e| {
                     DataFusionError::ArrowError(e, Some("\ncreate max batch".to_string()))
                 },
@@ -168,8 +168,8 @@ impl MinMaxStatistics {
     pub fn new(
         sort_order: &[PhysicalSortExpr],
         schema: &SchemaRef,
-        min_values: RecordBatch,
-        max_values: RecordBatch,
+        min_values: &RecordBatch,
+        max_values: &RecordBatch,
     ) -> Result<Self> {
         use arrow::row::*;
 

@@ -320,7 +320,7 @@ impl Unparser<'_> {
                     return self.derive(plan, relation);
                 }
                 if let Some(query_ref) = query {
-                    query_ref.order_by(self.sorts_to_sql(sort.expr.clone())?);
+                    query_ref.order_by(self.sorts_to_sql(&sort.expr)?);
                 } else {
                     return internal_err!(
                         "Sort operator only valid in a statement context."
@@ -363,7 +363,7 @@ impl Unparser<'_> {
                             .collect::<Result<Vec<_>>>()?;
                         if let Some(sort_expr) = &on.sort_expr {
                             if let Some(query_ref) = query {
-                                query_ref.order_by(self.sorts_to_sql(sort_expr.clone())?);
+                                query_ref.order_by(self.sorts_to_sql(sort_expr)?);
                             } else {
                                 return internal_err!(
                                     "Sort operator only valid in a statement context."
@@ -550,7 +550,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn sorts_to_sql(&self, sort_exprs: Vec<SortExpr>) -> Result<Vec<ast::OrderByExpr>> {
+    fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<Vec<ast::OrderByExpr>> {
         sort_exprs
             .iter()
             .map(|sort_expr| self.sort_to_sql(sort_expr))

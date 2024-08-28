@@ -289,7 +289,7 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 }
 
 fn _regexp_replace_early_abort<T: ArrayAccessor>(
-    input_array: T,
+    input_array: &T,
     sz: usize,
 ) -> Result<ArrayRef> {
     // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
@@ -307,7 +307,7 @@ macro_rules! fetch_string_arg {
     ($ARG:expr, $NAME:expr, $T:ident, $EARLY_ABORT:ident, $ARRAY_SIZE:expr) => {{
         let array = as_generic_string_array::<$T>($ARG)?;
         if array.len() == 0 || array.is_null(0) {
-            return $EARLY_ABORT(array, $ARRAY_SIZE);
+            return $EARLY_ABORT(&array, $ARRAY_SIZE);
         } else {
             array.value(0)
         }

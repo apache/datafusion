@@ -367,7 +367,7 @@ mod tests {
         let agg1 = stddev_pop_udaf();
         let agg2 = stddev_pop_udaf();
 
-        let actual = merge(&batch1, &batch2, agg1, agg2, &schema)?;
+        let actual = merge(&batch1, &batch2, &agg1, &agg2, &schema)?;
         assert_eq!(actual, ScalarValue::from(std::f64::consts::SQRT_2));
 
         Ok(())
@@ -386,7 +386,7 @@ mod tests {
         let agg1 = stddev_pop_udaf();
         let agg2 = stddev_pop_udaf();
 
-        let actual = merge(&batch1, &batch2, agg1, agg2, &schema)?;
+        let actual = merge(&batch1, &batch2, &agg1, &agg2, &schema)?;
         assert_eq!(actual, ScalarValue::from(std::f64::consts::SQRT_2));
 
         Ok(())
@@ -395,8 +395,8 @@ mod tests {
     fn merge(
         batch1: &RecordBatch,
         batch2: &RecordBatch,
-        agg1: Arc<AggregateUDF>,
-        agg2: Arc<AggregateUDF>,
+        agg1: &Arc<AggregateUDF>,
+        agg2: &Arc<AggregateUDF>,
         schema: &Schema,
     ) -> Result<ScalarValue> {
         let args1 = AccumulatorArgs {

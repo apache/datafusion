@@ -103,7 +103,7 @@ impl TopK {
         expr: Vec<PhysicalSortExpr>,
         k: usize,
         batch_size: usize,
-        runtime: Arc<RuntimeEnv>,
+        runtime: &Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
         partition: usize,
     ) -> Result<Self> {

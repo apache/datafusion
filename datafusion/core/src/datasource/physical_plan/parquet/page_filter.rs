@@ -113,7 +113,7 @@ pub struct PagePruningAccessPlanFilter {
 impl PagePruningAccessPlanFilter {
     /// Create a new [`PagePruningAccessPlanFilter`] from a physical
     /// expression.
-    pub fn new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Self {
+    pub fn new(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> Self {
         // extract any single column predicates
         let predicates = split_conjunction(expr)
             .into_iter()

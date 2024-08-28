@@ -2779,7 +2779,7 @@ impl Aggregate {
             input.schema().metadata().clone(),
         )?;
 
-        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
+        Self::try_new_with_schema(input, group_expr, aggr_expr, schema)
     }
 
     /// Create a new aggregate operator using the provided schema to avoid the overhead of
@@ -2791,7 +2791,7 @@ impl Aggregate {
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
-        schema: DFSchemaRef,
+        schema: DFSchema,
     ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
             return plan_err!(
@@ -2809,10 +2809,8 @@ impl Aggregate {
 
         let aggregate_func_dependencies =
             calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
-        let new_schema = schema.as_ref().clone();
-        let schema = Arc::new(
-            new_schema.with_functional_dependencies(aggregate_func_dependencies)?,
-        );
+        let schema =
+            Arc::new(schema.with_functional_dependencies(aggregate_func_dependencies)?);
         Ok(Self {
             input,
             group_expr,

@@ -21,7 +21,7 @@ use datafusion_expr::Operator;
 use sqlparser::ast::BinaryOperator;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    pub(crate) fn parse_sql_binary_op(&self, op: BinaryOperator) -> Result<Operator> {
+    pub(crate) fn parse_sql_binary_op(&self, op: &BinaryOperator) -> Result<Operator> {
         match op {
             BinaryOperator::Gt => Ok(Operator::Gt),
             BinaryOperator::GtEq => Ok(Operator::GtEq),

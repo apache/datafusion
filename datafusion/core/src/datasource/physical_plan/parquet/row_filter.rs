@@ -432,7 +432,7 @@ pub fn build_row_filter(
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
-    schema_mapping: Arc<dyn SchemaMapper>,
+    schema_mapping: &Arc<dyn SchemaMapper>,
 ) -> Result<Option<RowFilter>> {
     let rows_filtered = &file_metrics.pushdown_rows_filtered;
     let time = &file_metrics.pushdown_eval_time;
@@ -474,7 +474,7 @@ pub fn build_row_filter(
                 metadata,
                 rows_filtered.clone(),
                 time.clone(),
-                Arc::clone(&schema_mapping),
+                Arc::clone(schema_mapping),
             )
             .map(|pred| Box::new(pred) as _)
         })

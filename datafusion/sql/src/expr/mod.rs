@@ -125,7 +125,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let RawBinaryExpr { op, left, right } = binary_expr;
         Ok(Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left),
-            self.parse_sql_binary_op(op)?,
+            self.parse_sql_binary_op(&op)?,
             Box::new(right),
         )))
     }
@@ -600,7 +600,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::Struct { values, fields } => {
-                self.parse_struct(schema, planner_context, values, fields)
+                self.parse_struct(schema, planner_context, values, &fields)
             }
             SQLExpr::Position { expr, r#in } => {
                 self.sql_position_to_expr(*expr, *r#in, schema, planner_context)
@@ -680,7 +680,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         values: Vec<SQLExpr>,
-        fields: Vec<StructField>,
+        fields: &[StructField],
     ) -> Result<Expr> {
         if !fields.is_empty() {
             return not_impl_err!("Struct fields are not supported yet");
@@ -712,7 +712,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match values.first() {
             Some(SQLExpr::Identifier(_)) | Some(SQLExpr::Value(_)) => {
-                self.parse_struct(schema, planner_context, values, vec![])
+                self.parse_struct(schema, planner_context, values, &[])
             }
             None => not_impl_err!("Empty tuple not supported yet"),
             _ => {

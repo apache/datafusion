@@ -93,11 +93,11 @@ impl ExecutionProps {
     /// Returns the provider for the `var_type`, if any
     pub fn get_var_provider(
         &self,
-        var_type: VarType,
+        var_type: &VarType,
     ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
         self.var_providers
             .as_ref()
-            .and_then(|var_providers| var_providers.get(&var_type).cloned())
+            .and_then(|var_providers| var_providers.get(var_type).cloned())
     }
 }
 

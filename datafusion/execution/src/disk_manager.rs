@@ -87,7 +87,7 @@ impl DiskManager {
                 local_dirs: Mutex::new(Some(vec![])),
             })),
             DiskManagerConfig::NewSpecified(conf_dirs) => {
-                let local_dirs = create_local_dirs(conf_dirs)?;
+                let local_dirs = create_local_dirs(&conf_dirs)?;
                 debug!(
                     "Created local dirs {:?} as DataFusion working directory",
                     local_dirs
@@ -169,7 +169,7 @@ impl RefCountedTempFile {
 }
 
 /// Setup local dirs by creating one new dir in each of the given dirs
-fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<Arc<TempDir>>> {
+fn create_local_dirs(local_dirs: &[PathBuf]) -> Result<Vec<Arc<TempDir>>> {
     local_dirs
         .iter()
         .map(|root| {

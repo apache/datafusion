@@ -407,13 +407,13 @@ pub fn replace_sort_expressions(sorts: Vec<Sort>, new_expr: Vec<Expr>) -> Vec<So
     sorts
         .into_iter()
         .zip(new_expr)
-        .map(|(sort, expr)| replace_sort_expression(sort, expr))
+        .map(|(sort, expr)| replace_sort_expression(&sort, expr))
         .collect()
 }
 
-pub fn replace_sort_expression(sort: Sort, new_expr: Expr) -> Sort {
+pub fn replace_sort_expression(sort: &Sort, new_expr: Expr) -> Sort {
     Sort {
         expr: new_expr,
-        ..sort
+        ..*sort
     }
 }

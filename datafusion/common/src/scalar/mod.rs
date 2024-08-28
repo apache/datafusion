@@ -721,19 +721,19 @@ impl std::hash::Hash for ScalarValue {
                 v.hash(state)
             }
             List(arr) => {
-                hash_nested_array(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(&(arr.to_owned() as ArrayRef), state);
             }
             LargeList(arr) => {
-                hash_nested_array(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(&(arr.to_owned() as ArrayRef), state);
             }
             FixedSizeList(arr) => {
-                hash_nested_array(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(&(arr.to_owned() as ArrayRef), state);
             }
             Struct(arr) => {
-                hash_nested_array(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(&(arr.to_owned() as ArrayRef), state);
             }
             Map(arr) => {
-                hash_nested_array(arr.to_owned() as ArrayRef, state);
+                hash_nested_array(&(arr.to_owned() as ArrayRef), state);
             }
             Date32(v) => v.hash(state),
             Date64(v) => v.hash(state),
@@ -767,7 +767,7 @@ impl std::hash::Hash for ScalarValue {
     }
 }
 
-fn hash_nested_array<H: std::hash::Hasher>(arr: ArrayRef, state: &mut H) {
+fn hash_nested_array<H: std::hash::Hasher>(arr: &ArrayRef, state: &mut H) {
     let arrays = vec![arr.to_owned()];
     let hashes_buffer = &mut vec![0; arr.len()];
     let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
@@ -3234,7 +3234,7 @@ impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
         value
             .into_iter()
             .fold(ScalarStructBuilder::new(), |builder, (name, value)| {
-                builder.with_name_and_scalar(name, value)
+                builder.with_name_and_scalar(name, &value)
             })
             .build()
             .unwrap()
@@ -3542,9 +3542,11 @@ impl fmt::Display for ScalarValue {
                 }
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::LargeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
-            ScalarValue::FixedSizeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
+            ScalarValue::List(arr) => fmt_list(&(arr.to_owned() as ArrayRef), f)?,
+            ScalarValue::LargeList(arr) => fmt_list(&(arr.to_owned() as ArrayRef), f)?,
+            ScalarValue::FixedSizeList(arr) => {
+                fmt_list(&(arr.to_owned() as ArrayRef), f)?
+            }
             ScalarValue::Date32(e) => {
                 format_option!(f, e.map(|v| Date32Type::to_naive_date(v).to_string()))?
             }
@@ -3651,7 +3653,7 @@ impl fmt::Display for ScalarValue {
     }
 }
 
-fn fmt_list(arr: ArrayRef, f: &mut fmt::Formatter) -> fmt::Result {
+fn fmt_list(arr: &ArrayRef, f: &mut fmt::Formatter) -> fmt::Result {
     // ScalarValue List, LargeList, FixedSizeList should always have a single element
     assert_eq!(arr.len(), 1);
     let options = FormatOptions::default().with_display_error(true);
@@ -4433,6 +4435,7 @@ mod tests {
     }
 
     // Verifies that ScalarValue has the same behavior with compute kernal when it overflows.
+    #[allow(clippy::needless_pass_by_value)] // OK in tests
     fn check_scalar_add_overflow<T>(left: ScalarValue, right: ScalarValue)
     where
         T: ArrowNumericType,
@@ -5967,6 +5970,7 @@ mod tests {
     }
 
     // mimics how casting work on scalar values by `casting` `scalar` to `desired_type`
+    #[allow(clippy::needless_pass_by_value)] // OK in tests
     fn check_scalar_cast(scalar: ScalarValue, desired_type: DataType) {
         // convert from scalar --> Array to call cast
         let scalar_array = scalar.to_array().expect("Failed to convert to array");
@@ -6571,8 +6575,8 @@ mod tests {
         let field_b = Field::new("b", DataType::Utf8, true);
 
         let s = ScalarStructBuilder::new()
-            .with_scalar(field_a, ScalarValue::from(1i32))
-            .with_scalar(field_b, ScalarValue::Utf8(None))
+            .with_scalar(field_a, &ScalarValue::from(1i32))
+            .with_scalar(field_b, &ScalarValue::Utf8(None))
             .build()
             .unwrap();
 

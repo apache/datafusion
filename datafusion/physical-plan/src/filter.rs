@@ -86,7 +86,7 @@ impl FilterExec {
                 )?;
                 Ok(Self {
                     predicate,
-                    input: Arc::clone(&input),
+                    input,
                     metrics: ExecutionPlanMetricsSet::new(),
                     default_selectivity,
                     cache,

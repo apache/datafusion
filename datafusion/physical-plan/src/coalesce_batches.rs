@@ -183,7 +183,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
+        Statistics::with_fetch(self.input.statistics()?, &self.schema(), self.fetch, 0, 1)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -290,7 +290,7 @@ impl CoalesceBatchesStream {
                     let _timer = cloned_time.timer();
 
                     match input_batch {
-                        Some(Ok(batch)) => match self.coalescer.push_batch(batch) {
+                        Some(Ok(batch)) => match self.coalescer.push_batch(&batch) {
                             CoalescerState::Continue => {}
                             CoalescerState::LimitReached => {
                                 self.inner_state = CoalesceBatchesStreamState::Exhausted;

@@ -159,7 +159,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             })
             .collect::<Vec<_>>();
         Some(Arc::new(SlidingAggregateWindowExpr {
-            aggregate: self.aggregate.with_new_expressions(args, vec![])?,
+            aggregate: self.aggregate.with_new_expressions(&args, &[])?,
             partition_by: partition_bys,
             order_by: new_order_by,
             window_frame: Arc::clone(&self.window_frame),

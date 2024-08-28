@@ -1567,6 +1567,7 @@ pub(crate) enum StatisticsType {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use std::collections::HashMap;
     use std::ops::{Not, Rem};
 

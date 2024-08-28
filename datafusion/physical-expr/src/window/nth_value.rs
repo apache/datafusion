@@ -319,6 +319,7 @@ impl PartitionEvaluator for NthValueEvaluator {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use crate::expressions::Column;
     use arrow::{array::*, datatypes::*};

@@ -143,7 +143,7 @@ impl ExprPlanner for FieldAccessPlanner {
         match field_access {
             // expr["field"] => get_field(expr, "field")
             GetFieldAccess::NamedStructField { name } => {
-                Ok(PlannerResult::Planned(get_field(expr, name)))
+                Ok(PlannerResult::Planned(get_field(expr, &name)))
             }
             // expr[idx] ==> array_element(expr, idx)
             GetFieldAccess::ListIndex { key: index } => {
