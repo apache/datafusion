@@ -657,8 +657,26 @@ pub async fn from_substrait_rel(
                         table: nt.names[2].clone().into(),
                     },
                 };
-                let t = ctx.table(table_reference).await?;
+                let t = ctx.table(table_reference.clone()).await?;
                 let t = t.into_optimized_plan()?;
+                let datafusion_schema = t.schema();
+
+                let named_struct = read.base_schema.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("No base schema provided for Named Scan")
+                })?;
+                let substrait_schema = from_substrait_named_struct(
+                    named_struct,
+                    extensions,
+                    Some(table_reference),
+                )?;
+
+                if !validate_substrait_schema(datafusion_schema, &substrait_schema) {
+                    return Err(substrait_datafusion_err!(
+                        "Schema mismatch in ReadRel: substrait: {:?}, DataFusion: {:?}",
+                        substrait_schema,
+                        datafusion_schema
+                    ));
+                };
                 extract_projection(t, &read.projection)
             }
             Some(ReadType::VirtualTable(vt)) => {
@@ -848,6 +866,31 @@ pub async fn from_substrait_rel(
         }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
     }
+}
+
+/// Validates that the given Substrait schema matches the given DataFusion schema
+/// Returns true if the two schemas have the same qualified named fields with the same data types.
+/// Returns false otherwise.
+/// Ignores case when comparing field names
+///
+/// This code is equivalent to [DFSchema::equivalent_names_and_types] except that the field name
+/// checking is case-insensitive
+fn validate_substrait_schema(
+    datafusion_schema: &DFSchema,
+    substrait_schema: &DFSchema,
+) -> bool {
+    if datafusion_schema.fields().len() != substrait_schema.fields().len() {
+        return false;
+    }
+    let datafusion_fields = datafusion_schema.iter();
+    let substrait_fields = substrait_schema.iter();
+    datafusion_fields
+        .zip(substrait_fields)
+        .all(|((q1, f1), (q2, f2))| {
+            q1 == q2
+                && f1.name().to_lowercase() == f2.name().to_lowercase()
+                && f1.data_type().equals_datatype(f2.data_type())
+        })
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
