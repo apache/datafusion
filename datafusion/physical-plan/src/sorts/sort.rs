@@ -1034,7 +1034,7 @@ mod tests {
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::{assert_batches_eq, Result, ScalarValue};
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnvBuilder};
+    use datafusion_execution::runtime_env::{RuntimeEnvBuilder};
     use datafusion_execution::RecordBatchStream;
     use datafusion_physical_expr::expressions::{Column, Literal};
     use datafusion_physical_expr::EquivalenceProperties;
