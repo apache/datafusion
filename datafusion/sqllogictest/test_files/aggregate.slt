@@ -416,6 +416,50 @@ from data
 ----
 1
 
+# csv_query_distance
+query R
+SELECT distance(c2, c12) FROM aggregate_test_100
+----
+27.565541154252
+
+# single_row_query_distance
+query R
+select distance(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
+----
+1.1
+
+# all_nulls_query_distance
+query R
+with data as (
+  select null::int as f, null::int as b
+  union all
+  select null::int as f, null::int as b
+)
+select distance(f, b)
+from data
+----
+0
+
+# distance_query_with_nulls
+query R
+with data as (
+  select 1 as f,       4 as b
+  union all
+  select null as f,   99 as b
+  union all
+  select 2 as f,       5 as b
+  union all
+  select 98 as f,   null as b
+  union all
+  select 3 as f,       6 as b
+  union all
+  select null as f, null as b
+)
+select distance(f, b)
+from data
+----
+5.196152422707
+
 # csv_query_variance_1
 query R
 SELECT var_pop(c2) FROM aggregate_test_100
