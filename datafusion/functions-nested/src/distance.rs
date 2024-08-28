@@ -29,7 +29,7 @@ use datafusion_common::cast::{
     as_int64_array,
 };
 use datafusion_common::DataFusionError;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
@@ -73,7 +73,7 @@ impl ScalarUDFImpl for ArrayDistance {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types[0] {
             List(_) | LargeList(_) | FixedSizeList(_, _) => Ok(Float64),
-            _ => plan_err!("The array_distance function can only accept List/LargeList/FixedSizeList."),
+            _ => exec_err!("The array_distance function can only accept List/LargeList/FixedSizeList."),
         }
     }
 
