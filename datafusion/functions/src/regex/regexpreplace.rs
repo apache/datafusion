@@ -210,30 +210,33 @@ where
     match flags {
         None => {
             let result = string_array_iter
-            .zip(pattern_array_iter)
-            .zip(replacement_array_iter)
-            .map(|((string, pattern), replacement)| match (string, pattern, replacement) {
-                (Some(string), Some(pattern), Some(replacement)) => {
-                    let replacement = regex_replace_posix_groups(replacement);
-                    // if patterns hashmap already has regexp then use else create and return
-                    let re = match patterns.get(pattern) {
-                        Some(re) => Ok(re),
-                        None => {
-                            match Regex::new(pattern) {
-                                Ok(re) => {
-                                    patterns.insert(pattern.to_string(), re);
-                                    Ok(patterns.get(pattern).unwrap())
+                .zip(pattern_array_iter)
+                .zip(replacement_array_iter)
+                .map(|((string, pattern), replacement)| {
+                    match (string, pattern, replacement) {
+                        (Some(string), Some(pattern), Some(replacement)) => {
+                            let replacement = regex_replace_posix_groups(replacement);
+                            // if patterns hashmap already has regexp then use else create and return
+                            let re = match patterns.get(pattern) {
+                                Some(re) => Ok(re),
+                                None => match Regex::new(pattern) {
+                                    Ok(re) => {
+                                        patterns.insert(pattern.to_string(), re);
+                                        Ok(patterns.get(pattern).unwrap())
+                                    }
+                                    Err(err) => {
+                                        Err(DataFusionError::External(Box::new(err)))
+                                    }
                                 },
-                                Err(err) => Err(DataFusionError::External(Box::new(err))),
-                            }
-                        }
-                    };
+                            };
 
-                    Some(re.map(|re| re.replace(string, replacement.as_str()))).transpose()
-                }
-            _ => Ok(None)
-            })
-            .collect::<Result<GenericStringArray<T>>>()?;
+                            Some(re.map(|re| re.replace(string, replacement.as_str())))
+                                .transpose()
+                        }
+                        _ => Ok(None),
+                    }
+                })
+                .collect::<Result<GenericStringArray<T>>>()?;
 
             Ok(Arc::new(result) as ArrayRef)
         }
@@ -241,47 +244,57 @@ where
             let flags_array = as_generic_string_array::<T>(flags)?;
 
             let result = string_array_iter
-            .zip(pattern_array_iter)
-            .zip(replacement_array_iter)
-            .zip(flags_array.iter())
-            .map(|(((string, pattern), replacement), flags)| match (string, pattern, replacement, flags) {
-                (Some(string), Some(pattern), Some(replacement), Some(flags)) => {
-                    let replacement = regex_replace_posix_groups(replacement);
+                .zip(pattern_array_iter)
+                .zip(replacement_array_iter)
+                .zip(flags_array.iter())
+                .map(|(((string, pattern), replacement), flags)| {
+                    match (string, pattern, replacement, flags) {
+                        (Some(string), Some(pattern), Some(replacement), Some(flags)) => {
+                            let replacement = regex_replace_posix_groups(replacement);
 
-                    // format flags into rust pattern
-                    let (pattern, replace_all) = if flags == "g" {
-                        (pattern.to_string(), true)
-                    } else if flags.contains('g') {
-                        (format!("(?{}){}", flags.to_string().replace('g', ""), pattern), true)
-                    } else {
-                        (format!("(?{flags}){pattern}"), false)
-                    };
+                            // format flags into rust pattern
+                            let (pattern, replace_all) = if flags == "g" {
+                                (pattern.to_string(), true)
+                            } else if flags.contains('g') {
+                                (
+                                    format!(
+                                        "(?{}){}",
+                                        flags.to_string().replace('g', ""),
+                                        pattern
+                                    ),
+                                    true,
+                                )
+                            } else {
+                                (format!("(?{flags}){pattern}"), false)
+                            };
 
-                    // if patterns hashmap already has regexp then use else create and return
-                    let re = match patterns.get(&pattern) {
-                        Some(re) => Ok(re),
-                        None => {
-                            match Regex::new(pattern.as_str()) {
-                                Ok(re) => {
-                                    patterns.insert(pattern.clone(), re);
-                                    Ok(patterns.get(&pattern).unwrap())
+                            // if patterns hashmap already has regexp then use else create and return
+                            let re = match patterns.get(&pattern) {
+                                Some(re) => Ok(re),
+                                None => match Regex::new(pattern.as_str()) {
+                                    Ok(re) => {
+                                        patterns.insert(pattern.clone(), re);
+                                        Ok(patterns.get(&pattern).unwrap())
+                                    }
+                                    Err(err) => {
+                                        Err(DataFusionError::External(Box::new(err)))
+                                    }
                                 },
-                                Err(err) => Err(DataFusionError::External(Box::new(err))),
-                            }
-                        }
-                    };
+                            };
 
-                    Some(re.map(|re| {
-                        if replace_all {
-                            re.replace_all(string, replacement.as_str())
-                        } else {
-                            re.replace(string, replacement.as_str())
+                            Some(re.map(|re| {
+                                if replace_all {
+                                    re.replace_all(string, replacement.as_str())
+                                } else {
+                                    re.replace(string, replacement.as_str())
+                                }
+                            }))
+                            .transpose()
                         }
-                    })).transpose()
-                }
-            _ => Ok(None)
-            })
-            .collect::<Result<GenericStringArray<T>>>()?;
+                        _ => Ok(None),
+                    }
+                })
+                .collect::<Result<GenericStringArray<T>>>()?;
 
             Ok(Arc::new(result) as ArrayRef)
         }
