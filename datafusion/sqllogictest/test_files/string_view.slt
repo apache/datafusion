@@ -905,6 +905,17 @@ XiangpengXiangpengXiangpeng
 RaphaelRR
 RR
 
+## Should run CONCAT successfully with utf8large
+query T
+SELECT
+  concat(column1_large_utf8, column2_large_utf8) as c
+FROM test;
+----
+AndrewX
+XiangpengXiangpeng
+RaphaelR
+R
+
 ## Ensure no casts for LPAD
 query TT
 EXPLAIN SELECT
