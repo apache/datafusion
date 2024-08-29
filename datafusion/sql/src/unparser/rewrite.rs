@@ -21,10 +21,11 @@ use std::{
 };
 
 use datafusion_common::{
-    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeIterator},
+    tree_node::{Transformed, TransformedResult, TreeNode},
     Result,
 };
-use datafusion_expr::{Expr, LogicalPlan, Projection, Sort};
+use datafusion_expr::tree_node::transform_sort_vec;
+use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
 use sqlparser::ast::Ident;
 
 /// Normalize the schema of a union plan to remove qualifiers from the schema fields and sort expressions.
@@ -83,20 +84,18 @@ pub(super) fn normalize_union_schema(plan: &LogicalPlan) -> Result<LogicalPlan> 
 }
 
 /// Rewrite sort expressions that have a UNION plan as their input to remove the table reference.
-fn rewrite_sort_expr_for_union(exprs: Vec<Expr>) -> Result<Vec<Expr>> {
-    let sort_exprs: Vec<Expr> = exprs
-        .into_iter()
-        .map_until_stop_and_collect(|expr| {
-            expr.transform_up(|expr| {
-                if let Expr::Column(mut col) = expr {
-                    col.relation = None;
-                    Ok(Transformed::yes(Expr::Column(col)))
-                } else {
-                    Ok(Transformed::no(expr))
-                }
-            })
+fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
+    let sort_exprs = transform_sort_vec(exprs, &mut |expr| {
+        expr.transform_up(|expr| {
+            if let Expr::Column(mut col) = expr {
+                col.relation = None;
+                Ok(Transformed::yes(Expr::Column(col)))
+            } else {
+                Ok(Transformed::no(expr))
+            }
         })
-        .data()?;
+    })
+    .data()?;
 
     Ok(sort_exprs)
 }
@@ -158,12 +157,8 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         .collect::<Vec<_>>();
 
     let mut collects = p.expr.clone();
-    for expr in &sort.expr {
-        if let Expr::Sort(s) = expr {
-            collects.push(s.expr.as_ref().clone());
-        } else {
-            panic!("sort expression must be of type Sort");
-        }
+    for sort in &sort.expr {
+        collects.push(sort.expr.as_ref().clone());
     }
 
     // Compare outer collects Expr::to_string with inner collected transformed values

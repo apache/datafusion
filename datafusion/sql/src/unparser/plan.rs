@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DataFusionError, Result,
-};
+use datafusion_common::{internal_err, not_impl_err, Column, DataFusionError, Result};
 use datafusion_expr::{
     expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan, Projection,
+    SortExpr,
 };
 use sqlparser::ast::{self, Ident, SetExpr};
 
@@ -318,7 +317,7 @@ impl Unparser<'_> {
                     return self.derive(plan, relation);
                 }
                 if let Some(query_ref) = query {
-                    query_ref.order_by(self.sort_to_sql(sort.expr.clone())?);
+                    query_ref.order_by(self.sorts_to_sql(sort.expr.clone())?);
                 } else {
                     return internal_err!(
                         "Sort operator only valid in a statement context."
@@ -361,7 +360,7 @@ impl Unparser<'_> {
                             .collect::<Result<Vec<_>>>()?;
                         if let Some(sort_expr) = &on.sort_expr {
                             if let Some(query_ref) = query {
-                                query_ref.order_by(self.sort_to_sql(sort_expr.clone())?);
+                                query_ref.order_by(self.sorts_to_sql(sort_expr.clone())?);
                             } else {
                                 return internal_err!(
                                     "Sort operator only valid in a statement context."
@@ -525,14 +524,10 @@ impl Unparser<'_> {
         }
     }
 
-    fn sort_to_sql(&self, sort_exprs: Vec<Expr>) -> Result<Vec<ast::OrderByExpr>> {
+    fn sorts_to_sql(&self, sort_exprs: Vec<SortExpr>) -> Result<Vec<ast::OrderByExpr>> {
         sort_exprs
             .iter()
-            .map(|expr: &Expr| {
-                self.expr_to_unparsed(expr)?
-                    .into_order_by_expr()
-                    .or(plan_err!("Expecting Sort expr"))
-            })
+            .map(|sort_expr| self.sort_to_sql(sort_expr))
             .collect::<Result<Vec<_>>>()
     }
 
