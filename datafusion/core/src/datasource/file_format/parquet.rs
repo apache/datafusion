@@ -235,6 +235,12 @@ impl ParquetFormat {
     pub fn should_use_view_types(&self) -> bool {
         self.options.global.schema_force_string_view
     }
+
+    #[cfg(test)]
+    fn with_view_types(mut self, use_views: bool) -> Self {
+        self.options.global.schema_force_string_view = use_views;
+        self
+    }
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator
@@ -1255,8 +1261,8 @@ mod tests {
     use arrow_schema::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_common::cast::{
-        as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
-        as_int32_array, as_timestamp_nanosecond_array,
+        as_binary_array, as_binary_view_array, as_boolean_array, as_float32_array,
+        as_float64_array, as_int32_array, as_timestamp_nanosecond_array,
     };
     use datafusion_common::config::ParquetOptions;
     use datafusion_common::ScalarValue;
@@ -1277,8 +1283,7 @@ mod tests {
     use parquet::file::page_index::index::Index;
     use tokio::fs::File;
 
-    #[tokio::test]
-    async fn read_merged_batches() -> Result<()> {
+    async fn _run_read_merged_batches(use_views: bool) -> Result<()> {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
 
@@ -1292,7 +1297,7 @@ mod tests {
 
         let session = SessionContext::new();
         let ctx = session.state();
-        let format = ParquetFormat::default();
+        let format = ParquetFormat::default().with_view_types(use_views);
         let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
 
         let stats =
@@ -1318,6 +1323,14 @@ mod tests {
             c2_stats.min_value,
             Precision::Exact(ScalarValue::Int64(Some(1)))
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_merged_batches() -> Result<()> {
+        _run_read_merged_batches(false).await?;
+        _run_read_merged_batches(true).await?;
 
         Ok(())
     }
@@ -1452,8 +1465,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn fetch_metadata_with_size_hint() -> Result<()> {
+    async fn _run_fetch_metadata_with_size_hint(use_views: bool) -> Result<()> {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
 
@@ -1477,7 +1489,9 @@ mod tests {
 
         let session = SessionContext::new();
         let ctx = session.state();
-        let format = ParquetFormat::default().with_metadata_size_hint(Some(9));
+        let format = ParquetFormat::default()
+            .with_metadata_size_hint(Some(9))
+            .with_view_types(use_views);
         let schema = format
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
@@ -1507,7 +1521,9 @@ mod tests {
         // ensure the requests were coalesced into a single request
         assert_eq!(store.request_count(), 1);
 
-        let format = ParquetFormat::default().with_metadata_size_hint(Some(size_hint));
+        let format = ParquetFormat::default()
+            .with_metadata_size_hint(Some(size_hint))
+            .with_view_types(use_views);
         let schema = format
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
@@ -1538,6 +1554,14 @@ mod tests {
             .expect("error reading metadata with hint");
 
         assert_eq!(store.request_count(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fetch_metadata_with_size_hint() -> Result<()> {
+        _run_fetch_metadata_with_size_hint(false).await?;
+        _run_fetch_metadata_with_size_hint(true).await?;
 
         Ok(())
     }
@@ -1584,8 +1608,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_statistics_from_parquet_metadata() -> Result<()> {
+    async fn _run_test_statistics_from_parquet_metadata(use_views: bool) -> Result<()> {
         // Data for column c1: ["Foo", null, "bar"]
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
@@ -1603,28 +1626,37 @@ mod tests {
         let store = Arc::new(LocalFileSystem::new()) as _;
         let (files, _file_names) = store_parquet(vec![batch1, batch2], false).await?;
 
-        let state = SessionContext::new().state();
-        let format = ParquetFormat::default();
+        let mut state = SessionContext::new().state();
+        state = set_view_state(state, use_views);
+        let format = ParquetFormat::default().with_view_types(use_views);
         let schema = format.infer_schema(&state, &store, &files).await.unwrap();
 
         let null_i64 = ScalarValue::Int64(None);
-        let null_utf8 = ScalarValue::Utf8(None);
+        let null_utf8 = if use_views {
+            ScalarValue::Utf8View(None)
+        } else {
+            ScalarValue::Utf8(None)
+        };
 
         // Fetch statistics for first file
         let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
         let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
-        //
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1
         let c1_stats = &stats.column_statistics[0];
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
+        let expected_type = if use_views {
+            ScalarValue::Utf8View
+        } else {
+            ScalarValue::Utf8
+        };
         assert_eq!(
             c1_stats.max_value,
-            Precision::Exact(ScalarValue::Utf8(Some("bar".to_string())))
+            Precision::Exact(expected_type(Some("bar".to_string())))
         );
         assert_eq!(
             c1_stats.min_value,
-            Precision::Exact(ScalarValue::Utf8(Some("Foo".to_string())))
+            Precision::Exact(expected_type(Some("Foo".to_string())))
         );
         // column c2: missing from the file so the table treats all 3 rows as null
         let c2_stats = &stats.column_statistics[1];
@@ -1646,6 +1678,14 @@ mod tests {
         assert_eq!(c2_stats.null_count, Precision::Exact(1));
         assert_eq!(c2_stats.max_value, Precision::Exact(2i64.into()));
         assert_eq!(c2_stats.min_value, Precision::Exact(1i64.into()));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistics_from_parquet_metadata() -> Result<()> {
+        _run_test_statistics_from_parquet_metadata(false).await?;
+        _run_test_statistics_from_parquet_metadata(true).await?;
 
         Ok(())
     }
@@ -1724,10 +1764,26 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn read_alltypes_plain_parquet() -> Result<()> {
+    fn set_view_state(mut state: SessionState, use_views: bool) -> SessionState {
+        let mut options = TableParquetOptions::default();
+        options.global.schema_force_string_view = use_views;
+        state
+            .register_file_format(
+                Arc::new(ParquetFormatFactory::new_with_options(options)),
+                true,
+            )
+            .expect("ok");
+        state
+    }
+
+    async fn _run_read_alltypes_plain_parquet(
+        use_views: bool,
+        expected: &str,
+    ) -> Result<()> {
         let session_ctx = SessionContext::new();
-        let state = session_ctx.state();
+        let mut state = session_ctx.state();
+        state = set_view_state(state, use_views);
+
         let task_ctx = state.task_ctx();
         let projection = None;
         let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
@@ -1739,8 +1795,20 @@ mod tests {
             .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
             .collect();
         let y = x.join("\n");
-        assert_eq!(
-            "id: Int32\n\
+        assert_eq!(expected, y);
+
+        let batches = collect(exec, task_ctx).await?;
+
+        assert_eq!(1, batches.len());
+        assert_eq!(11, batches[0].num_columns());
+        assert_eq!(8, batches[0].num_rows());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_alltypes_plain_parquet() -> Result<()> {
+        let no_views = "id: Int32\n\
              bool_col: Boolean\n\
              tinyint_col: Int32\n\
              smallint_col: Int32\n\
@@ -1750,15 +1818,21 @@ mod tests {
              double_col: Float64\n\
              date_string_col: Binary\n\
              string_col: Binary\n\
-             timestamp_col: Timestamp(Nanosecond, None)",
-            y
-        );
+             timestamp_col: Timestamp(Nanosecond, None)";
+        _run_read_alltypes_plain_parquet(false, no_views).await?;
 
-        let batches = collect(exec, task_ctx).await?;
-
-        assert_eq!(1, batches.len());
-        assert_eq!(11, batches[0].num_columns());
-        assert_eq!(8, batches[0].num_rows());
+        let with_views = "id: Int32\n\
+             bool_col: Boolean\n\
+             tinyint_col: Int32\n\
+             smallint_col: Int32\n\
+             int_col: Int32\n\
+             bigint_col: Int64\n\
+             float_col: Float32\n\
+             double_col: Float64\n\
+             date_string_col: BinaryView\n\
+             string_col: BinaryView\n\
+             timestamp_col: Timestamp(Nanosecond, None)";
+        _run_read_alltypes_plain_parquet(true, with_views).await?;
 
         Ok(())
     }
@@ -1895,7 +1969,9 @@ mod tests {
     #[tokio::test]
     async fn read_binary_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let state = session_ctx.state();
+        let mut state = session_ctx.state();
+        state = set_view_state(state, false);
+
         let task_ctx = state.task_ctx();
         let projection = Some(vec![9]);
         let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
@@ -1906,6 +1982,35 @@ mod tests {
         assert_eq!(8, batches[0].num_rows());
 
         let array = as_binary_array(batches[0].column(0))?;
+        let mut values: Vec<&str> = vec![];
+        for i in 0..batches[0].num_rows() {
+            values.push(std::str::from_utf8(array.value(i)).unwrap());
+        }
+
+        assert_eq!(
+            "[\"0\", \"1\", \"0\", \"1\", \"0\", \"1\", \"0\", \"1\"]",
+            format!("{values:?}")
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_binaryview_alltypes_plain_parquet() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let mut state = session_ctx.state();
+        state = set_view_state(state, true);
+
+        let task_ctx = state.task_ctx();
+        let projection = Some(vec![9]);
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
+
+        let batches = collect(exec, task_ctx).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(8, batches[0].num_rows());
+
+        let array = as_binary_view_array(batches[0].column(0))?;
         let mut values: Vec<&str> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(std::str::from_utf8(array.value(i)).unwrap());
@@ -2053,8 +2158,13 @@ mod tests {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::parquet_test_data();
-        let format = ParquetFormat::default();
-        scan_format(state, &format, &testdata, file_name, projection, limit).await
+
+        let format = state
+            .get_file_format_factory("parquet")
+            .map(|factory| factory.create(state, &Default::default()).unwrap())
+            .unwrap_or(Arc::new(ParquetFormat::new()));
+
+        scan_format(state, &*format, &testdata, file_name, projection, limit).await
     }
 
     fn build_ctx(store_url: &url::Url) -> Arc<TaskContext> {
