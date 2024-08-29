@@ -3731,7 +3731,6 @@ SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
 
 - element_at
 
-
 ### `map_keys`
 
 Return a list of all keys in the map.
@@ -3756,7 +3755,6 @@ select map_keys(map([100, 5], [42,43]));
 ----
 [100, 5]
 ```
-
 
 ### `map_values`
 
