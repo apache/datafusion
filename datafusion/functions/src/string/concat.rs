@@ -17,12 +17,11 @@
 
 use std::any::Any;
 use std::sync::Arc;
-
+use arrow::array::{Array, StringViewArray};
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::Utf8;
 
-use datafusion_common::cast::as_string_array;
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::cast::{as_string_array, as_string_view_array};
+use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{lit, ColumnarValue, Expr, Volatility};
@@ -70,7 +69,7 @@ impl ScalarUDFImpl for ConcatFunc {
             Utf8 => Utf8,
             Utf8View => Utf8View,
             other => {
-                exec_err!("CONCAT function cannot use {other} as a return type");
+                return plan_err!("CONCAT function cannot use {other} as a return type");
             }
         })
     }
@@ -78,6 +77,7 @@ impl ScalarUDFImpl for ConcatFunc {
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
     /// concat('abcde', 2, NULL, 22) = 'abcde222'
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let args_datatype = args[0].data_type();
         let array_len = args
             .iter()
             .filter_map(|x| match x {
@@ -94,7 +94,18 @@ impl ScalarUDFImpl for ConcatFunc {
                     result.push_str(v);
                 }
             }
-            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))));
+
+            return match args_datatype {
+                DataType::Utf8View => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
+                },
+                DataType::Utf8 => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
+                },
+                other => {
+                    plan_err!("Concat function does not support datatype of {other}")
+                }
+            }
         }
 
         // Array
@@ -110,15 +121,41 @@ impl ScalarUDFImpl for ConcatFunc {
                         columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
                     }
                 }
+                ColumnarValue::Scalar(ScalarValue::Utf8View(maybe_value)) => {
+                    if let Some(s) = maybe_value {
+                        data_size += s.len() * len;
+                        columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
+                    }
+                },
                 ColumnarValue::Array(array) => {
-                    let string_array = as_string_array(array)?;
-                    data_size += string_array.values().len();
-                    let column = if array.is_nullable() {
-                        ColumnarValueRef::NullableArray(string_array)
-                    } else {
-                        ColumnarValueRef::NonNullableArray(string_array)
+                    match array.data_type() {
+                        DataType::Utf8 | DataType::LargeUtf8 => {
+                            let string_array = as_string_array(array)?;
+
+                            data_size += string_array.values().len();
+                            let column = if array.is_nullable() {
+                                ColumnarValueRef::NullableArray(string_array)
+                            } else {
+                                ColumnarValueRef::NonNullableArray(string_array)
+                            };
+                            columns.push(column);
+                        },
+                        DataType::Utf8View => {
+                            let string_array = as_string_view_array(array)?;
+
+                            data_size += string_array.len();
+                            let column = if array.is_nullable() {
+                                ColumnarValueRef::NullableStringViewArray(string_array)
+                            } else {
+                                ColumnarValueRef::NonNullableStringViewArray(string_array)
+                            };
+                            columns.push(column);
+                        },
+                        other => {
+                            return plan_err!("Input was {other} which is not a supported datatype for concat function")
+                        }
                     };
-                    columns.push(column);
+
                 }
                 _ => unreachable!(),
             }
@@ -131,7 +168,18 @@ impl ScalarUDFImpl for ConcatFunc {
                 .for_each(|column| builder.write::<true>(column, i));
             builder.append_offset();
         }
-        Ok(ColumnarValue::Array(Arc::new(builder.finish(None))))
+        let string_array = builder.finish(None);
+
+        match args_datatype {
+            DataType::Utf8 | DataType::LargeUtf8 => {
+                Ok(ColumnarValue::Array(Arc::new(string_array)))
+            },
+            DataType::Utf8View => {
+                Ok(ColumnarValue::Array(Arc::new(StringViewArray::from_iter(string_array.into_iter()))))
+            },
+            _ => unreachable!()
+        }
+
     }
 
     /// Simplify the `concat` function by
@@ -158,11 +206,11 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     for arg in args.clone() {
         match arg {
             // filter out `null` args
-            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None)) => {}
+            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None)) => {}
             // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
             // Concatenate it with the `contiguous_scalar`.
             Expr::Literal(
-                ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)),
+                ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) | ScalarValue::Utf8View(Some(v)),
             ) => contiguous_scalar += &v,
             Expr::Literal(x) => {
                 return internal_err!(
@@ -201,6 +249,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use DataType::*;
     use crate::utils::test::test_function;
     use arrow::array::Array;
     use arrow::array::{ArrayRef, StringArray};
