@@ -18,16 +18,21 @@
 use std::mem;
 use std::sync::Arc;
 
-use arrow_schema::DataType;
 use futures::{Stream, StreamExt};
 
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
 
-use crate::arrow::datatypes::{Schema, SchemaRef};
+use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
-use crate::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
+use crate::physical_plan::{ColumnStatistics, Statistics};
+
+#[cfg(feature = "parquet")]
+use crate::{
+    functions_aggregate::min_max::{MaxAccumulator, MinAccumulator},
+    physical_plan::Accumulator,
+    arrow::datatypes::Schema
+};
 
 use super::listing::PartitionedFile;
 
@@ -144,6 +149,8 @@ pub async fn get_statistics_with_limit(
     Ok((result_files, statistics))
 }
 
+// only adding this cfg b/c this is the only feature it's used with currently
+#[cfg(feature = "parquet")]
 pub(crate) fn create_max_min_accs(
     schema: &Schema,
 ) -> (Vec<Option<MaxAccumulator>>, Vec<Option<MinAccumulator>>) {
@@ -175,6 +182,8 @@ fn add_row_stats(
     }
 }
 
+// only adding this cfg b/c this is the only feature it's used with currently
+#[cfg(feature = "parquet")]
 pub(crate) fn get_col_stats(
     schema: &Schema,
     null_counts: Vec<Precision<usize>>,
@@ -205,8 +214,11 @@ pub(crate) fn get_col_stats(
 // (aka non Dictionary) output. We need to adjust the output data type to reflect this.
 // The reason min/max aggregate produces unpacked output because there is only one
 // min/max value per group; there is no needs to keep them Dictionary encode
-fn min_max_aggregate_data_type(input_type: &DataType) -> &DataType {
-    if let DataType::Dictionary(_, value_type) = input_type {
+//
+// only adding this cfg b/c this is the only feature it's used with currently
+#[cfg(feature = "parquet")]
+fn min_max_aggregate_data_type(input_type: &arrow_schema::DataType) -> &arrow_schema::DataType {
+    if let arrow_schema::DataType::Dictionary(_, value_type) = input_type {
         value_type.as_ref()
     } else {
         input_type
