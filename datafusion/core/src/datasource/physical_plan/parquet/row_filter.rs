@@ -376,7 +376,7 @@ type ProjectionAndExpr = (Vec<usize>, Arc<dyn PhysicalExpr>);
 // post-parquet-scan in a `FilterExec`. If it can be pushed down, this returns None. If it can't be
 // pushed down, this returns the content of [`PushdownChecker::required_column_indices`],
 // transformed into a [`Vec`].
-pub fn non_pushdown_columns(
+fn non_pushdown_columns(
     expr: Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
     table_schema: &Schema,
