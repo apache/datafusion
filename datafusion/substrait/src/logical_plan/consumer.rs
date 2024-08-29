@@ -1629,7 +1629,8 @@ fn next_struct_field_name(
     }
 }
 
-fn from_substrait_named_struct(
+/// Convert Substrait NamedStruct to DataFusion DFSchemaRef
+pub fn from_substrait_named_struct(
     base_schema: &NamedStruct,
     extensions: &Extensions,
     // optional qualifier to apply to every field in the schema
@@ -1646,10 +1647,10 @@ fn from_substrait_named_struct(
     );
     if name_idx != base_schema.names.len() {
         return substrait_err!(
-                                "Names list must match exactly to nested schema, but found {} uses for {} names",
-                                name_idx,
-                                base_schema.names.len()
-                            );
+            "Names list must match exactly to nested schema, but found {} uses for {} names",
+            name_idx,
+            base_schema.names.len()
+        );
     }
     let mut df_schema = DFSchema::try_from(Schema::new(fields?))?;
     match field_qualifier {
