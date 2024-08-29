@@ -170,9 +170,12 @@ impl ScalarUDFImpl for ConcatFunc {
             DataType::Utf8 | DataType::LargeUtf8 => {
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
-            DataType::Utf8View => Ok(ColumnarValue::Array(Arc::new(
-                StringViewArray::from_iter(string_array.into_iter()),
-            ))),
+            DataType::Utf8View => {
+                let string_array_iter = string_array.into_iter();
+                Ok(ColumnarValue::Array(Arc::new(
+                    StringViewArray::from_iter(string_array_iter),
+                )))
+            },
             _ => unreachable!(),
         }
     }
