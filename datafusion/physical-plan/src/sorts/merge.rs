@@ -18,19 +18,23 @@
 //! Merge that deals with an arbitrary size of streaming inputs.
 //! This is an order-preserving merge.
 
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{ready, Context, Poll};
+
 use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
 use crate::RecordBatchStream;
+
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
+
 use futures::Stream;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use hashbrown::HashSet;
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
 type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
@@ -97,6 +101,9 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
 
     /// number of rows produced
     produced: usize,
+
+    /// Cursors which are not initialized yet
+    uninitiated_cursors: HashSet<usize>,
 }
 
 impl<C: CursorValues> SortPreservingMergeStream<C> {
@@ -121,6 +128,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             batch_size,
             fetch,
             produced: 0,
+            uninitiated_cursors: (0..stream_count).collect(),
         }
     }
 
@@ -138,9 +146,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
 
         match futures::ready!(self.streams.poll_next(cx, idx)) {
-            None => Poll::Ready(Ok(())),
+            None => {
+                self.uninitiated_cursors.retain(|&x| x != idx);
+                Poll::Ready(Ok(()))
+            }
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
+                self.uninitiated_cursors.retain(|&x| x != idx);
                 self.cursors[idx] = Some(Cursor::new(cursor));
                 Poll::Ready(self.in_progress.push_batch(idx, batch))
             }
@@ -158,11 +170,27 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         if self.loser_tree.is_empty() {
             // Ensure all non-exhausted streams have a cursor from which
             // rows can be pulled
-            for i in 0..self.streams.partitions() {
-                if let Err(e) = ready!(self.maybe_poll_stream(cx, i)) {
-                    self.aborted = true;
-                    return Poll::Ready(Some(Err(e)));
+            loop {
+                let mut return_pending = false;
+                let uninitiated_cursors = self.uninitiated_cursors.clone();
+                for i in uninitiated_cursors {
+                    if self.uninitiated_cursors.contains(&i) {
+                        match self.maybe_poll_stream(cx, i) {
+                            Poll::Ready(Err(e)) => {
+                                self.aborted = true;
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                            Poll::Pending => {
+                                return_pending = true;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
+                if self.uninitiated_cursors.is_empty() {
+                    break;
+                }
+                return Poll::Pending;
             }
             self.init_loser_tree();
         }

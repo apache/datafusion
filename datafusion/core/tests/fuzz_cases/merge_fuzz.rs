@@ -16,13 +16,21 @@
 // under the License.
 
 //! Fuzz Test for various corner cases merging streams of RecordBatches
-use std::sync::Arc;
+
+use std::any::Any;
+use std::fmt::Formatter;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use arrow::{
     array::{ArrayRef, Int32Array},
     compute::SortOptions,
     record_batch::RecordBatch,
 };
+use arrow_array::UInt64Array;
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
@@ -30,7 +38,19 @@ use datafusion::physical_plan::{
     sorts::sort_preserving_merge::SortPreservingMergeExec,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::{DataFusionError, Result};
+use datafusion_common_runtime::SpawnedTask;
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties,
+};
 use test_utils::{batches_to_vec, partitions_to_sorted_vec, stagger_batch_with_seed};
+
+use futures::Stream;
+use tokio::time::timeout;
 
 #[tokio::test]
 async fn test_merge_2() {
@@ -159,4 +179,184 @@ fn make_staggered_batches(low: i32, high: i32, seed: u64) -> Vec<RecordBatch> {
 fn concat(mut v1: Vec<RecordBatch>, v2: Vec<RecordBatch>) -> Vec<RecordBatch> {
     v1.extend(v2);
     v1
+}
+
+#[derive(Debug, Clone)]
+struct CongestedExec {
+    schema: Schema,
+    cache: PlanProperties,
+    batch_size: u64,
+    limit: u64,
+    congestion_cleared: Arc<Mutex<bool>>,
+}
+
+impl CongestedExec {
+    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+        let columns = schema
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>)
+            .collect::<Vec<_>>();
+        let mut eq_properties = EquivalenceProperties::new(schema);
+        eq_properties.add_new_orderings(vec![columns
+            .iter()
+            .map(|expr| PhysicalSortExpr::new(expr.clone(), SortOptions::default()))
+            .collect::<Vec<_>>()]);
+        let mode = ExecutionMode::Unbounded;
+        PlanProperties::new(eq_properties, Partitioning::Hash(columns, 2), mode)
+    }
+}
+
+impl ExecutionPlan for CongestedExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
+    }
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+    fn execute(
+        &self,
+        partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        Ok(Box::pin(CongestedStream {
+            schema: Arc::new(self.schema.clone()),
+            batch_size: self.batch_size,
+            offset: 0,
+            congestion_cleared: self.congestion_cleared.clone(),
+            limit: self.limit,
+            partition,
+        }))
+    }
+}
+
+impl DisplayAs for CongestedExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "CongestedExec",).unwrap()
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct CongestedStream {
+    schema: SchemaRef,
+    batch_size: u64,
+    offset: u64,
+    limit: u64,
+    congestion_cleared: Arc<Mutex<bool>>,
+    partition: usize,
+}
+
+impl CongestedStream {
+    fn create_record_batch(
+        schema: SchemaRef,
+        value: u64,
+        batch_size: u64,
+    ) -> RecordBatch {
+        let values = (0..batch_size).map(|_| value).collect::<Vec<_>>();
+        let array = UInt64Array::from(values);
+        let array_ref: ArrayRef = Arc::new(array);
+        RecordBatch::try_new(schema, vec![array_ref]).unwrap()
+    }
+}
+
+impl Stream for CongestedStream {
+    type Item = Result<RecordBatch>;
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        match self.partition {
+            0 => {
+                let cleared = self.congestion_cleared.lock().unwrap();
+                if *cleared {
+                    std::mem::drop(cleared);
+                    if self.offset == self.limit {
+                        return Poll::Ready(None);
+                    }
+                    let batch = CongestedStream::create_record_batch(
+                        Arc::clone(&self.schema),
+                        0,
+                        self.batch_size,
+                    );
+                    self.offset += self.batch_size;
+                    Poll::Ready(Some(Ok(batch)))
+                } else {
+                    Poll::Pending
+                }
+            }
+            1 => {
+                if self.offset == self.limit {
+                    return Poll::Ready(None);
+                }
+                let batch = CongestedStream::create_record_batch(
+                    Arc::clone(&self.schema),
+                    0,
+                    self.batch_size,
+                );
+                self.offset += self.batch_size;
+                let mut cleared = self.congestion_cleared.lock().unwrap();
+                *cleared = true;
+                Poll::Ready(Some(Ok(batch)))
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl RecordBatchStream for CongestedStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
+#[tokio::test]
+async fn test_spm_congestion() -> Result<()> {
+    let task_ctx = Arc::new(TaskContext::default());
+    let schema = Schema::new(vec![Field::new("c1", DataType::UInt64, false)]);
+    let source = CongestedExec {
+        schema: schema.clone(),
+        batch_size: 1,
+        cache: CongestedExec::compute_properties(Arc::new(schema.clone())),
+        limit: 1_000,
+        congestion_cleared: Arc::new(Mutex::new(false)),
+    };
+    let spm = SortPreservingMergeExec::new(
+        vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            SortOptions::default(),
+        )],
+        Arc::new(source),
+    );
+    let spm_task =
+        SpawnedTask::spawn(async move { collect(Arc::new(spm), task_ctx).await });
+
+    let result = timeout(Duration::from_secs(1), spm_task.join()).await;
+    match result {
+        Ok(Ok(Ok(_batches))) => Ok(()),
+        Ok(Ok(Err(e))) => Err(e),
+        Ok(Err(_)) => Err(DataFusionError::Execution(
+            "SortPreservingMerge task panicked or was cancelled".to_string(),
+        )),
+        Err(_) => Err(DataFusionError::Execution(
+            "SortPreservingMerge caused a deadlock".to_string(),
+        )),
+    }
 }
