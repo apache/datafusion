@@ -23,9 +23,6 @@ mod tests {
     use datafusion::common::Result;
     use datafusion::dataframe::DataFrame;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
-    use std::fs::File;
-    use std::io::BufReader;
-    use substrait::proto::Plan;
 
     #[tokio::test]
     async fn scalar_function_compound_signature() -> Result<()> {
