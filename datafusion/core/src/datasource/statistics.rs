@@ -29,9 +29,9 @@ use crate::physical_plan::{ColumnStatistics, Statistics};
 
 #[cfg(feature = "parquet")]
 use crate::{
+    arrow::datatypes::Schema,
     functions_aggregate::min_max::{MaxAccumulator, MinAccumulator},
     physical_plan::Accumulator,
-    arrow::datatypes::Schema
 };
 
 use super::listing::PartitionedFile;
@@ -217,7 +217,9 @@ pub(crate) fn get_col_stats(
 //
 // only adding this cfg b/c this is the only feature it's used with currently
 #[cfg(feature = "parquet")]
-fn min_max_aggregate_data_type(input_type: &arrow_schema::DataType) -> &arrow_schema::DataType {
+fn min_max_aggregate_data_type(
+    input_type: &arrow_schema::DataType,
+) -> &arrow_schema::DataType {
     if let arrow_schema::DataType::Dictionary(_, value_type) = input_type {
         value_type.as_ref()
     } else {
