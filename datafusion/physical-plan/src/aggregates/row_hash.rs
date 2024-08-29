@@ -282,9 +282,10 @@ impl SkipAggregationProbe {
 /// copies, resulting in poor performance.
 ///
 /// In contrast, the blocked approach allocates capacity for the block
-/// based on a predefined block size firstly. And
-/// when the block reaches its limit, we allocate a new block instead of
-/// expanding the current one and copying the data.
+/// based on a predefined block size firstly. 
+/// And when the block reaches its limit, we allocate a new block
+/// (also with the same predefined block size based capacity) 
+/// instead of expanding the current one and copying the data.
 /// This method eliminates unnecessary copies and significantly improves performance.
 /// For a nice introduction to the blocked approach, maybe you can see [#7065].
 ///
