@@ -3641,6 +3641,8 @@ Unwraps struct fields into columns.
 - [map](#map)
 - [make_map](#make_map)
 - [map_extract](#map_extract)
+- [map_keys](#map_keys)
+- [map_values](#map_values)
 
 ### `map`
 
@@ -3728,6 +3730,58 @@ SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
 #### Aliases
 
 - element_at
+
+
+### `map_keys`
+
+Return a list of all keys in the map.
+
+```
+map_keys(map)
+```
+
+#### Arguments
+
+- `map`: Map expression.
+  Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```
+SELECT map_keys(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[a, b, c] 
+
+select map_keys(map([100, 5], [42,43]));
+----
+[100, 5]
+```
+
+
+### `map_values`
+
+Return a list of all values in the map.
+
+```
+map_values(map)
+```
+
+#### Arguments
+
+- `map`: Map expression.
+  Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```
+SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[1, , 3]
+
+select map_keys(map([100, 5], [42,43]));
+----
+[42, 43]
+```
 
 ## Hashing Functions
 

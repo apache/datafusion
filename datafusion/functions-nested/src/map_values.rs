@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ScalarUDFImpl`] definitions for map_keys function.
+//! [`ScalarUDFImpl`] definitions for map_values function.
 
 use crate::utils::{get_map_entry_field, make_scalar_function};
 use arrow_array::{Array, ArrayRef, ListArray};
