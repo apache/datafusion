@@ -245,8 +245,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Build Unnest expression
         if name.eq("unnest") {
-            let mut exprs =
-                self.function_args_to_expr(args.clone(), schema, planner_context)?;
+            let mut exprs = self.function_args_to_expr(args, schema, planner_context)?;
             if exprs.len() != 1 {
                 return plan_err!("unnest() requires exactly one argument");
             }
@@ -283,18 +282,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let func_deps = schema.functional_dependencies();
             // Find whether ties are possible in the given ordering
             let is_ordering_strict = order_by.iter().find_map(|orderby_expr| {
-                if let Expr::Sort(sort_expr) = orderby_expr {
-                    if let Expr::Column(col) = sort_expr.expr.as_ref() {
-                        let idx = schema.index_of_column(col).ok()?;
-                        return if func_deps.iter().any(|dep| {
-                            dep.source_indices == vec![idx]
-                                && dep.mode == Dependency::Single
-                        }) {
-                            Some(true)
-                        } else {
-                            Some(false)
-                        };
-                    }
+                if let Expr::Column(col) = orderby_expr.expr.as_ref() {
+                    let idx = schema.index_of_column(col).ok()?;
+                    return if func_deps.iter().any(|dep| {
+                        dep.source_indices == vec![idx] && dep.mode == Dependency::Single
+                    }) {
+                        Some(true)
+                    } else {
+                        Some(false)
+                    };
                 }
                 Some(false)
             });

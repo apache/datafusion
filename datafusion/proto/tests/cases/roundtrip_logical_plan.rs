@@ -59,7 +59,7 @@ use datafusion_common::{
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Sort, Unnest, WildcardOptions,
+    Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -104,10 +104,8 @@ fn roundtrip_json_test(_proto: &protobuf::LogicalExprNode) {}
 fn roundtrip_expr_test(initial_struct: Expr, ctx: SessionContext) {
     let extension_codec = DefaultLogicalExtensionCodec {};
     let proto: protobuf::LogicalExprNode =
-        match serialize_expr(&initial_struct, &extension_codec) {
-            Ok(p) => p,
-            Err(e) => panic!("Error serializing expression: {:?}", e),
-        };
+        serialize_expr(&initial_struct, &extension_codec)
+            .unwrap_or_else(|e| panic!("Error serializing expression: {:?}", e));
     let round_trip: Expr =
         from_proto::parse_expr(&proto, &ctx, &extension_codec).unwrap();
 
@@ -1940,14 +1938,6 @@ fn roundtrip_try_cast() {
 }
 
 #[test]
-fn roundtrip_sort_expr() {
-    let test_expr = Expr::Sort(Sort::new(Box::new(lit(1.0_f32)), true, true));
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
 fn roundtrip_negative() {
     let test_expr = Expr::Negative(Box::new(lit(1.0_f32)));
 
@@ -2436,7 +2426,7 @@ fn roundtrip_window() {
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
     ))
-    .window_frame(row_number_frame.clone())
+    .window_frame(row_number_frame)
     .build()
     .unwrap();
 

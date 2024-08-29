@@ -205,7 +205,7 @@ fn roundtrip_crossjoin() -> Result<()> {
     println!("plan {}", plan.display_indent());
 
     let plan_roundtrip = sql_to_rel
-        .sql_statement_to_plan(roundtrip_statement.clone())
+        .sql_statement_to_plan(roundtrip_statement)
         .unwrap();
 
     let expected = "Projection: j1.j1_id, j2.j2_string\

@@ -102,11 +102,10 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             }
 
             // TODO other expressions are not handled yet:
-            // - AGGREGATE, WINDOW and SORT should not end up in filter conditions, except maybe in some edge cases
+            // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
             // - Can `Wildcard` be considered as a `Literal`?
             // - ScalarVariable could be `applicable`, but that would require access to the context
             Expr::AggregateFunction { .. }
-            | Expr::Sort { .. }
             | Expr::WindowFunction { .. }
             | Expr::Wildcard { .. }
             | Expr::Unnest { .. }
@@ -282,7 +281,7 @@ async fn prune_partitions(
         Default::default(),
     )?;
 
-    let batch = RecordBatch::try_new(schema.clone(), arrays)?;
+    let batch = RecordBatch::try_new(schema, arrays)?;
 
     // TODO: Plumb this down
     let props = ExecutionProps::new();

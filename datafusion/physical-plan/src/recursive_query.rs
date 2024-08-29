@@ -394,7 +394,7 @@ impl Stream for RecursiveQueryStream {
                     self.recursive_stream = None;
                     self.poll_next_iteration(cx)
                 }
-                Some(Ok(batch)) => self.push_batch(batch.clone()),
+                Some(Ok(batch)) => self.push_batch(batch),
                 _ => Poll::Ready(batch_result),
             }
         } else {

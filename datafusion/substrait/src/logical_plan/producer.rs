@@ -808,31 +808,26 @@ pub fn to_substrait_agg_measure(
 /// Converts sort expression to corresponding substrait `SortField`
 fn to_substrait_sort_field(
     ctx: &SessionContext,
-    expr: &Expr,
+    sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
 ) -> Result<SortField> {
-    match expr {
-        Expr::Sort(sort) => {
-            let sort_kind = match (sort.asc, sort.nulls_first) {
-                (true, true) => SortDirection::AscNullsFirst,
-                (true, false) => SortDirection::AscNullsLast,
-                (false, true) => SortDirection::DescNullsFirst,
-                (false, false) => SortDirection::DescNullsLast,
-            };
-            Ok(SortField {
-                expr: Some(to_substrait_rex(
-                    ctx,
-                    sort.expr.deref(),
-                    schema,
-                    0,
-                    extensions,
-                )?),
-                sort_kind: Some(SortKind::Direction(sort_kind.into())),
-            })
-        }
-        _ => exec_err!("expects to receive sort expression"),
-    }
+    let sort_kind = match (sort.asc, sort.nulls_first) {
+        (true, true) => SortDirection::AscNullsFirst,
+        (true, false) => SortDirection::AscNullsLast,
+        (false, true) => SortDirection::DescNullsFirst,
+        (false, false) => SortDirection::DescNullsLast,
+    };
+    Ok(SortField {
+        expr: Some(to_substrait_rex(
+            ctx,
+            sort.expr.deref(),
+            schema,
+            0,
+            extensions,
+        )?),
+        sort_kind: Some(SortKind::Direction(sort_kind.into())),
+    })
 }
 
 /// Return Substrait scalar function with two arguments
@@ -2107,30 +2102,26 @@ fn try_to_substrait_field_reference(
 
 fn substrait_sort_field(
     ctx: &SessionContext,
-    expr: &Expr,
+    sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
 ) -> Result<SortField> {
-    match expr {
-        Expr::Sort(Sort {
-            expr,
-            asc,
-            nulls_first,
-        }) => {
-            let e = to_substrait_rex(ctx, expr, schema, 0, extensions)?;
-            let d = match (asc, nulls_first) {
-                (true, true) => SortDirection::AscNullsFirst,
-                (true, false) => SortDirection::AscNullsLast,
-                (false, true) => SortDirection::DescNullsFirst,
-                (false, false) => SortDirection::DescNullsLast,
-            };
-            Ok(SortField {
-                expr: Some(e),
-                sort_kind: Some(SortKind::Direction(d as i32)),
-            })
-        }
-        _ => not_impl_err!("Expecting sort expression but got {expr:?}"),
-    }
+    let Sort {
+        expr,
+        asc,
+        nulls_first,
+    } = sort;
+    let e = to_substrait_rex(ctx, expr, schema, 0, extensions)?;
+    let d = match (asc, nulls_first) {
+        (true, true) => SortDirection::AscNullsFirst,
+        (true, false) => SortDirection::AscNullsLast,
+        (false, true) => SortDirection::DescNullsFirst,
+        (false, false) => SortDirection::DescNullsLast,
+    };
+    Ok(SortField {
+        expr: Some(e),
+        sort_kind: Some(SortKind::Direction(d as i32)),
+    })
 }
 
 fn substrait_field_ref(index: usize) -> Result<Expression> {

@@ -908,7 +908,7 @@ mod tests {
             schema.clone(),
             Some(vec![0, 3, 5, schema.fields().len()]),
             Statistics::new_unknown(&schema),
-            to_partition_cols(partition_cols.clone()),
+            to_partition_cols(partition_cols),
         )
         .projected_file_schema();
 
@@ -941,7 +941,7 @@ mod tests {
             schema.clone(),
             None,
             Statistics::new_unknown(&schema),
-            to_partition_cols(partition_cols.clone()),
+            to_partition_cols(partition_cols),
         )
         .projected_file_schema();
 
@@ -979,7 +979,7 @@ mod tests {
             name: &'static str,
             file_schema: Schema,
             files: Vec<File>,
-            sort: Vec<datafusion_expr::Expr>,
+            sort: Vec<datafusion_expr::SortExpr>,
             expected_result: Result<Vec<Vec<&'static str>>, &'static str>,
         }
 

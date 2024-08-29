@@ -17,7 +17,7 @@
 
 //! View data source which uses a LogicalPlan as it's input.
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, borrow::Cow, sync::Arc};
 
 use crate::{
     error::Result,
@@ -90,8 +90,8 @@ impl TableProvider for ViewTable {
         self
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
-        Some(&self.logical_plan)
+    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+        Some(Cow::Borrowed(&self.logical_plan))
     }
 
     fn schema(&self) -> SchemaRef {

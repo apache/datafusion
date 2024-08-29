@@ -22,7 +22,7 @@ use crate::{Expr, LogicalPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Constraints, Result};
 
-use std::any::Any;
+use std::{any::Any, borrow::Cow};
 
 /// Indicates how a filter expression is handled by
 /// [`TableProvider::scan`].
@@ -122,7 +122,7 @@ pub trait TableSource: Sync + Send {
     }
 
     /// Get the Logical plan of this table provider, if available.
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
         None
     }
 
