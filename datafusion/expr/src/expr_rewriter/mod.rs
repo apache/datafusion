@@ -60,7 +60,7 @@ pub trait FunctionRewrite {
     ) -> Result<Transformed<Expr>>;
 }
 
-/// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
+/// Recursively call `LogicalPlanBuilder::normalize` on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     expr.transform(|expr| {
