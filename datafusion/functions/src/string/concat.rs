@@ -66,11 +66,8 @@ impl ScalarUDFImpl for ConcatFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
         Ok(match &arg_types[0] {
-            Utf8 => Utf8,
             Utf8View => Utf8View,
-            other => {
-                return plan_err!("CONCAT function cannot use {other} as a return type");
-            }
+            _ => Utf8,
         })
     }
 
