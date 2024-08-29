@@ -2090,6 +2090,29 @@ mod tests {
         Ok(())
     }
 
+    /// parquet's get_data_page_statistics is not yet implemented
+    /// for view types.
+    #[should_panic(expected = "not implemented")]
+    #[tokio::test]
+    async fn test_struct_filter_parquet_with_view_types() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().to_str().unwrap().to_string() + "/test.parquet";
+        write_file(&path);
+
+        let ctx = SessionContext::new();
+
+        let mut options = TableParquetOptions::default();
+        options.global.schema_force_string_view = true;
+        let opt =
+            ListingOptions::new(Arc::new(ParquetFormat::default().with_options(options)));
+
+        ctx.register_listing_table("base_table", path, opt, None, None)
+            .await
+            .unwrap();
+        let sql = "select * from base_table where name='test02'";
+        let _ = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+    }
+
     fn write_file(file: &String) {
         let struct_fields = Fields::from(vec![
             Field::new("id", DataType::Int64, false),
