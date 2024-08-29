@@ -77,6 +77,7 @@ pub struct CsvExec {
     has_header: bool,
     delimiter: u8,
     quote: u8,
+    terminator: Option<u8>,
     escape: Option<u8>,
     comment: Option<u8>,
     newlines_in_values: bool,
@@ -98,6 +99,7 @@ pub struct CsvExecBuilder {
     has_header: bool,
     delimiter: u8,
     quote: u8,
+    terminator: Option<u8>,
     escape: Option<u8>,
     comment: Option<u8>,
     newlines_in_values: bool,
@@ -112,6 +114,7 @@ impl CsvExecBuilder {
             has_header: false,
             delimiter: b',',
             quote: b'"',
+            terminator: None,
             escape: None,
             comment: None,
             newlines_in_values: false,
@@ -140,6 +143,14 @@ impl CsvExecBuilder {
     /// The default is `"`.
     pub fn with_quote(mut self, quote: u8) -> Self {
         self.quote = quote;
+        self
+    }
+
+    /// Set the line terminator. If not set, the default is CRLF.
+    ///
+    /// The default is None.
+    pub fn with_terminator(mut self, terminator: Option<u8>) -> Self {
+        self.terminator = terminator;
         self
     }
 
@@ -191,6 +202,7 @@ impl CsvExecBuilder {
             has_header,
             delimiter,
             quote,
+            terminator,
             escape,
             comment,
             newlines_in_values,
@@ -210,6 +222,7 @@ impl CsvExecBuilder {
             has_header,
             delimiter,
             quote,
+            terminator,
             escape,
             newlines_in_values,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -229,6 +242,7 @@ impl CsvExec {
         has_header: bool,
         delimiter: u8,
         quote: u8,
+        terminator: Option<u8>,
         escape: Option<u8>,
         comment: Option<u8>,
         newlines_in_values: bool,
@@ -238,6 +252,7 @@ impl CsvExec {
             .with_has_header(has_header)
             .with_delimeter(delimiter)
             .with_quote(quote)
+            .with_terminator(terminator)
             .with_escape(escape)
             .with_comment(comment)
             .with_newlines_in_values(newlines_in_values)
@@ -268,6 +283,11 @@ impl CsvExec {
     /// The quote character
     pub fn quote(&self) -> u8 {
         self.quote
+    }
+
+    /// The line terminator
+    pub fn terminator(&self) -> Option<u8> {
+        self.terminator
     }
 
     /// Lines beginning with this byte are ignored.
@@ -406,6 +426,7 @@ impl ExecutionPlan for CsvExec {
             delimiter: self.delimiter,
             quote: self.quote,
             escape: self.escape,
+            terminator: self.terminator,
             object_store,
             comment: self.comment,
         });
@@ -441,6 +462,7 @@ impl ExecutionPlan for CsvExec {
             delimiter: self.delimiter,
             quote: self.quote,
             escape: self.escape,
+            terminator: self.terminator,
             comment: self.comment,
             newlines_in_values: self.newlines_in_values,
             metrics: self.metrics.clone(),
@@ -459,6 +481,7 @@ pub struct CsvConfig {
     has_header: bool,
     delimiter: u8,
     quote: u8,
+    terminator: Option<u8>,
     escape: Option<u8>,
     object_store: Arc<dyn ObjectStore>,
     comment: Option<u8>,
@@ -474,6 +497,7 @@ impl CsvConfig {
         has_header: bool,
         delimiter: u8,
         quote: u8,
+        terminator: Option<u8>,
         object_store: Arc<dyn ObjectStore>,
         comment: Option<u8>,
     ) -> Self {
@@ -484,6 +508,7 @@ impl CsvConfig {
             has_header,
             delimiter,
             quote,
+            terminator,
             escape: None,
             object_store,
             comment,
@@ -503,6 +528,9 @@ impl CsvConfig {
             .with_header(self.has_header)
             .with_quote(self.quote);
 
+        if let Some(terminator) = self.terminator {
+            builder = builder.with_terminator(terminator);
+        }
         if let Some(proj) = &self.file_projection {
             builder = builder.with_projection(proj.clone());
         }
@@ -775,6 +803,7 @@ mod tests {
             .with_has_header(true)
             .with_delimeter(b',')
             .with_quote(b'"')
+            .with_terminator(None)
             .with_escape(None)
             .with_comment(None)
             .with_newlines_in_values(false)
@@ -844,6 +873,7 @@ mod tests {
             .with_has_header(true)
             .with_delimeter(b',')
             .with_quote(b'"')
+            .with_terminator(None)
             .with_escape(None)
             .with_comment(None)
             .with_newlines_in_values(false)
@@ -913,6 +943,7 @@ mod tests {
             .with_has_header(true)
             .with_delimeter(b',')
             .with_quote(b'"')
+            .with_terminator(None)
             .with_escape(None)
             .with_comment(None)
             .with_newlines_in_values(false)
@@ -979,6 +1010,7 @@ mod tests {
             .with_has_header(true)
             .with_delimeter(b',')
             .with_quote(b'"')
+            .with_terminator(None)
             .with_escape(None)
             .with_comment(None)
             .with_newlines_in_values(false)
@@ -1044,6 +1076,7 @@ mod tests {
             .with_has_header(true)
             .with_delimeter(b',')
             .with_quote(b'"')
+            .with_terminator(None)
             .with_escape(None)
             .with_comment(None)
             .with_newlines_in_values(false)
@@ -1139,6 +1172,7 @@ mod tests {
             .with_has_header(true)
             .with_delimeter(b',')
             .with_quote(b'"')
+            .with_terminator(None)
             .with_escape(None)
             .with_comment(None)
             .with_newlines_in_values(false)
@@ -1193,6 +1227,37 @@ mod tests {
 
         let df = session_ctx
             .read_csv("memory:///", CsvReadOptions::new())
+            .await
+            .unwrap();
+
+        let result = df.collect().await.unwrap();
+
+        let expected = [
+            "+---+---+",
+            "| a | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "| 3 | 4 |",
+            "+---+---+",
+        ];
+
+        crate::assert_batches_eq!(expected, &result);
+    }
+
+    #[tokio::test]
+    async fn test_terminator() {
+        let session_ctx = SessionContext::new();
+        let store = object_store::memory::InMemory::new();
+
+        let data = bytes::Bytes::from("a,b 1,2 3,4");
+        let path = object_store::path::Path::from("a.csv");
+        store.put(&path, data.into()).await.unwrap();
+
+        let url = Url::parse("memory://").unwrap();
+        session_ctx.register_object_store(&url, Arc::new(store));
+
+        let df = session_ctx
+            .read_csv("memory:///", CsvReadOptions::new().terminator(Some(b' ')))
             .await
             .unwrap();
 
@@ -1365,6 +1430,7 @@ mod tests {
             has_header,
             delimiter,
             quote,
+            terminator,
             escape,
             comment,
             newlines_in_values,
@@ -1374,6 +1440,7 @@ mod tests {
         assert_eq!(has_header, default_options.has_header.unwrap_or(false));
         assert_eq!(delimiter, default_options.delimiter);
         assert_eq!(quote, default_options.quote);
+        assert_eq!(terminator, default_options.terminator);
         assert_eq!(escape, default_options.escape);
         assert_eq!(comment, default_options.comment);
         assert_eq!(

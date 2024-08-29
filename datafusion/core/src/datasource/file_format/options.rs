@@ -59,6 +59,8 @@ pub struct CsvReadOptions<'a> {
     pub delimiter: u8,
     /// An optional quote character. Defaults to `b'"'`.
     pub quote: u8,
+    /// An optional terminator character. Defaults to None (CRLF).
+    pub terminator: Option<u8>,
     /// An optional escape character. Defaults to None.
     pub escape: Option<u8>,
     /// If enabled, lines beginning with this byte are ignored.
@@ -102,6 +104,7 @@ impl<'a> CsvReadOptions<'a> {
             schema_infer_max_records: DEFAULT_SCHEMA_INFER_MAX_RECORD,
             delimiter: b',',
             quote: b'"',
+            terminator: None,
             escape: None,
             newlines_in_values: false,
             file_extension: DEFAULT_CSV_EXTENSION,
@@ -133,6 +136,12 @@ impl<'a> CsvReadOptions<'a> {
     /// Specify quote to use for CSV read
     pub fn quote(mut self, quote: u8) -> Self {
         self.quote = quote;
+        self
+    }
+
+    /// Specify terminator to use for CSV read
+    pub fn terminator(mut self, terminator: Option<u8>) -> Self {
+        self.terminator = terminator;
         self
     }
 

@@ -863,6 +863,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             has_header: proto_opts.has_header.first().map(|h| *h != 0),
             delimiter: proto_opts.delimiter[0],
             quote: proto_opts.quote[0],
+            terminator: proto_opts.terminator.first().copied(),
             escape: proto_opts.escape.first().copied(),
             double_quote: proto_opts.has_header.first().map(|h| *h != 0),
             newlines_in_values: proto_opts.newlines_in_values.first().map(|h| *h != 0),

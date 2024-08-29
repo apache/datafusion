@@ -1628,6 +1628,7 @@ config_namespace! {
         pub has_header: Option<bool>, default = None
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
+        pub terminator: Option<u8>, default = None
         pub escape: Option<u8>, default = None
         pub double_quote: Option<bool>, default = None
         /// Specifies whether newlines in (quoted) values are supported.
@@ -1696,6 +1697,13 @@ impl CsvOptions {
         self
     }
 
+    /// The character that terminates a row.
+    /// - default to '\n'
+    pub fn with_terminator(mut self, terminator: Option<u8>) -> Self {
+        self.terminator = terminator;
+        self
+    }
+
     /// The escape character in a row.
     /// - default is None
     pub fn with_escape(mut self, escape: Option<u8>) -> Self {
@@ -1740,6 +1748,11 @@ impl CsvOptions {
     /// The quote character.
     pub fn quote(&self) -> u8 {
         self.quote
+    }
+
+    /// The terminator character.
+    pub fn terminator(&self) -> Option<u8> {
+        self.terminator
     }
 
     /// The escape character.
