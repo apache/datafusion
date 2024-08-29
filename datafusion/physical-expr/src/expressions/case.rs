@@ -380,7 +380,7 @@ impl CaseExpr {
 
         // keep `else_expr`'s data type and return type consistent
         let e = self.else_expr.as_ref().unwrap();
-        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
+        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type)
             .unwrap_or_else(|_| Arc::clone(e));
         let else_ = Scalar::new(expr.evaluate(batch)?.into_array(1)?);
 

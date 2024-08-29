@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::session::Session;
@@ -56,8 +57,8 @@ pub trait TableProvider: Sync + Send {
         None
     }
 
-    /// Get the [`LogicalPlan`] of this table, if available
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    /// Get the [`LogicalPlan`] of this table, if available.
+    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
         None
     }
 

@@ -33,7 +33,6 @@ use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
 };
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::utils::{
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
@@ -361,9 +360,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .build()
             }
             LogicalPlan::Filter(mut filter) => {
-                filter.input = Arc::new(
-                    self.try_process_aggregate_unnest(unwrap_arc(filter.input))?,
-                );
+                filter.input =
+                    Arc::new(self.try_process_aggregate_unnest(Arc::unwrap_or_clone(
+                        filter.input,
+                    ))?);
                 Ok(LogicalPlan::Filter(filter))
             }
             _ => Ok(input),
@@ -401,7 +401,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         //     Projection: tab.array_col AS unnest(tab.array_col)
         //       TableScan: tab
         // ```
-        let mut intermediate_plan = unwrap_arc(input);
+        let mut intermediate_plan = Arc::unwrap_or_clone(input);
         let mut intermediate_select_exprs = group_expr;
 
         loop {

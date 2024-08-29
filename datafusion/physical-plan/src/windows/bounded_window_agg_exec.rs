@@ -59,7 +59,8 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use hashbrown::raw::RawTable;
@@ -253,7 +254,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         vec![&self.input]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         if self.input_order_mode != InputOrderMode::Sorted
@@ -1311,7 +1312,7 @@ mod tests {
                 &args,
                 &partitionby_exprs,
                 &orderby_exprs,
-                Arc::new(window_frame.clone()),
+                Arc::new(window_frame),
                 &input.schema(),
                 false,
             )?],
@@ -1484,7 +1485,7 @@ mod tests {
         let partitions = vec![
             Arc::new(TestStreamPartition {
                 schema: Arc::clone(&schema),
-                batches: batches.clone(),
+                batches,
                 idx: 0,
                 state: PolingState::BatchReturn,
                 sleep_duration: per_batch_wait_duration,

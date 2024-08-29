@@ -167,7 +167,7 @@ where
 
                 // Rebuilding input values with a new nulls mask, which is equal to
                 // the union of original nulls and filter mask
-                let (dt, values_buf, original_nulls) = values.clone().into_parts();
+                let (dt, values_buf, original_nulls) = values.into_parts();
                 let nulls_buf =
                     NullBuffer::union(original_nulls.as_ref(), Some(&filter_nulls));
                 PrimitiveArray::<T>::new(values_buf, nulls_buf).with_data_type(dt)

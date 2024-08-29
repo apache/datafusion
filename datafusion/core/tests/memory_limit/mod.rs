@@ -40,7 +40,7 @@ use tokio::fs::File;
 use datafusion::datasource::streaming::StreamingTable;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -509,16 +509,16 @@ impl TestCase {
 
         let table = scenario.table();
 
-        let mut rt_config = RuntimeConfig::new()
+        let rt_config = RuntimeEnvBuilder::new()
             // disk manager setting controls the spilling
             .with_disk_manager(disk_manager_config)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);
 
-        if let Some(pool) = memory_pool {
-            rt_config = rt_config.with_memory_pool(pool);
+        let runtime = if let Some(pool) = memory_pool {
+            rt_config.with_memory_pool(pool).build().unwrap()
+        } else {
+            rt_config.build().unwrap()
         };
-
-        let runtime = RuntimeEnv::new(rt_config).unwrap();
 
         // Configure execution
         let builder = SessionStateBuilder::new()

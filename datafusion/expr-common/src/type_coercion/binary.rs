@@ -936,6 +936,9 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
             string_concat_internal_coercion(from_type, &LargeUtf8)
         }
+        (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
+            string_coercion(lhs_value_type, rhs_value_type).or(None)
+        }
         _ => None,
     })
 }
@@ -1878,7 +1881,7 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
-            DataType::Timestamp(TimeUnit::Second, utc.clone()),
+            DataType::Timestamp(TimeUnit::Second, utc),
             Operator::Eq,
             DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into()))
         );

@@ -26,7 +26,7 @@ use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
-use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
+use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols, NamePreserver};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -51,7 +51,6 @@ use datafusion_common::{
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
-use crate::logical_plan::tree_node::unwrap_arc;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -770,7 +769,7 @@ impl LogicalPlan {
                 ..
             }) => {
                 // Update schema with unnested column type.
-                unnest_with_options(unwrap_arc(input), exec_columns, options)
+                unnest_with_options(Arc::unwrap_or_clone(input), exec_columns, options)
             }
         }
     }
@@ -1160,10 +1159,7 @@ impl LogicalPlan {
         Ok(if let LogicalPlan::Prepare(prepare_lp) = plan_with_values {
             param_values.verify(&prepare_lp.data_types)?;
             // try and take ownership of the input if is not shared, clone otherwise
-            match Arc::try_unwrap(prepare_lp.input) {
-                Ok(input) => input,
-                Err(arc_input) => arc_input.as_ref().clone(),
-            }
+            Arc::unwrap_or_clone(prepare_lp.input)
         } else {
             plan_with_values
         })
@@ -1339,15 +1335,20 @@ impl LogicalPlan {
     ) -> Result<LogicalPlan> {
         self.transform_up_with_subqueries(|plan| {
             let schema = Arc::clone(plan.schema());
+            let name_preserver = NamePreserver::new(&plan);
             plan.map_expressions(|e| {
-                e.infer_placeholder_types(&schema)?.transform_up(|e| {
-                    if let Expr::Placeholder(Placeholder { id, .. }) = e {
-                        let value = param_values.get_placeholders_with_values(&id)?;
-                        Ok(Transformed::yes(Expr::Literal(value)))
-                    } else {
-                        Ok(Transformed::no(e))
-                    }
-                })
+                let original_name = name_preserver.save(&e)?;
+                let transformed_expr =
+                    e.infer_placeholder_types(&schema)?.transform_up(|e| {
+                        if let Expr::Placeholder(Placeholder { id, .. }) = e {
+                            let value = param_values.get_placeholders_with_values(&id)?;
+                            Ok(Transformed::yes(Expr::Literal(value)))
+                        } else {
+                            Ok(Transformed::no(e))
+                        }
+                    })?;
+                // Preserve name to avoid breaking column references to this expression
+                transformed_expr.map_data(|expr| original_name.restore(expr))
             })
         })
         .map(|res| res.data)
@@ -2927,7 +2928,11 @@ impl Debug for Subquery {
     }
 }
 
-/// Logical partitioning schemes supported by the repartition operator.
+/// Logical partitioning schemes supported by [`LogicalPlan::Repartition`]
+///
+/// See [`Partitioning`] for more details on partitioning
+///
+/// [`Partitioning`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html#
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions

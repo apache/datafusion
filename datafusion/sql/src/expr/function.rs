@@ -245,8 +245,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Build Unnest expression
         if name.eq("unnest") {
-            let mut exprs =
-                self.function_args_to_expr(args.clone(), schema, planner_context)?;
+            let mut exprs = self.function_args_to_expr(args, schema, planner_context)?;
             if exprs.len() != 1 {
                 return plan_err!("unnest() requires exactly one argument");
             }
@@ -295,8 +294,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Some(false)
                         };
                     }
+                    Some(false)
+                } else {
+                    panic!("order_by expression must be of type Sort");
                 }
-                Some(false)
             });
 
             let window_frame = window

@@ -1198,7 +1198,6 @@ dependencies = [
  "datafusion-optimizer",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
- "datafusion-physical-expr-functions-aggregate",
  "datafusion-physical-optimizer",
  "datafusion-physical-plan",
  "datafusion-sql",
@@ -1287,12 +1286,14 @@ dependencies = [
  "parquet",
  "paste",
  "sqlparser",
+ "tokio",
 ]
 
 [[package]]
 name = "datafusion-common-runtime"
 version = "41.0.0"
 dependencies = [
+ "log",
  "tokio",
 ]
 
@@ -1414,6 +1415,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions",
  "datafusion-functions-aggregate",
+ "datafusion-physical-expr-common",
  "itertools",
  "log",
  "paste",
@@ -1491,20 +1493,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "datafusion-physical-expr-functions-aggregate"
-version = "41.0.0"
-dependencies = [
- "ahash",
- "arrow",
- "datafusion-common",
- "datafusion-expr",
- "datafusion-expr-common",
- "datafusion-functions-aggregate-common",
- "datafusion-physical-expr-common",
- "rand",
-]
-
-[[package]]
 name = "datafusion-physical-optimizer"
 version = "41.0.0"
 dependencies = [
@@ -1535,7 +1523,6 @@ dependencies = [
  "datafusion-functions-aggregate-common",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
- "datafusion-physical-expr-functions-aggregate",
  "futures",
  "half",
  "hashbrown",
