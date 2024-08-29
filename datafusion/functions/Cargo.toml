@@ -52,7 +52,7 @@ encoding_expressions = ["base64", "hex"]
 # enable math functions
 math_expressions = []
 # enable regular expressions
-regex_expressions = ["regex"]
+regex_expressions = ["regex", "string_expressions"]
 # enable string functions
 string_expressions = ["uuid"]
 # enable unicode functions
