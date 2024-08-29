@@ -36,6 +36,7 @@ use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
+use datafusion_expr::tree_node::replace_sort_expressions;
 use datafusion_expr::{col, BinaryExpr, Case, Expr, ExprSchemable, Operator};
 use indexmap::IndexMap;
 
@@ -327,15 +328,17 @@ impl CommonSubexprEliminate {
     ) -> Result<Transformed<LogicalPlan>> {
         let Sort { expr, input, fetch } = sort;
         let input = Arc::unwrap_or_clone(input);
-        let new_sort = self.try_unary_plan(expr, input, config)?.update_data(
-            |(new_expr, new_input)| {
+        let sort_expressions =
+            expr.iter().map(|sort| sort.expr.as_ref().clone()).collect();
+        let new_sort = self
+            .try_unary_plan(sort_expressions, input, config)?
+            .update_data(|(new_expr, new_input)| {
                 LogicalPlan::Sort(Sort {
-                    expr: new_expr,
+                    expr: replace_sort_expressions(expr, new_expr),
                     input: Arc::new(new_input),
                     fetch,
                 })
-            },
-        );
+            });
         Ok(new_sort)
     }
 
@@ -882,7 +885,6 @@ enum ExprMask {
     /// - [`Columns`](Expr::Column)
     /// - [`ScalarVariable`](Expr::ScalarVariable)
     /// - [`Alias`](Expr::Alias)
-    /// - [`Sort`](Expr::Sort)
     /// - [`Wildcard`](Expr::Wildcard)
     /// - [`AggregateFunction`](Expr::AggregateFunction)
     Normal,
@@ -899,7 +901,6 @@ impl ExprMask {
                 | Expr::Column(..)
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
-                | Expr::Sort { .. }
                 | Expr::Wildcard { .. }
         );
 

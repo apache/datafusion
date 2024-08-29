@@ -43,6 +43,7 @@ use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_expr::SortExpr;
 use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
@@ -64,7 +65,7 @@ pub struct MemTable {
     column_defaults: HashMap<String, Expr>,
     /// Optional pre-known sort order(s). Must be `SortExpr`s.
     /// inserting data into this table removes the order
-    pub sort_order: Arc<Mutex<Vec<Vec<Expr>>>>,
+    pub sort_order: Arc<Mutex<Vec<Vec<SortExpr>>>>,
 }
 
 impl MemTable {
@@ -118,7 +119,7 @@ impl MemTable {
     ///
     /// Note that multiple sort orders are supported, if some are known to be
     /// equivalent,
-    pub fn with_sort_order(self, mut sort_order: Vec<Vec<Expr>>) -> Self {
+    pub fn with_sort_order(self, mut sort_order: Vec<Vec<SortExpr>>) -> Self {
         std::mem::swap(self.sort_order.lock().as_mut(), &mut sort_order);
         self
     }
