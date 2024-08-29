@@ -256,7 +256,7 @@ pub(crate) enum ColumnarValueRef<'a> {
     NullableArray(&'a StringArray),
     NonNullableArray(&'a StringArray),
     NullableStringViewArray(&'a StringViewArray),
-    NonNullableStringViewArray(&'a StringViewArray)
+    NonNullableStringViewArray(&'a StringViewArray),
 }
 
 impl<'a> ColumnarValueRef<'a> {
@@ -273,7 +273,9 @@ impl<'a> ColumnarValueRef<'a> {
     #[inline]
     pub fn nulls(&self) -> Option<NullBuffer> {
         match &self {
-            Self::Scalar(_) | Self::NonNullableArray(_) | Self::NonNullableStringViewArray(_) => None,
+            Self::Scalar(_)
+            | Self::NonNullableArray(_)
+            | Self::NonNullableStringViewArray(_) => None,
             Self::NullableArray(array) => array.nulls().cloned(),
             Self::NullableStringViewArray(array) => array.nulls().cloned(),
         }
@@ -395,15 +397,15 @@ impl StringArrayBuilder {
                 }
             }
             ColumnarValueRef::NullableStringViewArray(array) => {
-              if !CHECK_VALID || array.is_valid(i) {
-                  self.value_buffer
-                      .extend_from_slice(array.value(i).as_bytes());
-              }
-            },
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer
+                        .extend_from_slice(array.value(i).as_bytes());
+                }
+            }
             ColumnarValueRef::NonNullableArray(array) => {
                 self.value_buffer
                     .extend_from_slice(array.value(i).as_bytes());
-            },
+            }
             ColumnarValueRef::NonNullableStringViewArray(array) => {
                 self.value_buffer
                     .extend_from_slice(array.value(i).as_bytes());

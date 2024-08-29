@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::sync::Arc;
 use arrow::array::{Array, StringViewArray};
 use arrow::datatypes::DataType;
+use std::any::Any;
+use std::sync::Arc;
 
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
@@ -98,14 +98,14 @@ impl ScalarUDFImpl for ConcatFunc {
             return match args_datatype {
                 DataType::Utf8View => {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
-                },
+                }
                 DataType::Utf8 => {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
-                },
+                }
                 other => {
                     plan_err!("Concat function does not support datatype of {other}")
                 }
-            }
+            };
         }
 
         // Array
@@ -126,7 +126,7 @@ impl ScalarUDFImpl for ConcatFunc {
                         data_size += s.len() * len;
                         columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
                     }
-                },
+                }
                 ColumnarValue::Array(array) => {
                     match array.data_type() {
                         DataType::Utf8 | DataType::LargeUtf8 => {
@@ -155,7 +155,6 @@ impl ScalarUDFImpl for ConcatFunc {
                             return plan_err!("Input was {other} which is not a supported datatype for concat function")
                         }
                     };
-
                 }
                 _ => unreachable!(),
             }
@@ -173,13 +172,12 @@ impl ScalarUDFImpl for ConcatFunc {
         match args_datatype {
             DataType::Utf8 | DataType::LargeUtf8 => {
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
-            },
-            DataType::Utf8View => {
-                Ok(ColumnarValue::Array(Arc::new(StringViewArray::from_iter(string_array.into_iter()))))
-            },
-            _ => unreachable!()
+            }
+            DataType::Utf8View => Ok(ColumnarValue::Array(Arc::new(
+                StringViewArray::from_iter(string_array.into_iter()),
+            ))),
+            _ => unreachable!(),
         }
-
     }
 
     /// Simplify the `concat` function by
@@ -249,10 +247,10 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use DataType::*;
     use crate::utils::test::test_function;
     use arrow::array::Array;
     use arrow::array::{ArrayRef, StringArray};
+    use DataType::*;
 
     #[test]
     fn test_functions() -> Result<()> {
