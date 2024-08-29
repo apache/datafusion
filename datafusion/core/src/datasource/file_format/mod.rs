@@ -229,6 +229,57 @@ pub fn transform_schema_to_view(schema: &Schema) -> Schema {
     Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
 }
 
+/// Merge table schema into the parquet file schema.
+///
+/// This coerces the file schema if the table schema uses a view type.
+pub(crate) fn merge_file_schema_on_view_type(
+    table_schema: &Schema,
+    file_schema: &Schema,
+) -> Option<Schema> {
+    let mut transformed = false;
+    let table_fields: HashMap<_, _> = table_schema
+        .fields
+        .iter()
+        .map(|f| (f.name(), f.data_type()))
+        .collect();
+
+    let transformed_fields: Vec<Arc<Field>> = file_schema
+        .fields
+        .iter()
+        .map(
+            |field| match (table_fields.get(field.name()), field.data_type()) {
+                (Some(DataType::Utf8View), DataType::Utf8)
+                | (Some(DataType::Utf8View), DataType::LargeUtf8) => {
+                    transformed = true;
+                    Arc::new(Field::new(
+                        field.name(),
+                        DataType::Utf8View,
+                        field.is_nullable(),
+                    ))
+                }
+                (Some(DataType::BinaryView), DataType::Binary)
+                | (Some(DataType::BinaryView), DataType::LargeBinary) => {
+                    transformed = true;
+                    Arc::new(Field::new(
+                        field.name(),
+                        DataType::BinaryView,
+                        field.is_nullable(),
+                    ))
+                }
+                _ => field.clone(),
+            },
+        )
+        .collect();
+
+    if !transformed {
+        return None;
+    }
+    Some(Schema::new_with_metadata(
+        transformed_fields,
+        file_schema.metadata.clone(),
+    ))
+}
+
 #[cfg(test)]
 pub(crate) mod test_util {
     use std::ops::Range;

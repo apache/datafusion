@@ -24,7 +24,10 @@ use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
-use super::{transform_schema_to_view, FileFormat, FileFormatFactory, FileScanConfig};
+use super::{
+    merge_file_schema_on_view_type, transform_schema_to_view, FileFormat,
+    FileFormatFactory, FileScanConfig,
+};
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -227,6 +230,11 @@ impl ParquetFormat {
     pub fn options(&self) -> &TableParquetOptions {
         &self.options
     }
+
+    /// Return `true` if should use view types.
+    pub fn should_use_view_types(&self) -> bool {
+        self.options.global.schema_force_string_view
+    }
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator
@@ -317,12 +325,7 @@ impl FileFormat for ParquetFormat {
             Schema::try_merge(schemas)
         }?;
 
-        let schema = if state
-            .config_options()
-            .execution
-            .parquet
-            .schema_force_string_view
-        {
+        let schema = if self.should_use_view_types() {
             transform_schema_to_view(&schema)
         } else {
             schema
@@ -515,10 +518,13 @@ pub fn statistics_from_parquet_meta_calc(
     statistics.total_byte_size = Precision::Exact(total_byte_size);
 
     let file_metadata = metadata.file_metadata();
-    let file_schema = parquet_to_arrow_schema(
+    let mut file_schema = parquet_to_arrow_schema(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
+    if let Some(merged) = merge_file_schema_on_view_type(&table_schema, &file_schema) {
+        file_schema = merged;
+    }
 
     statistics.column_statistics = if has_statistics {
         let (mut max_accs, mut min_accs) = create_max_min_accs(&table_schema);

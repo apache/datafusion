@@ -725,10 +725,6 @@ impl ExecutionPlan for ParquetExec {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             schema_adapter_factory,
-            schema_force_string_view: self
-                .table_parquet_options
-                .global
-                .schema_force_string_view,
         };
 
         let stream =
