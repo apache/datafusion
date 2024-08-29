@@ -2093,6 +2093,7 @@ to_unixtime(expression[, ..., format_n])
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
+- [array_distance](#array_distance)
 - [array_distinct](#array_distinct)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
@@ -2387,6 +2388,36 @@ array_dims(array)
 #### Aliases
 
 - list_dims
+
+### `array_distance`
+
+Returns the Euclidean distance between two input arrays of equal length.
+
+```
+array_distance(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+> select array_distance([1, 2], [1, 4]);
++---------------------------------+
+| array_distance(List([1,2], [1,4])) |
++---------------------------------+
+| 2.0                               |
++---------------------------------+
+```
+
+#### Aliases
+
+- list_distance
 
 ### `array_distinct`
 
@@ -3223,6 +3254,10 @@ _Alias of [array_concat](#array_concat)._
 ### `list_dims`
 
 _Alias of [array_dims](#array_dims)._
+
+### `list_distance`
+
+_Alias of [array_distance](#array_distance)._
 
 ### `list_distinct`
 
