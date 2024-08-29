@@ -2401,26 +2401,6 @@ impl TableScan {
             fetch,
         })
     }
-
-    /// Get the table name
-    pub fn table_name(&self) -> TableReference {
-        self.table_name.clone()
-    }
-
-    /// Get the table source reference
-    pub fn source(&self) -> Arc<dyn TableSource> {
-        Arc::clone(&self.source)
-    }
-
-    /// Get the projection
-    pub fn projection(&self) -> Option<&[usize]> {
-        self.projection.as_deref()
-    }
-
-    /// Get the filters
-    pub fn filters(&self) -> &[Expr] {
-        &self.filters
-    }
 }
 
 /// Apply Cross Join to two logical plans

@@ -24,6 +24,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, Projection, SortExpr,
 };
 use sqlparser::ast::{self, Ident, SetExpr};
+use std::sync::Arc;
 
 use super::{
     ast::{
@@ -530,18 +531,18 @@ impl Unparser<'_> {
         match plan {
             LogicalPlan::TableScan(table_scan) => {
                 // TODO: support filters for table scan with alias
-                if alias.is_some() && !table_scan.filters().is_empty() {
+                if alias.is_some() && !table_scan.filters.is_empty() {
                     return not_impl_err!(
                         "Subquery alias is not supported for table scan with pushdown filters"
                     );
                 }
 
                 let mut builder = LogicalPlanBuilder::scan(
-                    table_scan.table_name(),
-                    table_scan.source(),
+                    table_scan.table_name.clone(),
+                    Arc::clone(&table_scan.source),
                     None,
                 )?;
-                if let Some(project_vec) = table_scan.projection() {
+                if let Some(project_vec) = &table_scan.projection {
                     let project_columns = project_vec
                         .iter()
                         .cloned()
@@ -562,7 +563,7 @@ impl Unparser<'_> {
                 }
 
                 let filter_expr = table_scan
-                    .filters()
+                    .filters
                     .iter()
                     .cloned()
                     .reduce(|acc, expr| acc.and(expr));
