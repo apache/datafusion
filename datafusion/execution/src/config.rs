@@ -383,19 +383,6 @@ impl SessionConfig {
         self.options.execution.batch_size
     }
 
-    /// Get the currently configured scalar_update_factor for aggregate
-    pub fn agg_scalar_update_factor(&self) -> usize {
-        self.options.execution.aggregate.scalar_update_factor
-    }
-
-    /// Customize scalar_update_factor for aggregate
-    pub fn with_agg_scalar_update_factor(mut self, n: usize) -> Self {
-        // scalar update factor must be greater than zero
-        assert!(n > 0);
-        self.options.execution.aggregate.scalar_update_factor = n;
-        self
-    }
-
     /// Enables or disables the coalescence of small batches into larger batches
     pub fn with_coalesce_batches(mut self, enabled: bool) -> Self {
         self.options.execution.coalesce_batches = enabled;

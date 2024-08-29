@@ -500,17 +500,6 @@ config_namespace! {
     ///
     /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct AggregateOptions {
-        /// Specifies the threshold for using `ScalarValue`s to update
-        /// accumulators during high-cardinality aggregations for each input batch.
-        ///
-        /// The aggregation is considered high-cardinality if the number of affected groups
-        /// is greater than or equal to `batch_size / scalar_update_factor`. In such cases,
-        /// `ScalarValue`s are utilized for updating accumulators, rather than the default
-        /// batch-slice approach. This can lead to performance improvements.
-        ///
-        /// By adjusting the `scalar_update_factor`, you can balance the trade-off between
-        /// more efficient accumulator updates and the number of groups affected.
-        pub scalar_update_factor: usize, default = 10
     }
 }
 
