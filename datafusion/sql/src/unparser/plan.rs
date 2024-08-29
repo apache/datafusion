@@ -17,7 +17,7 @@
 
 use crate::unparser::utils::unproject_agg_exprs;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DataFusionError, Result, TableReference,
+    internal_err, not_impl_err, Column, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{
     expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
