@@ -630,6 +630,11 @@ config_namespace! {
 
         /// When set to true, the optimizer will not attempt to convert Union to Interleave
         pub prefer_existing_union: bool, default = false
+
+        /// When set to true, if the returned type is a view type
+        /// then the output will be coerced to a non-view.
+        /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
+        pub expand_views_at_output: bool, default = false
     }
 }
 
