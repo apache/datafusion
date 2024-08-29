@@ -45,7 +45,10 @@ impl ConcatFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
-            signature: Signature::variadic(vec![Utf8, Utf8View], Volatility::Immutable),
+            signature: Signature::variadic(
+                vec![Utf8, Utf8View, LargeUtf8],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -67,6 +70,7 @@ impl ScalarUDFImpl for ConcatFunc {
         use DataType::*;
         Ok(match &arg_types[0] {
             Utf8View => Utf8View,
+            LargeUtf8 => LargeUtf8,
             _ => Utf8,
         })
     }
@@ -98,6 +102,9 @@ impl ScalarUDFImpl for ConcatFunc {
                 }
                 DataType::Utf8 => {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
+                }
+                DataType::LargeUtf8 => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
                 }
                 other => {
                     plan_err!("Concat function does not support datatype of {other}")
