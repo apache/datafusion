@@ -172,10 +172,10 @@ impl ScalarUDFImpl for ConcatFunc {
             }
             DataType::Utf8View => {
                 let string_array_iter = string_array.into_iter();
-                Ok(ColumnarValue::Array(Arc::new(
-                    StringViewArray::from_iter(string_array_iter),
-                )))
-            },
+                Ok(ColumnarValue::Array(Arc::new(StringViewArray::from_iter(
+                    string_array_iter,
+                ))))
+            }
             _ => unreachable!(),
         }
     }
