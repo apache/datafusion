@@ -137,6 +137,7 @@ impl ScalarUDFImpl for ToDateFunc {
 
 #[cfg(test)]
 mod tests {
+    use arrow::{compute::kernels::cast_utils::Parser, datatypes::Date32Type};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -149,7 +150,13 @@ mod tests {
 
         let res = ToDateFunc::new().invoke(&[ColumnarValue::Scalar(date_scalar)]);
 
-        assert!(res.is_ok(), "Could not convert '{}' to Date", date_str);
+        match res {
+            Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
+                let expected = Date32Type::parse("9999-12-31");
+                assert_eq!(date_val, expected, "to_date created wrong value");
+            }
+            _ => panic!("Could not convert '{}' to Date", date_str),
+        }
     }
 
     #[test]
@@ -164,11 +171,15 @@ mod tests {
             ColumnarValue::Scalar(format_scalar),
         ]);
 
-        assert!(
-            res.is_ok(),
-            "Could not convert '{}' with fornat string '{}'to Date",
-            date_str,
-            format_str
-        );
+        match res {
+            Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
+                let expected = Date32Type::parse("9999-12-31");
+                assert_eq!(date_val, expected, "to_date created wrong value");
+            }
+            _ => panic!(
+                "Could not convert '{}' with format string '{}'to Date",
+                date_str, format_str
+            ),
+        }
     }
 }
