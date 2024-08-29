@@ -301,6 +301,16 @@ struct PushdownChecker<'schema> {
 }
 
 impl<'schema> PushdownChecker<'schema> {
+    fn new(file_schema: &'schema Schema, table_schema: &'schema Schema) -> Self {
+        Self {
+            non_primitive_columns: false,
+            projected_columns: false,
+            required_column_indices: BTreeSet::default(),
+            file_schema,
+            table_schema,
+        }
+    }
+
     fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
         if let Ok(idx) = self.file_schema.index_of(column_name) {
             self.required_column_indices.insert(idx);
@@ -371,13 +381,7 @@ pub fn non_pushdown_columns(
     file_schema: &Schema,
     table_schema: &Schema,
 ) -> Result<Option<ProjectionAndExpr>> {
-    let mut checker = PushdownChecker {
-        non_primitive_columns: false,
-        projected_columns: false,
-        required_column_indices: BTreeSet::new(),
-        file_schema,
-        table_schema,
-    };
+    let mut checker = PushdownChecker::new(file_schema, table_schema);
 
     let expr = expr.rewrite(&mut checker).data()?;
 
@@ -396,13 +400,7 @@ fn would_column_prevent_pushdown(
     file_schema: &Schema,
     table_schema: &Schema,
 ) -> bool {
-    let mut checker = PushdownChecker {
-        non_primitive_columns: false,
-        projected_columns: false,
-        required_column_indices: BTreeSet::new(),
-        file_schema,
-        table_schema,
-    };
+    let mut checker = PushdownChecker::new(file_schema, table_schema);
 
     // the return of this is only used for [`PushdownChecker::f_down()`], so we can safely ignore
     // it here. I'm just verifying we know the return type of this so nobody accidentally changes
