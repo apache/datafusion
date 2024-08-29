@@ -863,7 +863,7 @@ XIANGPENG
 RAPHAEL
 NULL
 
-## Should run CONCAT() successfully
+## Should run CONCAT successfully
 query T
 SELECT
   concat(column1_utf8view, column2_utf8view) as c
@@ -873,6 +873,28 @@ AndrewX
 XiangpengXiangpeng
 RaphaelR
 R
+
+## Should run CONCAT successfully with utf8 and utf8view
+query T
+SELECT
+  concat(column1_utf8view, column2_utf8) as c
+FROM test;
+----
+AndrewX
+XiangpengXiangpeng
+RaphaelR
+R
+
+## Should run CONCAT successfully with utf8 utf8view and largeutf8
+query T
+SELECT
+  concat(column1_utf8view, column2_utf8, column2_large_utf8) as c
+FROM test;
+----
+AndrewXX
+XiangpengXiangpengXiangpeng
+RaphaelRR
+RR
 
 ## Ensure no casts for LPAD
 query TT
