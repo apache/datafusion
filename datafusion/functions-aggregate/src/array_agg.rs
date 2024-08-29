@@ -501,11 +501,8 @@ impl OrderSensitiveArrayAggAccumulator {
             column_wise_ordering_values.push(array);
         }
 
-        let ordering_array = StructArray::try_new(
-            struct_field.clone(),
-            column_wise_ordering_values,
-            None,
-        )?;
+        let ordering_array =
+            StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
         Ok(ScalarValue::List(Arc::new(array_into_list_array_nullable(
             Arc::new(ordering_array),
         ))))

@@ -18,7 +18,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
+use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -34,6 +34,7 @@ use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
+use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion::physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 use datafusion::physical_plan::aggregates::AggregateMode;
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
@@ -59,7 +60,7 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
-    AggregateExpr, ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
+    ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
@@ -259,10 +260,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     runtime,
                     extension_codec,
                 )?;
-                Ok(Arc::new(CoalesceBatchesExec::new(
-                    input,
-                    coalesce_batches.target_batch_size as usize,
-                )))
+                Ok(Arc::new(
+                    CoalesceBatchesExec::new(
+                        input,
+                        coalesce_batches.target_batch_size as usize,
+                    )
+                    .with_fetch(coalesce_batches.fetch.map(|f| f as usize)),
+                ))
             }
             PhysicalPlanType::Merge(merge) => {
                 let input: Arc<dyn ExecutionPlan> =
@@ -464,7 +468,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let physical_aggr_expr: Vec<Arc<dyn AggregateExpr>> = hash_agg
+                let physical_aggr_expr: Vec<Arc<AggregateFunctionExpr>> = hash_agg
                     .aggr_expr
                     .iter()
                     .zip(hash_agg.aggr_expr_name.iter())
@@ -1536,6 +1540,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     protobuf::CoalesceBatchesExecNode {
                         input: Some(Box::new(input)),
                         target_batch_size: coalesce_batches.target_batch_size() as u32,
+                        fetch: coalesce_batches.fetch().map(|n| n as u32),
                     },
                 ))),
             });

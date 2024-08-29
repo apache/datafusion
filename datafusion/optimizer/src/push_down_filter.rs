@@ -28,7 +28,6 @@ use datafusion_common::{
     JoinConstraint, Result,
 };
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{
     CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union,
 };
@@ -658,7 +657,7 @@ impl OptimizerRule for PushDownFilter {
             return Ok(Transformed::no(plan));
         };
 
-        match unwrap_arc(filter.input) {
+        match Arc::unwrap_or_clone(filter.input) {
             LogicalPlan::Filter(child_filter) => {
                 let parents_predicates = split_conjunction_owned(filter.predicate);
 
@@ -820,7 +819,7 @@ impl OptimizerRule for PushDownFilter {
                     .map(|e| Ok(Column::from_qualified_name(e.schema_name().to_string())))
                     .collect::<Result<HashSet<_>>>()?;
 
-                let predicates = split_conjunction_owned(filter.predicate.clone());
+                let predicates = split_conjunction_owned(filter.predicate);
 
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
@@ -1139,19 +1138,19 @@ fn convert_to_cross_join_if_beneficial(
     match plan {
         // Can be converted back to cross join
         LogicalPlan::Join(join) if join.on.is_empty() && join.filter.is_none() => {
-            LogicalPlanBuilder::from(unwrap_arc(join.left))
-                .cross_join(unwrap_arc(join.right))?
+            LogicalPlanBuilder::from(Arc::unwrap_or_clone(join.left))
+                .cross_join(Arc::unwrap_or_clone(join.right))?
                 .build()
                 .map(Transformed::yes)
         }
-        LogicalPlan::Filter(filter) => convert_to_cross_join_if_beneficial(unwrap_arc(
-            filter.input,
-        ))?
-        .transform_data(|child_plan| {
-            Filter::try_new(filter.predicate, Arc::new(child_plan))
-                .map(LogicalPlan::Filter)
-                .map(Transformed::yes)
-        }),
+        LogicalPlan::Filter(filter) => {
+            convert_to_cross_join_if_beneficial(Arc::unwrap_or_clone(filter.input))?
+                .transform_data(|child_plan| {
+                    Filter::try_new(filter.predicate, Arc::new(child_plan))
+                        .map(LogicalPlan::Filter)
+                        .map(Transformed::yes)
+                })
+        }
         plan => Ok(Transformed::no(plan)),
     }
 }

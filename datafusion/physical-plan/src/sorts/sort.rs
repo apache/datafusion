@@ -499,6 +499,12 @@ impl ExternalSorter {
         metrics: BaselineMetrics,
     ) -> Result<SendableRecordBatchStream> {
         assert_ne!(self.in_mem_batches.len(), 0);
+
+        // The elapsed compute timer is updated when the value is dropped.
+        // There is no need for an explicit call to drop.
+        let elapsed_compute = metrics.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer();
+
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.remove(0);
             let reservation = self.reservation.take();
@@ -552,7 +558,9 @@ impl ExternalSorter {
         let fetch = self.fetch;
         let expressions = Arc::clone(&self.expr);
         let stream = futures::stream::once(futures::future::lazy(move |_| {
+            let timer = metrics.elapsed_compute().timer();
             let sorted = sort_batch(&batch, &expressions, fetch)?;
+            timer.done();
             metrics.record_output(sorted.num_rows());
             drop(batch);
             drop(reservation);
@@ -958,7 +966,7 @@ mod tests {
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::RuntimeConfig;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::Literal;
@@ -1001,9 +1009,11 @@ mod tests {
             .options()
             .execution
             .sort_spill_reservation_bytes;
-        let rt_config = RuntimeConfig::new()
-            .with_memory_limit(sort_spill_reservation_bytes + 12288, 1.0);
-        let runtime = Arc::new(RuntimeEnv::new(rt_config)?);
+        let runtime = Arc::new(
+            RuntimeEnvBuilder::new()
+                .with_memory_limit(sort_spill_reservation_bytes + 12288, 1.0)
+                .build()?,
+        );
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(session_config)
@@ -1077,11 +1087,14 @@ mod tests {
                 .execution
                 .sort_spill_reservation_bytes;
 
-            let rt_config = RuntimeConfig::new().with_memory_limit(
-                sort_spill_reservation_bytes + avg_batch_size * (partitions - 1),
-                1.0,
+            let runtime = Arc::new(
+                RuntimeEnvBuilder::new()
+                    .with_memory_limit(
+                        sort_spill_reservation_bytes + avg_batch_size * (partitions - 1),
+                        1.0,
+                    )
+                    .build()?,
             );
-            let runtime = Arc::new(RuntimeEnv::new(rt_config)?);
             let task_ctx = Arc::new(
                 TaskContext::default()
                     .with_runtime(runtime)

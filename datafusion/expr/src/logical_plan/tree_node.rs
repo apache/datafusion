@@ -87,8 +87,17 @@ impl TreeNode for LogicalPlan {
                     schema,
                 })
             }),
-            LogicalPlan::Filter(Filter { predicate, input }) => rewrite_arc(input, f)?
-                .update_data(|input| LogicalPlan::Filter(Filter { predicate, input })),
+            LogicalPlan::Filter(Filter {
+                predicate,
+                input,
+                having,
+            }) => rewrite_arc(input, f)?.update_data(|input| {
+                LogicalPlan::Filter(Filter {
+                    predicate,
+                    input,
+                    having,
+                })
+            }),
             LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,
@@ -370,21 +379,12 @@ impl TreeNode for LogicalPlan {
     }
 }
 
-/// Converts a `Arc<LogicalPlan>` without copying, if possible. Copies the plan
-/// if there is a shared reference
-pub fn unwrap_arc(plan: Arc<LogicalPlan>) -> LogicalPlan {
-    Arc::try_unwrap(plan)
-        // if None is returned, there is another reference to this
-        // LogicalPlan, so we can not own it, and must clone instead
-        .unwrap_or_else(|node| node.as_ref().clone())
-}
-
 /// Applies `f` to rewrite a `Arc<LogicalPlan>` without copying, if possible
 fn rewrite_arc<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
     plan: Arc<LogicalPlan>,
     mut f: F,
 ) -> Result<Transformed<Arc<LogicalPlan>>> {
-    f(unwrap_arc(plan))?.map_data(|new_plan| Ok(Arc::new(new_plan)))
+    f(Arc::unwrap_or_clone(plan))?.map_data(|new_plan| Ok(Arc::new(new_plan)))
 }
 
 /// rewrite a `Vec` of `Arc<LogicalPlan>` without copying, if possible
@@ -561,10 +561,17 @@ impl LogicalPlan {
                     value.into_iter().map_until_stop_and_collect(&mut f)
                 })?
                 .update_data(|values| LogicalPlan::Values(Values { schema, values })),
-            LogicalPlan::Filter(Filter { predicate, input }) => f(predicate)?
-                .update_data(|predicate| {
-                    LogicalPlan::Filter(Filter { predicate, input })
-                }),
+            LogicalPlan::Filter(Filter {
+                predicate,
+                input,
+                having,
+            }) => f(predicate)?.update_data(|predicate| {
+                LogicalPlan::Filter(Filter {
+                    predicate,
+                    input,
+                    having,
+                })
+            }),
             LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,

@@ -528,24 +528,10 @@ impl Unparser<'_> {
     fn sort_to_sql(&self, sort_exprs: Vec<Expr>) -> Result<Vec<ast::OrderByExpr>> {
         sort_exprs
             .iter()
-            .map(|expr: &Expr| match expr {
-                Expr::Sort(sort_expr) => {
-                    let col = self.expr_to_sql(&sort_expr.expr)?;
-
-                    let nulls_first = if self.dialect.supports_nulls_first_in_sort() {
-                        Some(sort_expr.nulls_first)
-                    } else {
-                        None
-                    };
-
-                    Ok(ast::OrderByExpr {
-                        asc: Some(sort_expr.asc),
-                        expr: col,
-                        nulls_first,
-                        with_fill: None,
-                    })
-                }
-                _ => plan_err!("Expecting Sort expr"),
+            .map(|expr: &Expr| {
+                self.expr_to_unparsed(expr)?
+                    .into_order_by_expr()
+                    .or(plan_err!("Expecting Sort expr"))
             })
             .collect::<Result<Vec<_>>>()
     }

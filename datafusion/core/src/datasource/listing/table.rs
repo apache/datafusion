@@ -1016,7 +1016,7 @@ impl ListingTable {
             .collected_statistics
             .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
         {
-            Some(statistics) => Ok(statistics.clone()),
+            Some(statistics) => Ok(statistics),
             None => {
                 let statistics = self
                     .options

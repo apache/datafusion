@@ -58,8 +58,8 @@ use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    displayable, windows, AggregateExpr, ExecutionPlan, ExecutionPlanProperties,
-    InputOrderMode, Partitioning, PhysicalExpr, WindowExpr,
+    displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
+    Partitioning, PhysicalExpr, WindowExpr,
 };
 
 use arrow::compute::SortOptions;
@@ -73,8 +73,7 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
-    self, create_function_physical_name, physical_name, AggregateFunction, Alias,
-    GroupingSet, WindowFunction,
+    self, physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -82,9 +81,9 @@ use datafusion_expr::{
     DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, StringifiedPlan,
     WindowFrame, WindowFrameBound, WriteOp,
 };
+use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
@@ -702,7 +701,7 @@ impl DefaultPhysicalPlanner {
                 let initial_aggr = Arc::new(AggregateExec::try_new(
                     AggregateMode::Partial,
                     groups.clone(),
-                    aggregates.clone(),
+                    aggregates,
                     filters.clone(),
                     input_exec,
                     physical_input_schema.clone(),
@@ -720,7 +719,7 @@ impl DefaultPhysicalPlanner {
                 // optimization purposes. For example, a FIRST_VALUE may turn
                 // into a LAST_VALUE with the reverse ordering requirement.
                 // To reflect such changes to subsequent stages, use the updated
-                // `AggregateExpr`/`PhysicalSortExpr` objects.
+                // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
                 let updated_aggregates = initial_aggr.aggr_expr().to_vec();
 
                 let next_partition_mode = if can_repartition {
@@ -1542,7 +1541,7 @@ pub fn create_window_expr(
 }
 
 type AggregateExprWithOptionalArgs = (
-    Arc<dyn AggregateExpr>,
+    Arc<AggregateFunctionExpr>,
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
     // Ordering requirements, if any
@@ -1569,12 +1568,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             let name = if let Some(name) = name {
                 name
             } else {
-                create_function_physical_name(
-                    func.name(),
-                    *distinct,
-                    args,
-                    order_by.as_ref(),
-                )?
+                physical_name(e)?
             };
 
             let physical_args =
@@ -1588,8 +1582,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 None => None,
             };
 
-            let ignore_nulls = null_treatment
-                .unwrap_or(sqlparser::ast::NullTreatment::RespectNulls)
+            let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
                 == NullTreatment::IgnoreNulls;
 
             let (agg_expr, filter, order_by) = {
@@ -2576,7 +2569,7 @@ mod tests {
 
     impl NoOpExecutionPlan {
         fn new(schema: SchemaRef) -> Self {
-            let cache = Self::compute_properties(schema.clone());
+            let cache = Self::compute_properties(schema);
             Self { cache }
         }
 

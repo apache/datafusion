@@ -316,11 +316,11 @@ fn test_no_group_by() -> Result<()> {
     // `SELECT <aggregate with no expressions> FROM MemoryExec LIMIT 10;`, Single AggregateExec
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
-        build_group_by(&schema.clone(), vec![]),
-        vec![],         /* aggr_expr */
-        vec![],         /* filter_expr */
-        source,         /* input */
-        schema.clone(), /* input_schema */
+        build_group_by(&schema, vec![]),
+        vec![], /* aggr_expr */
+        vec![], /* filter_expr */
+        source, /* input */
+        schema, /* input_schema */
     )?;
     let limit_exec = LocalLimitExec::new(
         Arc::new(single_agg),
@@ -346,7 +346,7 @@ fn test_has_aggregate_expression() -> Result<()> {
     // `SELECT <aggregate with no expressions> FROM MemoryExec LIMIT 10;`, Single AggregateExec
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
-        build_group_by(&schema.clone(), vec!["a".to_string()]),
+        build_group_by(&schema, vec!["a".to_string()]),
         vec![agg.count_expr(&schema)], /* aggr_expr */
         vec![None],                    /* filter_expr */
         source,                        /* input */
@@ -418,11 +418,11 @@ fn test_has_order_by() -> Result<()> {
     // the `a > 1` filter is applied in the AggregateExec
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
-        build_group_by(&schema.clone(), vec!["a".to_string()]),
-        vec![],         /* aggr_expr */
-        vec![],         /* filter_expr */
-        source,         /* input */
-        schema.clone(), /* input_schema */
+        build_group_by(&schema, vec!["a".to_string()]),
+        vec![], /* aggr_expr */
+        vec![], /* filter_expr */
+        source, /* input */
+        schema, /* input_schema */
     )?;
     let limit_exec = LocalLimitExec::new(
         Arc::new(single_agg),
