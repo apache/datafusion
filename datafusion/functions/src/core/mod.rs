@@ -84,6 +84,11 @@ pub mod expr_fn {
     pub fn get_field(arg1: Expr, arg2: impl Literal) -> Expr {
         super::get_field().call(vec![arg1, arg2.lit()])
     }
+
+    // FIXME: This is a helper function to support a use case for map
+    pub fn get_field_helper(arg1: Expr, arg2: Expr) -> Expr {
+        super::get_field().call(vec![arg1, arg2])
+    }
 }
 
 /// Returns all DataFusion functions defined in this package

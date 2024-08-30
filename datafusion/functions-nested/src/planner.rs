@@ -23,7 +23,7 @@ use datafusion_expr::{
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
     sqlparser, Expr, ExprSchemable, GetFieldAccess,
 };
-use datafusion_functions::expr_fn::get_field;
+use datafusion_functions::expr_fn::{get_field, get_field_helper};
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 
 use crate::map::map_udf;
@@ -148,6 +148,13 @@ impl ExprPlanner for FieldAccessPlanner {
             // expr[idx] ==> array_element(expr, idx)
             GetFieldAccess::ListIndex { key: index } => {
                 match expr {
+                    // Special case for accessing map value with non-string values
+                    Expr::ScalarFunction(scalar_func) if is_map(&scalar_func) => {
+                        Ok(PlannerResult::Planned(get_field_helper(
+                            Expr::ScalarFunction(scalar_func),
+                            *index,
+                        )))
+                    }
                     // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
                     Expr::AggregateFunction(agg_func) if is_array_agg(&agg_func) => {
                         Ok(PlannerResult::Planned(Expr::AggregateFunction(
@@ -185,4 +192,8 @@ impl ExprPlanner for FieldAccessPlanner {
 
 fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
     return agg_func.func.name() == "array_agg";
+}
+
+fn is_map(scalar_func: &datafusion_expr::expr::ScalarFunction) -> bool {
+    return scalar_func.func.name() == "map";
 }
