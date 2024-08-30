@@ -16,7 +16,7 @@
 // under the License.
 
 #[cfg(test)]
-pub(crate) mod test {
+pub mod test {
     use datafusion::catalog_common::TableReference;
     use datafusion::datasource::empty::EmptyTable;
     use datafusion::prelude::SessionContext;
@@ -29,14 +29,14 @@ pub(crate) mod test {
     use substrait::proto::rel::RelType;
     use substrait::proto::{Plan, ReadRel, Rel};
 
-    pub(crate) fn read_json(path: &str) -> Plan {
+    pub fn read_json(path: &str) -> Plan {
         serde_json::from_reader::<_, Plan>(BufReader::new(
             File::open(path).expect("file not found"),
         ))
         .expect("failed to parse json")
     }
 
-    pub(crate) struct TestSchemaCollector {
+    pub struct TestSchemaCollector {
         ctx: SessionContext,
     }
 
@@ -47,7 +47,7 @@ pub(crate) mod test {
             }
         }
 
-        pub(crate) fn generate_context_from_plan(plan: &Plan) -> SessionContext {
+        pub fn generate_context_from_plan(plan: &Plan) -> SessionContext {
             let mut schema_collector = Self::new();
 
             for plan_rel in plan.relations.iter() {
