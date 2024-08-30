@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{as_largestring_array, Array, StringViewArray};
+use arrow::array::{as_largestring_array, Array};
 use arrow::datatypes::DataType;
 use std::any::Any;
 use std::sync::Arc;
@@ -69,7 +69,6 @@ impl ScalarUDFImpl for ConcatFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
         Ok(match &arg_types[0] {
-            Utf8View => Utf8View,
             LargeUtf8 => LargeUtf8,
             _ => Utf8,
         })
@@ -176,7 +175,7 @@ impl ScalarUDFImpl for ConcatFunc {
         }
 
         match first_arg_datatype {
-            DataType::Utf8 => {
+            DataType::Utf8 | DataType::Utf8View => {
                 let mut builder = StringArrayBuilder::with_capacity(len, data_size);
                 for i in 0..len {
                     columns
@@ -199,21 +198,6 @@ impl ScalarUDFImpl for ConcatFunc {
 
                 let string_array = builder.finish(None);
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
-            }
-            DataType::Utf8View => {
-                let mut builder = StringArrayBuilder::with_capacity(len, data_size);
-                for i in 0..len {
-                    columns
-                        .iter()
-                        .for_each(|column| builder.write::<true>(column, i));
-                    builder.append_offset();
-                }
-
-                let string_array = builder.finish(None);
-                let string_array_iter = string_array.into_iter();
-                Ok(ColumnarValue::Array(Arc::new(StringViewArray::from_iter(
-                    string_array_iter,
-                ))))
             }
             _ => unreachable!(),
         }
