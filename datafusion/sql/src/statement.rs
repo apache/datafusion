@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::iter;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -29,7 +30,7 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 
-use arrow_schema::{DataType, Fields};
+use arrow_schema::{DataType, Field, Fields, Schema};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
@@ -43,7 +44,7 @@ use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
+    cast, col, lit, Analyze, BuiltInWindowFunction, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, DescribeTable,
     DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView, EmptyRelation,
@@ -51,7 +52,7 @@ use datafusion_expr::{
     OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr,
     Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
-    Volatility, WriteOp,
+    Values, Volatility, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
@@ -62,6 +63,7 @@ use sqlparser::ast::{
     TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
+use strum::IntoEnumIterator;
 
 fn ident_to_string(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())
@@ -468,6 +470,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_name,
                 filter,
             } => self.show_columns_to_plan(extended, full, table_name, filter),
+
+            Statement::ShowFunctions { filter } => self.show_functions_to_plan(filter),
 
             Statement::Insert(Insert {
                 or,
@@ -1586,6 +1590,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
         self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
+    }
+
+    fn show_functions_to_plan(
+        &self,
+        filter: Option<ShowStatementFilter>,
+    ) -> Result<LogicalPlan> {
+        if filter.is_some() {
+            // See https://github.com/sqlparser-rs/sqlparser-rs/issues/1399 before adding support for filter.
+            return plan_err!("SHOW FUNCTIONS with WHERE or LIKE is not supported");
+        }
+
+        let names = iter::empty::<String>()
+            .chain(self.context_provider.udf_names())
+            .chain(self.context_provider.udaf_names())
+            .chain(BuiltInWindowFunction::iter().map(|func| func.to_string()))
+            .chain(self.context_provider.udwf_names())
+            // TODO list table functions
+            .map(|name| name.to_lowercase())
+            .collect::<BTreeSet<_>>();
+
+        Ok(LogicalPlan::Values(Values {
+            schema: Arc::new(
+                DFSchema::try_from(Schema::new(vec![Field::new(
+                    "function_name",
+                    DataType::Utf8,
+                    false,
+                )]))
+                .unwrap(),
+            ),
+            values: names.into_iter().map(|name| vec![lit(name)]).collect(),
+        }))
     }
 
     /// Return true if there is a table provider available for "schema.table"
