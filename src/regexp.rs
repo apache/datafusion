@@ -24,7 +24,7 @@ use arrow_array::{Array, BooleanArray, DictionaryArray, RecordBatch, StringArray
 use arrow_schema::{DataType, Schema};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr::PhysicalExpr;
 use regex::Regex;
 use std::any::Any;
 use std::fmt::{Display, Formatter};

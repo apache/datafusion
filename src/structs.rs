@@ -239,8 +239,8 @@ mod test {
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::Result;
     use datafusion_expr::ColumnarValue;
-    use datafusion_physical_expr_common::expressions::column::Column;
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr::PhysicalExpr;
     use std::sync::Arc;
 
     #[test]

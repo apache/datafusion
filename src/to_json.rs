@@ -25,7 +25,7 @@ use arrow_array::{Array, ArrayRef, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Schema};
 use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
