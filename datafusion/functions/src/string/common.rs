@@ -20,7 +20,11 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef, GenericStringArray, GenericStringBuilder, LargeStringArray, OffsetSizeTrait, StringArray, StringBuilder, StringViewArray};
+use arrow::array::{
+    new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef,
+    GenericStringArray, GenericStringBuilder, LargeStringArray, OffsetSizeTrait,
+    StringArray, StringBuilder, StringViewArray,
+};
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
@@ -260,7 +264,10 @@ impl<'a> ColumnarValueRef<'a> {
     #[inline]
     pub fn is_valid(&self, i: usize) -> bool {
         match &self {
-            Self::Scalar(_) | Self::NonNullableArray(_) | Self::NonNullableLargeStringArray(_)| Self::NonNullableStringViewArray(_)  => true,
+            Self::Scalar(_)
+            | Self::NonNullableArray(_)
+            | Self::NonNullableLargeStringArray(_)
+            | Self::NonNullableStringViewArray(_) => true,
             Self::NullableArray(array) => array.is_valid(i),
             Self::NullableStringViewArray(array) => array.is_valid(i),
             Self::NullableLargeStringArray(array) => array.is_valid(i),

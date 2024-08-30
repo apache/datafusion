@@ -153,7 +153,7 @@ impl ScalarUDFImpl for ConcatFunc {
                             } else {
                                 ColumnarValueRef::NonNullableLargeStringArray(string_array)
                             };
-                            columns.push(column);  
+                            columns.push(column);
                         },
                         DataType::Utf8View => {
                             let string_array = as_string_view_array(array)?;
@@ -184,7 +184,7 @@ impl ScalarUDFImpl for ConcatFunc {
                         .for_each(|column| builder.write::<true>(column, i));
                     builder.append_offset();
                 }
-                
+
                 let string_array = builder.finish(None);
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
