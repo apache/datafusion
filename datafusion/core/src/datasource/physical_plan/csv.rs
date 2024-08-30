@@ -430,7 +430,6 @@ impl ExecutionPlan for CsvExec {
             object_store,
             comment: self.comment,
         });
-
         let opener = CsvOpener {
             config,
             file_compression_type: self.file_compression_type.to_owned(),
@@ -518,6 +517,7 @@ impl CsvConfig {
 
 impl CsvConfig {
     fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
+        dbg!(&self.terminator);
         Ok(self.builder().build(reader)?)
     }
 
@@ -527,7 +527,6 @@ impl CsvConfig {
             .with_batch_size(self.batch_size)
             .with_header(self.has_header)
             .with_quote(self.quote);
-
         if let Some(terminator) = self.terminator {
             builder = builder.with_terminator(terminator);
         }
@@ -557,6 +556,7 @@ impl CsvOpener {
         config: Arc<CsvConfig>,
         file_compression_type: FileCompressionType,
     ) -> Self {
+        dbg!(&config);
         Self {
             config,
             file_compression_type,
@@ -1249,7 +1249,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let store = object_store::memory::InMemory::new();
 
-        let data = bytes::Bytes::from("a,b 1,2 3,4");
+        let data = bytes::Bytes::from("a,b\r1,2\r3,4");
         let path = object_store::path::Path::from("a.csv");
         store.put(&path, data.into()).await.unwrap();
 
@@ -1257,7 +1257,7 @@ mod tests {
         session_ctx.register_object_store(&url, Arc::new(store));
 
         let df = session_ctx
-            .read_csv("memory:///", CsvReadOptions::new().terminator(Some(b' ')))
+            .read_csv("memory:///", CsvReadOptions::new().terminator(Some(b'\r')))
             .await
             .unwrap();
 
@@ -1273,6 +1273,13 @@ mod tests {
         ];
 
         crate::assert_batches_eq!(expected, &result);
+
+        match session_ctx
+            .read_csv("memory:///", CsvReadOptions::new().terminator(Some(b'\n')))
+            .await.unwrap().collect().await {
+            Ok(_) => panic!("Expected error"),
+            Err(e) => assert_eq!(e.strip_backtrace(), "Arrow error: Csv error: incorrect number of fields for line 1, expected 2 got more than 2"),
+        }
     }
 
     #[tokio::test]

@@ -520,6 +520,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_delimiter(self.delimiter)
             .with_quote(self.quote)
             .with_escape(self.escape)
+            .with_terminator(self.terminator)
             .with_newlines_in_values(self.newlines_in_values)
             .with_schema_infer_max_rec(self.schema_infer_max_records)
             .with_file_compression_type(self.file_compression_type.to_owned());
