@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    make_array, Array, ArrayRef, Capacities, Int64Array, MutableArrayData, Scalar,
-    StringArray,
+    make_array, Array, ArrayRef, Capacities, Float64Array, Int64Array, MutableArrayData,
+    Scalar, StringArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
@@ -122,7 +122,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             Expr::Literal(name) => name,
             _ => {
                 return exec_err!(
-                    "get_field function requires the argument field_name to be a scalar value"
+                    "get_field function requires the argument field_name to be a string"
                 );
             }
         };
@@ -178,7 +178,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             ColumnarValue::Scalar(name) => name,
             _ => {
                 return exec_err!(
-                    "get_field function requires the argument field_name to be a scalar value"
+                    "get_field function requires the argument field_name to be a string"
                 );
             }
         };
@@ -186,7 +186,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         match (array.data_type(), name) {
             (DataType::Map(_, _), name) => {
                 let map_array = as_map_array(array.as_ref())?;
-                if !matches!(name, ScalarValue::Utf8(_) | ScalarValue::Int64(_)) {
+                if !matches!(name, ScalarValue::Utf8(_) | ScalarValue::Int64(_) | ScalarValue::Float64(_)) {
                     return exec_err!(
                 "get indexed field is only possible on map with int64 and utf8 indexes. \
                              Tried with {name:?} index")
@@ -197,6 +197,9 @@ impl ScalarUDFImpl for GetFieldFunc {
                     }
                     ScalarValue::Utf8(Some(k)) => {
                         Arc::new(StringArray::from(vec![k.clone()]))
+                    }
+                    ScalarValue::Float64(Some(k)) => {
+                        Arc::new(Float64Array::from(vec![*k]))
                     }
                     _ => {
                         unreachable!();

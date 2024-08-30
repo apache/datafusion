@@ -499,6 +499,12 @@ SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
 ----
 33
 
+query T
+SELECT MAP { 1.0: 'a', 2.0: 'b', 3.0: 'c' }[2.0];
+----
+b
+
+
 ## cardinality
 
 # cardinality scalar function
