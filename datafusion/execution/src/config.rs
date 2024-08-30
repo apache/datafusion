@@ -78,7 +78,6 @@ use datafusion_common::{
 /// | --------- | ------------- |
 /// | `datafusion.catalog` | [CatalogOptions][datafusion_common::config::CatalogOptions] |
 /// | `datafusion.execution` | [ExecutionOptions][datafusion_common::config::ExecutionOptions] |
-/// | `datafusion.execution.aggregate` | [AggregateOptions][datafusion_common::config::AggregateOptions] |
 /// | `datafusion.execution.parquet` | [ParquetOptions][datafusion_common::config::ParquetOptions] |
 /// | `datafusion.optimizer` | [OptimizerOptions][datafusion_common::config::OptimizerOptions] |
 /// | `datafusion.sql_parser` | [SqlParserOptions][datafusion_common::config::SqlParserOptions] |
