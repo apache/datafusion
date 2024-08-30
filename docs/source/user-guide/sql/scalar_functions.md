@@ -1735,9 +1735,8 @@ Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format]s are 
 Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
 Returns the corresponding date.
 
-Note: `to_date` returns Date32. The supported range for integer input is between `-96465293` and `95026237`.
-Supported range for string input is between `1677-09-21` and `2262-04-11` exclusive. To parse dates outside of
-that range use a [Chrono format].
+Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value.
+Supported range for string input is between `-9999-01-01` and `9999-12-31`.
 
 ```
 to_date(expression[, ..., format_n])

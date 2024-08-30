@@ -17,13 +17,15 @@
 
 use std::any::Any;
 
-use arrow::array::types::Date32Type;
-use arrow::compute::kernels::cast_utils::Parser;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
+use arrow::error::ArrowError::ParseError;
+use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
+use chrono::Utc;
 
 use crate::datetime::common::*;
-use datafusion_common::{exec_err, internal_datafusion_err, Result};
+use datafusion_common::error::DataFusionError;
+use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
@@ -37,6 +39,13 @@ impl Default for ToDateFunc {
     }
 }
 
+fn string_to_timestamp_millis_formatted(s: &str, format: &str) -> Result<i64> {
+    Ok(string_to_datetime_formatted(&Utc, s, format)?
+        .naive_utc()
+        .and_utc()
+        .timestamp_millis())
+}
+
 impl ToDateFunc {
     pub fn new() -> Self {
         Self {
@@ -48,24 +57,44 @@ impl ToDateFunc {
         match args.len() {
             1 => handle::<Date32Type, _, Date32Type>(
                 args,
-                // For most cases 'Date32Type::parse' would also work here, as it semantically parses
-                // assuming a YYYY-MM-DD format. However 'Date32Type::parse' cannot handle negative
-                // values for year (e.g. years in BC). Date32Type::parse_formatted can handle also these.
-                |s| match Date32Type::parse_formatted(s, "%Y-%m-%d") {
+                // Although not being speficied, previous implementations have supported parsing date values that are followed
+                // by a time part separated either a whitespace ('2023-01-10 12:34:56.000') or a 'T' ('2023-01-10T12:34:56.000').
+                // Parsing these strings with "%Y-%m-%d" will fail. Therefore the string is split and the first part is used for parsing.
+                |s| {
+                    let string_to_parse;
+                    if s.find('T').is_some() {
+                        string_to_parse = s.split('T').next();
+                    } else {
+                        string_to_parse = s.split_whitespace().next();
+                    }
+                    if string_to_parse.is_none() {
+                        return Err(internal_datafusion_err!(
+                            "Cannot cast emtpy string to Date32"
+                        ));
+                    }
+
+                    // For most cases 'Date32Type::parse' would also work here, as it semantically parses
+                    // assuming a YYYY-MM-DD format. However 'Date32Type::parse' cannot handle negative
+                    // values for year (e.g. years in BC). Date32Type::parse_formatted can handle also these.
+                    match Date32Type::parse_formatted(string_to_parse.unwrap(), "%Y-%m-%d") {
                     Some(v) => Ok(v),
-                    None => Err(internal_datafusion_err!(
-                        "Unable to cast to Date32 for converting from i64 to i32 failed"
+                    None => arrow_err!(ParseError(
+                        "Unable to cast to Date32 for converting from i64 to i32 failed".to_string()
                     )),
+                }
                 },
                 "to_date",
             ),
             2.. => handle_multiple::<Date32Type, _, Date32Type, _>(
                 args,
-                |s, format| match Date32Type::parse_formatted(s, format) {
-                    Some(v) => Ok(v),
-                    None => Err(internal_datafusion_err!(
-                        "Unable to cast to Date32 for converting from i64 to i32 failed"
-                    )),
+                |s, format| {
+                    string_to_timestamp_millis_formatted(s, format)
+                        .map(|n| n / (24 * 60 * 60 * 1_000))
+                        .and_then(|v| {
+                            v.try_into().map_err(|_| {
+                                internal_datafusion_err!("Unable to cast to Date32 for converting from i64 to i32 failed")
+                            })
+                        })
                 },
                 |n| n,
                 "to_date",
@@ -142,6 +171,12 @@ mod tests {
                 formatted_date: "99991231",
             },
             TestCase {
+                name: "Smallest four-digit year (-9999)",
+                date_str: "-9999-12-31",
+                format_str: "%Y/%m/%d",
+                formatted_date: "-9999/12/31",
+            },
+            TestCase {
                 name: "Year 1 (0001)",
                 date_str: "0001-12-31",
                 format_str: "%Y%m%d",
@@ -162,8 +197,8 @@ mod tests {
             TestCase {
                 name: "Negative Year, BC (-42-01-01)",
                 date_str: "-42-01-01",
-                format_str: "%Y#%m#%d",
-                formatted_date: "-42#01#01",
+                format_str: "%Y/%m/%d",
+                formatted_date: "-42/01/01",
             },
         ];
 
@@ -206,6 +241,53 @@ mod tests {
                     "Could not convert '{}' with format string '{}'to Date",
                     tc.date_str, tc.format_str
                 ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_to_date_multiple_format_strings() {
+        let formatted_date_scalar = ScalarValue::Utf8(Some("2023/01/31".into()));
+        let format1_scalar = ScalarValue::Utf8(Some("%Y-%m-%d".into()));
+        let format2_scalar = ScalarValue::Utf8(Some("%Y/%m/%d".into()));
+
+        let to_date_result = ToDateFunc::new().invoke(&[
+            ColumnarValue::Scalar(formatted_date_scalar),
+            ColumnarValue::Scalar(format1_scalar),
+            ColumnarValue::Scalar(format2_scalar),
+        ]);
+
+        match to_date_result {
+            Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
+                let expected = Date32Type::parse_formatted("2023-01-31", "%Y-%m-%d");
+                assert_eq!(
+                    date_val, expected,
+                    "to_date created wrong value for date with 2 format strings"
+                );
+            }
+            _ => panic!("Conversion failed",),
+        }
+    }
+
+    #[test]
+    fn test_to_date_from_timestamp() {
+        let test_cases = vec![
+            "2020-09-08T13:42:29Z",
+            "2020-09-08T13:42:29.190855-05:00",
+            "2020-09-08 12:13:29",
+        ];
+        for date_str in test_cases {
+            let formatted_date_scalar = ScalarValue::Utf8(Some(date_str.into()));
+
+            let to_date_result =
+                ToDateFunc::new().invoke(&[ColumnarValue::Scalar(formatted_date_scalar)]);
+
+            match to_date_result {
+                Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
+                    let expected = Date32Type::parse_formatted("2020-09-08", "%Y-%m-%d");
+                    assert_eq!(date_val, expected, "to_date created wrong value");
+                }
+                _ => panic!("Conversion of {} failed", date_str),
             }
         }
     }
