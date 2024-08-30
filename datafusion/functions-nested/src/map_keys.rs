@@ -21,7 +21,10 @@ use crate::utils::{get_map_entry_field, make_scalar_function};
 use arrow_array::{Array, ArrayRef, ListArray};
 use arrow_schema::{DataType, Field};
 use datafusion_common::{cast::as_map_array, exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
+};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -41,7 +44,10 @@ pub(crate) struct MapKeysFunc {
 impl MapKeysFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::new(
+                TypeSignature::ArraySignature(ArrayFunctionSignature::MapArray),
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -74,16 +80,6 @@ impl ScalarUDFImpl for MapKeysFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
         make_scalar_function(map_keys_inner)(args)
-    }
-
-    fn coerce_types(
-        &self,
-        arg_types: &[DataType],
-    ) -> datafusion_common::Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!("map_keys expects single argument");
-        }
-        Ok(vec![arg_types[0].clone()])
     }
 }
 
