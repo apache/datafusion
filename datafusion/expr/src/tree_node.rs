@@ -97,7 +97,7 @@ impl TreeNode for Expr {
                     expr_vec.push(f.as_ref());
                 }
                 if let Some(order_by) = order_by {
-                    expr_vec.extend(order_by.iter().map(|sort| sort.expr.as_ref()));
+                    expr_vec.extend(order_by.iter().map(|sort| &sort.expr));
                 }
                 expr_vec
             }
@@ -109,7 +109,7 @@ impl TreeNode for Expr {
             }) => {
                 let mut expr_vec = args.iter().collect::<Vec<_>>();
                 expr_vec.extend(partition_by);
-                expr_vec.extend(order_by.iter().map(|sort| sort.expr.as_ref()));
+                expr_vec.extend(order_by.iter().map(|sort| &sort.expr));
                 expr_vec
             }
             Expr::InList(InList { expr, list, .. }) => {
@@ -395,7 +395,7 @@ pub fn transform_sort_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
 ) -> Result<Transformed<Vec<Sort>>> {
     Ok(sorts
         .iter()
-        .map(|sort| (*sort.expr).clone())
+        .map(|sort| sort.expr.clone())
         .map_until_stop_and_collect(&mut f)?
         .update_data(|transformed_exprs| {
             replace_sort_expressions(sorts, transformed_exprs)
@@ -413,7 +413,7 @@ pub fn replace_sort_expressions(sorts: Vec<Sort>, new_expr: Vec<Expr>) -> Vec<So
 
 pub fn replace_sort_expression(sort: Sort, new_expr: Expr) -> Sort {
     Sort {
-        expr: Box::new(new_expr),
+        expr: new_expr,
         ..sort
     }
 }

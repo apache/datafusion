@@ -328,8 +328,7 @@ impl CommonSubexprEliminate {
     ) -> Result<Transformed<LogicalPlan>> {
         let Sort { expr, input, fetch } = sort;
         let input = Arc::unwrap_or_clone(input);
-        let sort_expressions =
-            expr.iter().map(|sort| sort.expr.as_ref().clone()).collect();
+        let sort_expressions = expr.iter().map(|sort| sort.expr.clone()).collect();
         let new_sort = self
             .try_unary_plan(sort_expressions, input, config)?
             .update_data(|(new_expr, new_input)| {

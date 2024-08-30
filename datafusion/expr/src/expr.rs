@@ -602,7 +602,7 @@ impl TryCast {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Sort {
     /// The expression to sort on
-    pub expr: Box<Expr>,
+    pub expr: Expr,
     /// The direction of the sort
     pub asc: bool,
     /// Whether to put Nulls before all other data values
@@ -611,7 +611,7 @@ pub struct Sort {
 
 impl Sort {
     /// Create a new Sort expression
-    pub fn new(expr: Box<Expr>, asc: bool, nulls_first: bool) -> Self {
+    pub fn new(expr: Expr, asc: bool, nulls_first: bool) -> Self {
         Self {
             expr,
             asc,
@@ -1368,7 +1368,7 @@ impl Expr {
     /// let sort_expr = col("foo").sort(true, true); // SORT ASC NULLS_FIRST
     /// ```
     pub fn sort(self, asc: bool, nulls_first: bool) -> Sort {
-        Sort::new(Box::new(self), asc, nulls_first)
+        Sort::new(self, asc, nulls_first)
     }
 
     /// Return `IsTrue(Box(self))`

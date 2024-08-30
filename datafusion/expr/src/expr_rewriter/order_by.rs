@@ -35,7 +35,7 @@ pub fn rewrite_sort_cols_by_aggs(
         .map(|e| {
             let sort = e.into();
             Ok(Sort::new(
-                Box::new(rewrite_sort_col_by_aggs(*sort.expr, plan)?),
+                rewrite_sort_col_by_aggs(sort.expr, plan)?,
                 sort.asc,
                 sort.nulls_first,
             ))

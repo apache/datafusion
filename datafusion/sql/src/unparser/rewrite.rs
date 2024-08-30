@@ -158,7 +158,7 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
 
     let mut collects = p.expr.clone();
     for sort in &sort.expr {
-        collects.push(sort.expr.as_ref().clone());
+        collects.push(sort.expr.clone());
     }
 
     // Compare outer collects Expr::to_string with inner collected transformed values
