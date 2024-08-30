@@ -16,7 +16,6 @@
 // under the License.
 
 use itertools::Itertools;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use arrow_buffer::ToByteSlice;
@@ -819,13 +818,7 @@ fn to_substrait_sort_field(
         (false, false) => SortDirection::DescNullsLast,
     };
     Ok(SortField {
-        expr: Some(to_substrait_rex(
-            ctx,
-            sort.expr.deref(),
-            schema,
-            0,
-            extensions,
-        )?),
+        expr: Some(to_substrait_rex(ctx, &sort.expr, schema, 0, extensions)?),
         sort_kind: Some(SortKind::Direction(sort_kind.into())),
     })
 }

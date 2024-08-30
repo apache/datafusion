@@ -936,7 +936,7 @@ pub async fn from_substrait_sorts(
         };
         let (asc, nulls_first) = asc_nullfirst.unwrap();
         sorts.push(Sort {
-            expr: Box::new(expr),
+            expr,
             asc,
             nulls_first,
         });

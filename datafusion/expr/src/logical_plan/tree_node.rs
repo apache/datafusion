@@ -509,7 +509,7 @@ impl LogicalPlan {
             })) => on_expr
                 .iter()
                 .chain(select_expr.iter())
-                .chain(sort_expr.iter().flatten().map(|sort| &*sort.expr))
+                .chain(sort_expr.iter().flatten().map(|sort| &sort.expr))
                 .apply_until_stop(f),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)

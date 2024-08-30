@@ -637,7 +637,7 @@ where
                 nulls_first,
             } = sort;
             Ok(protobuf::SortExprNode {
-                expr: Some(serialize_expr(expr.as_ref(), codec)?),
+                expr: Some(serialize_expr(expr, codec)?),
                 asc: *asc,
                 nulls_first: *nulls_first,
             })

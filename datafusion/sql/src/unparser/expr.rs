@@ -1761,7 +1761,7 @@ mod tests {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     args: vec![wildcard()],
                     partition_by: vec![],
-                    order_by: vec![Sort::new(Box::new(col("a")), false, true)],
+                    order_by: vec![Sort::new(col("a"), false, true)],
                     window_frame: WindowFrame::new_bounds(
                         datafusion_expr::WindowFrameUnits::Range,
                         datafusion_expr::WindowFrameBound::Preceding(

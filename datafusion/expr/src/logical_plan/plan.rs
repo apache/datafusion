@@ -2616,7 +2616,7 @@ impl DistinctOn {
         // Check that the left-most sort expressions are the same as the `ON` expressions.
         let mut matched = true;
         for (on, sort) in self.on_expr.iter().zip(sort_expr.iter()) {
-            if on != &*sort.expr {
+            if on != &sort.expr {
                 matched = false;
                 break;
             }
