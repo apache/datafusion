@@ -821,11 +821,10 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
 
         fn try_encode_expr(
             &self,
-            node: Arc<dyn PhysicalExpr>,
+            node: &Arc<dyn PhysicalExpr>,
             buf: &mut Vec<u8>,
         ) -> Result<()> {
             if node
-                .as_ref()
                 .as_any()
                 .downcast_ref::<CustomPredicateExpr>()
                 .is_some()

@@ -289,10 +289,6 @@ pub enum Expr {
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
     TryCast(TryCast),
-    /// A sort expression, that can be used to sort values.
-    ///
-    /// See [Expr::sort] for more details
-    Sort(Sort),
     /// Represents the call of a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
     /// Calls an aggregate function with arguments, and optional
@@ -606,7 +602,7 @@ impl TryCast {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Sort {
     /// The expression to sort on
-    pub expr: Box<Expr>,
+    pub expr: Expr,
     /// The direction of the sort
     pub asc: bool,
     /// Whether to put Nulls before all other data values
@@ -615,7 +611,7 @@ pub struct Sort {
 
 impl Sort {
     /// Create a new Sort expression
-    pub fn new(expr: Box<Expr>, asc: bool, nulls_first: bool) -> Self {
+    pub fn new(expr: Expr, asc: bool, nulls_first: bool) -> Self {
         Self {
             expr,
             asc,
@@ -630,6 +626,23 @@ impl Sort {
             asc: !self.asc,
             nulls_first: !self.nulls_first,
         }
+    }
+}
+
+impl Display for Sort {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.expr)?;
+        if self.asc {
+            write!(f, " ASC")?;
+        } else {
+            write!(f, " DESC")?;
+        }
+        if self.nulls_first {
+            write!(f, " NULLS FIRST")?;
+        } else {
+            write!(f, " NULLS LAST")?;
+        }
+        Ok(())
     }
 }
 
@@ -649,7 +662,7 @@ pub struct AggregateFunction {
     /// Optional filter
     pub filter: Option<Box<Expr>>,
     /// Optional ordering
-    pub order_by: Option<Vec<Expr>>,
+    pub order_by: Option<Vec<Sort>>,
     pub null_treatment: Option<NullTreatment>,
 }
 
@@ -660,7 +673,7 @@ impl AggregateFunction {
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Expr>>,
+        order_by: Option<Vec<Sort>>,
         null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
@@ -785,7 +798,7 @@ pub struct WindowFunction {
     /// List of partition by expressions
     pub partition_by: Vec<Expr>,
     /// List of order by expressions
-    pub order_by: Vec<Expr>,
+    pub order_by: Vec<Sort>,
     /// Window frame
     pub window_frame: window_frame::WindowFrame,
     /// Specifies how NULL value is treated: ignore or respect
@@ -1141,7 +1154,6 @@ impl Expr {
             Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
             Expr::ScalarVariable(..) => "ScalarVariable",
-            Expr::Sort { .. } => "Sort",
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard { .. } => "Wildcard",
@@ -1227,14 +1239,9 @@ impl Expr {
         Expr::Like(Like::new(true, Box::new(self), Box::new(other), None, true))
     }
 
-    /// Return the name to use for the specific Expr, recursing into
-    /// `Expr::Sort` as appropriate
+    /// Return the name to use for the specific Expr
     pub fn name_for_alias(&self) -> Result<String> {
-        match self {
-            // call Expr::display_name() on a Expr::Sort will throw an error
-            Expr::Sort(Sort { expr, .. }) => expr.name_for_alias(),
-            expr => Ok(expr.schema_name().to_string()),
-        }
+        Ok(self.schema_name().to_string())
     }
 
     /// Ensure `expr` has the name as `original_name` by adding an
@@ -1250,14 +1257,7 @@ impl Expr {
 
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        match self {
-            Expr::Sort(Sort {
-                expr,
-                asc,
-                nulls_first,
-            }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
-            _ => Expr::Alias(Alias::new(self, None::<&str>, name.into())),
-        }
+        Expr::Alias(Alias::new(self, None::<&str>, name.into()))
     }
 
     /// Return `self AS name` alias expression with a specific qualifier
@@ -1266,18 +1266,7 @@ impl Expr {
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
-        match self {
-            Expr::Sort(Sort {
-                expr,
-                asc,
-                nulls_first,
-            }) => Expr::Sort(Sort::new(
-                Box::new(expr.alias_qualified(relation, name)),
-                asc,
-                nulls_first,
-            )),
-            _ => Expr::Alias(Alias::new(self, relation, name.into())),
-        }
+        Expr::Alias(Alias::new(self, relation, name.into()))
     }
 
     /// Remove an alias from an expression if one exists.
@@ -1372,14 +1361,14 @@ impl Expr {
         Expr::IsNotNull(Box::new(self))
     }
 
-    /// Create a sort expression from an existing expression.
+    /// Create a sort configuration from an existing expression.
     ///
     /// ```
     /// # use datafusion_expr::col;
     /// let sort_expr = col("foo").sort(true, true); // SORT ASC NULLS_FIRST
     /// ```
-    pub fn sort(self, asc: bool, nulls_first: bool) -> Expr {
-        Expr::Sort(Sort::new(Box::new(self), asc, nulls_first))
+    pub fn sort(self, asc: bool, nulls_first: bool) -> Sort {
+        Sort::new(self, asc, nulls_first)
     }
 
     /// Return `IsTrue(Box(self))`
@@ -1655,7 +1644,6 @@ impl Expr {
             | Expr::Wildcard { .. }
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
-            | Expr::Sort(..)
             | Expr::Placeholder(..) => false,
         }
     }
@@ -1751,14 +1739,6 @@ impl Expr {
                 data_type,
             }) => {
                 data_type.hash(hasher);
-            }
-            Expr::Sort(Sort {
-                expr: _expr,
-                asc,
-                nulls_first,
-            }) => {
-                asc.hash(hasher);
-                nulls_first.hash(hasher);
             }
             Expr::ScalarFunction(ScalarFunction { func, args: _args }) => {
                 func.hash(hasher);
@@ -1871,7 +1851,6 @@ impl<'a> Display for SchemaDisplay<'a> {
             Expr::Column(_)
             | Expr::Literal(_)
             | Expr::ScalarVariable(..)
-            | Expr::Sort(_)
             | Expr::OuterReferenceColumn(..)
             | Expr::Placeholder(_)
             | Expr::Wildcard { .. } => write!(f, "{}", self.0),
@@ -1901,7 +1880,7 @@ impl<'a> Display for SchemaDisplay<'a> {
                 };
 
                 if let Some(order_by) = order_by {
-                    write!(f, " ORDER BY [{}]", schema_name_from_exprs(order_by)?)?;
+                    write!(f, " ORDER BY [{}]", schema_name_from_sorts(order_by)?)?;
                 };
 
                 Ok(())
@@ -2107,7 +2086,7 @@ impl<'a> Display for SchemaDisplay<'a> {
                 }
 
                 if !order_by.is_empty() {
-                    write!(f, " ORDER BY [{}]", schema_name_from_exprs(order_by)?)?;
+                    write!(f, " ORDER BY [{}]", schema_name_from_sorts(order_by)?)?;
                 };
 
                 write!(f, " {window_frame}")
@@ -2139,6 +2118,24 @@ fn schema_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt
             write!(&mut s, "{sep}")?;
         }
         write!(&mut s, "{}", SchemaDisplay(e))?;
+    }
+
+    Ok(s)
+}
+
+pub fn schema_name_from_sorts(sorts: &[Sort]) -> Result<String, fmt::Error> {
+    let mut s = String::new();
+    for (i, e) in sorts.iter().enumerate() {
+        if i > 0 {
+            write!(&mut s, ", ")?;
+        }
+        let ordering = if e.asc { "ASC" } else { "DESC" };
+        let nulls_ordering = if e.nulls_first {
+            "NULLS FIRST"
+        } else {
+            "NULLS LAST"
+        };
+        write!(&mut s, "{} {} {}", e.expr, ordering, nulls_ordering)?;
     }
 
     Ok(s)
@@ -2203,22 +2200,6 @@ impl fmt::Display for Expr {
             }) => write!(f, "{expr} IN ({subquery:?})"),
             Expr::ScalarSubquery(subquery) => write!(f, "({subquery:?})"),
             Expr::BinaryExpr(expr) => write!(f, "{expr}"),
-            Expr::Sort(Sort {
-                expr,
-                asc,
-                nulls_first,
-            }) => {
-                if *asc {
-                    write!(f, "{expr} ASC")?;
-                } else {
-                    write!(f, "{expr} DESC")?;
-                }
-                if *nulls_first {
-                    write!(f, " NULLS FIRST")
-                } else {
-                    write!(f, " NULLS LAST")
-                }
-            }
             Expr::ScalarFunction(fun) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }

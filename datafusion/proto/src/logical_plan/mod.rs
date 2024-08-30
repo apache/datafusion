@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
-use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
+use crate::protobuf::{CustomTableScanNode, SortExprNodeCollection};
 use crate::{
     convert_required, into_required,
     protobuf::{
@@ -62,11 +62,13 @@ use datafusion_expr::{
         EmptyRelation, Extension, Join, JoinConstraint, Limit, Prepare, Projection,
         Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
-    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, WindowUDF,
+    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
+    WindowUDF,
 };
 use datafusion_expr::{AggregateUDF, Unnest};
 
 use self::to_proto::{serialize_expr, serialize_exprs};
+use crate::logical_plan::to_proto::serialize_sorts;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -347,8 +349,8 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let mut all_sort_orders = vec![];
                 for order in &scan.file_sort_order {
-                    all_sort_orders.push(from_proto::parse_exprs(
-                        &order.logical_expr_nodes,
+                    all_sort_orders.push(from_proto::parse_sorts(
+                        &order.sort_expr_nodes,
                         ctx,
                         extension_codec,
                     )?)
@@ -476,8 +478,8 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
                     into_logical_plan!(sort.input, ctx, extension_codec)?;
-                let sort_expr: Vec<Expr> =
-                    from_proto::parse_exprs(&sort.expr, ctx, extension_codec)?;
+                let sort_expr: Vec<SortExpr> =
+                    from_proto::parse_sorts(&sort.expr, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input).sort(sort_expr)?.build()
             }
             LogicalPlanType::Repartition(repartition) => {
@@ -536,8 +538,8 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let mut order_exprs = vec![];
                 for expr in &create_extern_table.order_exprs {
-                    order_exprs.push(from_proto::parse_exprs(
-                        &expr.logical_expr_nodes,
+                    order_exprs.push(from_proto::parse_sorts(
+                        &expr.sort_expr_nodes,
                         ctx,
                         extension_codec,
                     )?);
@@ -772,7 +774,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?;
                 let sort_expr = match distinct_on.sort_expr.len() {
                     0 => None,
-                    _ => Some(from_proto::parse_exprs(
+                    _ => Some(from_proto::parse_sorts(
                         &distinct_on.sort_expr,
                         ctx,
                         extension_codec,
@@ -981,10 +983,10 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                     let options = listing_table.options();
 
-                    let mut exprs_vec: Vec<LogicalExprNodeCollection> = vec![];
+                    let mut exprs_vec: Vec<SortExprNodeCollection> = vec![];
                     for order in &options.file_sort_order {
-                        let expr_vec = LogicalExprNodeCollection {
-                            logical_expr_nodes: serialize_exprs(order, extension_codec)?,
+                        let expr_vec = SortExprNodeCollection {
+                            sort_expr_nodes: serialize_sorts(order, extension_codec)?,
                         };
                         exprs_vec.push(expr_vec);
                     }
@@ -1114,7 +1116,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )?;
                 let sort_expr = match sort_expr {
                     None => vec![],
-                    Some(sort_expr) => serialize_exprs(sort_expr, extension_codec)?,
+                    Some(sort_expr) => serialize_sorts(sort_expr, extension_codec)?,
                 };
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::DistinctOn(Box::new(
@@ -1258,13 +1260,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                         input.as_ref(),
                         extension_codec,
                     )?;
-                let selection_expr: Vec<protobuf::LogicalExprNode> =
-                    serialize_exprs(expr, extension_codec)?;
+                let sort_expr: Vec<protobuf::SortExprNode> =
+                    serialize_sorts(expr, extension_codec)?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Sort(Box::new(
                         protobuf::SortNode {
                             input: Some(Box::new(input)),
-                            expr: selection_expr,
+                            expr: sort_expr,
                             fetch: fetch.map(|f| f as i64).unwrap_or(-1i64),
                         },
                     ))),
@@ -1334,10 +1336,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     column_defaults,
                 },
             )) => {
-                let mut converted_order_exprs: Vec<LogicalExprNodeCollection> = vec![];
+                let mut converted_order_exprs: Vec<SortExprNodeCollection> = vec![];
                 for order in order_exprs {
-                    let temp = LogicalExprNodeCollection {
-                        logical_expr_nodes: serialize_exprs(order, extension_codec)?,
+                    let temp = SortExprNodeCollection {
+                        sort_expr_nodes: serialize_sorts(order, extension_codec)?,
                     };
                     converted_order_exprs.push(temp);
                 }

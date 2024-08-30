@@ -26,9 +26,9 @@ use crate::function::{
     StateFieldsArgs,
 };
 use crate::{
-    conditional_expressions::CaseBuilder, logical_plan::Subquery, AggregateUDF, Expr,
-    LogicalPlan, Operator, ScalarFunctionImplementation, ScalarUDF, Signature,
-    Volatility,
+    conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
+    AggregateUDF, Expr, LogicalPlan, Operator, ScalarFunctionImplementation, ScalarUDF,
+    Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -723,9 +723,7 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// ```
 pub trait ExprFunctionExt {
     /// Add `ORDER BY <order_by>`
-    ///
-    /// Note: `order_by` must be [`Expr::Sort`]
-    fn order_by(self, order_by: Vec<Expr>) -> ExprFuncBuilder;
+    fn order_by(self, order_by: Vec<Sort>) -> ExprFuncBuilder;
     /// Add `FILTER <filter>`
     fn filter(self, filter: Expr) -> ExprFuncBuilder;
     /// Add `DISTINCT`
@@ -753,7 +751,7 @@ pub enum ExprFuncKind {
 #[derive(Debug, Clone)]
 pub struct ExprFuncBuilder {
     fun: Option<ExprFuncKind>,
-    order_by: Option<Vec<Expr>>,
+    order_by: Option<Vec<Sort>>,
     filter: Option<Expr>,
     distinct: bool,
     null_treatment: Option<NullTreatment>,
@@ -798,16 +796,6 @@ impl ExprFuncBuilder {
             );
         };
 
-        if let Some(order_by) = &order_by {
-            for expr in order_by.iter() {
-                if !matches!(expr, Expr::Sort(_)) {
-                    return plan_err!(
-                        "ORDER BY expressions must be Expr::Sort, found {expr:?}"
-                    );
-                }
-            }
-        }
-
         let fun_expr = match fun {
             ExprFuncKind::Aggregate(mut udaf) => {
                 udaf.order_by = order_by;
@@ -833,9 +821,7 @@ impl ExprFuncBuilder {
 
 impl ExprFunctionExt for ExprFuncBuilder {
     /// Add `ORDER BY <order_by>`
-    ///
-    /// Note: `order_by` must be [`Expr::Sort`]
-    fn order_by(mut self, order_by: Vec<Expr>) -> ExprFuncBuilder {
+    fn order_by(mut self, order_by: Vec<Sort>) -> ExprFuncBuilder {
         self.order_by = Some(order_by);
         self
     }
@@ -873,7 +859,7 @@ impl ExprFunctionExt for ExprFuncBuilder {
 }
 
 impl ExprFunctionExt for Expr {
-    fn order_by(self, order_by: Vec<Expr>) -> ExprFuncBuilder {
+    fn order_by(self, order_by: Vec<Sort>) -> ExprFuncBuilder {
         let mut builder = match self {
             Expr::AggregateFunction(udaf) => {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))

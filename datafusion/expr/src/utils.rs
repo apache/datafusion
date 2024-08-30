@@ -296,7 +296,6 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Case { .. }
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
-            | Expr::Sort { .. }
             | Expr::ScalarFunction(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
@@ -461,22 +460,20 @@ pub fn expand_qualified_wildcard(
 
 /// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")
 /// if bool is true SortExpr comes from `PARTITION BY` column, if false comes from `ORDER BY` column
-type WindowSortKey = Vec<(Expr, bool)>;
+type WindowSortKey = Vec<(Sort, bool)>;
 
 /// Generate a sort key for a given window expr's partition_by and order_by expr
 pub fn generate_sort_key(
     partition_by: &[Expr],
-    order_by: &[Expr],
+    order_by: &[Sort],
 ) -> Result<WindowSortKey> {
     let normalized_order_by_keys = order_by
         .iter()
-        .map(|e| match e {
-            Expr::Sort(Sort { expr, .. }) => {
-                Ok(Expr::Sort(Sort::new(expr.clone(), true, false)))
-            }
-            _ => plan_err!("Order by only accepts sort expressions"),
+        .map(|e| {
+            let Sort { expr, .. } = e;
+            Sort::new(expr.clone(), true, false)
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
 
     let mut final_sort_keys = vec![];
     let mut is_partition_flag = vec![];
@@ -512,65 +509,61 @@ pub fn generate_sort_key(
 /// Compare the sort expr as PostgreSQL's common_prefix_cmp():
 /// <https://github.com/postgres/postgres/blob/master/src/backend/optimizer/plan/planner.c>
 pub fn compare_sort_expr(
-    sort_expr_a: &Expr,
-    sort_expr_b: &Expr,
+    sort_expr_a: &Sort,
+    sort_expr_b: &Sort,
     schema: &DFSchemaRef,
 ) -> Ordering {
-    match (sort_expr_a, sort_expr_b) {
-        (
-            Expr::Sort(Sort {
-                expr: expr_a,
-                asc: asc_a,
-                nulls_first: nulls_first_a,
-            }),
-            Expr::Sort(Sort {
-                expr: expr_b,
-                asc: asc_b,
-                nulls_first: nulls_first_b,
-            }),
-        ) => {
-            let ref_indexes_a = find_column_indexes_referenced_by_expr(expr_a, schema);
-            let ref_indexes_b = find_column_indexes_referenced_by_expr(expr_b, schema);
-            for (idx_a, idx_b) in ref_indexes_a.iter().zip(ref_indexes_b.iter()) {
-                match idx_a.cmp(idx_b) {
-                    Ordering::Less => {
-                        return Ordering::Less;
-                    }
-                    Ordering::Greater => {
-                        return Ordering::Greater;
-                    }
-                    Ordering::Equal => {}
-                }
+    let Sort {
+        expr: expr_a,
+        asc: asc_a,
+        nulls_first: nulls_first_a,
+    } = sort_expr_a;
+
+    let Sort {
+        expr: expr_b,
+        asc: asc_b,
+        nulls_first: nulls_first_b,
+    } = sort_expr_b;
+
+    let ref_indexes_a = find_column_indexes_referenced_by_expr(expr_a, schema);
+    let ref_indexes_b = find_column_indexes_referenced_by_expr(expr_b, schema);
+    for (idx_a, idx_b) in ref_indexes_a.iter().zip(ref_indexes_b.iter()) {
+        match idx_a.cmp(idx_b) {
+            Ordering::Less => {
+                return Ordering::Less;
             }
-            match ref_indexes_a.len().cmp(&ref_indexes_b.len()) {
-                Ordering::Less => return Ordering::Greater,
-                Ordering::Greater => {
-                    return Ordering::Less;
-                }
-                Ordering::Equal => {}
+            Ordering::Greater => {
+                return Ordering::Greater;
             }
-            match (asc_a, asc_b) {
-                (true, false) => {
-                    return Ordering::Greater;
-                }
-                (false, true) => {
-                    return Ordering::Less;
-                }
-                _ => {}
-            }
-            match (nulls_first_a, nulls_first_b) {
-                (true, false) => {
-                    return Ordering::Less;
-                }
-                (false, true) => {
-                    return Ordering::Greater;
-                }
-                _ => {}
-            }
-            Ordering::Equal
+            Ordering::Equal => {}
         }
-        _ => panic!("Sort expressions must be of type Sort"),
     }
+    match ref_indexes_a.len().cmp(&ref_indexes_b.len()) {
+        Ordering::Less => return Ordering::Greater,
+        Ordering::Greater => {
+            return Ordering::Less;
+        }
+        Ordering::Equal => {}
+    }
+    match (asc_a, asc_b) {
+        (true, false) => {
+            return Ordering::Greater;
+        }
+        (false, true) => {
+            return Ordering::Less;
+        }
+        _ => {}
+    }
+    match (nulls_first_a, nulls_first_b) {
+        (true, false) => {
+            return Ordering::Less;
+        }
+        (false, true) => {
+            return Ordering::Greater;
+        }
+        _ => {}
+    }
+    Ordering::Equal
 }
 
 /// group a slice of window expression expr by their order by expressions
@@ -603,14 +596,6 @@ pub fn group_window_expr_by_sort_keys(
 pub fn find_aggregate_exprs(exprs: &[Expr]) -> Vec<Expr> {
     find_exprs_in_exprs(exprs, &|nested_expr| {
         matches!(nested_expr, Expr::AggregateFunction { .. })
-    })
-}
-
-/// Collect all deeply nested `Expr::Sort`. They are returned in order of occurrence
-/// (depth first), with duplicates omitted.
-pub fn find_sort_exprs(exprs: &[Expr]) -> Vec<Expr> {
-    find_exprs_in_exprs(exprs, &|nested_expr| {
-        matches!(nested_expr, Expr::Sort { .. })
     })
 }
 
@@ -1376,8 +1361,7 @@ mod tests {
     use crate::{
         col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup,
         test::function_stub::max_udaf, test::function_stub::min_udaf,
-        test::function_stub::sum_udaf, Cast, ExprFunctionExt, WindowFrame,
-        WindowFunctionDefinition,
+        test::function_stub::sum_udaf, Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
 
     #[test]
@@ -1417,10 +1401,9 @@ mod tests {
 
     #[test]
     fn test_group_window_expr_by_sort_keys() -> Result<()> {
-        let age_asc = Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true));
-        let name_desc = Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true));
-        let created_at_desc =
-            Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true));
+        let age_asc = expr::Sort::new(col("age"), true, true);
+        let name_desc = expr::Sort::new(col("name"), false, true);
+        let created_at_desc = expr::Sort::new(col("created_at"), false, true);
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
@@ -1472,43 +1455,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_sort_exprs() -> Result<()> {
-        let exprs = &[
-            Expr::WindowFunction(expr::WindowFunction::new(
-                WindowFunctionDefinition::AggregateUDF(max_udaf()),
-                vec![col("name")],
-            ))
-            .order_by(vec![
-                Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
-                Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
-            ])
-            .window_frame(WindowFrame::new(Some(false)))
-            .build()
-            .unwrap(),
-            Expr::WindowFunction(expr::WindowFunction::new(
-                WindowFunctionDefinition::AggregateUDF(sum_udaf()),
-                vec![col("age")],
-            ))
-            .order_by(vec![
-                Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
-                Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
-                Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true)),
-            ])
-            .window_frame(WindowFrame::new(Some(false)))
-            .build()
-            .unwrap(),
-        ];
-        let expected = vec![
-            Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
-            Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
-            Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true)),
-        ];
-        let result = find_sort_exprs(exprs);
-        assert_eq!(expected, result);
-        Ok(())
-    }
-
-    #[test]
     fn avoid_generate_duplicate_sort_keys() -> Result<()> {
         let asc_or_desc = [true, false];
         let nulls_first_or_last = [true, false];
@@ -1516,41 +1462,41 @@ mod tests {
         for asc_ in asc_or_desc {
             for nulls_first_ in nulls_first_or_last {
                 let order_by = &[
-                    Expr::Sort(Sort {
-                        expr: Box::new(col("age")),
+                    Sort {
+                        expr: col("age"),
                         asc: asc_,
                         nulls_first: nulls_first_,
-                    }),
-                    Expr::Sort(Sort {
-                        expr: Box::new(col("name")),
+                    },
+                    Sort {
+                        expr: col("name"),
                         asc: asc_,
                         nulls_first: nulls_first_,
-                    }),
+                    },
                 ];
 
                 let expected = vec![
                     (
-                        Expr::Sort(Sort {
-                            expr: Box::new(col("age")),
+                        Sort {
+                            expr: col("age"),
                             asc: asc_,
                             nulls_first: nulls_first_,
-                        }),
+                        },
                         true,
                     ),
                     (
-                        Expr::Sort(Sort {
-                            expr: Box::new(col("name")),
+                        Sort {
+                            expr: col("name"),
                             asc: asc_,
                             nulls_first: nulls_first_,
-                        }),
+                        },
                         true,
                     ),
                     (
-                        Expr::Sort(Sort {
-                            expr: Box::new(col("created_at")),
+                        Sort {
+                            expr: col("created_at"),
                             asc: true,
                             nulls_first: false,
-                        }),
+                        },
                         true,
                     ),
                 ];

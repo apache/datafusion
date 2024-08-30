@@ -33,7 +33,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like,
-    ScalarFunction, WindowFunction,
+    ScalarFunction, Sort, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -506,7 +506,6 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
             | Expr::Negative(_)
             | Expr::Cast(_)
             | Expr::TryCast(_)
-            | Expr::Sort(_)
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
@@ -593,12 +592,12 @@ fn coerce_frame_bound(
 fn coerce_window_frame(
     window_frame: WindowFrame,
     schema: &DFSchema,
-    expressions: &[Expr],
+    expressions: &[Sort],
 ) -> Result<WindowFrame> {
     let mut window_frame = window_frame;
     let current_types = expressions
         .iter()
-        .map(|e| e.get_type(schema))
+        .map(|s| s.expr.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
