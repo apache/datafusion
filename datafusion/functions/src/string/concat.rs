@@ -78,7 +78,7 @@ impl ScalarUDFImpl for ConcatFunc {
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
     /// concat('abcde', 2, NULL, 22) = 'abcde222'
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args_datatype = args[0].data_type();
+        let first_arg_datatype = args[0].data_type();
         let array_len = args
             .iter()
             .filter_map(|x| match x {
@@ -96,7 +96,7 @@ impl ScalarUDFImpl for ConcatFunc {
                 }
             }
 
-            return match args_datatype {
+            return match first_arg_datatype {
                 DataType::Utf8View => {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
                 }
@@ -175,7 +175,7 @@ impl ScalarUDFImpl for ConcatFunc {
             }
         }
 
-        match args_datatype {
+        match first_arg_datatype {
             DataType::Utf8 => {
                 let mut builder = StringArrayBuilder::with_capacity(len, data_size);
                 for i in 0..len {
