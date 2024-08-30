@@ -23,6 +23,7 @@ use std::sync::Arc;
 pub mod arrow_cast;
 pub mod arrowtypeof;
 pub mod coalesce;
+pub mod dftypeof;
 pub mod expr_ext;
 pub mod getfield;
 pub mod named_struct;
@@ -38,6 +39,7 @@ make_udf_function!(nullif::NullIfFunc, NULLIF, nullif);
 make_udf_function!(nvl::NVLFunc, NVL, nvl);
 make_udf_function!(nvl2::NVL2Func, NVL2, nvl2);
 make_udf_function!(arrowtypeof::ArrowTypeOfFunc, ARROWTYPEOF, arrow_typeof);
+make_udf_function!(dftypeof::DataFusionTypeOfFunc, DFTYPEOF, datafusion_typeof);
 make_udf_function!(r#struct::StructFunc, STRUCT, r#struct);
 make_udf_function!(named_struct::NamedStructFunc, NAMED_STRUCT, named_struct);
 make_udf_function!(getfield::GetFieldFunc, GET_FIELD, get_field);
@@ -67,6 +69,10 @@ pub mod expr_fn {
         "Returns the Arrow type of the input expression.",
         arg1
     ),(
+        datafusion_typeof,
+        "Returns the DataFusion type of the input expression.",
+        arg1
+    ),(
         r#struct,
         "Returns a struct with the given arguments",
         args,
@@ -94,6 +100,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         nvl(),
         nvl2(),
         arrow_typeof(),
+        datafusion_typeof(),
         named_struct(),
         // Note: most users invoke `get_field` indirectly via field access
         // syntax like `my_struct_col['field_name']`, which results in a call to

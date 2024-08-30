@@ -35,8 +35,8 @@ use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarV
 use datafusion_expr::expr::{InList, InSubquery, WindowFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
-    WindowFunctionDefinition,
+    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator,
+    Volatility, WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
@@ -624,6 +624,17 @@ impl<'a> ConstEvaluator<'a> {
     pub(crate) fn evaluate_to_scalar(&mut self, expr: Expr) -> ConstSimplifyResult {
         if let Expr::Literal(s) = expr {
             return ConstSimplifyResult::NotSimplified(s);
+        }
+        if let Expr::ScalarFunction(ScalarFunction { func, args }) = &expr {
+            // This function cannot evaluate at runtime since DF types are elided.
+            // TODO the function is provided by core and ideally this logic would be provided by it too
+            if func.name() == "datafusion_typeof" && args.len() == 1 {
+                if let Ok(data_type) = args[0].get_type(&self.input_schema) {
+                    return ConstSimplifyResult::Simplified(ScalarValue::from(
+                        data_type.to_string(),
+                    ));
+                }
+            }
         }
 
         let phys_expr =

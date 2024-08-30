@@ -250,3 +250,39 @@ async fn test_parameter_invalid_types() -> Result<()> {
 );
     Ok(())
 }
+
+#[tokio::test]
+async fn test_datafusion_typeof() -> Result<()> {
+    assert_scalar("datafusion_typeof(NULL)", &ScalarValue::from("Null")).await?;
+    assert_scalar("datafusion_typeof(42)", &ScalarValue::from("Int64")).await?;
+    assert_scalar("datafusion_typeof('abc')", &ScalarValue::from("Utf8")).await?;
+
+    Ok(())
+}
+
+async fn assert_scalar(
+    expression: impl Into<&str>,
+    expected: &ScalarValue,
+) -> Result<()> {
+    let ctx = SessionContext::new();
+    let results =
+        execute_to_batches(&ctx, format!("SELECT {} AS t", expression.into()).as_str())
+            .await;
+    assert_eq!(results.len(), 1);
+    let batch = &results[0];
+    assert_eq!(batch.num_columns(), 1);
+    let column = batch.column(0);
+    assert_eq!(column.len(), 1);
+    match column.data_type() {
+        DataType::Utf8 => {
+            let value = column.as_string::<i32>().value(0);
+            match expected {
+                ScalarValue::Utf8(Some(expected)) => assert_eq!(value, expected),
+                _ => panic!("unsupported expected scalar type"),
+            }
+        }
+        _ => panic!("unsupported array data type"),
+    }
+
+    Ok(())
+}
