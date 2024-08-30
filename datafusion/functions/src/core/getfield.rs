@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    make_array, Array, ArrayRef, Capacities, Int64Array, MutableArrayData, StringArray,
+    make_array, Array, ArrayRef, Capacities, Int64Array, MutableArrayData, Scalar,
+    StringArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
@@ -47,7 +48,6 @@ impl GetFieldFunc {
     }
 }
 
-// get_field(struct_array, field_name)
 impl ScalarUDFImpl for GetFieldFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -203,7 +203,8 @@ impl ScalarUDFImpl for GetFieldFunc {
                     }
                 };
 
-                let keys = arrow::compute::kernels::cmp::eq(&key_array, map_array.keys())?;
+                let key_scalar = Scalar::new(key_array.clone());
+                let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
 
                 // note that this array has more entries than the expected output/input size
                 // because maparray is flatten
