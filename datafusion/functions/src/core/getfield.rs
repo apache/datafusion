@@ -206,7 +206,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                     }
                 };
 
-                let key_scalar = Scalar::new(key_array.clone());
+                let key_scalar = Scalar::new(key_array);
                 let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
 
                 // note that this array has more entries than the expected output/input size

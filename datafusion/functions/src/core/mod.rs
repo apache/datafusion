@@ -85,8 +85,9 @@ pub mod expr_fn {
         super::get_field().call(vec![arg1, arg2.lit()])
     }
 
-    // FIXME: This is a helper function to support a use case for map
-    pub fn get_field_helper(arg1: Expr, arg2: Expr) -> Expr {
+    /// Returns the value of the field with the given name from the struct.
+    /// **Internal use only.** This function is added to support the map use case.
+    pub fn _get_field(arg1: Expr, arg2: Expr) -> Expr {
         super::get_field().call(vec![arg1, arg2])
     }
 }

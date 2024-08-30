@@ -23,7 +23,7 @@ use datafusion_expr::{
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
     sqlparser, Expr, ExprSchemable, GetFieldAccess,
 };
-use datafusion_functions::expr_fn::{get_field, get_field_helper};
+use datafusion_functions::expr_fn::{get_field, _get_field};
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 
 use crate::map::map_udf;
@@ -150,7 +150,7 @@ impl ExprPlanner for FieldAccessPlanner {
                 match expr {
                     // Special case for accessing map value with non-string values
                     Expr::ScalarFunction(scalar_func) if is_map(&scalar_func) => {
-                        Ok(PlannerResult::Planned(get_field_helper(
+                        Ok(PlannerResult::Planned(_get_field(
                             Expr::ScalarFunction(scalar_func),
                             *index,
                         )))
