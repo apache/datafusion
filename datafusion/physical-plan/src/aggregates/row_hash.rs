@@ -282,9 +282,9 @@ impl SkipAggregationProbe {
 /// copies, resulting in poor performance.
 ///
 /// In contrast, the blocked approach allocates capacity for the block
-/// based on a predefined block size firstly. 
+/// based on a predefined block size firstly.
 /// And when the block reaches its limit, we allocate a new block
-/// (also with the same predefined block size based capacity) 
+/// (also with the same predefined block size based capacity)
 /// instead of expanding the current one and copying the data.
 /// This method eliminates unnecessary copies and significantly improves performance.
 /// For a nice introduction to the blocked approach, maybe you can see [#7065].
@@ -641,10 +641,11 @@ impl GroupedHashAggregateStream {
 ///   - It is not streaming aggregation(because blocked mode can't support Emit::first(exact n))
 ///   - The spilling is disabled(still need to consider more to support it efficiently)
 ///   - The accumulator is not empty(I am still not sure about logic in this case)
-///   - [`GroupValues::support_blocked_mode`] and all [`GroupsAccumulator::supports_blocked_mode`] are true
+///   - [`GroupValues::supports_blocked_mode`] and all [`GroupsAccumulator::supports_blocked_mode`] are true
 ///
 /// [`GroupValues::supports_blocked_mode`]: crate::aggregates::group_values::GroupValues::supports_blocked_mode
 /// [`GroupsAccumulator::supports_blocked_mode`]: datafusion_expr::GroupsAccumulator::supports_blocked_mode
+///
 // TODO: support blocked optimization in streaming, spilling, and maybe empty accumulators case?
 fn maybe_enable_blocked_group_states(
     context: &TaskContext,
