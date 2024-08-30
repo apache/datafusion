@@ -128,7 +128,7 @@ fn string_view_trim<'a, T: OffsetSizeTrait>(
         }
         other => {
             exec_err!(
-            "trim was called with {other} arguments. It requires at least 1 and at most 2."
+            "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
             )
         }
     }
