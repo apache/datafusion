@@ -482,23 +482,23 @@ SELECT MAP { 'a': 1, 2: 3 };
 ----
 {a: 1, 2: 3}
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[1];
-# ----
-# a
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {1:'a', 2:'b'}];
-# ----
-# 1
+query ?
+SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[1];
+----
+a
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
-# ----
-# 33
+
+query ?
+SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {1:'a', 2:'b'}];
+----
+1
+
+
+query ?
+SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
+----
+33
 
 ## cardinality
 
