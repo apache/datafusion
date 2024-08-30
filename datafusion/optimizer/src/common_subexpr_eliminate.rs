@@ -228,7 +228,7 @@ impl CommonSubexprEliminate {
     fn rewrite_exprs_list<'n>(
         &self,
         exprs_list: Vec<Vec<Expr>>,
-        arrays_list: Vec<Vec<IdArray<'n>>>,
+        arrays_list: &[Vec<IdArray<'n>>],
         expr_stats: &ExprStats<'n>,
         common_exprs: &mut CommonExprs<'n>,
         alias_generator: &AliasGenerator,
@@ -283,10 +283,10 @@ impl CommonSubexprEliminate {
                 // Must clone as Identifiers use references to original expressions so we have
                 // to keep the original expressions intact.
                 exprs_list.clone(),
-                id_arrays_list,
+                &id_arrays_list,
                 &expr_stats,
                 &mut common_exprs,
-                &config.alias_generator(),
+                config.alias_generator().as_ref(),
             )?;
             assert!(!common_exprs.is_empty());
 

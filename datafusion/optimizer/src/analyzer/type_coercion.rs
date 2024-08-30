@@ -91,7 +91,7 @@ fn analyze_internal(
 ) -> Result<Transformed<LogicalPlan>> {
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
-    let mut schema = merge_schema(plan.inputs());
+    let mut schema = merge_schema(&plan.inputs());
 
     if let LogicalPlan::TableScan(ts) = &plan {
         let source_schema = DFSchema::try_from_qualified_schema(
@@ -545,12 +545,12 @@ fn coerce_scalar(target_type: &DataType, value: &ScalarValue) -> Result<ScalarVa
 /// Downstream code uses this signal to treat these values as *unbounded*.
 fn coerce_scalar_range_aware(
     target_type: &DataType,
-    value: ScalarValue,
+    value: &ScalarValue,
 ) -> Result<ScalarValue> {
-    coerce_scalar(target_type, &value).or_else(|err| {
+    coerce_scalar(target_type, value).or_else(|err| {
         // If type coercion fails, check if the largest type in family works:
         if let Some(largest_type) = get_widest_type_in_family(target_type) {
-            coerce_scalar(largest_type, &value).map_or_else(
+            coerce_scalar(largest_type, value).map_or_else(
                 |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
                 |_| ScalarValue::try_from(target_type),
             )
@@ -579,11 +579,11 @@ fn coerce_frame_bound(
 ) -> Result<WindowFrameBound> {
     match bound {
         WindowFrameBound::Preceding(v) => {
-            coerce_scalar_range_aware(target_type, v).map(WindowFrameBound::Preceding)
+            coerce_scalar_range_aware(target_type, &v).map(WindowFrameBound::Preceding)
         }
         WindowFrameBound::CurrentRow => Ok(WindowFrameBound::CurrentRow),
         WindowFrameBound::Following(v) => {
-            coerce_scalar_range_aware(target_type, v).map(WindowFrameBound::Following)
+            coerce_scalar_range_aware(target_type, &v).map(WindowFrameBound::Following)
         }
     }
 }
@@ -1460,26 +1460,26 @@ mod test {
 
     fn cast_helper(
         case: Case,
-        case_when_type: DataType,
-        then_else_type: DataType,
+        case_when_type: &DataType,
+        then_else_type: &DataType,
         schema: &DFSchemaRef,
     ) -> Case {
         let expr = case
             .expr
-            .map(|e| cast_if_not_same_type(e, &case_when_type, schema));
+            .map(|e| cast_if_not_same_type(e, case_when_type, schema));
         let when_then_expr = case
             .when_then_expr
             .into_iter()
             .map(|(when, then)| {
                 (
-                    cast_if_not_same_type(when, &case_when_type, schema),
-                    cast_if_not_same_type(then, &then_else_type, schema),
+                    cast_if_not_same_type(when, case_when_type, schema),
+                    cast_if_not_same_type(then, then_else_type, schema),
                 )
             })
             .collect::<Vec<_>>();
         let else_expr = case
             .else_expr
-            .map(|e| cast_if_not_same_type(e, &then_else_type, schema));
+            .map(|e| cast_if_not_same_type(e, then_else_type, schema));
 
         Case {
             expr,
@@ -1527,8 +1527,8 @@ mod test {
         let then_else_common_type = DataType::Utf8;
         let expected = cast_helper(
             case.clone(),
-            case_when_common_type,
-            then_else_common_type,
+            &case_when_common_type,
+            &then_else_common_type,
             &schema,
         );
         let actual = coerce_case_expression(case, &schema)?;
@@ -1547,8 +1547,8 @@ mod test {
         let then_else_common_type = DataType::Utf8;
         let expected = cast_helper(
             case.clone(),
-            case_when_common_type,
-            then_else_common_type,
+            &case_when_common_type,
+            &then_else_common_type,
             &schema,
         );
         let actual = coerce_case_expression(case, &schema)?;

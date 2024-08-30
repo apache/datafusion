@@ -1351,7 +1351,7 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 }
 
 /// merge inputs schema into a single schema.
-pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
+pub fn merge_schema(inputs: &[&LogicalPlan]) -> DFSchema {
     if inputs.len() == 1 {
         inputs[0].schema().as_ref().clone()
     } else {
