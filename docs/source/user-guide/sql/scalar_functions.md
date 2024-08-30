@@ -3262,7 +3262,7 @@ _Alias of [array_distance](#array_distance)._
 
 ### `list_distinct`
 
-_Alias of [array_dims](#array_distinct)._
+_Alias of [array_distinct](#array_distinct)._
 
 ### `list_element`
 
