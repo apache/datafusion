@@ -3776,7 +3776,7 @@ SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
 ----
 [1, , 3]
 
-select map_keys(map([100, 5], [42,43]));
+select map_values(map([100, 5], [42,43]));
 ----
 [42, 43]
 ```
