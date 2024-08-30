@@ -2373,11 +2373,11 @@ mod tests {
         let mut session_config = SessionConfig::default();
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            ScalarValue::Int64(Some(2)),
+            &ScalarValue::Int64(Some(2)),
         );
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            ScalarValue::Float64(Some(0.1)),
+            &ScalarValue::Float64(Some(0.1)),
         );
 
         let ctx = TaskContext::default().with_session_config(session_config);
@@ -2462,11 +2462,11 @@ mod tests {
         let mut session_config = SessionConfig::default();
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            ScalarValue::Int64(Some(5)),
+            &ScalarValue::Int64(Some(5)),
         );
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            ScalarValue::Float64(Some(0.1)),
+            &ScalarValue::Float64(Some(0.1)),
         );
 
         let ctx = TaskContext::default().with_session_config(session_config);
