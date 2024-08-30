@@ -2416,11 +2416,13 @@ mod tests {
             TableType::Base
         }
 
-        fn supports_filter_pushdown(
+        fn supports_filters_pushdown(
             &self,
-            _e: &Expr,
-        ) -> Result<TableProviderFilterPushDown> {
-            Ok(self.filter_support.clone())
+            filters: &[&Expr],
+        ) -> Result<Vec<TableProviderFilterPushDown>> {
+            Ok((0..filters.len())
+                .map(|_| self.filter_support.clone())
+                .collect())
         }
 
         fn as_any(&self) -> &dyn std::any::Any {
