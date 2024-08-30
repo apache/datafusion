@@ -261,9 +261,6 @@ config_namespace! {
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
 
-        /// Aggregate options
-        pub aggregate: AggregateOptions, default = Default::default()
-
         /// Fan-out during initial physical planning.
         ///
         /// This is mostly use to plan `UNION` children in parallel.
@@ -490,16 +487,6 @@ config_namespace! {
         /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
         /// and `Binary/BinaryLarge` with `BinaryView`.
         pub schema_force_string_view: bool, default = false
-    }
-}
-
-config_namespace! {
-    /// Options related to aggregate execution
-    ///
-    /// See also: [`SessionConfig`]
-    ///
-    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
-    pub struct AggregateOptions {
     }
 }
 
