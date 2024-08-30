@@ -188,7 +188,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                 let map_array = as_map_array(array.as_ref())?;
                 if !matches!(name, ScalarValue::Utf8(_) | ScalarValue::Int64(_) | ScalarValue::Float64(_)) {
                     return exec_err!(
-                "get indexed field is only possible on map with int64 and utf8 indexes. \
+                "get indexed field is only possible on map with utf8, int64 and float64 indexes. \
                              Tried with {name:?} index")
                 }
                 let key_array: ArrayRef = match name {

@@ -23,7 +23,7 @@ use datafusion_expr::{
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
     sqlparser, Expr, ExprSchemable, GetFieldAccess,
 };
-use datafusion_functions::expr_fn::{get_field, _get_field};
+use datafusion_functions::expr_fn::{_get_field, get_field};
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 
 use crate::map::map_udf;
