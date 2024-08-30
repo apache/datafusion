@@ -164,9 +164,17 @@ impl PhysicalGroupBy {
         }
     }
 
-    /// Returns true if this GROUP BY contains NULL expressions
-    pub fn contains_null(&self) -> bool {
-        self.groups.iter().flatten().any(|is_null| *is_null)
+    /// Calculate GROUP BY expressions nullable
+    pub fn exprs_nullable(&self) -> Vec<bool> {
+        let mut exprs_nullable = vec![false; self.expr.len()];
+        for group in self.groups.iter() {
+            group.iter().enumerate().for_each(|(index, is_null)| {
+                if *is_null {
+                    exprs_nullable[index] = true;
+                }
+            })
+        }
+        exprs_nullable
     }
 
     /// Returns the group expressions
@@ -278,7 +286,7 @@ pub struct AggregateExec {
 }
 
 impl AggregateExec {
-    /// Function used in `ConvertFirstLast` optimizer rule,
+    /// Function used in `OptimizeAggregateOrder` optimizer rule,
     /// where we need parts of the new value, others cloned from the old one
     /// Rewrites aggregate exec with new aggregate expressions.
     pub fn with_new_aggr_exprs(
@@ -319,7 +327,7 @@ impl AggregateExec {
             &input.schema(),
             &group_by.expr,
             &aggr_expr,
-            group_by.contains_null(),
+            group_by.exprs_nullable(),
             mode,
         )?;
 
@@ -793,18 +801,18 @@ fn create_schema(
     input_schema: &Schema,
     group_expr: &[(Arc<dyn PhysicalExpr>, String)],
     aggr_expr: &[Arc<AggregateFunctionExpr>],
-    contains_null_expr: bool,
+    group_expr_nullable: Vec<bool>,
     mode: AggregateMode,
 ) -> Result<Schema> {
     let mut fields = Vec::with_capacity(group_expr.len() + aggr_expr.len());
-    for (expr, name) in group_expr {
+    for (index, (expr, name)) in group_expr.iter().enumerate() {
         fields.push(Field::new(
             name,
             expr.data_type(input_schema)?,
             // In cases where we have multiple grouping sets, we will use NULL expressions in
             // order to align the grouping sets. So the field must be nullable even if the underlying
             // schema field is not.
-            contains_null_expr || expr.nullable(input_schema)?,
+            group_expr_nullable[index] || expr.nullable(input_schema)?,
         ))
     }
 
