@@ -20,14 +20,9 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use arrow::array::{
-    new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef,
-    GenericStringArray, GenericStringBuilder, OffsetSizeTrait, StringArray,
-    StringBuilder, StringViewArray,
-};
+use arrow::array::{new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef, GenericStringArray, GenericStringBuilder, LargeStringArray, OffsetSizeTrait, StringArray, StringBuilder, StringViewArray};
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
-
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
@@ -255,6 +250,8 @@ pub(crate) enum ColumnarValueRef<'a> {
     Scalar(&'a [u8]),
     NullableArray(&'a StringArray),
     NonNullableArray(&'a StringArray),
+    NullableLargeStringArray(&'a LargeStringArray),
+    NonNullableLargeStringArray(&'a LargeStringArray),
     NullableStringViewArray(&'a StringViewArray),
     NonNullableStringViewArray(&'a StringViewArray),
 }
@@ -263,10 +260,10 @@ impl<'a> ColumnarValueRef<'a> {
     #[inline]
     pub fn is_valid(&self, i: usize) -> bool {
         match &self {
-            Self::Scalar(_) | Self::NonNullableArray(_) => true,
-            Self::NonNullableStringViewArray(_) => true,
+            Self::Scalar(_) | Self::NonNullableArray(_) | Self::NonNullableLargeStringArray(_)| Self::NonNullableStringViewArray(_)  => true,
             Self::NullableArray(array) => array.is_valid(i),
             Self::NullableStringViewArray(array) => array.is_valid(i),
+            Self::NullableLargeStringArray(array) => array.is_valid(i),
         }
     }
 
@@ -275,9 +272,11 @@ impl<'a> ColumnarValueRef<'a> {
         match &self {
             Self::Scalar(_)
             | Self::NonNullableArray(_)
-            | Self::NonNullableStringViewArray(_) => None,
+            | Self::NonNullableStringViewArray(_)
+            | Self::NonNullableLargeStringArray(_) => None,
             Self::NullableArray(array) => array.nulls().cloned(),
             Self::NullableStringViewArray(array) => array.nulls().cloned(),
+            Self::NullableLargeStringArray(array) => array.nulls().cloned(),
         }
     }
 }
@@ -396,6 +395,12 @@ impl StringArrayBuilder {
                         .extend_from_slice(array.value(i).as_bytes());
                 }
             }
+            ColumnarValueRef::NullableLargeStringArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer
+                        .extend_from_slice(array.value(i).as_bytes());
+                }
+            }
             ColumnarValueRef::NullableStringViewArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
                     self.value_buffer
@@ -403,6 +408,10 @@ impl StringArrayBuilder {
                 }
             }
             ColumnarValueRef::NonNullableArray(array) => {
+                self.value_buffer
+                    .extend_from_slice(array.value(i).as_bytes());
+            }
+            ColumnarValueRef::NonNullableLargeStringArray(array) => {
                 self.value_buffer
                     .extend_from_slice(array.value(i).as_bytes());
             }
@@ -432,6 +441,88 @@ impl StringArrayBuilder {
         // and offsets were created correctly
         let array_data = unsafe { array_builder.build_unchecked() };
         StringArray::from(array_data)
+    }
+}
+
+pub(crate) struct LargeStringArrayBuilder {
+    offsets_buffer: MutableBuffer,
+    value_buffer: MutableBuffer,
+}
+
+impl LargeStringArrayBuilder {
+    pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
+        let mut offsets_buffer = MutableBuffer::with_capacity(
+            (item_capacity + 1) * std::mem::size_of::<i64>(),
+        );
+        // SAFETY: the first offset value is definitely not going to exceed the bounds.
+        unsafe { offsets_buffer.push_unchecked(0_i64) };
+        Self {
+            offsets_buffer,
+            value_buffer: MutableBuffer::with_capacity(data_capacity),
+        }
+    }
+
+    pub fn write<const CHECK_VALID: bool>(
+        &mut self,
+        column: &ColumnarValueRef,
+        i: usize,
+    ) {
+        match column {
+            ColumnarValueRef::Scalar(s) => {
+                self.value_buffer.extend_from_slice(s);
+            }
+            ColumnarValueRef::NullableArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer
+                        .extend_from_slice(array.value(i).as_bytes());
+                }
+            }
+            ColumnarValueRef::NullableLargeStringArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer
+                        .extend_from_slice(array.value(i).as_bytes());
+                }
+            }
+            ColumnarValueRef::NullableStringViewArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer
+                        .extend_from_slice(array.value(i).as_bytes());
+                }
+            }
+            ColumnarValueRef::NonNullableArray(array) => {
+                self.value_buffer
+                    .extend_from_slice(array.value(i).as_bytes());
+            }
+            ColumnarValueRef::NonNullableLargeStringArray(array) => {
+                self.value_buffer
+                    .extend_from_slice(array.value(i).as_bytes());
+            }
+            ColumnarValueRef::NonNullableStringViewArray(array) => {
+                self.value_buffer
+                    .extend_from_slice(array.value(i).as_bytes());
+            }
+        }
+    }
+
+    pub fn append_offset(&mut self) {
+        let next_offset: i64 = self
+            .value_buffer
+            .len()
+            .try_into()
+            .expect("byte array offset overflow");
+        unsafe { self.offsets_buffer.push_unchecked(next_offset) };
+    }
+
+    pub fn finish(self, null_buffer: Option<NullBuffer>) -> LargeStringArray {
+        let array_builder = ArrayDataBuilder::new(DataType::LargeUtf8)
+            .len(self.offsets_buffer.len() / std::mem::size_of::<i64>() - 1)
+            .add_buffer(self.offsets_buffer.into())
+            .add_buffer(self.value_buffer.into())
+            .nulls(null_buffer);
+        // SAFETY: all data that was appended was valid Large UTF8 and the values
+        // and offsets were created correctly
+        let array_data = unsafe { array_builder.build_unchecked() };
+        LargeStringArray::from(array_data)
     }
 }
 

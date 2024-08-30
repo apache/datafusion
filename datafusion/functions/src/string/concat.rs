@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, StringViewArray};
+use arrow::array::{as_largestring_array, Array, StringViewArray};
 use arrow::datatypes::DataType;
 use std::any::Any;
 use std::sync::Arc;
@@ -133,7 +133,7 @@ impl ScalarUDFImpl for ConcatFunc {
                 }
                 ColumnarValue::Array(array) => {
                     match array.data_type() {
-                        DataType::Utf8 | DataType::LargeUtf8 => {
+                        DataType::Utf8 => {
                             let string_array = as_string_array(array)?;
 
                             data_size += string_array.values().len();
@@ -143,6 +143,17 @@ impl ScalarUDFImpl for ConcatFunc {
                                 ColumnarValueRef::NonNullableArray(string_array)
                             };
                             columns.push(column);
+                        },
+                        DataType::LargeUtf8 => {
+                            let string_array = as_largestring_array(array);
+
+                            data_size += string_array.values().len();
+                            let column = if array.is_nullable() {
+                                ColumnarValueRef::NullableLargeStringArray(string_array)
+                            } else {
+                                ColumnarValueRef::NonNullableLargeStringArray(string_array)
+                            };
+                            columns.push(column);  
                         },
                         DataType::Utf8View => {
                             let string_array = as_string_view_array(array)?;
@@ -164,20 +175,41 @@ impl ScalarUDFImpl for ConcatFunc {
             }
         }
 
-        let mut builder = StringArrayBuilder::with_capacity(len, data_size);
-        for i in 0..len {
-            columns
-                .iter()
-                .for_each(|column| builder.write::<true>(column, i));
-            builder.append_offset();
-        }
-        let string_array = builder.finish(None);
-
         match args_datatype {
-            DataType::Utf8 | DataType::LargeUtf8 => {
+            DataType::Utf8 => {
+                let mut builder = StringArrayBuilder::with_capacity(len, data_size);
+                for i in 0..len {
+                    columns
+                        .iter()
+                        .for_each(|column| builder.write::<true>(column, i));
+                    builder.append_offset();
+                }
+                
+                let string_array = builder.finish(None);
+                Ok(ColumnarValue::Array(Arc::new(string_array)))
+            }
+            DataType::LargeUtf8 => {
+                let mut builder = LargeStringArrayBuilder::with_capacity(len, data_size);
+                for i in 0..len {
+                    columns
+                        .iter()
+                        .for_each(|column| builder.write::<true>(column, i));
+                    builder.append_offset();
+                }
+
+                let string_array = builder.finish(None);
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
             DataType::Utf8View => {
+                let mut builder = StringArrayBuilder::with_capacity(len, data_size);
+                for i in 0..len {
+                    columns
+                        .iter()
+                        .for_each(|column| builder.write::<true>(column, i));
+                    builder.append_offset();
+                }
+
+                let string_array = builder.finish(None);
                 let string_array_iter = string_array.into_iter();
                 Ok(ColumnarValue::Array(Arc::new(StringViewArray::from_iter(
                     string_array_iter,
