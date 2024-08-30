@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{
-    make_array, Array, Capacities, MutableArrayData, Scalar, StringArray,
+    make_array, Array, Capacities, Int64Array, MutableArrayData, Scalar, StringArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
@@ -122,7 +122,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             Expr::Literal(name) => name,
             _ => {
                 return exec_err!(
-                    "get_field function requires the argument field_name to be a string"
+                    "get_field function requires the argument field_name to be a scalar value"
                 );
             }
         };
@@ -178,12 +178,44 @@ impl ScalarUDFImpl for GetFieldFunc {
             ColumnarValue::Scalar(name) => name,
             _ => {
                 return exec_err!(
-                    "get_field function requires the argument field_name to be a string"
+                    "get_field function requires the argument field_name to be a scalar value"
                 );
             }
         };
 
         match (array.data_type(), name) {
+            (DataType::Map(_, _), ScalarValue::Int64(Some(k))) => {
+                let map_array = as_map_array(array.as_ref())?;
+                let key_scalar: Scalar<arrow::array::Int64Array> = Scalar::new(Int64Array::from(vec![*k]));
+                let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
+
+                // note that this array has more entries than the expected output/input size
+                // because maparray is flatten
+                let original_data =  map_array.entries().column(1).to_data();
+                let capacity = Capacities::Array(original_data.len());
+                let mut mutable =
+                    MutableArrayData::with_capacities(vec![&original_data], true,
+                                                      capacity);
+
+                for entry in 0..map_array.len(){
+                    let start = map_array.value_offsets()[entry] as usize;
+                    let end = map_array.value_offsets()[entry + 1] as usize;
+
+                    let maybe_matched =
+                        keys.slice(start, end-start).
+                            iter().enumerate().
+                            find(|(_, t)| t.unwrap());
+                    if maybe_matched.is_none(){
+                        mutable.extend_nulls(1);
+                        continue
+                    }
+                    let (match_offset,_) = maybe_matched.unwrap();
+                    mutable.extend(0, start + match_offset, start + match_offset + 1);
+                }
+                let data = mutable.freeze();
+                let data = make_array(data);
+                Ok(ColumnarValue::Array(data))
+            }
             (DataType::Map(_, _), ScalarValue::Utf8(Some(k))) => {
                 let map_array = as_map_array(array.as_ref())?;
                 let key_scalar: Scalar<arrow::array::GenericByteArray<arrow::datatypes::GenericStringType<i32>>> = Scalar::new(StringArray::from(vec![k.clone()]));
