@@ -191,7 +191,16 @@ impl ScalarUDFImpl for GetFieldFunc {
                              Tried with {name:?} index")
                 }
 
-                let key_array: ArrayRef = name.to_array()?;
+                let mut key_array: ArrayRef = name.to_array()?;
+                if key_array.data_type() != map_array.key_type() {
+                    let pre_cast_dt = key_array.data_type().clone();
+                    if arrow::compute::kernels::cast::can_cast_types(key_array.data_type(), map_array.key_type()) {
+                        key_array = arrow::compute::kernels::cast::cast(&key_array, map_array.key_type())?;
+                    }
+                    if key_array.null_count() > 0{
+                        return exec_err!("Could not convert {} {} to {}", pre_cast_dt, name, map_array.key_type())
+                    }
+                }
                 let key_scalar = Scalar::new(key_array);
                 let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
 

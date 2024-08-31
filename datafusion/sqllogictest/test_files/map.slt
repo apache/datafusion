@@ -504,6 +504,34 @@ SELECT MAP { 1.0: 'a', 2.0: 'b', 3.0: 'c' }[2.0];
 ----
 b
 
+query T
+SELECT MAP { 1.0: 'a', 2.0: 'b', 3.0: 'c' }['2.0'];
+----
+b
+
+query T
+SELECT MAP { 1.0: 'a', 2.0: 'b', 3.0: 'c' }[2];
+----
+b
+
+query T
+SELECT MAP { 1.0: 'a', 2.0: 'b', 3.0: 'c' }['2'];
+----
+b
+
+query T
+SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[3];
+----
+c
+
+query T
+SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }['3'];
+----
+c
+
+# FIXME: DuckDB handles this case
+query error DataFusion error: Execution error: Could not convert Utf8 3\.0 to Int64
+SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }['3.0'];
 
 ## cardinality
 
