@@ -134,9 +134,9 @@ impl Accumulator for KurtosisPopAccumulator {
             let value = unwrap_or_internal_err!(value);
             self.count += 1;
             self.sum += value;
-            self.sum_sqr += value * value;
-            self.sum_cub += value * value * value;
-            self.sum_four += value * value * value * value;
+            self.sum_sqr += value.powi(2);
+            self.sum_cub += value.powi(3);
+            self.sum_four += value.powi(4);
         }
         Ok(())
     }
@@ -171,22 +171,15 @@ impl Accumulator for KurtosisPopAccumulator {
         let count_64 = 1_f64 / self.count as f64;
         let m4 = count_64
             * (self.sum_four - 4.0 * self.sum_cub * self.sum * count_64
-                + 6.0 * self.sum_sqr * self.sum * self.sum * count_64 * count_64
-                - 3.0
-                    * self.sum
-                    * self.sum
-                    * self.sum
-                    * self.sum
-                    * count_64
-                    * count_64
-                    * count_64);
+                + 6.0 * self.sum_sqr * self.sum.powi(2) * count_64.powi(2)
+                - 3.0 * self.sum.powi(4) * count_64.powi(3));
 
-        let m2 = (self.sum_sqr - self.sum * self.sum * count_64) * count_64;
+        let m2 = (self.sum_sqr - self.sum.powi(2) * count_64) * count_64;
         if m2 <= 0.0 {
             return Ok(ScalarValue::Float64(None));
         }
 
-        let target = m4 / (m2 * m2) - 3.0;
+        let target = m4 / (m2.powi(2)) - 3.0;
         Ok(ScalarValue::Float64(Some(target)))
     }
 
