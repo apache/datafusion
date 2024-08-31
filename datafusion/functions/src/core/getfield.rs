@@ -15,20 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    make_array, Array, ArrayRef, Capacities, Float64Array, Int64Array, MutableArrayData,
-    Scalar, StringArray,
-};
+use std::any::Any;
+use std::sync::Arc;
+
+use arrow::array::{make_array, Array, ArrayRef, Capacities, MutableArrayData, Scalar};
 use arrow::datatypes::DataType;
+
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, ExprSchema, Result,
-    ScalarValue,
+    exec_err, plan_datafusion_err, plan_err, ExprSchema, Result, ScalarValue,
 };
 use datafusion_expr::{ColumnarValue, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct GetFieldFunc {
@@ -192,21 +190,8 @@ impl ScalarUDFImpl for GetFieldFunc {
                 "get indexed field is only possible on map with utf8, int64 and float64 indexes. \
                              Tried with {name:?} index")
                 }
-                let key_array: ArrayRef = match name {
-                    ScalarValue::Int64(Some(k)) => {
-                        Arc::new(Int64Array::from(vec![*k]))
-                    }
-                    ScalarValue::Utf8(Some(k)) => {
-                        Arc::new(StringArray::from(vec![k.clone()]))
-                    }
-                    ScalarValue::Float64(Some(k)) => {
-                        Arc::new(Float64Array::from(vec![*k]))
-                    }
-                    _ => {
-                        return internal_err!("Unexpected scalar value type: {name}");
-                    }
-                };
 
+                let key_array: ArrayRef = name.to_array()?;
                 let key_scalar = Scalar::new(key_array);
                 let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
 
