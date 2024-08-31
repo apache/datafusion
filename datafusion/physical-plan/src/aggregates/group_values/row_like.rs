@@ -32,8 +32,7 @@ use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 use datafusion_physical_expr_common::group_value_row::{
-    ArrayEq, ByteGroupValueBuilder, ByteGroupValueBuilderNaive,
-    PrimitiveGroupValueBuilder,
+    ArrayEq, ByteGroupValueBuilderNaive, PrimitiveGroupValueBuilder,
 };
 use hashbrown::raw::RawTable;
 
@@ -172,18 +171,13 @@ impl GroupValues for GroupValuesRowLike {
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Utf8 => {
-                            // let b = StringGroupValueBuilder::new();
-                            let b = ByteGroupValueBuilderNaive::<i32>::new(
-                                &cols[i],
-                                OutputType::Utf8,
-                            );
+                            let b =
+                                ByteGroupValueBuilderNaive::<i32>::new(OutputType::Utf8);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::LargeUtf8 => {
-                            let b = ByteGroupValueBuilder::<i64>::new(
-                                &cols[i],
-                                OutputType::Utf8,
-                            );
+                            let b =
+                                ByteGroupValueBuilderNaive::<i64>::new(OutputType::Utf8);
                             v.push(Box::new(b) as _)
                         }
                         dt => todo!("{dt} not impl"),

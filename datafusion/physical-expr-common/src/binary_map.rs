@@ -235,9 +235,9 @@ where
 }
 
 /// The size, in number of entries, of the initial hash table
-pub(crate) const INITIAL_MAP_CAPACITY: usize = 128;
+pub(super) const INITIAL_MAP_CAPACITY: usize = 128;
 /// The initial size, in bytes, of the string data
-pub(crate) const INITIAL_BUFFER_CAPACITY: usize = 8 * 1024;
+pub(super) const INITIAL_BUFFER_CAPACITY: usize = 8 * 1024;
 impl<O: OffsetSizeTrait, V> ArrowBytesMap<O, V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
@@ -574,7 +574,7 @@ where
 }
 
 /// Maximum size of a value that can be inlined in the hash table
-pub(crate) const SHORT_VALUE_LEN: usize = mem::size_of::<usize>();
+const SHORT_VALUE_LEN: usize = mem::size_of::<usize>();
 
 /// Entry in the hash table -- see [`ArrowBytesMap`] for more details
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
