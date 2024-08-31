@@ -22,6 +22,7 @@ use arrow::array::{make_array, Array, ArrayRef, Capacities, MutableArrayData, Sc
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::{as_map_array, as_struct_array};
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{
     exec_err, plan_datafusion_err, plan_err, ExprSchema, Result, ScalarValue,
 };
@@ -195,7 +196,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                 if key_array.data_type() != map_array.key_type() {
                     let pre_cast_dt = key_array.data_type().clone();
                     if arrow::compute::kernels::cast::can_cast_types(key_array.data_type(), map_array.key_type()) {
-                        key_array = arrow::compute::kernels::cast::cast(&key_array, map_array.key_type())?;
+                        key_array = arrow::compute::kernels::cast::cast_with_options(&key_array, map_array.key_type(), &DEFAULT_CAST_OPTIONS)?;
                     }
                     if key_array.null_count() > 0{
                         return exec_err!("Could not convert {} {} to {}", pre_cast_dt, name, map_array.key_type())
