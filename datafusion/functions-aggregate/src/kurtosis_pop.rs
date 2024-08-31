@@ -191,7 +191,7 @@ impl Accumulator for KurtosisPopAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self)
+        std::mem::size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
