@@ -3749,7 +3749,7 @@ map_keys(map)
 ```
 SELECT map_keys(MAP {'a': 1, 'b': NULL, 'c': 3});
 ----
-[a, b, c] 
+[a, b, c]
 
 select map_keys(map([100, 5], [42,43]));
 ----
