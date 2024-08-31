@@ -1009,10 +1009,11 @@ mod test {
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
 
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
-    use datafusion_expr::logical_plan::{EmptyRelation, Projection};
+    use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
@@ -1025,7 +1026,7 @@ mod test {
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
     };
-    use crate::test::assert_analyzed_plan_eq;
+    use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -1054,6 +1055,128 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: a < CAST(UInt32(2) AS Float64)\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
+    }
+
+    #[test]
+    fn coerce_utf8view_output() -> Result<()> {
+        let expr = col("a");
+        let empty = empty_with_type(DataType::Utf8View);
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![expr.clone()],
+            Arc::clone(&empty),
+        )?);
+
+        // baseline
+        let expected = "Projection: a\n  EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan.clone(), expected)?;
+
+        // coerce: Utf8View => LargeUtf8
+        let expect_cast = "Projection: CAST(a AS LargeUtf8)\n  EmptyRelation";
+        let mut options = ConfigOptions::default();
+        options.optimizer.expand_views_at_output = true;
+        assert_analyzed_plan_with_config_eq(
+            options,
+            Arc::new(TypeCoercion::new()),
+            plan.clone(),
+            expect_cast,
+        )?;
+
+        // request coerce --> but output in bool, not Utf8View
+        let bool_expr = col("a").lt(lit("foo"));
+        let plan_no_cast = LogicalPlan::Projection(Projection::try_new(
+            vec![bool_expr],
+            Arc::clone(&empty),
+        )?);
+        let expect_no_cast =
+            "Projection: a < CAST(Utf8(\"foo\") AS Utf8View)\n  EmptyRelation";
+        let mut options = ConfigOptions::default();
+        options.optimizer.expand_views_at_output = true;
+        assert_analyzed_plan_with_config_eq(
+            options,
+            Arc::new(TypeCoercion::new()),
+            plan_no_cast.clone(),
+            expect_no_cast,
+        )?;
+
+        // coerce start with a non-projection root logical plan node
+        let sort_expr = expr.sort(true, true);
+        let sort_plan = LogicalPlan::Sort(Sort {
+            expr: vec![sort_expr],
+            input: Arc::new(plan),
+            fetch: None,
+        });
+        let expect_cast = "Projection: CAST(a AS LargeUtf8)\n  Sort: a ASC NULLS FIRST\n    Projection: a\n      EmptyRelation";
+        let mut options = ConfigOptions::default();
+        options.optimizer.expand_views_at_output = true;
+        assert_analyzed_plan_with_config_eq(
+            options,
+            Arc::new(TypeCoercion::new()),
+            sort_plan.clone(),
+            expect_cast,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn coerce_binaryview_output() -> Result<()> {
+        let expr = col("a");
+        let empty = empty_with_type(DataType::BinaryView);
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![expr.clone()],
+            Arc::clone(&empty),
+        )?);
+
+        // baseline
+        let expected = "Projection: a\n  EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan.clone(), expected)?;
+
+        // coerce: BinaryView => LargeBinary
+        let expect_cast = "Projection: CAST(a AS LargeBinary)\n  EmptyRelation";
+        let mut options = ConfigOptions::default();
+        options.optimizer.expand_views_at_output = true;
+        assert_analyzed_plan_with_config_eq(
+            options,
+            Arc::new(TypeCoercion::new()),
+            plan.clone(),
+            expect_cast,
+        )?;
+
+        // request coerce --> but output in bool, not BinaryView
+        let bool_expr = col("a").lt(lit(vec![8, 1, 8, 1]));
+        let plan_no_cast = LogicalPlan::Projection(Projection::try_new(
+            vec![bool_expr],
+            Arc::clone(&empty),
+        )?);
+        let expect_no_cast =
+            "Projection: a < CAST(Binary(\"8,1,8,1\") AS BinaryView)\n  EmptyRelation";
+        let mut options = ConfigOptions::default();
+        options.optimizer.expand_views_at_output = true;
+        assert_analyzed_plan_with_config_eq(
+            options,
+            Arc::new(TypeCoercion::new()),
+            plan_no_cast.clone(),
+            expect_no_cast,
+        )?;
+
+        // coerce start with a non-projection root logical plan node
+        let sort_expr = expr.sort(true, true);
+        let sort_plan = LogicalPlan::Sort(Sort {
+            expr: vec![sort_expr],
+            input: Arc::new(plan),
+            fetch: None,
+        });
+        let expect_cast = "Projection: CAST(a AS LargeBinary)\n  Sort: a ASC NULLS FIRST\n    Projection: a\n      EmptyRelation";
+        let mut options = ConfigOptions::default();
+        options.optimizer.expand_views_at_output = true;
+        assert_analyzed_plan_with_config_eq(
+            options,
+            Arc::new(TypeCoercion::new()),
+            sort_plan.clone(),
+            expect_cast,
+        )?;
+
+        Ok(())
     }
 
     #[test]
