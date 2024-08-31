@@ -80,6 +80,7 @@ pub mod bool_and_or;
 pub mod grouping;
 pub mod nth_value;
 pub mod string_agg;
+mod skewness;
 
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;
