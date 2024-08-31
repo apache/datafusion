@@ -22,7 +22,6 @@ use std::collections::HashSet;
 async fn test_show_functions() {
     let ctx = SessionContext::new();
     let result = execute(&ctx, "SHOW FUNCTIONS").await;
-    println!("{:?}", result);
     assert!(!result.is_empty(), "result is empty");
     let names: HashSet<String> = result
         .into_iter()
