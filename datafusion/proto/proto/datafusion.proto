@@ -830,6 +830,8 @@ message PhysicalExprNode {
     PhysicalExtensionExprNode extension = 19;
 
     UnknownColumn unknown_column = 20;
+    
+    PhysicalScalarRegexMatchExprNode scalar_regex_match_expr = 21;
   }
 }
 
@@ -941,6 +943,13 @@ message PhysicalNegativeNode {
 message PhysicalExtensionExprNode {
   bytes expr = 1;
   repeated PhysicalExprNode inputs = 2;
+}
+
+message PhysicalScalarRegexMatchExprNode {
+  bool negated = 1;
+  bool case_insensitive = 2;
+  PhysicalExprNode expr = 3;
+  PhysicalExprNode pattern = 4;
 }
 
 message FilterExecNode {

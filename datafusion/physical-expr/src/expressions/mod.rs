@@ -30,6 +30,7 @@ mod literal;
 mod negative;
 mod no_op;
 mod not;
+mod scalar_regex_match;
 mod try_cast;
 mod unknown_column;
 
@@ -50,5 +51,6 @@ pub use literal::{lit, Literal};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
 pub use not::{not, NotExpr};
+pub use scalar_regex_match::{scalar_regex_match, ScalarRegexMatchExpr};
 pub use try_cast::{try_cast, TryCastExpr};
 pub use unknown_column::UnKnownColumn;

@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use crate::expressions::scalar_regex_match;
 use crate::scalar_function;
 use crate::{
     expressions::{self, binary, like, similar_to, Column, Literal},
@@ -191,7 +192,32 @@ pub fn create_physical_expr(
             //
             // There should be no coercion during physical
             // planning.
-            binary(lhs, *op, rhs, input_schema)
+            if let Expr::Literal(
+                ScalarValue::Null
+                | ScalarValue::Utf8(_)
+                | ScalarValue::Utf8View(_)
+                | ScalarValue::LargeUtf8(_),
+            ) = right.as_ref()
+            {
+                // handle literal regexp pattern case to `ScalarRegexMatchExpr`
+                match *op {
+                    Operator::RegexMatch => {
+                        scalar_regex_match(false, false, lhs, rhs, input_schema)
+                    }
+                    Operator::RegexNotMatch => {
+                        scalar_regex_match(true, false, lhs, rhs, input_schema)
+                    }
+                    Operator::RegexIMatch => {
+                        scalar_regex_match(false, true, lhs, rhs, input_schema)
+                    }
+                    Operator::RegexNotIMatch => {
+                        scalar_regex_match(true, true, lhs, rhs, input_schema)
+                    }
+                    _ => binary(lhs, *op, rhs, input_schema),
+                }
+            } else {
+                binary(lhs, *op, rhs, input_schema)
+            }
         }
         Expr::Like(Like {
             negated,
