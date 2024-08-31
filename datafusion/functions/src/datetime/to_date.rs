@@ -57,31 +57,12 @@ impl ToDateFunc {
         match args.len() {
             1 => handle::<Date32Type, _, Date32Type>(
                 args,
-                // Although not being speficied, previous implementations have supported parsing date values that are followed
-                // by a time part separated either a whitespace ('2023-01-10 12:34:56.000') or a 'T' ('2023-01-10T12:34:56.000').
-                // Parsing these strings with "%Y-%m-%d" will fail. Therefore the string is split and the first part is used for parsing.
-                |s| {
-                    let string_to_parse;
-                    if s.find('T').is_some() {
-                        string_to_parse = s.split('T').next();
-                    } else {
-                        string_to_parse = s.split_whitespace().next();
-                    }
-                    if string_to_parse.is_none() {
-                        return Err(internal_datafusion_err!(
-                            "Cannot cast emtpy string to Date32"
-                        ));
-                    }
-
-                    // For most cases 'Date32Type::parse' would also work here, as it semantically parses
-                    // assuming a YYYY-MM-DD format. However 'Date32Type::parse' cannot handle negative
-                    // values for year (e.g. years in BC). Date32Type::parse_formatted can handle also these.
-                    match Date32Type::parse_formatted(string_to_parse.unwrap(), "%Y-%m-%d") {
+                |s| match Date32Type::parse(s) {
                     Some(v) => Ok(v),
                     None => arrow_err!(ParseError(
-                        "Unable to cast to Date32 for converting from i64 to i32 failed".to_string()
+                        "Unable to cast to Date32 for converting from i64 to i32 failed"
+                            .to_string()
                     )),
-                }
                 },
                 "to_date",
             ),
@@ -155,7 +136,52 @@ mod tests {
     use super::ToDateFunc;
 
     #[test]
-    fn test_to_date() {
+    fn test_to_date_without_format() {
+        struct TestCase {
+            name: &'static str,
+            date_str: &'static str,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "Largest four-digit year (9999)",
+                date_str: "9999-12-31",
+            },
+            TestCase {
+                name: "Year 1 (0001)",
+                date_str: "0001-12-31",
+            },
+            TestCase {
+                name: "Year before epoch (1969)",
+                date_str: "1969-01-01",
+            },
+            TestCase {
+                name: "Switch Julian/Gregorian calendar (1582-10-10)",
+                date_str: "1582-10-10",
+            },
+        ];
+
+        for tc in &test_cases {
+            let date_scalar = ScalarValue::Utf8(Some(tc.date_str.to_string()));
+            let to_date_result =
+                ToDateFunc::new().invoke(&[ColumnarValue::Scalar(date_scalar)]);
+
+            match to_date_result {
+                Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
+                    let expected = Date32Type::parse_formatted(&tc.date_str, "%Y-%m-%d");
+                    assert_eq!(
+                        date_val, expected,
+                        "{}: to_date created wrong value",
+                        tc.name
+                    );
+                }
+                _ => panic!("Could not convert '{}' to Date", tc.date_str),
+            }
+        }
+    }
+
+    #[test]
+    fn test_to_date_with_format() {
         struct TestCase {
             name: &'static str,
             date_str: &'static str,
@@ -202,26 +228,6 @@ mod tests {
             },
         ];
 
-        // Step 1: Test without format string
-        for tc in &test_cases {
-            let date_scalar = ScalarValue::Utf8(Some(tc.date_str.to_string()));
-            let to_date_result =
-                ToDateFunc::new().invoke(&[ColumnarValue::Scalar(date_scalar)]);
-
-            match to_date_result {
-                Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
-                    let expected = Date32Type::parse_formatted(&tc.date_str, "%Y-%m-%d");
-                    assert_eq!(
-                        date_val, expected,
-                        "{}: to_date created wrong value",
-                        tc.name
-                    );
-                }
-                _ => panic!("Could not convert '{}' to Date", tc.date_str),
-            }
-        }
-
-        // Step 2: Test with format string
         for tc in &test_cases {
             let formatted_date_scalar =
                 ScalarValue::Utf8(Some(tc.formatted_date.to_string()));
@@ -289,6 +295,43 @@ mod tests {
                 }
                 _ => panic!("Conversion of {} failed", date_str),
             }
+        }
+    }
+
+    #[test]
+    fn test_to_date_string_with_valid_number() {
+        let date_str = "20241231";
+        let date_scalar = ScalarValue::Utf8(Some(date_str.into()));
+
+        let to_date_result =
+            ToDateFunc::new().invoke(&[ColumnarValue::Scalar(date_scalar)]);
+
+        match to_date_result {
+            Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
+                let expected = Date32Type::parse_formatted("2024-12-31", "%Y-%m-%d");
+                assert_eq!(
+                    date_val, expected,
+                    "to_date created wrong value for {}",
+                    date_str
+                );
+            }
+            _ => panic!("Conversion of {} failed", date_str),
+        }
+    }
+
+    #[test]
+    fn test_to_date_string_with_invalid_number() {
+        let date_str = "202412311";
+        let date_scalar = ScalarValue::Utf8(Some(date_str.into()));
+
+        let to_date_result =
+            ToDateFunc::new().invoke(&[ColumnarValue::Scalar(date_scalar)]);
+
+        if let Ok(ColumnarValue::Scalar(ScalarValue::Date32(_))) = to_date_result {
+            panic!(
+                "Conversion of {} succeded, but should have failed, ",
+                date_str
+            );
         }
     }
 }
