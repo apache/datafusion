@@ -5889,6 +5889,21 @@ SELECT kurtosis_pop(col) FROM VALUES (1.0) as tab(col);
 ----
 NULL
 
+query R
+SELECT kurtosis_pop(1)
+----
+NULL
+
+query R
+SELECT kurtosis_pop(1.0)
+----
+NULL
+
+query R
+SELECT kurtosis_pop(null)
+----
+NULL
+
 statement ok
 CREATE TABLE t1(c1 int);
 

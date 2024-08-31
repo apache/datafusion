@@ -77,7 +77,7 @@ impl AggregateUDFImpl for KurtosisPopFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
+        if !arg_types[0].is_null() && !arg_types[0].is_numeric() {
             return plan_err!("KurtosisPop requires numeric input types");
         }
 
