@@ -26,7 +26,9 @@ use datafusion_expr::EmitTo;
 use primitive::GroupValuesPrimitive;
 
 mod row;
+mod row_like;
 use row::GroupValuesRows;
+use row_like::GroupValuesRowLike;
 
 mod bytes;
 mod bytes_view;
@@ -92,5 +94,30 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
         }
     }
 
-    Ok(Box::new(GroupValuesRows::try_new(schema)?))
+    if schema
+        .fields()
+        .iter()
+        .map(|f| f.data_type())
+        .all(has_row_like_feature)
+    {
+        Ok(Box::new(GroupValuesRowLike::try_new(schema)?))
+    } else {
+        Ok(Box::new(GroupValuesRows::try_new(schema)?))
+    }
+}
+
+fn has_row_like_feature(data_type: &DataType) -> bool {
+    match *data_type {
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Utf8
+        | DataType::LargeUtf8 => true,
+        _ => false,
+    }
 }
