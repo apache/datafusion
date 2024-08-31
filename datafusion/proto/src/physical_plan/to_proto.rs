@@ -25,7 +25,7 @@ use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, InListExpr, IsNotNullExpr,
     IsNullExpr, Literal, NegativeExpr, NotExpr, NthValue, Ntile, Rank, RankType,
-    TryCastExpr, WindowShift,
+    ScalarRegexMatchExpr, TryCastExpr, WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -399,6 +399,25 @@ pub fn serialize_physical_expr(
                     )?)),
                 },
             ))),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<ScalarRegexMatchExpr>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(
+                protobuf::physical_expr_node::ExprType::ScalarRegexMatchExpr(Box::new(
+                    protobuf::PhysicalScalarRegexMatchExprNode {
+                        negated: expr.negated(),
+                        case_insensitive: expr.case_insensitive(),
+                        expr: Some(Box::new(serialize_physical_expr(
+                            expr.expr(),
+                            codec,
+                        )?)),
+                        pattern: Some(Box::new(serialize_physical_expr(
+                            expr.pattern(),
+                            codec,
+                        )?)),
+                    },
+                )),
+            ),
         })
     } else {
         let mut buf: Vec<u8> = vec![];
