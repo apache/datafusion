@@ -85,7 +85,7 @@ impl ScalarUDFImpl for MapValuesFunc {
 
 fn map_values_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 {
-        return exec_err!("map_keys expects single argument");
+        return exec_err!("map_values expects single argument");
     }
 
     let map_array = match args[0].data_type() {
