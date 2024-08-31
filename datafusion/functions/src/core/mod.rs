@@ -82,12 +82,12 @@ pub mod expr_fn {
 
     #[doc = "Returns the value of the field with the given name from the struct"]
     pub fn get_field(arg1: Expr, arg2: impl Literal) -> Expr {
-        super::get_field().call(vec![arg1, arg2.lit()])
+        get_field_from_expr(arg1, arg2.lit())
     }
 
-    /// Returns the value of the field with the given name from the struct.
+    /// Returns the value of the field with the given name from the struct & Map.
     /// **Internal use only.** This function is added to support the map use case.
-    pub fn _get_field(arg1: Expr, arg2: Expr) -> Expr {
+    pub fn get_field_from_expr(arg1: Expr, arg2: Expr) -> Expr {
         super::get_field().call(vec![arg1, arg2])
     }
 }

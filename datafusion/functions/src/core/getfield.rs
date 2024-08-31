@@ -22,7 +22,8 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    exec_err, plan_datafusion_err, plan_err, ExprSchema, Result, ScalarValue,
+    exec_err, internal_err, plan_datafusion_err, plan_err, ExprSchema, Result,
+    ScalarValue,
 };
 use datafusion_expr::{ColumnarValue, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -202,7 +203,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                         Arc::new(Float64Array::from(vec![*k]))
                     }
                     _ => {
-                        unreachable!();
+                        return internal_err!("Unexpected scalar value type: {name}");
                     }
                 };
 
