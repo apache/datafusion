@@ -512,11 +512,13 @@ pub enum ExecutionMode {
     /// results, it can execute with bounded memory and incrementally produces
     /// output.
     Unbounded,
-    /// Some of the operator's input stream(s) are unbounded, but the  operator
+    /// Some of the operator's input stream(s) are unbounded, but the operator
     /// cannot generate streaming results from these streaming inputs.
     ///
     /// In this case, the execution mode will be pipeline breaking, e.g. the
-    /// operator requires unbounded memory to generate results.
+    /// operator requires unbounded memory to generate results. This
+    /// information is used by the planner when performing sanity checks
+    /// on plans processings unbounded data sources.
     PipelineBreaking,
 }
 
