@@ -82,20 +82,20 @@ SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
 statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'c' to value of Float64 type
 SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
 
-statement error 3rd argument Utf8 is not coercible to f64
+statement error DataFusion error: This feature is not implemented: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal, got: CAST\(c1@0 AS Float64\)
 SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 statement error DataFusion error: External error: Arrow error: Cast error: Can't cast value \-1000 to type UInt64
 SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-query error 3rd argument Utf8 is not coercible to u64
+query error 3rd argument should be integer but got Utf8
 SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 
-query error 3rd argument Float64 is not coercible to u64
+query error 3rd argument should be integer but got Float64
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
-query error 3rd argument Float64 is not coercible to u64
+query error 3rd argument should be integer but got Float64
 SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
 
 statement error DataFusion error: This feature is not implemented: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
@@ -591,6 +591,11 @@ SELECT c2, var_samp(CASE WHEN c12 > 0.90 THEN c12 ELSE null END) FROM aggregate_
 
 
 # csv_query_approx_median_1
+query R
+select approx_median('1');
+----
+1
+
 query R
 SELECT approx_median(c2) FROM aggregate_test_100
 ----

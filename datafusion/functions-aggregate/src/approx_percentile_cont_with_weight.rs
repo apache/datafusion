@@ -20,14 +20,13 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::array::AsArray;
-use arrow::compute::can_cast_types;
 use arrow::datatypes::Float64Type;
 use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
 };
 
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::Volatility::Immutable;
@@ -129,30 +128,6 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 && arg_types.len() != 3 {
-            return exec_err!("Expect to get 2 or 3 args");
-        }
-
-        // Check `is_numeric` to filter out numeric string case
-        if arg_types[0].is_numeric()
-            && (!arg_types[0].is_numeric()
-                || !can_cast_types(&arg_types[0], &DataType::Float64))
-        {
-            return exec_err!("1st argument {} is not coercible to f64", arg_types[0]);
-        }
-        if arg_types[1].is_numeric()
-            && (!arg_types[1].is_numeric()
-                || !can_cast_types(&arg_types[1], &DataType::Float64))
-        {
-            return exec_err!("2nd argument {} is not coercible to f64", arg_types[1]);
-        }
-        if arg_types.len() == 3
-            && (!arg_types[2].is_numeric()
-                || !can_cast_types(&arg_types[2], &DataType::Float64))
-        {
-            return exec_err!("3rd argument {} is not coercible to f64", arg_types[2]);
-        }
-
         Ok(vec![DataType::Float64; arg_types.len()])
     }
 }

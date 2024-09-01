@@ -20,7 +20,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{Array, AsArray, RecordBatch};
-use arrow::compute::{can_cast_types, filter, is_not_null};
+use arrow::compute::{filter, is_not_null};
 use arrow::datatypes::Float64Type;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_schema::{Field, Schema};
@@ -230,26 +230,14 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 && arg_types.len() != 3 {
-            return exec_err!("Expect to get 2 or 3 args");
-        }
-
-        // Check `is_numeric` to filter out numeric string case
-        if !arg_types[0].is_numeric()
-            || !can_cast_types(&arg_types[0], &DataType::Float64)
-        {
-            return exec_err!("1st argument {} is not coercible to f64", arg_types[0]);
-        }
-        if !arg_types[1].is_numeric()
-            || !can_cast_types(&arg_types[1], &DataType::Float64)
-        {
-            return exec_err!("2nd argument {} is not coercible to f64", arg_types[1]);
-        }
-        if arg_types.len() == 3
-            && (!arg_types[2].is_integer()
-                || !can_cast_types(&arg_types[2], &DataType::UInt64))
-        {
-            return exec_err!("3rd argument {} is not coercible to u64", arg_types[2]);
+        if arg_types.len() == 3 {
+            // Since float is coercible to u64 in `can_cast_types`, we check whether it is integer
+            if !arg_types[2].is_integer() {
+                return exec_err!(
+                    "3rd argument should be integer but got {}",
+                    arg_types[2]
+                );
+            }
         }
 
         if arg_types.len() == 2 {

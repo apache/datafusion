@@ -20,11 +20,10 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-use arrow::compute::can_cast_types;
 use arrow::{datatypes::DataType, datatypes::Field};
 use arrow_schema::DataType::{Float64, UInt64};
 
-use datafusion_common::{exec_err, not_impl_err, plan_err, Result};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
@@ -97,11 +96,8 @@ impl AggregateUDFImpl for ApproxMedian {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("ApproxMedian requires numeric input types");
-        }
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -117,16 +113,7 @@ impl AggregateUDFImpl for ApproxMedian {
         )))
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!("Expect to get single argument");
-        }
-
-        if arg_types[0].is_numeric() && !can_cast_types(&arg_types[0], &DataType::Float64)
-        {
-            return exec_err!("1st argument {} is not coercible to f64", arg_types[0]);
-        }
-
+    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
         Ok(vec![DataType::Float64])
     }
 }
