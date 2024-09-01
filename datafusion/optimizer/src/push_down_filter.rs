@@ -745,19 +745,14 @@ impl OptimizerRule for PushDownFilter {
                     let mut accum: HashSet<Column> = HashSet::new();
                     expr_to_columns(&predicate, &mut accum)?;
 
-                    if unnest.exec_columns.iter().any(|(c, unnest_detail)| {
-                        match unnest_detail {
+                    if unnest.exec_columns.iter().any(|(unnest_col, unnest_type)| {
+                        match unnest_type {
                             ColumnUnnestType::List(vec) => {
-                                return vec
-                                    .iter()
-                                    .any(|c| accum.contains(&c.output_column));
+                                vec.iter().any(|c| accum.contains(&c.output_column))
                             }
-                            ColumnUnnestType::Struct => {
-                                return false;
-                            }
-                            ColumnUnnestType::Inferred => {
-                                return accum.contains(c);
-                            }
+                            ColumnUnnestType::Struct => false,
+                            // for inferred unnest, output column will be the same with input column
+                            ColumnUnnestType::Inferred => accum.contains(unnest_col),
                         }
                     }) {
                         unnest_predicates.push(predicate);

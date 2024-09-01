@@ -301,10 +301,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         select_exprs: Vec<Expr>,
     ) -> Result<LogicalPlan> {
         // Try process group by unnest
-        let temp = input.clone();
         let input = self.try_process_aggregate_unnest(input)?;
-        // TODO: some column was renamed after try_process_aggregate_unnest
-        // thus select_exprs also need to be transformed
 
         let mut intermediate_plan = input;
         let mut intermediate_select_exprs = select_exprs;
@@ -344,7 +341,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 break;
             } else {
-                let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
+                let columns = unnest_columns.into_iter().map(|col| col).collect();
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
                 let mut check_list: HashSet<Expr> = inner_projection_exprs

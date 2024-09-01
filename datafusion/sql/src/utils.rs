@@ -17,18 +17,18 @@
 
 //! SQL Utility Functions
 
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::vec;
 
 use arrow_schema::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    exec_err, internal_err, plan_err, Column, DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
@@ -320,31 +320,31 @@ fn print_unnest(expr: &str, level: usize) -> String {
     for _ in 0..level {
         result = format!("UNNEST({})", result);
     }
-    format!("{}", result)
+    result
 }
 
-/// TODO: maybe renamed into transform_bottom_most_consecutive_unnests
-/// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
-/// Given an expression which contains unnest expr as one of its children,
-/// Try transform depends on unnest type
-/// - For list column: unnest(col) with type list -> unnest(col) with type list::item
-/// - For struct column: unnest(struct(field1, field2)) -> unnest(struct).field1, unnest(struct).field2
-///
-/// The transformed exprs will be used in the outer projection
-/// If along the path from root to bottom, there are multiple unnest expressions, the transformation
-/// is done only for the bottom expression
-pub(crate) fn group_bottom_most_consecutive_unnest(
-    input: &LogicalPlan,
-    unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
-    inner_projection_exprs: &mut Vec<Expr>,
-    memo: &mut HashMap<String, Vec<Column>>,
-    original_expr: &Expr,
-) -> Result<Vec<Expr>> {
-    let mut transform = |level: usize,
-                         expr_in_unnest: &Expr,
-                         struct_allowed: bool,
-                         inner_projection_exprs: &mut Vec<Expr>|
-     -> Result<Vec<Expr>> {
+/*
+This is only usedful when used with transform down up
+A full example of how the transformation works:
+ */
+struct RecursiveUnnestRewriter<'a> {
+    memo: &'a mut HashMap<String, Vec<Column>>,
+    input_schema: &'a DFSchemaRef,
+    original_expr: &'a Expr,
+    latest_visited_unnest: Option<Expr>,
+    ancestor_unnest: Option<Expr>,
+    consecutive_unnest: Vec<Option<Expr>>,
+    inner_projection_exprs: &'a mut Vec<Expr>,
+    unnest_placeholder_columns: &'a mut Vec<(Column, ColumnUnnestType)>,
+    transformed_root_exprs: Option<Vec<Expr>>,
+}
+impl<'a> RecursiveUnnestRewriter<'a> {
+    fn transform(
+        &mut self,
+        level: usize,
+        expr_in_unnest: &Expr,
+        struct_allowed: bool,
+    ) -> Result<Vec<Expr>> {
         let inner_expr_name = expr_in_unnest.schema_name().to_string();
 
         // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
@@ -358,18 +358,18 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
         // column name as is, to comply with group by and order by
         let post_unnest_alias = print_unnest(&inner_expr_name, level);
         let placeholder_column = Column::from_name(placeholder_name.clone());
-        let schema = input.schema();
+        // let schema = input.schema();
 
-        let (data_type, _) = expr_in_unnest.data_type_and_nullable(schema)?;
+        let (data_type, _) = expr_in_unnest.data_type_and_nullable(self.input_schema)?;
 
         match data_type {
             DataType::Struct(inner_fields) => {
                 if !struct_allowed {
                     return internal_err!("unnest on struct can only be applied at the root level of select expression");
                 }
-                inner_projection_exprs
+                self.inner_projection_exprs
                     .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
-                unnest_placeholder_columns.push((
+                self.unnest_placeholder_columns.push((
                     Column::from_name(placeholder_name.clone()),
                     ColumnUnnestType::Struct,
                 ));
@@ -384,27 +384,28 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
             | DataType::FixedSizeList(_, _)
             | DataType::LargeList(_) => {
                 // TODO: this memo only needs to be a hashset
-                let (already_projected, _) = match memo.get_mut(&inner_expr_name) {
+                let (already_projected, _) = match self.memo.get_mut(&inner_expr_name) {
                     Some(vec) => (true, vec),
                     _ => {
-                        memo.insert(inner_expr_name.clone(), vec![]);
-                        (false, memo.get_mut(&inner_expr_name).unwrap())
+                        self.memo.insert(inner_expr_name.clone(), vec![]);
+                        (false, self.memo.get_mut(&inner_expr_name).unwrap())
                     }
                 };
                 if !already_projected {
-                    inner_projection_exprs
+                    self.inner_projection_exprs
                         .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
                 }
 
                 // let post_unnest_column = Column::from_name(post_unnest_name);
                 let post_unnest_expr =
                     col(post_unnest_name.clone()).alias(post_unnest_alias);
-                match unnest_placeholder_columns
+                match self
+                    .unnest_placeholder_columns
                     .iter_mut()
                     .find(|(inner_col, _)| inner_col == &placeholder_column)
                 {
                     None => {
-                        unnest_placeholder_columns.push((
+                        self.unnest_placeholder_columns.push((
                             Column::from_name(placeholder_name.clone()),
                             ColumnUnnestType::List(vec![ColumnUnnestList {
                                 output_column: Column::from_name(post_unnest_name),
@@ -435,23 +436,19 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
                 );
             }
         }
-    };
-    let latest_visited_unnest = RefCell::new(None);
-    let exprs_under_unnest = RefCell::new(HashSet::new());
-    let ancestor_unnest = RefCell::new(None);
+    }
+}
 
-    // two conseqcutive unnest is something look like: unnest(unnest(some_expr))
-    // the last items represent the inner most exprs
-    let consecutive_unnest = RefCell::new(Vec::<Option<Expr>>::new());
-    // we need to mark only the latest unnest expr that was visitted during the down traversal
-    let transform_down = |expr: Expr| -> Result<Transformed<Expr>> {
+impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
+    type Node = Expr;
+
+    fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(Unnest {
             expr: ref inner_expr,
         }) = expr
         {
-            let (data_type, _) = inner_expr.data_type_and_nullable(input.schema())?;
-            let mut consecutive_unnest_mut = consecutive_unnest.borrow_mut();
-            consecutive_unnest_mut.push(Some(expr.clone()));
+            let (data_type, _) = inner_expr.data_type_and_nullable(self.input_schema)?;
+            self.consecutive_unnest.push(Some(expr.clone()));
             // if expr inside unnest is a struct, do not consider
             // the next unnest as consecutive unnest (if any)
             // meaning unnest(unnest(struct_arr_col)) can't
@@ -462,42 +459,28 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
             //      unnest(struct_arr_col) as struct_col
 
             if let DataType::Struct(_) = data_type {
-                consecutive_unnest_mut.push(None);
+                self.consecutive_unnest.push(None);
             }
 
-            let mut maybe_ancestor = ancestor_unnest.borrow_mut();
-            if maybe_ancestor.is_none() {
-                *maybe_ancestor = Some(expr.clone());
+            if self.ancestor_unnest.is_none() {
+                self.ancestor_unnest = Some(expr.clone());
             }
 
-            exprs_under_unnest.borrow_mut().insert(inner_expr.clone());
-            *latest_visited_unnest.borrow_mut() = Some(expr.clone());
+            self.latest_visited_unnest = Some(expr.clone());
             Ok(Transformed::no(expr))
         } else {
-            consecutive_unnest.borrow_mut().push(None);
+            self.consecutive_unnest.push(None);
             Ok(Transformed::no(expr))
         }
-    };
-    let mut transformed_root_exprs = None;
-    let transform_up = |expr: Expr| -> Result<Transformed<Expr>> {
-        // From the bottom up, we know the latest consecutive unnest sequence
-        // only do the transformation at the top unnest node
-        // For example given this complex expr
-        // - unnest(array_concat(unnest([[1,2,3]]),unnest([[4,5,6]]))) + unnest(unnest([[7,8,9]))
-        // traversal will be like this:
-        // down[binary_add]
-        //  ->down[unnest(...)]->down[array_concat]->down/up[unnest([[1,2,3]])]->down/up[unnest([[4,5,6]])]
-        // ->up[array_concat]->up[unnest(...)]->down[unnest(unnest(...))]->down[unnest([[7,8,9]])]
-        // ->up[unnest([[7,8,9]])]->up[unnest(unnest(...))]->up[binary_add]
-        // the transformation only happens for unnest([[1,2,3]]), unnest([[4,5,6]]) and unnest(unnest([[7,8,9]]))
-        // and the complex expr will be rewritten into:
-        // unnest(array_concat(place_holder_col_1, place_holder_col_2)) + place_holder_col_3
+    }
+
+    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(Unnest { .. }) = expr {
-            let mut ancestor_unnest_ref = ancestor_unnest.borrow_mut();
+            // let mut ancestor_unnest_ref = ancestor_unnest.borrow_mut();
             // upward traversal has reached the top most unnest expr again
             // reset it to None
-            if *ancestor_unnest_ref == Some(expr.clone()) {
-                ancestor_unnest_ref.take();
+            if self.ancestor_unnest == Some(expr.clone()) {
+                self.ancestor_unnest.take();
             }
             // find inside consecutive_unnest, the sequence of continous unnest exprs
             let mut found_first_unnest = false;
@@ -509,7 +492,7 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
             // (e.g) unnest(unnest(col)) then the traversal happens like:
             // - down(unnest) -> down(unnest) -> down(col) -> up(col) -> up(unnest) -> up(unnest)
             // the result of such traversal is unnest(col,depth:=2)
-            for item in consecutive_unnest.borrow().iter().rev() {
+            for item in self.consecutive_unnest.iter().rev() {
                 if let Some(expr) = item {
                     found_first_unnest = true;
                     unnest_stack.push(expr.clone());
@@ -540,13 +523,13 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
                     // instead of unnest(struct_arr_col, depth = 2)
 
                     let depth = unnest_stack.len();
-                    let struct_allowed = (&expr == original_expr) && depth == 1;
+                    let struct_allowed = (&expr == self.original_expr) && depth == 1;
 
                     // TODO: arg should be inner most
                     let mut transformed_exprs =
-                        transform(depth, arg, struct_allowed, inner_projection_exprs)?;
+                        self.transform(depth, arg, struct_allowed)?;
                     if struct_allowed {
-                        transformed_root_exprs = Some(transformed_exprs.clone());
+                        self.transformed_root_exprs = Some(transformed_exprs.clone());
                     }
                     return Ok(Transformed::new(
                         transformed_exprs.swap_remove(0),
@@ -556,22 +539,50 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
                 } else {
                     return internal_err!("not reached");
                 }
-
-                // }
             }
         } else {
-            consecutive_unnest.borrow_mut().push(None);
+            self.consecutive_unnest.push(None);
         }
 
         // For column exprs that are not descendants of any unnest node
         // retain their projection
         // e.g given expr tree unnest(col_a) + col_b, we have to retain projection of col_b
         // this condition can be checked by maintaining an Option<current ancestor unnest>
-        if matches!(&expr, Expr::Column(_)) && ancestor_unnest.borrow().is_none() {
-            inner_projection_exprs.push(expr.clone());
+        if matches!(&expr, Expr::Column(_)) && self.ancestor_unnest.is_none() {
+            self.inner_projection_exprs.push(expr.clone());
         }
 
         Ok(Transformed::no(expr))
+    }
+}
+
+/// TODO: maybe renamed into transform_bottom_most_consecutive_unnests
+/// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
+/// Given an expression which contains unnest expr as one of its children,
+/// Try transform depends on unnest type
+/// - For list column: unnest(col) with type list -> unnest(col) with type list::item
+/// - For struct column: unnest(struct(field1, field2)) -> unnest(struct).field1, unnest(struct).field2
+///
+/// The transformed exprs will be used in the outer projection
+/// If along the path from root to bottom, there are multiple unnest expressions, the transformation
+/// is done only for the bottom expression
+pub(crate) fn group_bottom_most_consecutive_unnest(
+    input: &LogicalPlan,
+    unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
+    inner_projection_exprs: &mut Vec<Expr>,
+    memo: &mut HashMap<String, Vec<Column>>,
+    original_expr: &Expr,
+) -> Result<Vec<Expr>> {
+    let mut rewriter = RecursiveUnnestRewriter {
+        memo,
+        input_schema: input.schema(),
+        original_expr,
+        latest_visited_unnest: None,
+        ancestor_unnest: None,
+        consecutive_unnest: vec![],
+        inner_projection_exprs,
+        unnest_placeholder_columns,
+        transformed_root_exprs: None,
     };
 
     // This transformation is only done for list unnest
@@ -587,9 +598,7 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
         data: transformed_expr,
         transformed,
         tnr: _,
-    } = original_expr
-        .clone()
-        .transform_down_up(transform_down, transform_up)?;
+    } = original_expr.clone().rewrite(&mut rewriter)?;
 
     if !transformed {
         if matches!(&transformed_expr, Expr::Column(_)) {
@@ -603,7 +612,7 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }
     } else {
-        if let Some(transformed_root_exprs) = transformed_root_exprs {
+        if let Some(transformed_root_exprs) = rewriter.transformed_root_exprs {
             return Ok(transformed_root_exprs);
         }
         Ok(vec![transformed_expr])
