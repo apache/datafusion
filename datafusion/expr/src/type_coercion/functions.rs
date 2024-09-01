@@ -180,7 +180,7 @@ fn try_coerce_types(
             type_signature,
             TypeSignature::UserDefined
                 | TypeSignature::Numeric(_)
-                | TypeSignature::Float(_)
+                | TypeSignature::Coercible(_)
         )
     {
         // exact valid types
@@ -404,28 +404,28 @@ fn get_valid_types(
 
             vec![vec![valid_type; *number]]
         }
-        TypeSignature::Float(number) => {
-            if *number < 1 {
+        TypeSignature::Coercible(target_types) => {
+            if target_types.is_empty() {
                 return plan_err!(
                     "The signature expected at least one argument but received {}",
                     current_types.len()
                 );
             }
-            if *number != current_types.len() {
+            if target_types.len() != current_types.len() {
                 return plan_err!(
                     "The signature expected {} arguments but received {}",
-                    number,
+                    target_types.len(),
                     current_types.len()
                 );
             }
 
-            for t in current_types.iter() {
-                if !can_cast_types(t, &DataType::Float64) {
-                    return plan_err!("{t} is not coercible to a float type");
+            for (data_type, target_type) in current_types.iter().zip(target_types.iter()) {
+                if !can_cast_types(data_type,  target_type) {
+                    return plan_err!("{data_type} is not coercible to {target_type}");
                 }
             }
 
-            vec![vec![DataType::Float64; *number]]
+            vec![target_types.to_owned()]
         }
         TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()

@@ -105,6 +105,7 @@ pub enum TypeSignature {
     Uniform(usize, Vec<DataType>),
     /// Exact number of arguments of an exact type
     Exact(Vec<DataType>),
+    Coercible(Vec<DataType>),
     /// Fixed number of arguments of arbitrary types
     /// If a function takes 0 argument, its `TypeSignature` should be `Any(0)`
     Any(usize),
@@ -120,7 +121,6 @@ pub enum TypeSignature {
     /// Fixed number of arguments of numeric types.
     /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
     Numeric(usize),
-    Float(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -189,10 +189,7 @@ impl TypeSignature {
             TypeSignature::Numeric(num) => {
                 vec![format!("Numeric({})", num)]
             }
-            TypeSignature::Float(num) => {
-                vec![format!("Float({})", num)]
-            }
-            TypeSignature::Exact(types) => {
+            TypeSignature::Exact(types) | TypeSignature::Coercible(types)=> {
                 vec![Self::join_types(types, ", ")]
             }
             TypeSignature::Any(arg_count) => {
@@ -279,14 +276,6 @@ impl Signature {
         }
     }
 
-    /// A specified number of f64 arguments
-    pub fn float(arg_count: usize, volatility: Volatility) -> Self {
-        Self {
-            type_signature: TypeSignature::Float(arg_count),
-            volatility,
-        }
-    }
-
     /// An arbitrary number of arguments of any type.
     pub fn variadic_any(volatility: Volatility) -> Self {
         Self {
@@ -312,6 +301,14 @@ impl Signature {
             volatility,
         }
     }
+    /// A specified number of f64 arguments
+    pub fn coercible(target_types: Vec<DataType>, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Coercible(target_types),
+            volatility,
+        }
+    }
+
     /// A specified number of arguments of any type
     pub fn any(arg_count: usize, volatility: Volatility) -> Self {
         Signature {
