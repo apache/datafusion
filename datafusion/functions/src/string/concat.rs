@@ -68,16 +68,30 @@ impl ScalarUDFImpl for ConcatFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
-        Ok(match &arg_types[0] {
-            LargeUtf8 => LargeUtf8,
-            _ => Utf8,
-        })
+        let mut dt = &Utf8;
+        arg_types.iter().for_each(|data_type| {
+            if data_type == &Utf8View {
+                dt = data_type;
+            } else if data_type == &LargeUtf8 && dt != &Utf8View {
+                dt = data_type;
+            }
+        });
+
+        Ok(dt.to_owned())
     }
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
     /// concat('abcde', 2, NULL, 22) = 'abcde222'
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let first_arg_datatype = args[0].data_type();
+        let mut return_datatype = DataType::Utf8;
+        args.iter().for_each(|col| {
+            if col.data_type() == DataType::Utf8View {
+                return_datatype = col.data_type();
+            } else if col.data_type() == DataType::LargeUtf8 && return_datatype != DataType::Utf8View {
+                return_datatype = col.data_type();
+            }
+        });
+
         let array_len = args
             .iter()
             .filter_map(|x| match x {
@@ -95,7 +109,7 @@ impl ScalarUDFImpl for ConcatFunc {
                 }
             }
 
-            return match first_arg_datatype {
+            return match return_datatype {
                 DataType::Utf8View => {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
                 }
@@ -174,8 +188,8 @@ impl ScalarUDFImpl for ConcatFunc {
             }
         }
 
-        match first_arg_datatype {
-            DataType::Utf8 | DataType::Utf8View => {
+        match return_datatype {
+            DataType::Utf8 => {
                 let mut builder = StringArrayBuilder::with_capacity(len, data_size);
                 for i in 0..len {
                     columns
@@ -187,6 +201,18 @@ impl ScalarUDFImpl for ConcatFunc {
                 let string_array = builder.finish(None);
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             }
+            DataType::Utf8View => {
+                let mut builder = StringViewArrayBuilder::with_capacity(len, data_size);
+                for i in 0..len {
+                    columns
+                        .iter()
+                        .for_each(|column| builder.write::<true>(column, i));
+                    builder.append_offset();
+                }
+
+                let string_array = builder.finish(None);
+                Ok(ColumnarValue::Array(Arc::new(string_array)))
+            },
             DataType::LargeUtf8 => {
                 let mut builder = LargeStringArrayBuilder::with_capacity(len, data_size);
                 for i in 0..len {
@@ -271,7 +297,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
 mod tests {
     use super::*;
     use crate::utils::test::test_function;
-    use arrow::array::Array;
+    use arrow::array::{Array, StringViewArray};
     use arrow::array::{ArrayRef, StringArray};
     use DataType::*;
 
@@ -307,6 +333,18 @@ mod tests {
             Ok(Some("")),
             &str,
             Utf8,
+            StringArray
+        );
+        test_function!(
+            ConcatFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("aa".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("bb".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("cc".to_string())))
+            ],
+            Ok(Some("aabbcc")),
+            &str,
+            Utf8View,
             StringArray
         );
 
