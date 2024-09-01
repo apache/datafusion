@@ -1698,7 +1698,7 @@ impl CsvOptions {
     }
 
     /// The character that terminates a row.
-    /// - default to '\n'
+    /// - default to None (CRLF)
     pub fn with_terminator(mut self, terminator: Option<u8>) -> Self {
         self.terminator = terminator;
         self

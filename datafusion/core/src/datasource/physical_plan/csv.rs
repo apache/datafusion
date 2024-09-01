@@ -517,7 +517,6 @@ impl CsvConfig {
 
 impl CsvConfig {
     fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
-        dbg!(&self.terminator);
         Ok(self.builder().build(reader)?)
     }
 
@@ -556,7 +555,6 @@ impl CsvOpener {
         config: Arc<CsvConfig>,
         file_compression_type: FileCompressionType,
     ) -> Self {
-        dbg!(&config);
         Self {
             config,
             file_compression_type,
