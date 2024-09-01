@@ -20,12 +20,12 @@
 use std::any::Any;
 use std::fmt::Debug;
 
+use arrow::compute::can_cast_types;
 use arrow::{datatypes::DataType, datatypes::Field};
 use arrow_schema::DataType::{Float64, UInt64};
 
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{exec_err, not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 
@@ -63,7 +63,7 @@ impl ApproxMedian {
     /// Create a new APPROX_MEDIAN aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -115,5 +115,18 @@ impl AggregateUDFImpl for ApproxMedian {
             0.5_f64,
             acc_args.exprs[0].data_type(acc_args.schema)?,
         )))
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return exec_err!("Expect to get single argument");
+        }
+
+        if arg_types[0].is_numeric() && !can_cast_types(&arg_types[0], &DataType::Float64)
+        {
+            return exec_err!("1st argument {} is not coercible to f64", arg_types[0]);
+        }
+
+        Ok(vec![DataType::Float64])
     }
 }

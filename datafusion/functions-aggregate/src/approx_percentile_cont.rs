@@ -19,31 +19,22 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use arrow::array::{Array, RecordBatch};
-use arrow::compute::{filter, is_not_null};
-use arrow::{
-    array::{
-        ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-    },
-    datatypes::DataType,
-};
+use arrow::array::{Array, AsArray, RecordBatch};
+use arrow::compute::{can_cast_types, filter, is_not_null};
+use arrow::datatypes::Float64Type;
+use arrow::{array::ArrayRef, datatypes::DataType};
 use arrow_schema::{Field, Schema};
 
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_datafusion_err, not_impl_err, plan_err,
-    DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, not_impl_datafusion_err, not_impl_err, plan_err, Result,
+    ScalarValue,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ColumnarValue, Expr, Signature, TypeSignature,
-    Volatility,
+    Accumulator, AggregateUDFImpl, ColumnarValue, Expr, Signature, Volatility,
 };
-use datafusion_functions_aggregate_common::tdigest::{
-    TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
-};
+use datafusion_functions_aggregate_common::tdigest::{TDigest, DEFAULT_MAX_SIZE};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
@@ -84,21 +75,8 @@ impl Default for ApproxPercentileCont {
 impl ApproxPercentileCont {
     /// Create a new [`ApproxPercentileCont`] aggregate function.
     pub fn new() -> Self {
-        let mut variants = Vec::with_capacity(NUMERICS.len() * (INTEGERS.len() + 1));
-        // Accept any numeric value paired with a float64 percentile
-        for num in NUMERICS {
-            variants.push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
-            // Additionally accept an integer number of centroids for T-Digest
-            for int in INTEGERS {
-                variants.push(TypeSignature::Exact(vec![
-                    num.clone(),
-                    DataType::Float64,
-                    int.clone(),
-                ]))
-            }
-        }
         Self {
-            signature: Signature::one_of(variants, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 
@@ -156,15 +134,12 @@ fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
 fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
     let percentile = match get_scalar_value(expr)
         .map_err(|_| not_impl_datafusion_err!("Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal, got: {expr}"))? {
-        ScalarValue::Float32(Some(value)) => {
-            value as f64
-        }
         ScalarValue::Float64(Some(value)) => {
             value
         }
         sv => {
-            return not_impl_err!(
-                "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
+            return internal_err!(
+                "Percentile value for 'APPROX_PERCENTILE_CONT' should be coerced to f64 (got data type {})",
                 sv.data_type()
             )
         }
@@ -182,17 +157,10 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
 fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
     let max_size = match get_scalar_value(expr)
         .map_err(|_| not_impl_datafusion_err!("Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal, got: {expr}"))? {
-        ScalarValue::UInt8(Some(q)) => q as usize,
-        ScalarValue::UInt16(Some(q)) => q as usize,
-        ScalarValue::UInt32(Some(q)) => q as usize,
         ScalarValue::UInt64(Some(q)) => q as usize,
-        ScalarValue::Int32(Some(q)) if q > 0 => q as usize,
-        ScalarValue::Int64(Some(q)) if q > 0 => q as usize,
-        ScalarValue::Int16(Some(q)) if q > 0 => q as usize,
-        ScalarValue::Int8(Some(q)) if q > 0 => q as usize,
         sv => {
             return not_impl_err!(
-                "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
+                "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' should be coerced to u64 literal (got data type {}).",
                 sv.data_type()
             )
         },
@@ -257,16 +225,38 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         Ok(Box::new(self.create_accumulator(acc_args)?))
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("approx_percentile_cont requires numeric input types");
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 && arg_types.len() != 3 {
+            return exec_err!("Expect to get 2 or 3 args");
         }
-        if arg_types.len() == 3 && !arg_types[2].is_integer() {
-            return plan_err!(
-                "approx_percentile_cont requires integer max_size input types"
-            );
+
+        // Check `is_numeric` to filter out numeric string case
+        if !arg_types[0].is_numeric()
+            || !can_cast_types(&arg_types[0], &DataType::Float64)
+        {
+            return exec_err!("1st argument {} is not coercible to f64", arg_types[0]);
         }
-        Ok(arg_types[0].clone())
+        if !arg_types[1].is_numeric()
+            || !can_cast_types(&arg_types[1], &DataType::Float64)
+        {
+            return exec_err!("2nd argument {} is not coercible to f64", arg_types[1]);
+        }
+        if arg_types.len() == 3
+            && (!arg_types[2].is_integer()
+                || !can_cast_types(&arg_types[2], &DataType::UInt64))
+        {
+            return exec_err!("3rd argument {} is not coercible to u64", arg_types[2]);
+        }
+
+        if arg_types.len() == 2 {
+            Ok(vec![DataType::Float64; 2])
+        } else {
+            Ok(vec![DataType::Float64, DataType::Float64, DataType::UInt64])
+        }
     }
 }
 
@@ -306,91 +296,8 @@ impl ApproxPercentileAccumulator {
 
     // public for approx_percentile_cont_with_weight
     pub fn convert_to_float(values: &ArrayRef) -> Result<Vec<f64>> {
-        match values.data_type() {
-            DataType::Float64 => {
-                let array = downcast_value!(values, Float64Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
-            }
-            DataType::Float32 => {
-                let array = downcast_value!(values, Float32Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
-            }
-            DataType::Int64 => {
-                let array = downcast_value!(values, Int64Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
-            }
-            DataType::Int32 => {
-                let array = downcast_value!(values, Int32Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
-            }
-            DataType::Int16 => {
-                let array = downcast_value!(values, Int16Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
-            }
-            DataType::Int8 => {
-                let array = downcast_value!(values, Int8Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
-            }
-            DataType::UInt64 => {
-                let array = downcast_value!(values, UInt64Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
-            }
-            DataType::UInt32 => {
-                let array = downcast_value!(values, UInt32Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
-            }
-            DataType::UInt16 => {
-                let array = downcast_value!(values, UInt16Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
-            }
-            DataType::UInt8 => {
-                let array = downcast_value!(values, UInt8Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
-            }
-            e => internal_err!(
-                "APPROX_PERCENTILE_CONT is not expected to receive the type {e:?}"
-            ),
-        }
+        let array = values.as_primitive::<Float64Type>();
+        Ok(array.values().as_ref().to_vec())
     }
 }
 
@@ -406,7 +313,11 @@ impl Accumulator for ApproxPercentileAccumulator {
             values = filter(&values, &is_not_null(&values)?)?;
         }
         let sorted_values = &arrow::compute::sort(&values, None)?;
-        let sorted_values = ApproxPercentileAccumulator::convert_to_float(sorted_values)?;
+        let sorted_values = sorted_values
+            .as_primitive::<Float64Type>()
+            .values()
+            .as_ref()
+            .to_vec();
         self.digest = self.digest.merge_sorted_f64(&sorted_values);
         Ok(())
     }
