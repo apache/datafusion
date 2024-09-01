@@ -5881,8 +5881,10 @@ SELECT kurtosis_pop(col) FROM VALUES (1.0), (10.0), (100.0), (10.0), (1.0) as ta
 ----
 0.194323231917
 
-query error DataFusion error: Error during planning: KurtosisPop requires numeric input types
+query R
 SELECT kurtosis_pop(col) FROM VALUES ('1'), ('10'), ('100'), ('10'), ('1') as tab(col);
+----
+0.194323231917
 
 query R
 SELECT kurtosis_pop(col) FROM VALUES (1.0) as tab(col);

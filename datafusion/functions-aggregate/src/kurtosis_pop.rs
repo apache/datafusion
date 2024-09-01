@@ -18,10 +18,8 @@
 use arrow::array::{Array, ArrayRef, Float64Array, UInt64Array};
 use arrow::compute::cast;
 use arrow_schema::{DataType, Field};
-use datafusion_common::{
-    downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, Result,
-    ScalarValue,
-};
+use datafusion_common::cast::as_float64_array;
+use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_functions_aggregate_common::accumulator::{
     AccumulatorArgs, StateFieldsArgs,
@@ -76,11 +74,7 @@ impl AggregateUDFImpl for KurtosisPopFunction {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_null() && !arg_types[0].is_numeric() {
-            return plan_err!("KurtosisPop requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
@@ -99,6 +93,9 @@ impl AggregateUDFImpl for KurtosisPopFunction {
     }
 }
 
+/// Accumulator for calculating the excess kurtosis (Fisher’s definition) without bias correction.
+/// This implementation follows the DuckDB implementation:
+/// https://github.com/duckdb/duckdb/blob/main/src/core_functions/aggregate/distributive/kurtosis.cpp
 #[derive(Debug, Default)]
 pub struct KurtosisPopAccumulator {
     count: u64,
@@ -123,15 +120,8 @@ impl KurtosisPopAccumulator {
 impl Accumulator for KurtosisPopAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &cast(&values[0], &DataType::Float64)?;
-        let mut arr = downcast_value!(values, Float64Array).iter().flatten();
-        for i in 0..values.len() {
-            let value = if values.is_valid(i) { arr.next() } else { None };
-
-            if value.is_none() {
-                continue;
-            }
-
-            let value = unwrap_or_internal_err!(value);
+        let array = as_float64_array(&values)?;
+        for value in array.iter().flatten() {
             self.count += 1;
             self.sum += value;
             self.sum_sqr += value.powi(2);
