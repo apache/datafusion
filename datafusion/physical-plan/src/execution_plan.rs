@@ -493,7 +493,7 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
 ///
 /// There are three possible execution modes: `Bounded`, `Unbounded` and
 /// `PipelineBreaking`.
-# [derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ExecutionMode {
     /// The stream is bounded / finite.
     ///
