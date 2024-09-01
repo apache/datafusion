@@ -353,7 +353,7 @@ config_namespace! {
         /// we allocate a new block (also with the same predefined block size based capacity)
         // instead of expanding the current one and copying the data.
         /// We plan to make this the default in the future when tests are enough.
-        pub enable_aggregation_group_states_blocked_approach: bool, default = false
+        pub enable_aggregation_intermediate_states_blocked_approach: bool, default = false
     }
 }
 

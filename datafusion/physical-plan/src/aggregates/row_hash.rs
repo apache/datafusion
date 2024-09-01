@@ -450,7 +450,7 @@ pub(crate) struct GroupedHashAggregateStream {
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
     /// Have we enabled the blocked optimization for group values and accumulators.
-    enable_blocked_group_states: bool,
+    is_blocked_approach_on: bool,
 
     // ========================================================================
     // EXECUTION RESOURCES:
@@ -613,7 +613,7 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit,
             skip_aggregation_probe,
-            enable_blocked_group_states,
+            is_blocked_approach_on: enable_blocked_group_states,
         })
     }
 }
@@ -641,7 +641,7 @@ fn maybe_enable_blocked_group_states(
         .session_config()
         .options()
         .execution
-        .enable_aggregation_group_states_blocked_approach
+        .enable_aggregation_intermediate_states_blocked_approach
         || !matches!(group_ordering, GroupOrdering::None)
         || accumulators.is_empty()
         || enable_spilling(context.runtime_env().disk_manager.as_ref())
@@ -1082,7 +1082,7 @@ impl GroupedHashAggregateStream {
             && matches!(self.mode, AggregateMode::Partial)
             && self.update_memory_reservation().is_err()
         {
-            if !self.enable_blocked_group_states {
+            if !self.is_blocked_approach_on {
                 let n = self.group_values.len() / self.batch_size * self.batch_size;
                 let batch = self.emit(EmitTo::First(n), false)?;
                 self.exec_state = ExecutionState::ProducingOutput(batch);
@@ -1130,12 +1130,12 @@ impl GroupedHashAggregateStream {
         // We should disable the blocked optimization for `GroupValues` and `GroupAccumulator`s here,
         // because the blocked mode can't support `Emit::First(exact n)` which is needed in
         // streaming aggregation.
-        if self.enable_blocked_group_states {
+        if self.is_blocked_approach_on {
             self.group_values.alter_block_size(None)?;
             self.accumulators
                 .iter_mut()
                 .try_for_each(|acc| acc.alter_block_size(None))?;
-            self.enable_blocked_group_states = false;
+            self.is_blocked_approach_on = false;
         }
 
         self.input_done = false;
@@ -1159,7 +1159,7 @@ impl GroupedHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
-            if !self.enable_blocked_group_states {
+            if !self.is_blocked_approach_on {
                 let batch = self.emit(EmitTo::All, false)?;
                 ExecutionState::ProducingOutput(batch)
             } else {
@@ -1196,7 +1196,7 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<()> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
-                if !self.enable_blocked_group_states {
+                if !self.is_blocked_approach_on {
                     let batch = self.emit(EmitTo::All, false)?;
                     self.exec_state = ExecutionState::ProducingOutput(batch);
                 } else {
