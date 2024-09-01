@@ -274,28 +274,6 @@ impl SkipAggregationProbe {
 /// The accumulator state is not managed by this operator (e.g in the
 /// hash table).
 ///
-/// An important optimization for [`group_values`] and [`accumulators`]
-/// is to manage values using the blocked approach.
-///
-/// In the original method, values are managed within a single large block
-/// (can think of it as a Vec).  As this block grows, it often triggers numerous
-/// copies, resulting in poor performance.
-///
-/// In contrast, the blocked approach allocates capacity for the block
-/// based on a predefined block size firstly.
-/// And when the block reaches its limit, we allocate a new block
-/// (also with the same predefined block size based capacity)
-/// instead of expanding the current one and copying the data.
-/// This method eliminates unnecessary copies and significantly improves performance.
-/// For a nice introduction to the blocked approach, maybe you can see [#7065].
-///
-/// The conditions that trigger the blocked mode can be found in
-/// [`maybe_enable_blocked_group_states`].
-///  
-/// [`group_values`]: Self::group_values
-/// [`accumulators`]: Self::accumulators
-/// [#7065]: https://github.com/apache/datafusion/issues/7065
-///
 /// # Partial Aggregate and multi-phase grouping
 ///
 /// As described on [`Accumulator::state`], this operator is used in the context
@@ -364,24 +342,29 @@ impl SkipAggregationProbe {
 /// │ 2 │ 2     │ 3.0 │    │ 2 │ 2     │ 3.0 │                   └────────────┘
 /// └─────────────────┘    └─────────────────┘
 /// ```
+/// 
+/// # Blocked approach for intermediate values
+/// An important optimization for [`group_values`] and [`accumulators`]
+/// is to manage values using the blocked approach.
 ///
-/// # Partial Aggregate and multi-phase grouping
+/// In the original method, values are managed within a single large block
+/// (can think of it as a Vec).  As this block grows, it often triggers numerous
+/// copies, resulting in poor performance.
 ///
-/// As described on [`Accumulator::state`], this operator is used in the context
-/// "multi-phase" grouping when the mode is [`AggregateMode::Partial`].
+/// In contrast, the blocked approach allocates capacity for the block
+/// based on a predefined block size firstly.
+/// And when the block reaches its limit, we allocate a new block
+/// (also with the same predefined block size based capacity)
+/// instead of expanding the current one and copying the data.
+/// This method eliminates unnecessary copies and significantly improves performance.
+/// For a nice introduction to the blocked approach, maybe you can see [#7065].
 ///
-/// An important optimization for multi-phase partial aggregation is to skip
-/// partial aggregation when it is not effective enough to warrant the memory or
-/// CPU cost, as is often the case for queries many distinct groups (high
-/// cardinality group by). Memory is particularly important because each Partial
-/// aggregator must store the intermediate state for each group.
-///
-/// If the ratio of the number of groups to the number of input rows exceeds a
-/// threshold, and [`GroupsAccumulator::supports_convert_to_state`] is
-/// supported, this operator will stop applying Partial aggregation and directly
-/// pass the input rows to the next aggregation phase.
-///
-/// [`Accumulator::state`]: datafusion_expr::Accumulator::state
+/// The conditions that trigger the blocked mode can be found in
+/// [`maybe_enable_blocked_group_states`].
+///  
+/// [`group_values`]: Self::group_values
+/// [`accumulators`]: Self::accumulators
+/// [#7065]: https://github.com/apache/datafusion/issues/7065
 pub(crate) struct GroupedHashAggregateStream {
     // ========================================================================
     // PROPERTIES:
