@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Unnest};
+use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
@@ -60,7 +60,7 @@ pub trait FunctionRewrite {
     ) -> Result<Transformed<Expr>>;
 }
 
-/// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
+/// Recursively call `LogicalPlanBuilder::normalize` on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     expr.transform(|expr| {
@@ -114,6 +114,20 @@ pub fn normalize_cols(
     exprs
         .into_iter()
         .map(|e| normalize_col(e.into(), plan))
+        .collect()
+}
+
+pub fn normalize_sorts(
+    sorts: impl IntoIterator<Item = impl Into<Sort>>,
+    plan: &LogicalPlan,
+) -> Result<Vec<Sort>> {
+    sorts
+        .into_iter()
+        .map(|e| {
+            let sort = e.into();
+            normalize_col(sort.expr, plan)
+                .map(|expr| Sort::new(expr, sort.asc, sort.nulls_first))
+        })
         .collect()
 }
 
@@ -297,6 +311,8 @@ impl NamePreserver {
     /// Create a new NamePreserver for rewriting the `expr` that is part of the specified plan
     pub fn new(plan: &LogicalPlan) -> Self {
         Self {
+            // The schema of Filter and Join nodes comes from their inputs rather than their output expressions,
+            // so there is no need to use aliases to preserve expression names.
             use_alias: !matches!(plan, LogicalPlan::Filter(_) | LogicalPlan::Join(_)),
         }
     }
@@ -335,7 +351,6 @@ mod test {
     use std::ops::Add;
 
     use super::*;
-    use crate::expr::Sort;
     use crate::{col, lit, Cast};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
@@ -496,12 +511,6 @@ mod test {
 
         // change literal type from i32 to i64
         test_rewrite(col("a").add(lit(1i32)), col("a").add(lit(1i64)));
-
-        // SortExpr a+1 ==> b + 2
-        test_rewrite(
-            Expr::Sort(Sort::new(Box::new(col("a").add(lit(1i32))), true, false)),
-            Expr::Sort(Sort::new(Box::new(col("b").add(lit(2i64))), true, false)),
-        );
     }
 
     /// rewrites `expr_from` to `rewrite_to` using
@@ -524,15 +533,8 @@ mod test {
         };
         let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
 
-        let original_name = match &expr_from {
-            Expr::Sort(Sort { expr, .. }) => expr.schema_name().to_string(),
-            expr => expr.schema_name().to_string(),
-        };
-
-        let new_name = match &expr {
-            Expr::Sort(Sort { expr, .. }) => expr.schema_name().to_string(),
-            expr => expr.schema_name().to_string(),
-        };
+        let original_name = expr_from.schema_name().to_string();
+        let new_name = expr.schema_name().to_string();
 
         assert_eq!(
             original_name, new_name,

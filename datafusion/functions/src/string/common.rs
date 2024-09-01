@@ -73,15 +73,14 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
     };
 
     if use_string_view {
-        string_view_trim::<T>(trim_type, func, args)
+        string_view_trim::<T>(func, args)
     } else {
-        string_trim::<T>(trim_type, func, args)
+        string_trim::<T>(func, args)
     }
 }
 
 // removing 'a will cause compiler complaining lifetime of `func`
 fn string_view_trim<'a, T: OffsetSizeTrait>(
-    trim_type: TrimType,
     func: fn(&'a str, &'a str) -> &'a str,
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
@@ -129,14 +128,13 @@ fn string_view_trim<'a, T: OffsetSizeTrait>(
         }
         other => {
             exec_err!(
-            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
+            "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
             )
         }
     }
 }
 
 fn string_trim<'a, T: OffsetSizeTrait>(
-    trim_type: TrimType,
     func: fn(&'a str, &'a str) -> &'a str,
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
@@ -183,7 +181,7 @@ fn string_trim<'a, T: OffsetSizeTrait>(
         }
         other => {
             exec_err!(
-            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
+            "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
             )
         }
     }

@@ -111,9 +111,9 @@ impl AggregateMode {
 /// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
 /// In the case of a simple `GROUP BY a, b` clause, this will contain the expression [a, b]
 /// and a single group [false, false].
-/// In the case of `GROUP BY GROUPING SET/CUBE/ROLLUP` the planner will expand the expression
+/// In the case of `GROUP BY GROUPING SETS/CUBE/ROLLUP` the planner will expand the expression
 /// into multiple groups, using null expressions to align each group.
-/// For example, with a group by clause `GROUP BY GROUPING SET ((a,b),(a),(b))` the planner should
+/// For example, with a group by clause `GROUP BY GROUPING SETS ((a,b),(a),(b))` the planner should
 /// create a `PhysicalGroupBy` like
 /// ```text
 /// PhysicalGroupBy {
@@ -134,7 +134,7 @@ pub struct PhysicalGroupBy {
     null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Null mask for each group in this grouping set. Each group is
     /// composed of either one of the group expressions in expr or a null
-    /// expression in null_expr. If `groups[i][j]` is true, then the the
+    /// expression in null_expr. If `groups[i][j]` is true, then the
     /// j-th expression in the i-th group is NULL, otherwise it is `expr[j]`.
     groups: Vec<Vec<bool>>,
 }
@@ -821,7 +821,7 @@ fn create_schema(
         | AggregateMode::SinglePartitioned => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
-                fields.push(expr.field()?)
+                fields.push(expr.field())
             }
         }
     }

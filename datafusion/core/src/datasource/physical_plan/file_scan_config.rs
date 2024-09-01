@@ -979,7 +979,7 @@ mod tests {
             name: &'static str,
             file_schema: Schema,
             files: Vec<File>,
-            sort: Vec<datafusion_expr::Expr>,
+            sort: Vec<datafusion_expr::SortExpr>,
             expected_result: Result<Vec<Vec<&'static str>>, &'static str>,
         }
 
