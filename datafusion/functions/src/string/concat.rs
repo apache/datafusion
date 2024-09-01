@@ -72,7 +72,8 @@ impl ScalarUDFImpl for ConcatFunc {
         arg_types.iter().for_each(|data_type| {
             if data_type == &Utf8View {
                 dt = data_type;
-            } else if data_type == &LargeUtf8 && dt != &Utf8View {
+            }
+            if data_type == &LargeUtf8 && dt != &Utf8View {
                 dt = data_type;
             }
         });
@@ -87,7 +88,8 @@ impl ScalarUDFImpl for ConcatFunc {
         args.iter().for_each(|col| {
             if col.data_type() == DataType::Utf8View {
                 return_datatype = col.data_type();
-            } else if col.data_type() == DataType::LargeUtf8
+            }
+            if col.data_type() == DataType::LargeUtf8
                 && return_datatype != DataType::Utf8View
             {
                 return_datatype = col.data_type();
