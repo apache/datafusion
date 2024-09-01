@@ -175,7 +175,14 @@ fn try_coerce_types(
     let mut valid_types = valid_types;
 
     // Well-supported signature that returns exact valid types.
-    if !valid_types.is_empty() && matches!(type_signature, TypeSignature::UserDefined) {
+    if !valid_types.is_empty()
+        && matches!(
+            type_signature,
+            TypeSignature::UserDefined
+                | TypeSignature::Numeric(_)
+                | TypeSignature::Float(_)
+        )
+    {
         // exact valid types
         assert_eq!(valid_types.len(), 1);
         let valid_types = valid_types.swap_remove(0);
@@ -396,6 +403,29 @@ fn get_valid_types(
             }
 
             vec![vec![valid_type; *number]]
+        }
+        TypeSignature::Float(number) => {
+            if *number < 1 {
+                return plan_err!(
+                    "The signature expected at least one argument but received {}",
+                    current_types.len()
+                );
+            }
+            if *number != current_types.len() {
+                return plan_err!(
+                    "The signature expected {} arguments but received {}",
+                    number,
+                    current_types.len()
+                );
+            }
+
+            for t in current_types.iter() {
+                if !can_cast_types(t, &DataType::Float64) {
+                    return plan_err!("{t} is not coercible to a float type");
+                }
+            }
+
+            vec![vec![DataType::Float64; *number]]
         }
         TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()

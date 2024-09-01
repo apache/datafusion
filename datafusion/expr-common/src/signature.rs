@@ -120,6 +120,7 @@ pub enum TypeSignature {
     /// Fixed number of arguments of numeric types.
     /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
     Numeric(usize),
+    Float(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -187,6 +188,9 @@ impl TypeSignature {
             }
             TypeSignature::Numeric(num) => {
                 vec![format!("Numeric({})", num)]
+            }
+            TypeSignature::Float(num) => {
+                vec![format!("Float({})", num)]
             }
             TypeSignature::Exact(types) => {
                 vec![Self::join_types(types, ", ")]
@@ -271,6 +275,14 @@ impl Signature {
     pub fn numeric(arg_count: usize, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Numeric(arg_count),
+            volatility,
+        }
+    }
+
+    /// A specified number of f64 arguments
+    pub fn float(arg_count: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Float(arg_count),
             volatility,
         }
     }
