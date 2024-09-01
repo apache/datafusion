@@ -344,14 +344,14 @@ config_namespace! {
 
         /// Should DataFusion use the the blocked approach to manage the groups
         /// values and their related states in accumulators. By default, the single
-        /// approach will be used, and such group values and states will be managed
-        /// using a single big block(can think a `Vec`), obviously as the block growing up,
-        /// many copies will be triggered and finally get a bad performance.
+        /// approach will be used, values are managed within a single large block
+        /// (can think of it as a Vec). As this block grows, it often triggers
+        /// numerous copies, resulting in poor performance.
         /// If setting this flag to `true`, the blocked approach will be used.
-        /// We will allocate the `block size` capacity for block first, and when we
-        /// found the block has been filled to `block size` limit, we will allocate
-        /// next block rather than growing current block and copying the data. This
-        /// approach can eliminate all unnecessary copies and get a good performance finally.
+        /// And the blocked approach allocates capacity for the block
+        /// based on a predefined block size firstly. When the block reaches its limit,
+        /// we allocate a new block (also with the same predefined block size based capacity)
+        // instead of expanding the current one and copying the data.
         /// We plan to make this the default in the future when tests are enough.
         pub enable_aggregation_group_states_blocked_approach: bool, default = false
     }
