@@ -82,6 +82,11 @@ impl ProjectionMapping {
             .map(|map| Self { map })
     }
 
+    pub fn from_indices(indices: &[usize], schema: &SchemaRef) -> Result<Self> {
+        let projection_exprs = project_index_to_exprs(indices, schema);
+        ProjectionMapping::try_new(&projection_exprs, schema)
+    }
+
     /// Iterate over pairs of (source, target) expressions
     pub fn iter(
         &self,
@@ -108,6 +113,22 @@ impl ProjectionMapping {
             .find(|(source, _)| source.eq(expr))
             .map(|(_, target)| Arc::clone(target))
     }
+}
+
+fn project_index_to_exprs(
+    projection_index: &[usize],
+    schema: &SchemaRef,
+) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
+    projection_index
+        .iter()
+        .map(|index| {
+            let field = schema.field(*index);
+            (
+                Arc::new(Column::new(field.name(), *index)) as Arc<dyn PhysicalExpr>,
+                field.name().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>()
 }
 
 #[cfg(test)]

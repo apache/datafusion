@@ -68,7 +68,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
+use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use datafusion_expr::Operator;
@@ -527,10 +527,9 @@ impl HashJoinExec {
 
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
-            let projection_exprs = project_index_to_exprs(projection, &schema);
             // construct a map from the input expressions to the output expression of the Projection
             let projection_mapping =
-                ProjectionMapping::try_new(&projection_exprs, &schema)?;
+                ProjectionMapping::from_indices(projection, &schema)?;
             let out_schema = project_schema(&schema, Some(projection))?;
             output_partitioning =
                 output_partitioning.project(&projection_mapping, &eq_properties);
@@ -584,25 +583,6 @@ impl DisplayAs for HashJoinExec {
             }
         }
     }
-}
-
-fn project_index_to_exprs(
-    projection_index: &[usize],
-    schema: &SchemaRef,
-) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
-    projection_index
-        .iter()
-        .map(|index| {
-            let field = schema.field(*index);
-            (
-                Arc::new(datafusion_physical_expr::expressions::Column::new(
-                    field.name(),
-                    *index,
-                )) as Arc<dyn PhysicalExpr>,
-                field.name().to_owned(),
-            )
-        })
-        .collect::<Vec<_>>()
 }
 
 impl ExecutionPlan for HashJoinExec {
