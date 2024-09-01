@@ -20,7 +20,10 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
+use crate::{
+    equivalence::ProjectionMapping, expressions::UnKnownColumn, physical_exprs_equal,
+    EquivalenceProperties, PhysicalExpr,
+};
 
 /// Output partitioning supported by [`ExecutionPlan`]s.
 ///
@@ -189,6 +192,28 @@ impl Partitioning {
                 }
             }
             _ => false,
+        }
+    }
+
+    pub fn project(
+        &self,
+        projection_mapping: &ProjectionMapping,
+        input_eq_properties: &EquivalenceProperties,
+    ) -> Self {
+        if let Partitioning::Hash(exprs, part) = self {
+            let normalized_exprs = exprs
+                .iter()
+                .map(|expr| {
+                    input_eq_properties
+                        .project_expr(expr, projection_mapping)
+                        .unwrap_or_else(|| {
+                            Arc::new(UnKnownColumn::new(&expr.to_string()))
+                        })
+                })
+                .collect();
+            Partitioning::Hash(normalized_exprs, *part)
+        } else {
+            self.clone()
         }
     }
 }

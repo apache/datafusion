@@ -28,7 +28,7 @@ use crate::aggregates::{
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::get_ordered_partition_by_indices;
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode, Partitioning,
+    DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
     SendableRecordBatchStream, Statistics,
 };
 
@@ -41,7 +41,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     equivalence::{collapse_lex_req, ProjectionMapping},
-    expressions::{Column, UnKnownColumn},
+    expressions::Column,
     physical_exprs_contains, EquivalenceProperties, LexOrdering, LexRequirement,
     PhysicalExpr, PhysicalSortRequirement,
 };
@@ -567,26 +567,16 @@ impl AggregateExec {
             .project(projection_mapping, schema);
 
         // Get output partitioning:
-        let mut output_partitioning = input.output_partitioning().clone();
-        if mode.is_first_stage() {
+        let input_partitioning = input.output_partitioning().clone();
+        let output_partitioning = if mode.is_first_stage() {
             // First stage aggregation will not change the output partitioning,
             // but needs to respect aliases (e.g. mapping in the GROUP BY
             // expression).
             let input_eq_properties = input.equivalence_properties();
-            if let Partitioning::Hash(exprs, part) = output_partitioning {
-                let normalized_exprs = exprs
-                    .iter()
-                    .map(|expr| {
-                        input_eq_properties
-                            .project_expr(expr, projection_mapping)
-                            .unwrap_or_else(|| {
-                                Arc::new(UnKnownColumn::new(&expr.to_string()))
-                            })
-                    })
-                    .collect();
-                output_partitioning = Partitioning::Hash(normalized_exprs, part);
-            }
-        }
+            input_partitioning.project(projection_mapping, input_eq_properties)
+        } else {
+            input_partitioning.clone()
+        };
 
         // Determine execution mode:
         let mut exec_mode = input.execution_mode();
@@ -1233,6 +1223,7 @@ mod tests {
     use crate::common::collect;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::Literal;
+    use datafusion_physical_expr::Partitioning;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
