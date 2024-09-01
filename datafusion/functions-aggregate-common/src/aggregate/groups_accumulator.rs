@@ -549,10 +549,12 @@ impl<T> Blocks<T> {
         }
     }
 
+    #[inline]
     pub fn current(&self) -> Option<&T> {
         self.current.as_ref()
     }
 
+    #[inline]
     pub fn current_mut(&mut self) -> Option<&mut T> {
         self.current.as_mut()
     }
