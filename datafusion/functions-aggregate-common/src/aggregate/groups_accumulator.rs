@@ -44,6 +44,10 @@ use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 pub const MAX_PREALLOC_BLOCK_SIZE: usize = 8192;
+const FLAT_GROUP_INDEX_ID_MASK: u64 = 0;
+const FLAT_GROUP_INDEX_OFFSET_MASK: u64 = u64::MAX;
+const BLOCKED_GROUP_INDEX_ID_MASK: u64 = 0xffffffff00000000;
+const BLOCKED_GROUP_INDEX_OFFSET_MASK: u64 = 0x00000000ffffffff;
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -452,37 +456,14 @@ impl EmitToExt for EmitTo {
 pub struct BlockedGroupIndex {
     pub block_id: u32,
     pub block_offset: u64,
-    pub is_blocked: bool,
 }
 
 impl BlockedGroupIndex {
     #[inline]
-    pub fn new_from_parts(block_id: u32, block_offset: u64, is_blocked: bool) -> Self {
+    pub fn new_from_parts(block_id: u32, block_offset: u64) -> Self {
         Self {
             block_id,
             block_offset,
-            is_blocked,
-        }
-    }
-
-    #[inline]
-    pub fn new_flat(raw_index: usize) -> Self {
-        Self {
-            block_id: 0,
-            block_offset: raw_index as u64,
-            is_blocked: false,
-        }
-    }
-
-    #[inline]
-    pub fn new_blocked(raw_index: usize) -> Self {
-        let block_id = ((raw_index as u64 >> 32) & 0x00000000ffffffff) as u32;
-        let block_offset = (raw_index as u64) & 0x00000000ffffffff;
-
-        Self {
-            block_id,
-            block_offset,
-            is_blocked: true,
         }
     }
 
@@ -496,11 +477,41 @@ impl BlockedGroupIndex {
         self.block_offset as usize
     }
 
+    #[inline]
     pub fn as_packed_index(&self) -> usize {
-        if self.is_blocked {
-            (((self.block_id as u64) << 32) | self.block_offset) as usize
+        (((self.block_id as u64) << 32) | self.block_offset) as usize
+    }
+}
+
+pub struct BlockedGroupIndexBuilder {
+    block_id_mask: u64,
+    block_offset_mask: u64,
+}
+
+impl BlockedGroupIndexBuilder {
+    #[inline]
+    pub fn new(is_blocked: bool) -> Self {
+        if is_blocked {
+            Self {
+                block_id_mask: BLOCKED_GROUP_INDEX_ID_MASK,
+                block_offset_mask: BLOCKED_GROUP_INDEX_OFFSET_MASK,
+            }
         } else {
-            self.block_offset as usize
+            Self {
+                block_id_mask: FLAT_GROUP_INDEX_ID_MASK,
+                block_offset_mask: FLAT_GROUP_INDEX_OFFSET_MASK,
+            }
+        }
+    }
+
+    #[inline]
+    pub fn build(&self, packed_index: usize) -> BlockedGroupIndex {
+        let block_id = (((packed_index as u64) & self.block_id_mask) >> 32) as u32;
+        let block_offset = (packed_index as u64) & self.block_offset_mask;
+
+        BlockedGroupIndex {
+            block_id,
+            block_offset,
         }
     }
 }

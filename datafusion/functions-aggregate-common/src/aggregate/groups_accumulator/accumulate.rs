@@ -26,7 +26,7 @@ use arrow::datatypes::ArrowPrimitiveType;
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
 use crate::aggregate::groups_accumulator::{
-    BlockedGroupIndex, Blocks, MAX_PREALLOC_BLOCK_SIZE,
+    BlockedGroupIndex, BlockedGroupIndexBuilder, Blocks, MAX_PREALLOC_BLOCK_SIZE,
 };
 
 /// Track the accumulator null state per row: if any values for that
@@ -303,32 +303,20 @@ impl BlockedNullState {
             false,
         );
         let seen_values_blocks = &mut self.seen_values_blocks;
+        let group_index_builder =
+            BlockedGroupIndexBuilder::new(self.block_size.is_some());
 
-        if self.block_size.is_some() {
-            do_blocked_accumulate(
-                group_indices,
-                values,
-                opt_filter,
-                BlockedGroupIndex::new_blocked,
-                value_fn,
-                |index: &BlockedGroupIndex| {
-                    seen_values_blocks[index.block_id()]
-                        .set_bit(index.block_offset(), true);
-                },
-            )
-        } else {
-            do_blocked_accumulate(
-                group_indices,
-                values,
-                opt_filter,
-                BlockedGroupIndex::new_flat,
-                value_fn,
-                |index: &BlockedGroupIndex| {
-                    seen_values_blocks[index.block_id()]
-                        .set_bit(index.block_offset(), true);
-                },
-            );
-        }
+        do_blocked_accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            &group_index_builder,
+            value_fn,
+            |group_index| {
+                seen_values_blocks[group_index.block_id()]
+                    .set_bit(group_index.block_offset(), true);
+            },
+        )
     }
 
     /// Similar as [NullState::build] but support the blocked version accumulator
@@ -598,16 +586,15 @@ pub fn accumulate_indices<F>(
     }
 }
 
-fn do_blocked_accumulate<T, F1, F2, G>(
+fn do_blocked_accumulate<T, F1, F2>(
     group_indices: &[usize],
     values: &PrimitiveArray<T>,
     opt_filter: Option<&BooleanArray>,
-    group_index_parse_fn: G,
+    group_index_builder: &BlockedGroupIndexBuilder,
     mut value_fn: F1,
     mut set_valid_fn: F2,
 ) where
     T: ArrowPrimitiveType + Send,
-    G: Fn(usize) -> BlockedGroupIndex,
     F1: FnMut(&BlockedGroupIndex, T::Native) + Send,
     F2: FnMut(&BlockedGroupIndex) + Send,
 {
@@ -617,7 +604,7 @@ fn do_blocked_accumulate<T, F1, F2, G>(
         (false, None) => {
             let iter = group_indices.iter().zip(data.iter());
             for (&group_index, &new_value) in iter {
-                let blocked_index = group_index_parse_fn(group_index);
+                let blocked_index = group_index_builder.build(group_index);
                 set_valid_fn(&blocked_index);
                 value_fn(&blocked_index, new_value);
             }
@@ -645,7 +632,8 @@ fn do_blocked_accumulate<T, F1, F2, G>(
                             // valid bit was set, real value
                             let is_valid = (mask & index_mask) != 0;
                             if is_valid {
-                                let blocked_index = group_index_parse_fn(group_index);
+                                let blocked_index =
+                                    group_index_builder.build(group_index);
                                 set_valid_fn(&blocked_index);
                                 value_fn(&blocked_index, new_value);
                             }
@@ -663,7 +651,7 @@ fn do_blocked_accumulate<T, F1, F2, G>(
                 .for_each(|(i, (&group_index, &new_value))| {
                     let is_valid = remainder_bits & (1 << i) != 0;
                     if is_valid {
-                        let blocked_index = group_index_parse_fn(group_index);
+                        let blocked_index = group_index_builder.build(group_index);
                         set_valid_fn(&blocked_index);
                         value_fn(&blocked_index, new_value);
                     }
@@ -681,7 +669,7 @@ fn do_blocked_accumulate<T, F1, F2, G>(
                 .zip(filter.iter())
                 .for_each(|((&group_index, &new_value), filter_value)| {
                     if let Some(true) = filter_value {
-                        let blocked_index = group_index_parse_fn(group_index);
+                        let blocked_index = group_index_builder.build(group_index);
                         set_valid_fn(&blocked_index);
                         value_fn(&blocked_index, new_value);
                     }
@@ -700,9 +688,9 @@ fn do_blocked_accumulate<T, F1, F2, G>(
                 .for_each(|((filter_value, &group_index), new_value)| {
                     if let Some(true) = filter_value {
                         if let Some(new_value) = new_value {
-                            let blocked_index = group_index_parse_fn(group_index);
+                            let blocked_index = group_index_builder.build(group_index);
                             set_valid_fn(&blocked_index);
-                            value_fn(&blocked_index, new_value)
+                            value_fn(&blocked_index, new_value);
                         }
                     }
                 })
@@ -933,7 +921,6 @@ mod test {
                     BlockedGroupIndex::new_from_parts(
                         block_id as u32,
                         block_offset as u64,
-                        true,
                     )
                     .as_packed_index()
                 })

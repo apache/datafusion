@@ -18,7 +18,7 @@
 use ahash::RandomState;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
-    ensure_enough_room_for_values, BlockedGroupIndex, Blocks, EmitToExt, VecBlocks,
+    ensure_enough_room_for_values, BlockedGroupIndexBuilder, Blocks, EmitToExt, VecBlocks,
 };
 use std::collections::HashSet;
 use std::ops::BitAnd;
@@ -399,31 +399,19 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             0,
         );
 
-        if self.block_size.is_some() {
-            accumulate_indices(
-                group_indices,
-                values.logical_nulls().as_ref(),
-                opt_filter,
-                |group_index| {
-                    let blocked_index = BlockedGroupIndex::new_blocked(group_index);
-                    let count = &mut self.counts[blocked_index.block_id()]
-                        [blocked_index.block_offset()];
-                    *count += 1;
-                },
-            );
-        } else {
-            accumulate_indices(
-                group_indices,
-                values.logical_nulls().as_ref(),
-                opt_filter,
-                |group_index| {
-                    let blocked_index = BlockedGroupIndex::new_flat(group_index);
-                    let count = &mut self.counts[blocked_index.block_id()]
-                        [blocked_index.block_offset()];
-                    *count += 1;
-                },
-            );
-        }
+        let group_index_builder =
+            BlockedGroupIndexBuilder::new(self.block_size.is_some());
+        accumulate_indices(
+            group_indices,
+            values.logical_nulls().as_ref(),
+            opt_filter,
+            |group_index| {
+                let blocked_index = group_index_builder.build(group_index);
+                let count = &mut self.counts[blocked_index.block_id()]
+                    [blocked_index.block_offset()];
+                *count += 1;
+            },
+        );
 
         Ok(())
     }
@@ -450,31 +438,19 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             0,
         );
 
-        if self.block_size.is_some() {
-            do_count_merge_batch(
-                values,
-                group_indices,
-                opt_filter,
-                |group_index, partial_count| {
-                    let blocked_index = BlockedGroupIndex::new_blocked(group_index);
-                    let count = &mut self.counts[blocked_index.block_id()]
-                        [blocked_index.block_offset()];
-                    *count += partial_count;
-                },
-            );
-        } else {
-            do_count_merge_batch(
-                values,
-                group_indices,
-                opt_filter,
-                |group_index, partial_count| {
-                    let blocked_index = BlockedGroupIndex::new_flat(group_index);
-                    let count = &mut self.counts[blocked_index.block_id()]
-                        [blocked_index.block_offset()];
-                    *count += partial_count;
-                },
-            );
-        }
+        let group_index_builder =
+            BlockedGroupIndexBuilder::new(self.block_size.is_some());
+        do_count_merge_batch(
+            values,
+            group_indices,
+            opt_filter,
+            |group_index, partial_count| {
+                let blocked_index = group_index_builder.build(group_index);
+                let count = &mut self.counts[blocked_index.block_id()]
+                    [blocked_index.block_offset()];
+                *count += partial_count;
+            },
+        );
 
         Ok(())
     }
