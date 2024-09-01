@@ -2580,7 +2580,7 @@ mod tests {
         // Define task context
         let mut session_config = SessionConfig::default();
         session_config = session_config.set(
-            "datafusion.execution.enable_aggregation_group_states_blocked_approach",
+            "datafusion.execution.enable_aggregation_intermediate_states_blocked_approach",
             ScalarValue::Boolean(Some(true)),
         );
         session_config = session_config.set(

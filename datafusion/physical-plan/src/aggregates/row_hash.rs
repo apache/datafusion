@@ -342,9 +342,9 @@ impl SkipAggregationProbe {
 /// │ 2 │ 2     │ 3.0 │    │ 2 │ 2     │ 3.0 │                   └────────────┘
 /// └─────────────────┘    └─────────────────┘
 /// ```
-/// 
+///
 /// # Blocked approach for intermediate values
-/// 
+///
 /// An important optimization for [`group_values`] and [`accumulators`]
 /// is to manage values using the blocked approach.
 ///
@@ -366,7 +366,7 @@ impl SkipAggregationProbe {
 /// [`group_values`]: Self::group_values
 /// [`accumulators`]: Self::accumulators
 /// [#7065]: https://github.com/apache/datafusion/issues/7065
-/// 
+///
 pub(crate) struct GroupedHashAggregateStream {
     // ========================================================================
     // PROPERTIES:
@@ -622,7 +622,7 @@ impl GroupedHashAggregateStream {
 
 /// Check if we can enable the blocked optimization for `GroupValues` and `GroupsAccumulator`s.
 /// The blocked optimization will be enabled when:
-///   - When `enable_aggregation_group_states_blocked_approach` is true
+///   - When `enable_aggregation_intermediate_states_blocked_approach` is true
 ///   - It is not streaming aggregation(because blocked mode can't support Emit::first(exact n))
 ///   - The spilling is disabled(still need to consider more to support it efficiently)
 ///   - The accumulator is not empty(I am still not sure about logic in this case)
