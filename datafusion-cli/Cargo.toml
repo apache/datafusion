@@ -30,7 +30,7 @@ rust-version = "1.76"
 readme = "README.md"
 
 [dependencies]
-arrow = { version = "52.2.0" }
+arrow = { version = "53.0.0" }
 async-trait = "0.1.73"
 aws-config = "1.5.5"
 aws-credential-types = "1.2.0"
@@ -51,7 +51,7 @@ futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { version = "0.11.0", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
-parquet = { version = "52.2.0", default-features = false }
+parquet = { version = "53.0.0", default-features = false }
 regex = "1.8"
 rustyline = "11.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
@@ -76,5 +76,4 @@ arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "ffd216d5
 arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "ffd216d57469a33303c0d2ec9b974fd25cc0e0f9" }
 arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "ffd216d57469a33303c0d2ec9b974fd25cc0e0f9" }
 arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "ffd216d57469a33303c0d2ec9b974fd25cc0e0f9" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "ffd216d57469a33303c0d2ec9b974fd25cc0e0f9" }
 parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "ffd216d57469a33303c0d2ec9b974fd25cc0e0f9" }
