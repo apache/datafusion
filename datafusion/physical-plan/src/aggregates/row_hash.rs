@@ -344,6 +344,7 @@ impl SkipAggregationProbe {
 /// ```
 /// 
 /// # Blocked approach for intermediate values
+/// 
 /// An important optimization for [`group_values`] and [`accumulators`]
 /// is to manage values using the blocked approach.
 ///
@@ -365,6 +366,7 @@ impl SkipAggregationProbe {
 /// [`group_values`]: Self::group_values
 /// [`accumulators`]: Self::accumulators
 /// [#7065]: https://github.com/apache/datafusion/issues/7065
+/// 
 pub(crate) struct GroupedHashAggregateStream {
     // ========================================================================
     // PROPERTIES:
