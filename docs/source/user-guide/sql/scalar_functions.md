@@ -2093,6 +2093,7 @@ to_unixtime(expression[, ..., format_n])
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
+- [array_distance](#array_distance)
 - [array_distinct](#array_distinct)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
@@ -2135,6 +2136,7 @@ to_unixtime(expression[, ..., format_n])
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
 - [list_dims](#list_dims)
+- [list_distance](#list_distance)
 - [list_distinct](#list_distinct)
 - [list_element](#list_element)
 - [list_except](#list_except)
@@ -2387,6 +2389,36 @@ array_dims(array)
 #### Aliases
 
 - list_dims
+
+### `array_distance`
+
+Returns the Euclidean distance between two input arrays of equal length.
+
+```
+array_distance(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+> select array_distance([1, 2], [1, 4]);
++------------------------------------+
+| array_distance(List([1,2], [1,4])) |
++------------------------------------+
+| 2.0                                |
++------------------------------------+
+```
+
+#### Aliases
+
+- list_distance
 
 ### `array_distinct`
 
@@ -3224,9 +3256,13 @@ _Alias of [array_concat](#array_concat)._
 
 _Alias of [array_dims](#array_dims)._
 
+### `list_distance`
+
+_Alias of [array_distance](#array_distance)._
+
 ### `list_distinct`
 
-_Alias of [array_dims](#array_distinct)._
+_Alias of [array_distinct](#array_distinct)._
 
 ### `list_element`
 
@@ -3641,6 +3677,8 @@ Unwraps struct fields into columns.
 - [map](#map)
 - [make_map](#make_map)
 - [map_extract](#map_extract)
+- [map_keys](#map_keys)
+- [map_values](#map_values)
 
 ### `map`
 
@@ -3728,6 +3766,56 @@ SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
 #### Aliases
 
 - element_at
+
+### `map_keys`
+
+Return a list of all keys in the map.
+
+```
+map_keys(map)
+```
+
+#### Arguments
+
+- `map`: Map expression.
+  Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```
+SELECT map_keys(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[a, b, c]
+
+select map_keys(map([100, 5], [42,43]));
+----
+[100, 5]
+```
+
+### `map_values`
+
+Return a list of all values in the map.
+
+```
+map_values(map)
+```
+
+#### Arguments
+
+- `map`: Map expression.
+  Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```
+SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[1, , 3]
+
+select map_values(map([100, 5], [42,43]));
+----
+[42, 43]
+```
 
 ## Hashing Functions
 

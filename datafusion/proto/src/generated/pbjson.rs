@@ -9301,9 +9301,6 @@ impl serde::Serialize for LogicalExprNode {
                 logical_expr_node::ExprType::Cast(v) => {
                     struct_ser.serialize_field("cast", v)?;
                 }
-                logical_expr_node::ExprType::Sort(v) => {
-                    struct_ser.serialize_field("sort", v)?;
-                }
                 logical_expr_node::ExprType::Negative(v) => {
                     struct_ser.serialize_field("negative", v)?;
                 }
@@ -9394,7 +9391,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             "case_",
             "case",
             "cast",
-            "sort",
             "negative",
             "in_list",
             "inList",
@@ -9443,7 +9439,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             Between,
             Case,
             Cast,
-            Sort,
             Negative,
             InList,
             Wildcard,
@@ -9496,7 +9491,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                             "between" => Ok(GeneratedField::Between),
                             "case" | "case_" => Ok(GeneratedField::Case),
                             "cast" => Ok(GeneratedField::Cast),
-                            "sort" => Ok(GeneratedField::Sort),
                             "negative" => Ok(GeneratedField::Negative),
                             "inList" | "in_list" => Ok(GeneratedField::InList),
                             "wildcard" => Ok(GeneratedField::Wildcard),
@@ -9608,13 +9602,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("cast"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Cast)
-;
-                        }
-                        GeneratedField::Sort => {
-                            if expr_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("sort"));
-                            }
-                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Sort)
 ;
                         }
                         GeneratedField::Negative => {
@@ -17972,6 +17959,98 @@ impl<'de> serde::Deserialize<'de> for SortExprNode {
             }
         }
         deserializer.deserialize_struct("datafusion.SortExprNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SortExprNodeCollection {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.sort_expr_nodes.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.SortExprNodeCollection", len)?;
+        if !self.sort_expr_nodes.is_empty() {
+            struct_ser.serialize_field("sortExprNodes", &self.sort_expr_nodes)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SortExprNodeCollection {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "sort_expr_nodes",
+            "sortExprNodes",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            SortExprNodes,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "sortExprNodes" | "sort_expr_nodes" => Ok(GeneratedField::SortExprNodes),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SortExprNodeCollection;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.SortExprNodeCollection")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SortExprNodeCollection, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut sort_expr_nodes__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::SortExprNodes => {
+                            if sort_expr_nodes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sortExprNodes"));
+                            }
+                            sort_expr_nodes__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(SortExprNodeCollection {
+                    sort_expr_nodes: sort_expr_nodes__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.SortExprNodeCollection", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for SortNode {

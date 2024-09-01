@@ -97,6 +97,12 @@ pub struct LogicalExprNodeCollection {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SortExprNodeCollection {
+    #[prost(message, repeated, tag = "1")]
+    pub sort_expr_nodes: ::prost::alloc::vec::Vec<SortExprNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListingTableScanNode {
     #[prost(message, optional, tag = "14")]
     pub table_name: ::core::option::Option<TableReference>,
@@ -117,7 +123,7 @@ pub struct ListingTableScanNode {
     #[prost(uint32, tag = "9")]
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
-    pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
+    pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
     #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12, 15")]
     pub file_format_type: ::core::option::Option<
         listing_table_scan_node::FileFormatType,
@@ -200,7 +206,7 @@ pub struct SortNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
-    pub expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub expr: ::prost::alloc::vec::Vec<SortExprNode>,
     /// Maximum number of highest/lowest rows to fetch; negative means no limit
     #[prost(int64, tag = "3")]
     pub fetch: i64,
@@ -256,7 +262,7 @@ pub struct CreateExternalTableNode {
     #[prost(string, tag = "7")]
     pub definition: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "10")]
-    pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
+    pub order_exprs: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
     #[prost(bool, tag = "11")]
     pub unbounded: bool,
     #[prost(map = "string, string", tag = "8")]
@@ -402,7 +408,7 @@ pub struct DistinctOnNode {
     #[prost(message, repeated, tag = "2")]
     pub select_expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "3")]
-    pub sort_expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub sort_expr: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(message, optional, boxed, tag = "4")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
 }
@@ -488,7 +494,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -521,8 +527,6 @@ pub mod logical_expr_node {
         Case(::prost::alloc::boxed::Box<super::CaseNode>),
         #[prost(message, tag = "11")]
         Cast(::prost::alloc::boxed::Box<super::CastNode>),
-        #[prost(message, tag = "12")]
-        Sort(::prost::alloc::boxed::Box<super::SortExprNode>),
         #[prost(message, tag = "13")]
         Negative(::prost::alloc::boxed::Box<super::NegativeNode>),
         #[prost(message, tag = "14")]
@@ -740,7 +744,7 @@ pub struct AggregateUdfExprNode {
     #[prost(message, optional, boxed, tag = "3")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, repeated, tag = "4")]
-    pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub order_by: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(bytes = "vec", optional, tag = "6")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
@@ -762,7 +766,7 @@ pub struct WindowExprNode {
     #[prost(message, repeated, tag = "5")]
     pub partition_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "6")]
-    pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub order_by: ::prost::alloc::vec::Vec<SortExprNode>,
     /// repeated LogicalExprNode filter = 7;
     #[prost(message, optional, tag = "8")]
     pub window_frame: ::core::option::Option<WindowFrame>,
@@ -869,8 +873,8 @@ pub struct TryCastNode {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortExprNode {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, tag = "1")]
+    pub expr: ::core::option::Option<LogicalExprNode>,
     #[prost(bool, tag = "2")]
     pub asc: bool,
     #[prost(bool, tag = "3")]

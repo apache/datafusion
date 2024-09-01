@@ -33,11 +33,10 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like,
-    ScalarFunction, WindowFunction,
+    ScalarFunction, Sort, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, get_input_types, like_coercion,
@@ -56,6 +55,8 @@ use datafusion_expr::{
     Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
+/// Performs type coercion by determining the schema
+/// and performing the expression rewrites.
 #[derive(Default)]
 pub struct TypeCoercion {}
 
@@ -128,16 +129,23 @@ fn analyze_internal(
     .map_data(|plan| plan.recompute_schema())
 }
 
-pub(crate) struct TypeCoercionRewriter<'a> {
+/// Rewrite expressions to apply type coercion.
+pub struct TypeCoercionRewriter<'a> {
     pub(crate) schema: &'a DFSchema,
 }
 
 impl<'a> TypeCoercionRewriter<'a> {
+    /// Create a new [`TypeCoercionRewriter`] with a provided schema
+    /// representing both the inputs and output of the [`LogicalPlan`] node.
     fn new(schema: &'a DFSchema) -> Self {
         Self { schema }
     }
 
-    fn coerce_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
+    /// Coerce the [`LogicalPlan`].
+    ///
+    /// Refer to [`TypeCoercionRewriter::coerce_join`] and [`TypeCoercionRewriter::coerce_union`]
+    /// for type-coercion approach.
+    pub fn coerce_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
@@ -153,7 +161,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     ///
     /// For example, on_exprs like `t1.a = t2.b AND t1.x = t2.y` will be stored
     /// as a list of `(t1.a, t2.b), (t1.x, t2.y)`
-    fn coerce_join(&mut self, mut join: Join) -> Result<LogicalPlan> {
+    pub fn coerce_join(&mut self, mut join: Join) -> Result<LogicalPlan> {
         join.on = join
             .on
             .into_iter()
@@ -176,7 +184,7 @@ impl<'a> TypeCoercionRewriter<'a> {
 
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
     /// This occurs after wildcard expansion and the coercion of the input expressions.
-    fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
+    pub fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
         let union_schema = Arc::new(coerce_union_schema(&union_plan.inputs)?);
         let new_inputs = union_plan
             .inputs
@@ -241,15 +249,19 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 subquery,
                 outer_ref_columns,
             }) => {
-                let new_plan = analyze_internal(self.schema, unwrap_arc(subquery))?.data;
+                let new_plan =
+                    analyze_internal(self.schema, Arc::unwrap_or_clone(subquery))?.data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
                 })))
             }
             Expr::Exists(Exists { subquery, negated }) => {
-                let new_plan =
-                    analyze_internal(self.schema, unwrap_arc(subquery.subquery))?.data;
+                let new_plan = analyze_internal(
+                    self.schema,
+                    Arc::unwrap_or_clone(subquery.subquery),
+                )?
+                .data;
                 Ok(Transformed::yes(Expr::Exists(Exists {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
@@ -263,8 +275,11 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 subquery,
                 negated,
             }) => {
-                let new_plan =
-                    analyze_internal(self.schema, unwrap_arc(subquery.subquery))?.data;
+                let new_plan = analyze_internal(
+                    self.schema,
+                    Arc::unwrap_or_clone(subquery.subquery),
+                )?
+                .data;
                 let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
                 let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
@@ -491,7 +506,6 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
             | Expr::Negative(_)
             | Expr::Cast(_)
             | Expr::TryCast(_)
-            | Expr::Sort(_)
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
@@ -578,12 +592,12 @@ fn coerce_frame_bound(
 fn coerce_window_frame(
     window_frame: WindowFrame,
     schema: &DFSchema,
-    expressions: &[Expr],
+    expressions: &[Sort],
 ) -> Result<WindowFrame> {
     let mut window_frame = window_frame;
     let current_types = expressions
         .iter()
-        .map(|e| e.get_type(schema))
+        .map(|s| s.expr.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
@@ -809,7 +823,10 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 }
 
 /// Get a common schema that is compatible with all inputs of UNION.
-fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
+///
+/// This method presumes that the wildcard expansion is unneeded, or has already
+/// been applied.
+pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
     let base_schema = inputs[0].schema();
     let mut union_datatypes = base_schema
         .fields()

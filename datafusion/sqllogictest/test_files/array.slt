@@ -4715,6 +4715,60 @@ NULL 10
 NULL 10
 NULL 10
 
+query RRR
+select array_distance([2], [3]), list_distance([1], [2]), list_distance([1], [-2]);
+----
+1 1 3
+
+query error
+select list_distance([1], [1, 2]);
+
+query R
+select array_distance([[1, 1]], [1, 2]);
+----
+1
+
+query R
+select array_distance([[1, 1]], [[1, 2]]);
+----
+1
+
+query R
+select array_distance([[1, 1]], [[1, 2]]);
+----
+1
+
+query RR
+select array_distance([1, 1, 0, 0], [2, 2, 1, 1]), list_distance([1, 2, 3], [1, 2, 3]);
+----
+2 0
+
+query RR
+select array_distance([1.0, 1, 0, 0], [2, 2.0, 1, 1]), list_distance([1, 2.0, 3], [1, 2, 3]);
+----
+2 0
+
+query R
+select list_distance([1, 1, NULL, 0], [2, 2, NULL, NULL]);
+----
+NULL
+
+query R
+select list_distance([NULL, NULL], [NULL, NULL]);
+----
+NULL
+
+query R
+select list_distance([1.0, 2.0, 3.0], [1.0, 2.0, 3.5]) AS distance;
+----
+0.5
+
+query R
+select list_distance([1, 2, 3], [1, 2, 3]) AS distance;
+----
+0
+
+
 ## array_dims (aliases: `list_dims`)
 
 # array dims error
@@ -4972,11 +5026,19 @@ NULL 1 1
 
 ## array_has/array_has_all/array_has_any
 
-query BB
-select array_has([], null),
-       array_has([1, 2, 3], null);
+# If lhs is empty, return false
+query B
+select array_has([], 1);
 ----
-false false
+false
+
+# If rhs is Null, we returns Null
+query BBB
+select array_has([], null),
+       array_has([1, 2, 3], null),
+       array_has([null, 1], null);
+----
+NULL NULL NULL
 
 #TODO: array_has_all and array_has_any cannot handle NULL
 #query BBBB

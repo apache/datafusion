@@ -26,7 +26,7 @@
 use std::fmt::{self, Formatter};
 use std::hash::Hash;
 
-use crate::{lit, Expr};
+use crate::{expr::Sort, lit};
 
 use datafusion_common::{plan_err, sql_err, DataFusionError, Result, ScalarValue};
 use sqlparser::ast;
@@ -247,7 +247,7 @@ impl WindowFrame {
     }
 
     /// Regularizes the ORDER BY clause of the window frame.
-    pub fn regularize_order_bys(&self, order_by: &mut Vec<Expr>) -> Result<()> {
+    pub fn regularize_order_bys(&self, order_by: &mut Vec<Sort>) -> Result<()> {
         match self.units {
             // Normally, RANGE frames require an ORDER BY clause with exactly
             // one column. However, an ORDER BY clause may be absent or have

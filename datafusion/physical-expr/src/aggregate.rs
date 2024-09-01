@@ -15,29 +15,46 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub(crate) mod groups_accumulator {
+    #[allow(unused_imports)]
+    pub(crate) mod accumulate {
+        pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+    }
+    pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+        accumulate::NullState, GroupsAccumulatorAdapter,
+    };
+}
+pub(crate) mod stats {
+    pub use datafusion_functions_aggregate_common::stats::StatsType;
+}
+pub mod utils {
+    pub use datafusion_functions_aggregate_common::utils::{
+        adjust_output_array, get_accum_scalar_values_as_arrays, get_sort_options,
+        ordering_fields, DecimalAverager, Hashable,
+    };
+}
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::ScalarValue;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::AggregateUDF;
 use datafusion_expr::ReversedUDAF;
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
 use datafusion_functions_aggregate_common::accumulator::AccumulatorArgs;
 use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
-use datafusion_functions_aggregate_common::aggregate::AggregateExpr;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
-use datafusion_functions_aggregate_common::utils::{self, down_cast_any_ref};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::utils::reverse_order_bys;
 
+use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use std::fmt::Debug;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
-/// Builder for physical [`AggregateExpr`]
+/// Builder for physical [`AggregateFunctionExpr`]
 ///
-/// `AggregateExpr` contains the information necessary to call
+/// `AggregateFunctionExpr` contains the information necessary to call
 /// an aggregate expression.
 #[derive(Debug, Clone)]
 pub struct AggregateExprBuilder {
@@ -71,7 +88,7 @@ impl AggregateExprBuilder {
         }
     }
 
-    pub fn build(self) -> Result<Arc<dyn AggregateExpr>> {
+    pub fn build(self) -> Result<Arc<AggregateFunctionExpr>> {
         let Self {
             fun,
             args,
@@ -204,6 +221,17 @@ impl AggregateFunctionExpr {
         &self.fun
     }
 
+    /// expressions that are passed to the Accumulator.
+    /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
+    pub fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.args.clone()
+    }
+
+    /// Human readable name such as `"MIN(c2)"`.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Return if the aggregation is distinct
     pub fn is_distinct(&self) -> bool {
         self.is_distinct
@@ -219,42 +247,20 @@ impl AggregateFunctionExpr {
         self.is_reversed
     }
 
+    /// Return if the aggregation is nullable
     pub fn is_nullable(&self) -> bool {
         self.is_nullable
     }
-}
 
-impl AggregateExpr for AggregateFunctionExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
+    /// the field of the final result of this aggregation.
+    pub fn field(&self) -> Field {
+        Field::new(&self.name, self.data_type.clone(), self.is_nullable)
     }
 
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.args.clone()
-    }
-
-    fn state_fields(&self) -> Result<Vec<Field>> {
-        let args = StateFieldsArgs {
-            name: &self.name,
-            input_types: &self.input_types,
-            return_type: &self.data_type,
-            ordering_fields: &self.ordering_fields,
-            is_distinct: self.is_distinct,
-        };
-
-        self.fun.state_fields(args)
-    }
-
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            self.data_type.clone(),
-            self.is_nullable,
-        ))
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+    /// the accumulator used to accumulate values from the expressions.
+    /// the accumulator expects the same number of arguments as `expressions` and must
+    /// return states with the same description as `state_fields`
+    pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let acc_args = AccumulatorArgs {
             return_type: &self.data_type,
             schema: &self.schema,
@@ -269,7 +275,83 @@ impl AggregateExpr for AggregateFunctionExpr {
         self.fun.accumulator(acc_args)
     }
 
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+    /// the field of the final result of this aggregation.
+    pub fn state_fields(&self) -> Result<Vec<Field>> {
+        let args = StateFieldsArgs {
+            name: &self.name,
+            input_types: &self.input_types,
+            return_type: &self.data_type,
+            ordering_fields: &self.ordering_fields,
+            is_distinct: self.is_distinct,
+        };
+
+        self.fun.state_fields(args)
+    }
+
+    /// Order by requirements for the aggregate function
+    /// By default it is `None` (there is no requirement)
+    /// Order-sensitive aggregators, such as `FIRST_VALUE(x ORDER BY y)` should implement this
+    pub fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+        if self.ordering_req.is_empty() {
+            return None;
+        }
+
+        if !self.order_sensitivity().is_insensitive() {
+            return Some(&self.ordering_req);
+        }
+
+        None
+    }
+
+    /// Indicates whether aggregator can produce the correct result with any
+    /// arbitrary input ordering. By default, we assume that aggregate expressions
+    /// are order insensitive.
+    pub fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        if !self.ordering_req.is_empty() {
+            // If there is requirement, use the sensitivity of the implementation
+            self.fun.order_sensitivity()
+        } else {
+            // If no requirement, aggregator is order insensitive
+            AggregateOrderSensitivity::Insensitive
+        }
+    }
+
+    /// Sets the indicator whether ordering requirements of the aggregator is
+    /// satisfied by its input. If this is not the case, aggregators with order
+    /// sensitivity `AggregateOrderSensitivity::Beneficial` can still produce
+    /// the correct result with possibly more work internally.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(updated_expr))` if the process completes successfully.
+    /// If the expression can benefit from existing input ordering, but does
+    /// not implement the method, returns an error. Order insensitive and hard
+    /// requirement aggregators return `Ok(None)`.
+    pub fn with_beneficial_ordering(
+        self: Arc<Self>,
+        beneficial_ordering: bool,
+    ) -> Result<Option<Arc<AggregateFunctionExpr>>> {
+        let Some(updated_fn) = self
+            .fun
+            .clone()
+            .with_beneficial_ordering(beneficial_ordering)?
+        else {
+            return Ok(None);
+        };
+
+        AggregateExprBuilder::new(Arc::new(updated_fn), self.args.to_vec())
+            .order_by(self.ordering_req.to_vec())
+            .schema(Arc::new(self.schema.clone()))
+            .alias(self.name().to_string())
+            .with_ignore_nulls(self.ignore_nulls)
+            .with_distinct(self.is_distinct)
+            .with_reversed(self.is_reversed)
+            .build()
+            .map(Some)
+    }
+
+    /// Creates accumulator implementation that supports retract
+    pub fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let args = AccumulatorArgs {
             return_type: &self.data_type,
             schema: &self.schema,
@@ -335,11 +417,10 @@ impl AggregateExpr for AggregateFunctionExpr {
         Ok(accumulator)
     }
 
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn groups_accumulator_supported(&self) -> bool {
+    /// If the aggregate expression has a specialized
+    /// [`GroupsAccumulator`] implementation. If this returns true,
+    /// `[Self::create_groups_accumulator`] will be called.
+    pub fn groups_accumulator_supported(&self) -> bool {
         let args = AccumulatorArgs {
             return_type: &self.data_type,
             schema: &self.schema,
@@ -353,7 +434,12 @@ impl AggregateExpr for AggregateFunctionExpr {
         self.fun.groups_accumulator_supported(args)
     }
 
-    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+    /// Return a specialized [`GroupsAccumulator`] that manages state
+    /// for all groups.
+    ///
+    /// For maximum performance, a [`GroupsAccumulator`] should be
+    /// implemented in addition to [`Accumulator`].
+    pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         let args = AccumulatorArgs {
             return_type: &self.data_type,
             schema: &self.schema,
@@ -367,52 +453,11 @@ impl AggregateExpr for AggregateFunctionExpr {
         self.fun.create_groups_accumulator(args)
     }
 
-    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.ordering_req.is_empty() {
-            return None;
-        }
-
-        if !self.order_sensitivity().is_insensitive() {
-            return Some(&self.ordering_req);
-        }
-
-        None
-    }
-
-    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        if !self.ordering_req.is_empty() {
-            // If there is requirement, use the sensitivity of the implementation
-            self.fun.order_sensitivity()
-        } else {
-            // If no requirement, aggregator is order insensitive
-            AggregateOrderSensitivity::Insensitive
-        }
-    }
-
-    fn with_beneficial_ordering(
-        self: Arc<Self>,
-        beneficial_ordering: bool,
-    ) -> Result<Option<Arc<dyn AggregateExpr>>> {
-        let Some(updated_fn) = self
-            .fun
-            .clone()
-            .with_beneficial_ordering(beneficial_ordering)?
-        else {
-            return Ok(None);
-        };
-
-        AggregateExprBuilder::new(Arc::new(updated_fn), self.args.to_vec())
-            .order_by(self.ordering_req.to_vec())
-            .schema(Arc::new(self.schema.clone()))
-            .alias(self.name().to_string())
-            .with_ignore_nulls(self.ignore_nulls)
-            .with_distinct(self.is_distinct)
-            .with_reversed(self.is_reversed)
-            .build()
-            .map(Some)
-    }
-
-    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+    /// Construct an expression that calculates the aggregate in reverse.
+    /// Typically the "reverse" expression is itself (e.g. SUM, COUNT).
+    /// For aggregates that do not support calculation in reverse,
+    /// returns None (which is the default value).
+    pub fn reverse_expr(&self) -> Option<Arc<AggregateFunctionExpr>> {
         match self.fun.reverse_udf() {
             ReversedUDAF::NotSupported => None,
             ReversedUDAF::Identical => Some(Arc::new(self.clone())),
@@ -440,33 +485,70 @@ impl AggregateExpr for AggregateFunctionExpr {
         }
     }
 
-    fn get_minmax_desc(&self) -> Option<(Field, bool)> {
-        self.fun
-            .is_descending()
-            .and_then(|flag| self.field().ok().map(|f| (f, flag)))
+    /// Returns all expressions used in the [`AggregateFunctionExpr`].
+    /// These expressions are  (1)function arguments, (2) order by expressions.
+    pub fn all_expressions(&self) -> AggregatePhysicalExpressions {
+        let args = self.expressions();
+        let order_bys = self.order_bys().unwrap_or(&[]);
+        let order_by_exprs = order_bys
+            .iter()
+            .map(|sort_expr| Arc::clone(&sort_expr.expr))
+            .collect::<Vec<_>>();
+        AggregatePhysicalExpressions {
+            args,
+            order_by_exprs,
+        }
     }
 
-    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+    /// Rewrites [`AggregateFunctionExpr`], with new expressions given. The argument should be consistent
+    /// with the return value of the [`AggregateFunctionExpr::all_expressions`] method.
+    /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
+    pub fn with_new_expressions(
+        &self,
+        _args: Vec<Arc<dyn PhysicalExpr>>,
+        _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Option<Arc<AggregateFunctionExpr>> {
+        None
+    }
+
+    /// If this function is max, return (output_field, true)
+    /// if the function is min, return (output_field, false)
+    /// otherwise return None (the default)
+    ///
+    /// output_field is the name of the column produced by this aggregate
+    ///
+    /// Note: this is used to use special aggregate implementations in certain conditions
+    pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        self.fun.is_descending().map(|flag| (self.field(), flag))
+    }
+
+    /// Returns default value of the function given the input is Null
+    /// Most of the aggregate function return Null if input is Null,
+    /// while `count` returns 0 if input is Null
+    pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         self.fun.default_value(data_type)
     }
 }
 
-impl PartialEq<dyn Any> for AggregateFunctionExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.data_type == x.data_type
-                    && self.fun == x.fun
-                    && self.args.len() == x.args.len()
-                    && self
-                        .args
-                        .iter()
-                        .zip(x.args.iter())
-                        .all(|(this_arg, other_arg)| this_arg.eq(other_arg))
-            })
-            .unwrap_or(false)
+/// Stores the physical expressions used inside the `AggregateExpr`.
+pub struct AggregatePhysicalExpressions {
+    /// Aggregate function arguments
+    pub args: Vec<Arc<dyn PhysicalExpr>>,
+    /// Order by expressions
+    pub order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+}
+
+impl PartialEq for AggregateFunctionExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.data_type == other.data_type
+            && self.fun == other.fun
+            && self.args.len() == other.args.len()
+            && self
+                .args
+                .iter()
+                .zip(other.args.iter())
+                .all(|(this_arg, other_arg)| this_arg.eq(other_arg))
     }
 }
 

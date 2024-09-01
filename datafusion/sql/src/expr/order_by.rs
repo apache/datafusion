@@ -20,7 +20,7 @@ use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema, Result,
 };
 use datafusion_expr::expr::Sort;
-use datafusion_expr::Expr;
+use datafusion_expr::{Expr, SortExpr};
 use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -44,7 +44,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
         literal_to_column: bool,
         additional_schema: Option<&DFSchema>,
-    ) -> Result<Vec<Expr>> {
+    ) -> Result<Vec<SortExpr>> {
         if exprs.is_empty() {
             return Ok(vec![]);
         }
@@ -99,13 +99,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             };
             let asc = asc.unwrap_or(true);
-            expr_vec.push(Expr::Sort(Sort::new(
-                Box::new(expr),
+            expr_vec.push(Sort::new(
+                expr,
                 asc,
                 // when asc is true, by default nulls last to be consistent with postgres
                 // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
                 nulls_first.unwrap_or(!asc),
-            )))
+            ))
         }
         Ok(expr_vec)
     }

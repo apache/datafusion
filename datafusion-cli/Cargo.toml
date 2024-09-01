@@ -32,8 +32,8 @@ readme = "README.md"
 [dependencies]
 arrow = { version = "52.2.0" }
 async-trait = "0.1.73"
-aws-config = "0.55"
-aws-credential-types = "0.55"
+aws-config = "1.5.5"
+aws-credential-types = "1.2.0"
 clap = { version = "4.5.16", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "41.0.0", features = [
     "avro",

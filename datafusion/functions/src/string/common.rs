@@ -23,7 +23,7 @@ use std::sync::Arc;
 use arrow::array::{
     new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef,
     GenericStringArray, GenericStringBuilder, OffsetSizeTrait, StringArray,
-    StringViewArray,
+    StringBuilder, StringViewArray,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
@@ -73,15 +73,14 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
     };
 
     if use_string_view {
-        string_view_trim::<T>(trim_type, func, args)
+        string_view_trim::<T>(func, args)
     } else {
-        string_trim::<T>(trim_type, func, args)
+        string_trim::<T>(func, args)
     }
 }
 
 // removing 'a will cause compiler complaining lifetime of `func`
 fn string_view_trim<'a, T: OffsetSizeTrait>(
-    trim_type: TrimType,
     func: fn(&'a str, &'a str) -> &'a str,
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
@@ -129,14 +128,13 @@ fn string_view_trim<'a, T: OffsetSizeTrait>(
         }
         other => {
             exec_err!(
-            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
+            "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
             )
         }
     }
 }
 
 fn string_trim<'a, T: OffsetSizeTrait>(
-    trim_type: TrimType,
     func: fn(&'a str, &'a str) -> &'a str,
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
@@ -183,7 +181,7 @@ fn string_trim<'a, T: OffsetSizeTrait>(
         }
         other => {
             exec_err!(
-            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
+            "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
             )
         }
     }
@@ -214,6 +212,23 @@ where
                 i64,
                 _,
             >(array, op)?)),
+            DataType::Utf8View => {
+                let string_array = as_string_view_array(array)?;
+                let mut string_builder = StringBuilder::with_capacity(
+                    string_array.len(),
+                    string_array.get_array_memory_size(),
+                );
+
+                for str in string_array.iter() {
+                    if let Some(str) = str {
+                        string_builder.append_value(op(str));
+                    } else {
+                        string_builder.append_null();
+                    }
+                }
+
+                Ok(ColumnarValue::Array(Arc::new(string_builder.finish())))
+            }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -224,6 +239,10 @@ where
             ScalarValue::LargeUtf8(a) => {
                 let result = a.as_ref().map(|x| op(x));
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
+            }
+            ScalarValue::Utf8View(a) => {
+                let result = a.as_ref().map(|x| op(x));
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },

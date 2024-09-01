@@ -4905,7 +4905,7 @@ mod tests {
         let data_type =
             DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
 
-        assert_eq!(non_null_list_scalar.data_type(), data_type.clone());
+        assert_eq!(non_null_list_scalar.data_type(), data_type);
         assert_eq!(null_list_scalar.data_type(), data_type);
     }
 
@@ -5582,13 +5582,13 @@ mod tests {
 
         // Define list-of-structs scalars
 
-        let nl0_array = ScalarValue::iter_to_array(vec![s0.clone(), s1.clone()]).unwrap();
+        let nl0_array = ScalarValue::iter_to_array(vec![s0, s1.clone()]).unwrap();
         let nl0 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl0_array)));
 
-        let nl1_array = ScalarValue::iter_to_array(vec![s2.clone()]).unwrap();
+        let nl1_array = ScalarValue::iter_to_array(vec![s2]).unwrap();
         let nl1 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl1_array)));
 
-        let nl2_array = ScalarValue::iter_to_array(vec![s1.clone()]).unwrap();
+        let nl2_array = ScalarValue::iter_to_array(vec![s1]).unwrap();
         let nl2 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl2_array)));
 
         // iter_to_array for list-of-struct
