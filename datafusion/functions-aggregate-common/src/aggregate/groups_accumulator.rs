@@ -452,7 +452,7 @@ impl EmitToExt for EmitTo {
 ///   - `block_id` is always 0
 ///   - total 64 bits used to represent the `block offset`
 ///
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockedGroupIndex {
     pub block_id: u32,
     pub block_offset: u64,
@@ -813,6 +813,8 @@ pub fn ensure_enough_room_for_values<T: Clone>(
 
 #[cfg(test)]
 mod tests {
+    use std::u32;
+
     use super::*;
 
     #[test]
@@ -954,5 +956,34 @@ mod tests {
 
         let actual = emit.take_needed_from_blocks(&mut values);
         assert!(actual.is_empty());
+    }
+
+    #[test]
+    fn test_blocked_group_index_build() {
+        let group_index1 = (0_u64 << 32) | 1;
+        let group_index2 = (42_u64 << 32) | 2;
+        let group_index3 = ((u32::MAX as u64) << 32) | 3;
+
+        let index_builder = BlockedGroupIndexBuilder::new(false);
+        let flat1 = index_builder.build(group_index1 as usize);
+        let flat2 = index_builder.build(group_index2 as usize);
+        let flat3 = index_builder.build(group_index3 as usize);
+        let expected1 = BlockedGroupIndex::new_from_parts(0, group_index1);
+        let expected2 = BlockedGroupIndex::new_from_parts(0, group_index2);
+        let expected3 = BlockedGroupIndex::new_from_parts(0, group_index3);
+        assert_eq!(flat1, expected1);
+        assert_eq!(flat2, expected2);
+        assert_eq!(flat3, expected3);
+
+        let index_builder = BlockedGroupIndexBuilder::new(true);
+        let blocked1 = index_builder.build(group_index1 as usize);
+        let blocked2 = index_builder.build(group_index2 as usize);
+        let blocked3 = index_builder.build(group_index3 as usize);
+        let expected1 = BlockedGroupIndex::new_from_parts(0, 1);
+        let expected2 = BlockedGroupIndex::new_from_parts(42, 2);
+        let expected3 = BlockedGroupIndex::new_from_parts(u32::MAX, 3);
+        assert_eq!(blocked1, expected1);
+        assert_eq!(blocked2, expected2);
+        assert_eq!(blocked3, expected3);
     }
 }
