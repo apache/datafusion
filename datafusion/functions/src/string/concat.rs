@@ -87,7 +87,9 @@ impl ScalarUDFImpl for ConcatFunc {
         args.iter().for_each(|col| {
             if col.data_type() == DataType::Utf8View {
                 return_datatype = col.data_type();
-            } else if col.data_type() == DataType::LargeUtf8 && return_datatype != DataType::Utf8View {
+            } else if col.data_type() == DataType::LargeUtf8
+                && return_datatype != DataType::Utf8View
+            {
                 return_datatype = col.data_type();
             }
         });
@@ -212,7 +214,7 @@ impl ScalarUDFImpl for ConcatFunc {
 
                 let string_array = builder.finish();
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
-            },
+            }
             DataType::LargeUtf8 => {
                 let mut builder = LargeStringArrayBuilder::with_capacity(len, data_size);
                 for i in 0..len {
@@ -297,7 +299,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
 mod tests {
     use super::*;
     use crate::utils::test::test_function;
-    use arrow::array::{Array, StringViewArray};
+    use arrow::array::{Array, LargeStringArray, StringViewArray};
     use arrow::array::{ArrayRef, StringArray};
     use DataType::*;
 
@@ -338,14 +340,27 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("aa".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("bb".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("cc".to_string())))
+                ColumnarValue::Scalar(ScalarValue::from("aa")),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)),
+                ColumnarValue::Scalar(ScalarValue::from("cc")),
             ],
-            Ok(Some("aabbcc")),
+            Ok(Some("aacc")),
             &str,
             Utf8View,
-            StringArray
+            StringViewArray
+        );
+        test_function!(
+            ConcatFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("aa")),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)),
+                ColumnarValue::Scalar(ScalarValue::from("cc")),
+            ],
+            Ok(Some("aacc")),
+            &str,
+            LargeUtf8,
+            LargeStringArray
         );
 
         Ok(())

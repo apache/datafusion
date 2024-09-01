@@ -20,7 +20,11 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef, GenericStringArray, GenericStringBuilder, LargeStringArray, OffsetSizeTrait, StringArray, StringBuilder, StringViewArray, StringViewBuilder};
+use arrow::array::{
+    new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef,
+    GenericStringArray, GenericStringBuilder, LargeStringArray, OffsetSizeTrait,
+    StringArray, StringBuilder, StringViewArray, StringViewBuilder,
+};
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
@@ -450,7 +454,7 @@ impl StringArrayBuilder {
 
 pub(crate) struct StringViewArrayBuilder {
     builder: StringViewBuilder,
-    block: String
+    block: String,
 }
 
 impl StringViewArrayBuilder {
@@ -458,7 +462,7 @@ impl StringViewArrayBuilder {
         let builder = StringViewBuilder::with_capacity(data_capacity);
         Self {
             builder,
-            block: String::new()
+            block: String::new(),
         }
     }
 
@@ -473,27 +477,36 @@ impl StringViewArrayBuilder {
             }
             ColumnarValueRef::NullableArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                    self.block.push_str(
+                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
+                    );
                 }
             }
             ColumnarValueRef::NullableLargeStringArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                    self.block.push_str(
+                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
+                    );
                 }
             }
             ColumnarValueRef::NullableStringViewArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                    self.block.push_str(
+                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
+                    );
                 }
             }
             ColumnarValueRef::NonNullableArray(array) => {
-                self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                self.block
+                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
             }
             ColumnarValueRef::NonNullableLargeStringArray(array) => {
-                self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                self.block
+                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
             }
             ColumnarValueRef::NonNullableStringViewArray(array) => {
-                self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+                self.block
+                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
             }
         }
     }
