@@ -815,8 +815,6 @@ pub fn ensure_enough_room_for_values<T: Clone>(
 
 #[cfg(test)]
 mod tests {
-    use std::u32;
-
     use super::*;
 
     #[test]

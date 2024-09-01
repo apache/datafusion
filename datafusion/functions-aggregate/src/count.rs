@@ -428,7 +428,12 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         }
 
         assert_eq!(values.len(), 1, "one argument to merge_batch");
-        let values = &values[0];
+        // first batch is counts, second is partial sums
+        let partial_counts = values[0].as_primitive::<Int64Type>();
+
+        // intermediate counts are always created as non null
+        assert_eq!(partial_counts.null_count(), 0);
+        let partial_counts = partial_counts.values();
 
         // Adds the counts with the partial counts
         ensure_enough_room_for_values(
@@ -440,17 +445,29 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
         let group_index_builder =
             BlockedGroupIndexBuilder::new(self.block_size.is_some());
-        do_count_merge_batch(
-            values,
-            group_indices,
-            opt_filter,
-            |group_index, partial_count| {
-                let blocked_index = group_index_builder.build(group_index);
-                let count = &mut self.counts[blocked_index.block_id()]
-                    [blocked_index.block_offset()];
-                *count += partial_count;
-            },
-        );
+
+        match opt_filter {
+            Some(filter) => filter
+                .iter()
+                .zip(group_indices.iter())
+                .zip(partial_counts.iter())
+                .for_each(|((filter_value, &group_index), partial_count)| {
+                    if let Some(true) = filter_value {
+                        let blocked_index = group_index_builder.build(group_index);
+                        let count = &mut self.counts[blocked_index.block_id()]
+                            [blocked_index.block_offset()];
+                        *count += partial_count;
+                    }
+                }),
+            None => group_indices.iter().zip(partial_counts.iter()).for_each(
+                |(&group_index, partial_count)| {
+                    let blocked_index = group_index_builder.build(group_index);
+                    let count = &mut self.counts[blocked_index.block_id()]
+                        [blocked_index.block_offset()];
+                    *count += partial_count;
+                },
+            ),
+        }
 
         Ok(())
     }
@@ -571,42 +588,6 @@ fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
         values[0]
             .logical_nulls()
             .map_or(0, |nulls| nulls.null_count())
-    }
-}
-
-/// The intermediate states merging function in count accumulator.
-/// It can support blocked and flat mode count accumulator through
-/// different `update_group_fn`s.
-fn do_count_merge_batch<F>(
-    values: &ArrayRef,
-    group_indices: &[usize],
-    opt_filter: Option<&BooleanArray>,
-    mut update_group_fn: F,
-) where
-    F: FnMut(usize, i64),
-{
-    // first batch is counts, second is partial sums
-    let partial_counts = values.as_primitive::<Int64Type>();
-
-    // intermediate counts are always created as non null
-    assert_eq!(partial_counts.null_count(), 0);
-    let partial_counts = partial_counts.values();
-
-    match opt_filter {
-        Some(filter) => filter
-            .iter()
-            .zip(group_indices.iter())
-            .zip(partial_counts.iter())
-            .for_each(|((filter_value, &group_index), &partial_count)| {
-                if let Some(true) = filter_value {
-                    update_group_fn(group_index, partial_count);
-                }
-            }),
-        None => group_indices.iter().zip(partial_counts.iter()).for_each(
-            |(&group_index, &partial_count)| {
-                update_group_fn(group_index, partial_count);
-            },
-        ),
     }
 }
 
