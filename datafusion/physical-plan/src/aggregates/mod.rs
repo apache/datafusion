@@ -821,7 +821,7 @@ fn create_schema(
         | AggregateMode::SinglePartitioned => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
-                fields.push(expr.field()?)
+                fields.push(expr.field())
             }
         }
     }
