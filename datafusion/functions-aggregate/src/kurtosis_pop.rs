@@ -94,8 +94,8 @@ impl AggregateUDFImpl for KurtosisPopFunction {
 }
 
 /// Accumulator for calculating the excess kurtosis (Fisher’s definition) without bias correction.
-/// This implementation follows the DuckDB implementation:
-/// https://github.com/duckdb/duckdb/blob/main/src/core_functions/aggregate/distributive/kurtosis.cpp
+/// This implementation follows the [DuckDB implementation]:
+/// <https://github.com/duckdb/duckdb/blob/main/src/core_functions/aggregate/distributive/kurtosis.cpp>
 #[derive(Debug, Default)]
 pub struct KurtosisPopAccumulator {
     count: u64,
