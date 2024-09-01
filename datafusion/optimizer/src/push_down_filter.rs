@@ -36,8 +36,8 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    Projection, TableProviderFilterPushDown,
+    and, build_join_schema, or, BinaryExpr, ColumnUnnestType, Expr, Filter,
+    LogicalPlanBuilder, Operator, Projection, TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -745,7 +745,21 @@ impl OptimizerRule for PushDownFilter {
                     let mut accum: HashSet<Column> = HashSet::new();
                     expr_to_columns(&predicate, &mut accum)?;
 
-                    if unnest.exec_columns.iter().any(|(c, _)| accum.contains(c)) {
+                    if unnest.exec_columns.iter().any(|(c, unnest_detail)| {
+                        match unnest_detail {
+                            ColumnUnnestType::List(vec) => {
+                                return vec
+                                    .iter()
+                                    .any(|c| accum.contains(&c.output_column));
+                            }
+                            ColumnUnnestType::Struct => {
+                                return false;
+                            }
+                            ColumnUnnestType::Inferred => {
+                                return accum.contains(c);
+                            }
+                        }
+                    }) {
                         unnest_predicates.push(predicate);
                     } else {
                         non_unnest_predicates.push(predicate);
