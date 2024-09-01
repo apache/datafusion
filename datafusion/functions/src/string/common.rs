@@ -20,11 +20,7 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use arrow::array::{
-    new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef,
-    GenericStringArray, GenericStringBuilder, LargeStringArray, OffsetSizeTrait,
-    StringArray, StringBuilder, StringViewArray,
-};
+use arrow::array::{new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef, GenericStringArray, GenericStringBuilder, LargeStringArray, OffsetSizeTrait, StringArray, StringBuilder, StringViewArray, StringViewBuilder};
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
@@ -436,7 +432,6 @@ impl StringArrayBuilder {
             .len()
             .try_into()
             .expect("byte array offset overflow");
-        println!("appending offset of size {next_offset}..");
         unsafe { self.offsets_buffer.push_unchecked(next_offset) };
     }
 
@@ -449,27 +444,21 @@ impl StringArrayBuilder {
         // SAFETY: all data that was appended was valid UTF8 and the values
         // and offsets were created correctly
         let array_data = unsafe { array_builder.build_unchecked() };
-        let buf = &array_data.offset();
-        println!("{buf:?}");
         StringArray::from(array_data)
     }
 }
 
 pub(crate) struct StringViewArrayBuilder {
-    offsets_buffer: MutableBuffer,
-    value_buffer: MutableBuffer,
+    builder: StringViewBuilder,
+    block: String
 }
 
 impl StringViewArrayBuilder {
-    pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
-        let mut offsets_buffer = MutableBuffer::with_capacity(
-            (item_capacity + 1) * std::mem::size_of::<u128>(),
-        );
-        // SAFETY: the first offset value is definitely not going to exceed the bounds.
-        unsafe { offsets_buffer.push_unchecked(0_u128) };
+    pub fn with_capacity(_item_capacity: usize, data_capacity: usize) -> Self {
+        let builder = StringViewBuilder::with_capacity(data_capacity);
         Self {
-            offsets_buffer,
-            value_buffer: MutableBuffer::with_capacity(data_capacity),
+            builder,
+            block: String::new()
         }
     }
 
@@ -480,61 +469,42 @@ impl StringViewArrayBuilder {
     ) {
         match column {
             ColumnarValueRef::Scalar(s) => {
-                self.value_buffer.extend_from_slice(s);
+                self.block.push_str(std::str::from_utf8(s).unwrap());
             }
             ColumnarValueRef::NullableArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
+                    self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
                 }
             }
             ColumnarValueRef::NullableLargeStringArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
+                    self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
                 }
             }
             ColumnarValueRef::NullableStringViewArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
+                    self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
                 }
             }
             ColumnarValueRef::NonNullableArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
+                self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
             }
             ColumnarValueRef::NonNullableLargeStringArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
+                self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
             }
             ColumnarValueRef::NonNullableStringViewArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
+                self.block.push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
             }
         }
     }
 
     pub fn append_offset(&mut self) {
-        let next_offset: u128 = self
-            .value_buffer
-            .len()
-            .try_into()
-            .expect("byte array offset overflow");
-        unsafe { self.offsets_buffer.push_unchecked(next_offset) };
+        self.builder.append_value(&self.block);
+        self.block = String::new();
     }
 
-    pub fn finish(self, null_buffer: Option<NullBuffer>) -> StringViewArray {
-        let array_builder = ArrayDataBuilder::new(DataType::Utf8View)
-            .len(self.offsets_buffer.len() / std::mem::size_of::<u128>() - 1)
-            .add_buffer(self.offsets_buffer.into())
-            .add_buffer(self.value_buffer.into())
-            .nulls(null_buffer);
-        // SAFETY: all data that was appended was valid UTF8 and the values
-        // and offsets were created correctly
-        let array_data = unsafe { array_builder.build_unchecked() };
-        println!("{array_data:?}");
-        StringViewArray::from(array_data)
+    pub fn finish(mut self) -> StringViewArray {
+        self.builder.finish()
     }
 }
 

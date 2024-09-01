@@ -210,7 +210,7 @@ impl ScalarUDFImpl for ConcatFunc {
                     builder.append_offset();
                 }
 
-                let string_array = builder.finish(None);
+                let string_array = builder.finish();
                 Ok(ColumnarValue::Array(Arc::new(string_array)))
             },
             DataType::LargeUtf8 => {
