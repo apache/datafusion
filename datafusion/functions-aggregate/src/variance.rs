@@ -79,7 +79,10 @@ impl VarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("var_sample"), String::from("var_samp")],
-            signature: Signature::coercible(vec![DataType::Float64], Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![DataType::Float64],
+                Volatility::Immutable,
+            ),
         }
     }
 }

@@ -189,7 +189,7 @@ impl TypeSignature {
             TypeSignature::Numeric(num) => {
                 vec![format!("Numeric({})", num)]
             }
-            TypeSignature::Exact(types) | TypeSignature::Coercible(types)=> {
+            TypeSignature::Exact(types) | TypeSignature::Coercible(types) => {
                 vec![Self::join_types(types, ", ")]
             }
             TypeSignature::Any(arg_count) => {
@@ -301,7 +301,7 @@ impl Signature {
             volatility,
         }
     }
-    /// A specified number of f64 arguments
+    /// Target coerce types in order
     pub fn coercible(target_types: Vec<DataType>, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),

@@ -419,8 +419,9 @@ fn get_valid_types(
                 );
             }
 
-            for (data_type, target_type) in current_types.iter().zip(target_types.iter()) {
-                if !can_cast_types(data_type,  target_type) {
+            for (data_type, target_type) in current_types.iter().zip(target_types.iter())
+            {
+                if !can_cast_types(data_type, target_type) {
                     return plan_err!("{data_type} is not coercible to {target_type}");
                 }
             }

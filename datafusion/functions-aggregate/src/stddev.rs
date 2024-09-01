@@ -68,7 +68,10 @@ impl Stddev {
     /// Create a new STDDEV aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(vec![DataType::Float64], Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![DataType::Float64],
+                Volatility::Immutable,
+            ),
             alias: vec!["stddev_samp".to_string()],
         }
     }
