@@ -1,9 +1,33 @@
-statement ok
-CREATE TABLE temp
+
+statement ok 
+CREATE TABLE unnest_table
 AS VALUES
-    ([1,2,3],1,[9,10]),
-    ([1,2,3],2,[11,12]),
-    ([4,5,6],2,[13,14])
+    ([1,2,3], [7], 1, [13, 14], struct(1,2))
+;
+
+statement ok
+CREATE TABLE recursive_unnest_table
+AS VALUES 
+    (struct([1], 'a'), [[[1],[2]],[[1,1]]], [struct([1],[[1,2]])]),
+    (struct([2], 'b'), [[[3,4],[5]],[[null,6],null,[7,8]]], [struct([2],[[3],[4]])])
+;
+
+query TT
+explain select unnest(column2), unnest(unnest(column2)), unnest(unnest(unnest(column2))), unnest(unnest(unnest(column2))) + 1 from recursive_unnest_table;
+----
+
+
+# query TT
+# explain select column1 as c1 from unnest_table;
+# ----
+ 
+
+
+
+
+query TT 
+explain select unnest(column1) c1 from unnest_table group by c1 order by c1;
+----
 
 query TT
 explain select unnest(column1) c1 from temp group by unnest(column1);

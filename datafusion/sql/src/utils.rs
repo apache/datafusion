@@ -33,7 +33,7 @@ use datafusion_common::{
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
-use datafusion_expr::{expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
+use datafusion_expr::{col, expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
 use datafusion_expr::{ColumnUnnestList, ColumnUnnestType};
 use sqlparser::ast::Ident;
 use sqlparser::ast::Value;
@@ -315,6 +315,14 @@ pub(crate) fn group_bottom_most_consecutive_unnests(
         .collect::<Vec<_>>())
 }
 
+fn print_unnest(expr: &str, level: usize) -> String {
+    let mut result = String::from(expr);
+    for _ in 0..level {
+        result = format!("UNNEST({})", result);
+    }
+    format!("{}", result)
+}
+
 /// TODO: maybe renamed into transform_bottom_most_consecutive_unnests
 /// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
 /// Given an expression which contains unnest expr as one of its children,
@@ -346,6 +354,9 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
         let placeholder_name = format!("unnest_placeholder({})", inner_expr_name);
         let post_unnest_name =
             format!("unnest_placeholder({},depth={})", inner_expr_name, level);
+        // This is due to the fact that unnest transformation should keep the original
+        // column name as is, to comply with group by and order by
+        let post_unnest_alias = print_unnest(&inner_expr_name, level);
         let placeholder_column = Column::from_name(placeholder_name.clone());
         let schema = input.schema();
 
@@ -385,16 +396,18 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
                         .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
                 }
 
-                let post_unnest_column = Column::from_name(post_unnest_name);
+                // let post_unnest_column = Column::from_name(post_unnest_name);
+                let post_unnest_expr =
+                    col(post_unnest_name.clone()).alias(post_unnest_alias);
                 match unnest_placeholder_columns
                     .iter_mut()
                     .find(|(inner_col, _)| inner_col == &placeholder_column)
                 {
                     None => {
                         unnest_placeholder_columns.push((
-                            placeholder_column.clone(),
+                            Column::from_name(placeholder_name.clone()),
                             ColumnUnnestType::List(vec![ColumnUnnestList {
-                                output_column: post_unnest_column.clone(),
+                                output_column: Column::from_name(post_unnest_name),
                                 depth: level,
                             }]),
                         ));
@@ -402,7 +415,7 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
                     Some((_, unnesting)) => match unnesting {
                         ColumnUnnestType::List(list) => {
                             let unnesting = ColumnUnnestList {
-                                output_column: post_unnest_column.clone(),
+                                output_column: Column::from_name(post_unnest_name),
                                 depth: level,
                             };
                             if !list.contains(&unnesting) {
@@ -414,7 +427,7 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
                         }
                     },
                 }
-                return Ok(vec![Expr::Column(post_unnest_column)]);
+                return Ok(vec![post_unnest_expr]);
             }
             _ => {
                 return internal_err!(

@@ -29,9 +29,7 @@ use crate::utils::{
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::UnnestOptions;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
-use datafusion_expr::expr::{
-    schema_name_from_exprs, Alias, PlannedReplaceSelectItem, WildcardOptions,
-};
+use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
 };
@@ -163,7 +161,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         planner_context,
                     )?;
 
-                    println!("group by expr {:?} initial", group_by_expr);
                     // aliases from the projection can conflict with same-named expressions in the input
                     let mut alias_map = alias_map.clone();
                     for f in base_plan.schema().fields() {
@@ -178,7 +175,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         base_plan.schema(),
                         &[group_by_expr.clone()],
                     )?;
-                    println!("group by expr {:?} final", group_by_expr);
                     Ok(group_by_expr)
                 })
                 .collect::<Result<Vec<Expr>>>()?
@@ -306,13 +302,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         // Try process group by unnest
         let temp = input.clone();
-        let (input, select_exprs) =
-            self.try_process_aggregate_unnest(input, select_exprs)?;
+        let input = self.try_process_aggregate_unnest(input)?;
         // TODO: some column was renamed after try_process_aggregate_unnest
         // thus select_exprs also need to be transformed
-        if input == temp {
-            return Ok(input);
-        }
 
         let mut intermediate_plan = input;
         let mut intermediate_select_exprs = select_exprs;
@@ -345,10 +337,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if unnest_columns.is_empty() {
                 // The original expr does not contain any unnest
                 if i == 0 {
-                    return Ok(intermediate_plan);
-                    // return LogicalPlanBuilder::from(intermediate_plan)
-                    //     .project(inner_projection_exprs)?
-                    //     .build();
+                    // return Ok(intermediate_plan);
+                    return LogicalPlanBuilder::from(intermediate_plan)
+                        .project(intermediate_select_exprs)?
+                        .build();
                 }
                 break;
             } else {
@@ -386,35 +378,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(ret)
     }
 
-    fn try_process_aggregate_unnest(
-        &self,
-        input: LogicalPlan,
-        select_exprs: Vec<Expr>,
-    ) -> Result<(LogicalPlan, Vec<Expr>)> {
+    fn try_process_aggregate_unnest(&self, input: LogicalPlan) -> Result<LogicalPlan> {
         match input {
             LogicalPlan::Aggregate(agg) => {
                 let agg_expr = agg.aggr_expr.clone();
                 // we somehow need to un_rebase column exprs appeared in select/group by exprs
                 // e.g unnest(col("somecole")) expr may be rewritten as col("unnest(some_col)")
-                let (new_input, new_select_exprs, new_group_by_exprs) =
-                    self.try_process_group_by_unnest(agg, select_exprs)?;
-                Ok((
-                    LogicalPlanBuilder::from(new_input)
-                        .aggregate(new_group_by_exprs, agg_expr)?
-                        .build()?,
-                    new_select_exprs,
-                ))
+                let (new_input, new_group_by_exprs) =
+                    self.try_process_group_by_unnest(agg)?;
+                Ok(LogicalPlanBuilder::from(new_input)
+                    .aggregate(new_group_by_exprs, agg_expr)?
+                    .build()?)
             }
             LogicalPlan::Filter(mut filter) => {
-                let (new_filter_input, new_select_expr) = self
-                    .try_process_aggregate_unnest(
-                        unwrap_arc(filter.input),
-                        select_exprs,
-                    )?;
+                let new_filter_input =
+                    self.try_process_aggregate_unnest(unwrap_arc(filter.input))?;
                 filter.input = Arc::new(new_filter_input);
-                Ok((LogicalPlan::Filter(filter), new_select_expr))
+                Ok(LogicalPlan::Filter(filter))
             }
-            _ => Ok((input, select_exprs)),
+            _ => Ok(input),
         }
     }
 
@@ -426,8 +408,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn try_process_group_by_unnest(
         &self,
         agg: Aggregate,
-        select_exprs: Vec<Expr>,
-    ) -> Result<(LogicalPlan, Vec<Expr>, Vec<Expr>)> {
+    ) -> Result<(LogicalPlan, Vec<Expr>)> {
         let mut aggr_expr_using_columns: Option<HashSet<Expr>> = None;
 
         let Aggregate {
@@ -454,8 +435,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         //       TableScan: tab
         // ```
         let mut intermediate_plan = unwrap_arc(input);
-        let mut intermediate_select_exprs = select_exprs;
-        let mut intermediate_group_by_exprs = group_expr;
+        let mut intermediate_select_exprs = group_expr;
+        // let mut intermediate_group_by_exprs = group_expr;
         let mut memo = HashMap::new();
 
         loop {
@@ -469,27 +450,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 &mut memo,
                 &intermediate_select_exprs,
             )?;
-            println!("inner_projection_exprs {:?}", inner_projection_exprs);
-            println!(
-                "inner_projection_exprs {}",
-                schema_name_from_exprs(&inner_projection_exprs)?,
-            );
-            println!(
-                "select exprs {}",
-                schema_name_from_exprs(&intermediate_select_exprs)?,
-            );
-            let temp_new_group_exprs = group_bottom_most_consecutive_unnests(
-                &intermediate_plan,
-                &mut unnest_columns,
-                &mut inner_projection_exprs,
-                &mut memo,
-                &intermediate_group_by_exprs,
-            )?;
-            println!("inner_projection_exprs {:?}", inner_projection_exprs);
-            println!(
-                "inner_projection_exprs {}",
-                schema_name_from_exprs(&inner_projection_exprs)?,
-            );
 
             if unnest_columns.is_empty() {
                 break;
@@ -516,7 +476,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 };
                 projection_exprs.extend(inner_projection_exprs);
-                println!("projection_exprs {:?}", projection_exprs);
 
                 intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(projection_exprs)?
@@ -524,14 +483,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .build()?;
 
                 intermediate_select_exprs = outer_projection_exprs;
-                intermediate_group_by_exprs = temp_new_group_exprs;
+                // intermediate_group_by_exprs = temp_new_group_exprs;
             }
         }
 
         Ok((
             intermediate_plan,
             intermediate_select_exprs,
-            intermediate_group_by_exprs,
+            // intermediate_group_by_exprs,
         ))
     }
 
@@ -816,7 +775,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .map(|expr| resolve_columns(expr, input))
             .collect::<Result<Vec<Expr>>>()?;
-        println!("aggr_projection_exprs {:?}", aggr_projection_exprs);
 
         // next we replace any expressions that are not a column with a column referencing
         // an output column from the aggregate schema
