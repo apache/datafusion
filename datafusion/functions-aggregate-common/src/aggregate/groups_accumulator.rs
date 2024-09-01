@@ -962,7 +962,7 @@ mod tests {
 
     #[test]
     fn test_blocked_group_index_build() {
-        let group_index1 = (0_u64 << 32) | 1;
+        let group_index1 = 1;
         let group_index2 = (42_u64 << 32) | 2;
         let group_index3 = ((u32::MAX as u64) << 32) | 3;
 
