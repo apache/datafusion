@@ -2497,4 +2497,49 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn group_exprs_nullable() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float32, false),
+            Field::new("b", DataType::Float32, false),
+        ]));
+
+        let aggr_expr =
+            vec![
+                AggregateExprBuilder::new(count_udaf(), vec![col("a", &input_schema)?])
+                    .schema(Arc::clone(&input_schema))
+                    .alias("COUNT(a)")
+                    .build()?,
+            ];
+
+        let grouping_set = PhysicalGroupBy {
+            expr: vec![
+                (col("a", &input_schema)?, "a".to_string()),
+                (col("b", &input_schema)?, "b".to_string()),
+            ],
+            null_expr: vec![
+                (lit(ScalarValue::Float32(None)), "a".to_string()),
+                (lit(ScalarValue::Float32(None)), "b".to_string()),
+            ],
+            groups: vec![
+                vec![false, true],  // (a, NULL)
+                vec![false, false], // (a,b)
+            ],
+        };
+        let aggr_schema = create_schema(
+            &input_schema,
+            &grouping_set.expr,
+            &aggr_expr,
+            grouping_set.exprs_nullable(),
+            AggregateMode::Final,
+        )?;
+        let expected_schema = Schema::new(vec![
+            Field::new("a", DataType::Float32, false),
+            Field::new("b", DataType::Float32, true),
+            Field::new("COUNT(a)", DataType::Int64, false),
+        ]);
+        assert_eq!(aggr_schema, expected_schema);
+        Ok(())
+    }
 }
