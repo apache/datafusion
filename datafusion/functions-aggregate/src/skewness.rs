@@ -24,15 +24,9 @@ use datafusion_functions_aggregate_common::accumulator::{
     AccumulatorArgs, StateFieldsArgs,
 };
 use std::any::Any;
-use std::ops::{Mul, Sub};
+use std::ops::{Div, Mul, Sub};
 
-make_udaf_expr_and_func!(
-    SkewnessFunc,
-    skewness,
-    x,
-    "The skewness.",
-    skewness_udaf
-);
+make_udaf_expr_and_func!(SkewnessFunc, skewness, x, "The skewness.", skewness_udaf);
 
 #[derive(Debug)]
 struct SkewnessFunc {
@@ -132,8 +126,8 @@ impl Accumulator for SkewnessAccumulator {
         for val in array.iter().flatten() {
             self.count += 1;
             self.sum += val;
-            self.sum_sqr = val.powi(2);
-            self.sum_cub = val.powi(3);
+            self.sum_sqr += val.powi(2);
+            self.sum_cub += val.powi(3);
         }
         Ok(())
     }
@@ -142,16 +136,15 @@ impl Accumulator for SkewnessAccumulator {
             return Ok(ScalarValue::Float64(None));
         }
         let count = self.count as f64;
-        let t1 = 1f64 / self.count as f64;
-        let mut p = (t1 * (self.sum_sqr - self.sum * self.sum * t1)).powi(3);
-        if p < 0f64 {
-            p = 0f64;
-        }
+        let t1 = 1f64 / count;
+        let p = (t1 * (self.sum_sqr - self.sum * self.sum * t1))
+            .powi(3)
+            .max(0f64);
         let div = p.sqrt();
         if div == 0f64 {
             return Ok(ScalarValue::Float64(None));
         }
-        let t2 = (count.mul(count.sub(1f64))) / (count.sub(2f64));
+        let t2 = count.mul(count.sub(1f64)).sqrt().div(count.sub(2f64));
         let res = t2
             * t1
             * (self.sum_cub - 3f64 * self.sum_sqr * self.sum * t1
