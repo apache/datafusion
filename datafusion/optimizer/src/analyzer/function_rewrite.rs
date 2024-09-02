@@ -48,7 +48,7 @@ impl ApplyFunctionRewrites {
     ) -> Result<Transformed<LogicalPlan>> {
         // get schema representing all available input fields. This is used for data type
         // resolution only, so order does not matter here
-        let mut schema = merge_schema(plan.inputs());
+        let mut schema = merge_schema(&plan.inputs());
 
         if let LogicalPlan::TableScan(ts) = &plan {
             let source_schema = DFSchema::try_from_qualified_schema(

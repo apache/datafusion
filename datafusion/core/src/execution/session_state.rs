@@ -1740,8 +1740,8 @@ impl OptimizerConfig for SessionState {
         self.execution_props.query_execution_start_time
     }
 
-    fn alias_generator(&self) -> Arc<AliasGenerator> {
-        self.execution_props.alias_generator.clone()
+    fn alias_generator(&self) -> &Arc<AliasGenerator> {
+        &self.execution_props.alias_generator
     }
 
     fn options(&self) -> &ConfigOptions {

@@ -73,13 +73,13 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
-    self, physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
+    physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, StringifiedPlan,
-    WindowFrame, WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, SortExpr,
+    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
@@ -1641,31 +1641,27 @@ pub fn create_aggregate_expr_and_maybe_filter(
 
 /// Create a physical sort expression from a logical expression
 pub fn create_physical_sort_expr(
-    e: &Expr,
+    e: &SortExpr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<PhysicalSortExpr> {
-    if let Expr::Sort(expr::Sort {
+    let SortExpr {
         expr,
         asc,
         nulls_first,
-    }) = e
-    {
-        Ok(PhysicalSortExpr {
-            expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-            options: SortOptions {
-                descending: !asc,
-                nulls_first: *nulls_first,
-            },
-        })
-    } else {
-        internal_err!("Expects a sort expression")
-    }
+    } = e;
+    Ok(PhysicalSortExpr {
+        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+        options: SortOptions {
+            descending: !asc,
+            nulls_first: *nulls_first,
+        },
+    })
 }
 
 /// Create vector of physical sort expression from a vector of logical expression
 pub fn create_physical_sort_exprs(
-    exprs: &[Expr],
+    exprs: &[SortExpr],
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<LexOrdering> {

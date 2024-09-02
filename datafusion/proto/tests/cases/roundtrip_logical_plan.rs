@@ -59,7 +59,7 @@ use datafusion_common::{
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Sort, Unnest, WildcardOptions,
+    Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -1932,14 +1932,6 @@ fn roundtrip_try_cast() {
 
     let test_expr =
         Expr::TryCast(TryCast::new(Box::new(lit("not a bool")), DataType::Boolean));
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
-fn roundtrip_sort_expr() {
-    let test_expr = Expr::Sort(Sort::new(Box::new(lit(1.0_f32)), true, true));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
