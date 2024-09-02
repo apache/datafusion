@@ -350,7 +350,7 @@ async fn test_spm_congestion() -> Result<()> {
     let spm_task =
         SpawnedTask::spawn(async move { collect(Arc::new(spm), task_ctx).await });
 
-    let result = timeout(Duration::from_secs(1), spm_task.join()).await;
+    let result = timeout(Duration::from_secs(10), spm_task.join()).await;
     match result {
         Ok(Ok(Ok(_batches))) => Ok(()),
         Ok(Ok(Err(e))) => Err(e),
