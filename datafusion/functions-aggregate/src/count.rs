@@ -291,6 +291,10 @@ impl AggregateUDFImpl for Count {
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(0)))
     }
+
+    fn is_count(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]

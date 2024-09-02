@@ -262,6 +262,19 @@ impl AggregateUDF {
         self.inner.is_descending()
     }
 
+    /// Returns true if the function is min. Used by the optimizer
+    pub fn is_min(&self) -> bool {
+        self.inner.is_min()
+    }
+
+    /// Returns true if the function is max. Used by the optimizer
+    pub fn is_max(&self) -> bool {
+        self.inner.is_max()
+    }
+    /// Returns true if the function is count. Used by the optimizer
+    pub fn is_count(&self) -> bool {
+        self.inner.is_count()
+    }
     /// See [`AggregateUDFImpl::default_value`] for more details.
     pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         self.inner.default_value(data_type)
@@ -573,6 +586,19 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Note: this is used to use special aggregate implementations in certain conditions
     fn is_descending(&self) -> Option<bool> {
         None
+    }
+
+    // Returns true if the function is min. Used by the optimizer
+    fn is_min(&self) -> bool {
+        false
+    }
+    // Returns true if the function is max. Used by the optimizer
+    fn is_max(&self) -> bool {
+        false
+    }
+    // Returns true if the function is count. Used by the optimizer
+    fn is_count(&self) -> bool {
+        false
     }
 
     /// Returns default value of the function given the input is all `null`.

@@ -272,6 +272,10 @@ impl AggregateUDFImpl for Max {
     fn is_descending(&self) -> Option<bool> {
         Some(true)
     }
+
+    fn is_max(&self) -> bool {
+        true
+    }
     fn order_sensitivity(&self) -> datafusion_expr::utils::AggregateOrderSensitivity {
         datafusion_expr::utils::AggregateOrderSensitivity::Insensitive
     }
@@ -1050,6 +1054,10 @@ impl AggregateUDFImpl for Min {
 
     fn is_descending(&self) -> Option<bool> {
         Some(false)
+    }
+
+    fn is_min(&self) -> bool {
+        true
     }
 
     fn order_sensitivity(&self) -> datafusion_expr::utils::AggregateOrderSensitivity {

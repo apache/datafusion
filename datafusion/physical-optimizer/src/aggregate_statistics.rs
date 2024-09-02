@@ -141,7 +141,7 @@ fn take_optimizable_column_and_table_count(
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
-    if is_non_distinct_count(agg_expr) {
+    if agg_expr.fun().is_count() && !agg_expr.is_distinct() {
         if let Precision::Exact(num_rows) = stats.num_rows {
             let exprs = agg_expr.expressions();
             if exprs.len() == 1 {
@@ -181,7 +181,7 @@ fn take_optimizable_min(
         match *num_rows {
             0 => {
                 // MIN/MAX with 0 rows is always null
-                if is_min(agg_expr) {
+                if agg_expr.fun().is_min() {
                     if let Ok(min_data_type) =
                         ScalarValue::try_from(agg_expr.field().data_type())
                     {
@@ -191,7 +191,7 @@ fn take_optimizable_min(
             }
             value if value > 0 => {
                 let col_stats = &stats.column_statistics;
-                if is_min(agg_expr) {
+                if agg_expr.fun().is_min() {
                     let exprs = agg_expr.expressions();
                     if exprs.len() == 1 {
                         // TODO optimize with exprs other than Column
@@ -227,7 +227,7 @@ fn take_optimizable_max(
         match *num_rows {
             0 => {
                 // MIN/MAX with 0 rows is always null
-                if is_max(agg_expr) {
+                if agg_expr.fun().is_max() {
                     if let Ok(max_data_type) =
                         ScalarValue::try_from(agg_expr.field().data_type())
                     {
@@ -237,7 +237,7 @@ fn take_optimizable_max(
             }
             value if value > 0 => {
                 let col_stats = &stats.column_statistics;
-                if is_max(agg_expr) {
+                if agg_expr.fun().is_max() {
                     let exprs = agg_expr.expressions();
                     if exprs.len() == 1 {
                         // TODO optimize with exprs other than Column
@@ -263,32 +263,3 @@ fn take_optimizable_max(
     }
     None
 }
-
-// TODO: Move this check into AggregateUDFImpl
-// https://github.com/apache/datafusion/issues/11153
-fn is_non_distinct_count(agg_expr: &AggregateFunctionExpr) -> bool {
-    if agg_expr.fun().name() == "count" && !agg_expr.is_distinct() {
-        return true;
-    }
-    false
-}
-
-// TODO: Move this check into AggregateUDFImpl
-// https://github.com/apache/datafusion/issues/11153
-fn is_min(agg_expr: &AggregateFunctionExpr) -> bool {
-    if agg_expr.fun().name().to_lowercase() == "min" {
-        return true;
-    }
-    false
-}
-
-// TODO: Move this check into AggregateUDFImpl
-// https://github.com/apache/datafusion/issues/11153
-fn is_max(agg_expr: &AggregateFunctionExpr) -> bool {
-    if agg_expr.fun().name().to_lowercase() == "max" {
-        return true;
-    }
-    false
-}
-
-// See tests in datafusion/core/tests/physical_optimizer
