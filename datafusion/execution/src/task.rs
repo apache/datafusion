@@ -58,7 +58,7 @@ pub struct TaskContext {
 impl Default for TaskContext {
     fn default() -> Self {
         let runtime = RuntimeEnvBuilder::new()
-            .build()
+            .build_arc()
             .expect("default runtime created successfully");
 
         // Create a default task context, mostly useful for testing
@@ -69,7 +69,7 @@ impl Default for TaskContext {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
-            runtime: Arc::new(runtime),
+            runtime,
         }
     }
 }
