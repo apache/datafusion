@@ -30,7 +30,7 @@ make_udaf_expr_and_func!(
     SkewnessFunc,
     skewness,
     x,
-    "Calculates the excess skewness.",
+    "The skewness.",
     skewness_udaf
 );
 
@@ -104,7 +104,7 @@ impl AggregateUDFImpl for SkewnessFunc {
     }
 }
 
-/// Accumulator for calculating the excess skewness
+/// Accumulator for calculating the skewness
 /// This implementation follows the [DuckDB implementation] :
 /// <https://github.com/duckdb/duckdb/blob/main/src/core_functions/aggregate/distributive/skew.cpp>
 #[derive(Debug)]
