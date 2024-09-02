@@ -681,6 +681,22 @@ pub fn binary(
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
 }
 
+/// Create a similar to expression
+pub fn similar_to(
+    negated: bool,
+    case_insensitive: bool,
+    expr: Arc<dyn PhysicalExpr>,
+    pattern: Arc<dyn PhysicalExpr>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let binary_op = match (negated, case_insensitive) {
+        (false, false) => Operator::RegexMatch,
+        (false, true) => Operator::RegexIMatch,
+        (true, false) => Operator::RegexNotMatch,
+        (true, true) => Operator::RegexNotIMatch,
+    };
+    Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
