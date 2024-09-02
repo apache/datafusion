@@ -168,7 +168,7 @@ mod tests {
 
             match to_date_result {
                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
-                    let expected = Date32Type::parse_formatted(&tc.date_str, "%Y-%m-%d");
+                    let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
                     assert_eq!(
                         date_val, expected,
                         "{}: to_date created wrong value",
@@ -240,7 +240,7 @@ mod tests {
 
             match to_date_result {
                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
-                    let expected = Date32Type::parse_formatted(&tc.date_str, "%Y-%m-%d");
+                    let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
                     assert_eq!(date_val, expected, "{}: to_date created wrong value for date '{}' with format string '{}'", tc.name, tc.formatted_date, tc.format_str);
                 }
                 _ => panic!(
