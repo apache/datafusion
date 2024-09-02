@@ -295,7 +295,6 @@ pub(crate) fn group_bottom_most_consecutive_unnests(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
     inner_projection_exprs: &mut Vec<Expr>,
-    memo: &mut HashMap<String, Vec<Column>>,
     original_exprs: &[Expr],
 ) -> Result<Vec<Expr>> {
     Ok(original_exprs
@@ -305,7 +304,6 @@ pub(crate) fn group_bottom_most_consecutive_unnests(
                 input,
                 unnest_placeholder_columns,
                 inner_projection_exprs,
-                memo,
                 expr,
             )
         })
@@ -328,14 +326,13 @@ This is only usedful when used with transform down up
 A full example of how the transformation works:
  */
 struct RecursiveUnnestRewriter<'a> {
-    memo: &'a mut HashMap<String, Vec<Column>>,
     input_schema: &'a DFSchemaRef,
     original_expr: &'a Expr,
     latest_visited_unnest: Option<Expr>,
     ancestor_unnest: Option<Expr>,
-    consecutive_unnest: Vec<Option<Expr>>,
+    consecutive_unnest: Vec<Option<Unnest>>,
     inner_projection_exprs: &'a mut Vec<Expr>,
-    unnest_placeholder_columns: &'a mut Vec<(Column, ColumnUnnestType)>,
+    columns_unnestings: &'a mut Vec<(Column, ColumnUnnestType)>,
     transformed_root_exprs: Option<Vec<Expr>>,
 }
 impl<'a> RecursiveUnnestRewriter<'a> {
@@ -358,7 +355,6 @@ impl<'a> RecursiveUnnestRewriter<'a> {
         // column name as is, to comply with group by and order by
         let post_unnest_alias = print_unnest(&inner_expr_name, level);
         let placeholder_column = Column::from_name(placeholder_name.clone());
-        // let schema = input.schema();
 
         let (data_type, _) = expr_in_unnest.data_type_and_nullable(self.input_schema)?;
 
@@ -369,43 +365,36 @@ impl<'a> RecursiveUnnestRewriter<'a> {
                 }
                 self.inner_projection_exprs
                     .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
-                self.unnest_placeholder_columns.push((
+                self.columns_unnestings.push((
                     Column::from_name(placeholder_name.clone()),
                     ColumnUnnestType::Struct,
                 ));
-                return Ok(
+                Ok(
                     get_struct_unnested_columns(&placeholder_name, &inner_fields)
                         .into_iter()
-                        .map(|c| Expr::Column(c))
+                        .map(Expr::Column)
                         .collect(),
-                );
+                )
             }
             DataType::List(_)
             | DataType::FixedSizeList(_, _)
             | DataType::LargeList(_) => {
-                // TODO: this memo only needs to be a hashset
-                let (already_projected, _) = match self.memo.get_mut(&inner_expr_name) {
-                    Some(vec) => (true, vec),
-                    _ => {
-                        self.memo.insert(inner_expr_name.clone(), vec![]);
-                        (false, self.memo.get_mut(&inner_expr_name).unwrap())
-                    }
-                };
-                if !already_projected {
-                    self.inner_projection_exprs
-                        .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
-                }
+                push_projection_dedupl(
+                    self.inner_projection_exprs,
+                    expr_in_unnest.clone().alias(placeholder_name.clone()),
+                );
 
                 // let post_unnest_column = Column::from_name(post_unnest_name);
                 let post_unnest_expr =
                     col(post_unnest_name.clone()).alias(post_unnest_alias);
                 match self
-                    .unnest_placeholder_columns
+                    .columns_unnestings
                     .iter_mut()
                     .find(|(inner_col, _)| inner_col == &placeholder_column)
                 {
+                    // there is not unnesting done on this column yet
                     None => {
-                        self.unnest_placeholder_columns.push((
+                        self.columns_unnestings.push((
                             Column::from_name(placeholder_name.clone()),
                             ColumnUnnestType::List(vec![ColumnUnnestList {
                                 output_column: Column::from_name(post_unnest_name),
@@ -413,6 +402,8 @@ impl<'a> RecursiveUnnestRewriter<'a> {
                             }]),
                         ));
                     }
+                    // some unnesting(at some level) has been done on this column
+                    // e.g select unnest(column3), unnest(unnest(column3))
                     Some((_, unnesting)) => match unnesting {
                         ColumnUnnestType::List(list) => {
                             let unnesting = ColumnUnnestList {
@@ -424,7 +415,7 @@ impl<'a> RecursiveUnnestRewriter<'a> {
                             }
                         }
                         _ => {
-                            return internal_err!("expr_in_unnest is a list type, while previous unnesting on this column is not a list type");
+                            return internal_err!("");
                         }
                     },
                 }
@@ -443,12 +434,10 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        if let Expr::Unnest(Unnest {
-            expr: ref inner_expr,
-        }) = expr
-        {
-            let (data_type, _) = inner_expr.data_type_and_nullable(self.input_schema)?;
-            self.consecutive_unnest.push(Some(expr.clone()));
+        if let Expr::Unnest(ref unnest_expr) = expr {
+            let (data_type, _) =
+                unnest_expr.expr.data_type_and_nullable(self.input_schema)?;
+            self.consecutive_unnest.push(Some(unnest_expr.clone()));
             // if expr inside unnest is a struct, do not consider
             // the next unnest as consecutive unnest (if any)
             // meaning unnest(unnest(struct_arr_col)) can't
@@ -475,8 +464,7 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
     }
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        if let Expr::Unnest(Unnest { .. }) = expr {
-            // let mut ancestor_unnest_ref = ancestor_unnest.borrow_mut();
+        if let Expr::Unnest(ref traversing_unnest) = expr {
             // upward traversal has reached the top most unnest expr again
             // reset it to None
             if self.ancestor_unnest == Some(expr.clone()) {
@@ -504,9 +492,11 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
                 }
             }
 
-            // this is the top most unnest expr inside the consecutive unnest exprs
-            // e.g unnest(unnest(some_col))
-            if expr == *unnest_stack.last().unwrap() {
+            // There exist a sequence of unnest exprs
+            // and this traversal has reached the top most
+            // e.g Unnest(top) -> Unnest(2nd) -> Column(bottom)
+            // -> Unnest(2nd) -> Unnest(top) a.k.a here
+            if traversing_unnest == unnest_stack.last().unwrap() {
                 // TODO: detect if the top level is an unnest on struct
                 // and if the unnest stack contain > 1 exprs
                 // then do not transform the top level unnest yet, instead do the transform
@@ -515,30 +505,26 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
                 // will needs to be transformed into
                 // unnest(unnest([[struct()]],depth=2))
                 let most_inner = unnest_stack.first().unwrap();
-                if let Expr::Unnest(Unnest { expr: ref arg }) = most_inner {
-                    // unnest(unnest(struct_arr_col)) is not allow to be done recursively
-                    // it needs to be splitted into multiple unnest logical plan
-                    // unnest(struct_arr)
-                    //  unnest(struct_arr_col) as struct_arr
-                    // instead of unnest(struct_arr_col, depth = 2)
+                let arg = most_inner.expr.as_ref();
+                // unnest(unnest(struct_arr_col)) is not allow to be done recursively
+                // it needs to be splitted into multiple unnest logical plan
+                // unnest(struct_arr)
+                //  unnest(struct_arr_col) as struct_arr
+                // instead of unnest(struct_arr_col, depth = 2)
 
-                    let depth = unnest_stack.len();
-                    let struct_allowed = (&expr == self.original_expr) && depth == 1;
+                let depth = unnest_stack.len();
+                let struct_allowed = (&expr == self.original_expr) && depth == 1;
 
-                    // TODO: arg should be inner most
-                    let mut transformed_exprs =
-                        self.transform(depth, arg, struct_allowed)?;
-                    if struct_allowed {
-                        self.transformed_root_exprs = Some(transformed_exprs.clone());
-                    }
-                    return Ok(Transformed::new(
-                        transformed_exprs.swap_remove(0),
-                        true,
-                        TreeNodeRecursion::Continue,
-                    ));
-                } else {
-                    return internal_err!("not reached");
+                // TODO: arg should be inner most
+                let mut transformed_exprs = self.transform(depth, arg, struct_allowed)?;
+                if struct_allowed {
+                    self.transformed_root_exprs = Some(transformed_exprs.clone());
                 }
+                return Ok(Transformed::new(
+                    transformed_exprs.swap_remove(0),
+                    true,
+                    TreeNodeRecursion::Continue,
+                ));
             }
         } else {
             self.consecutive_unnest.push(None);
@@ -549,13 +535,22 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
         // e.g given expr tree unnest(col_a) + col_b, we have to retain projection of col_b
         // this condition can be checked by maintaining an Option<current ancestor unnest>
         if matches!(&expr, Expr::Column(_)) && self.ancestor_unnest.is_none() {
-            self.inner_projection_exprs.push(expr.clone());
+            push_projection_dedupl(self.inner_projection_exprs, expr.clone());
         }
 
         Ok(Transformed::no(expr))
     }
 }
 
+fn push_projection_dedupl(projection: &mut Vec<Expr>, expr: Expr) {
+    let schema_name = expr.schema_name().to_string();
+    if !projection
+        .iter()
+        .any(|e| e.schema_name().to_string() == schema_name)
+    {
+        projection.push(expr);
+    }
+}
 /// TODO: maybe renamed into transform_bottom_most_consecutive_unnests
 /// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
 /// Given an expression which contains unnest expr as one of its children,
@@ -570,18 +565,16 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
     inner_projection_exprs: &mut Vec<Expr>,
-    memo: &mut HashMap<String, Vec<Column>>,
     original_expr: &Expr,
 ) -> Result<Vec<Expr>> {
     let mut rewriter = RecursiveUnnestRewriter {
-        memo,
         input_schema: input.schema(),
         original_expr,
         latest_visited_unnest: None,
         ancestor_unnest: None,
         consecutive_unnest: vec![],
         inner_projection_exprs,
-        unnest_placeholder_columns,
+        columns_unnestings: unnest_placeholder_columns,
         transformed_root_exprs: None,
     };
 
@@ -602,13 +595,13 @@ pub(crate) fn group_bottom_most_consecutive_unnest(
 
     if !transformed {
         if matches!(&transformed_expr, Expr::Column(_)) {
-            inner_projection_exprs.push(transformed_expr.clone());
+            push_projection_dedupl(inner_projection_exprs, transformed_expr.clone());
             Ok(vec![transformed_expr])
         } else {
             // We need to evaluate the expr in the inner projection,
             // outer projection just select its name
             let column_name = transformed_expr.schema_name().to_string();
-            inner_projection_exprs.push(transformed_expr);
+            push_projection_dedupl(inner_projection_exprs, transformed_expr);
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }
     } else {
@@ -697,12 +690,10 @@ mod tests {
         let original_expr = unnest(unnest(col("3d_col")))
             .add(unnest(unnest(col("3d_col"))))
             .add(col("i64_col"));
-        let mut memo = HashMap::new();
         let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
-            &mut memo,
             &original_expr,
         )?;
         // only the bottom most unnest exprs are transformed
@@ -712,9 +703,6 @@ mod tests {
                 .add(col("unnest_placeholder(3d_col,depth=2)"))
                 .add(col("i64_col"))]
         );
-        // memoization only contains 1 transformation
-        assert_eq!(memo.len(), 1);
-        assert!(memo.get("3d_col").is_some());
         column_unnests_eq(
             vec!["unnest_placeholder(3d_col)"],
             &unnest_placeholder_columns,
@@ -736,7 +724,6 @@ mod tests {
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
-            &mut memo,
             &original_expr_2,
         )?;
 
@@ -744,10 +731,6 @@ mod tests {
             transformed_exprs,
             vec![col("unnest_placeholder(3d_col,depth=1)").alias("2d_col")]
         );
-        // memoization still contains 1 transformation
-        // and the previous transformation is reused
-        assert_eq!(memo.len(), 1);
-        assert!(memo.get("3d_col").is_some());
         column_unnests_eq(
             vec!["unnest_placeholder(3d_col)"],
             &mut unnest_placeholder_columns,
@@ -770,7 +753,6 @@ mod tests {
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
-            &mut memo,
             &original_expr_3,
         )?;
 
@@ -781,11 +763,7 @@ mod tests {
             ))
             .alias("fully_unnested_struct_arr")]
         );
-        // memoization still contains 1 transformation
-        // and the previous transformation is reused
-        assert_eq!(memo.len(), 2);
 
-        assert!(memo.get("struct_arr_col").is_some());
         column_unnests_eq(
             vec![
                 "unnest_placeholder(3d_col)",
@@ -840,12 +818,10 @@ mod tests {
         let original_expr = unnest(unnest(col("3d_col")))
             .add(unnest(unnest(col("3d_col"))))
             .add(col("i64_col"));
-        let mut memo = HashMap::new();
         let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
-            &mut memo,
             &original_expr,
         )?;
         // only the bottom most unnest exprs are transformed
@@ -855,9 +831,6 @@ mod tests {
                 .add(col("unnest_placeholder(3d_col,depth=2)"))
                 .add(col("i64_col"))]
         );
-        // memoization only contains 1 transformation
-        assert_eq!(memo.len(), 1);
-        assert!(memo.get("3d_col").is_some());
         column_unnests_eq(
             vec!["unnest_placeholder(3d_col)|List([unnest_placeholder(3d_col,depth=2)|depth=2])"],
             &unnest_placeholder_columns,
@@ -879,7 +852,6 @@ mod tests {
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
-            &mut memo,
             &original_expr_2,
         )?;
 
@@ -887,10 +859,6 @@ mod tests {
             transformed_exprs,
             vec![col("unnest_placeholder(3d_col,depth=1)").alias("2d_col")]
         );
-        // memoization still contains 1 transformation
-        // and the for the same column, depth = 1 needs to be performed aside from depth = 2
-        assert_eq!(memo.len(), 1);
-        assert!(memo.get("3d_col").is_some());
         column_unnests_eq(
             vec!["unnest_placeholder(3d_col)|List([unnest_placeholder(3d_col,depth=2)|depth=2, unnest_placeholder(3d_col,depth=1)|depth=1])"],
             &unnest_placeholder_columns,
@@ -941,14 +909,12 @@ mod tests {
         let mut unnest_placeholder_columns = vec![];
         let mut inner_projection_exprs = vec![];
 
-        let mut memo = HashMap::new();
         // unnest(struct_col)
         let original_expr = unnest(col("struct_col"));
         let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
-            &mut memo,
             &original_expr,
         )?;
         assert_eq!(
@@ -969,14 +935,12 @@ mod tests {
             vec![col("struct_col").alias("UNNEST(struct_col)"),]
         );
 
-        memo.clear();
         // unnest(array_col) + 1
         let original_expr = unnest(col("array_col")).add(lit(1i64));
         let transformed_exprs = group_bottom_most_consecutive_unnest(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
-            &mut memo,
             &original_expr,
         )?;
         column_unnests_eq(
@@ -1034,7 +998,6 @@ mod tests {
 
         let mut unnest_placeholder_columns = vec![];
         let mut inner_projection_exprs = vec![];
-        memo.clear();
 
         // An expr with multiple unnest
         let original_expr = unnest(unnest(col("struct_col").field("matrix")));
@@ -1042,7 +1005,6 @@ mod tests {
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
-            &mut memo,
             &original_expr,
         )?;
         // Only the inner most/ bottom most unnest is transformed
