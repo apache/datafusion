@@ -1466,6 +1466,8 @@ pub struct FilterExecNode {
     pub expr: ::core::option::Option<PhysicalExprNode>,
     #[prost(uint32, tag = "3")]
     pub default_filter_selectivity: u32,
+    #[prost(uint32, repeated, tag = "9")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

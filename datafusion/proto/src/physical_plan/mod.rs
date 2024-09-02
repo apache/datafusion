@@ -178,7 +178,19 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         )
                     })?;
                 let filter_selectivity = filter.default_filter_selectivity.try_into();
-                let filter = FilterExec::try_new(predicate, input)?;
+                let projection = if !filter.projection.is_empty() {
+                    Some(
+                        filter
+                            .projection
+                            .iter()
+                            .map(|i| *i as usize)
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
+                let filter =
+                    FilterExec::try_new(predicate, input)?.with_projection(projection)?;
                 match filter_selectivity {
                     Ok(filter_selectivity) => Ok(Arc::new(
                         filter.with_default_selectivity(filter_selectivity)?,
@@ -1167,6 +1179,12 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             extension_codec,
                         )?),
                         default_filter_selectivity: exec.default_selectivity() as u32,
+                        projection: exec
+                            .projection()
+                            .as_ref()
+                            .map_or_else(Vec::new, |v| {
+                                v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
+                            }),
                     },
                 ))),
             });
