@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, AsArray, Float64Array, UInt64Array};
-use arrow::datatypes::Float64Type;
+use arrow::array::{ArrayRef, AsArray};
+use arrow::datatypes::{Float64Type, UInt64Type};
 use arrow_schema::{DataType, Field};
-use datafusion_common::{downcast_value, DataFusionError, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_functions_aggregate_common::accumulator::{
     AccumulatorArgs, StateFieldsArgs,
@@ -164,10 +164,10 @@ impl Accumulator for SkewnessAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion_common::Result<()> {
-        let counts = downcast_value!(states[0], UInt64Array);
-        let sums = downcast_value!(states[1], Float64Array);
-        let sum_sqrs = downcast_value!(states[2], Float64Array);
-        let sum_cubs = downcast_value!(states[3], Float64Array);
+        let counts = states[0].as_primitive::<UInt64Type>();
+        let sums = states[1].as_primitive::<Float64Type>();
+        let sum_sqrs = states[2].as_primitive::<Float64Type>();
+        let sum_cubs = states[3].as_primitive::<Float64Type>();
 
         for i in 0..counts.len() {
             let c = counts.value(i);

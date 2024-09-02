@@ -5863,3 +5863,18 @@ ORDER BY k;
 ----
 1 1.8125 6.8007813 Float16 Float16
 2 8.5 8.5 Float16 Float16
+
+query R
+SELECT skewness(col) FROM VALUES (-10), (-20), (100), (1000), (1000) AS tab(col);
+----
+0.574511614753
+
+query R
+SELECT skewness(DISTINCT col) FROM VALUES (-10), (-20), (100), (1000), (1000) AS tab(col);
+----
+1.928752451203
+
+query R
+SELECT skewness(1.0);
+----
+NULL
