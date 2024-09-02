@@ -252,7 +252,7 @@ last_value(expression [ORDER BY expression])
 - [regr_sxx](#regr_sxx)
 - [regr_syy](#regr_syy)
 - [regr_sxy](#regr_sxy)
-- [skewness][#skewness]
+- [skewness](#skewness)
 
 ### `corr`
 
