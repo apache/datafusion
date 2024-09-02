@@ -18,7 +18,7 @@
 use arrow::array::{ArrayRef, AsArray, Float64Array, UInt64Array};
 use arrow::datatypes::Float64Type;
 use arrow_schema::{DataType, Field};
-use datafusion_common::{downcast_value, not_impl_err, DataFusionError, ScalarValue};
+use datafusion_common::{downcast_value, DataFusionError, ScalarValue};
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_functions_aggregate_common::accumulator::{
     AccumulatorArgs, StateFieldsArgs,
@@ -70,11 +70,8 @@ impl AggregateUDFImpl for SkewnessFunc {
 
     fn accumulator(
         &self,
-        acc_args: AccumulatorArgs,
+        _acc_args: AccumulatorArgs,
     ) -> datafusion_common::Result<Box<dyn Accumulator>> {
-        if acc_args.is_distinct {
-            return not_impl_err!("DISTINCT is not implemented for skewness");
-        }
         Ok(Box::new(SkewnessAccumulator::new()))
     }
 
