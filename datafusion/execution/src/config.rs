@@ -48,7 +48,7 @@ use datafusion_common::{
 /// use datafusion_common::ScalarValue;
 ///
 /// let config = SessionConfig::new()
-///    .set("datafusion.execution.batch_size", ScalarValue::UInt64(Some(1234)))
+///    .set("datafusion.execution.batch_size", &ScalarValue::UInt64(Some(1234)))
 ///    .set_bool("datafusion.execution.parquet.pushdown_filters", true);
 ///
 /// assert_eq!(config.batch_size(), 1234);
@@ -123,7 +123,7 @@ impl SessionConfig {
     }
 
     /// Create new ConfigOptions struct, taking values from a string hash map.
-    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+    pub fn from_string_hash_map(settings: &HashMap<String, String>) -> Result<Self> {
         Ok(ConfigOptions::from_string_hash_map(settings)?.into())
     }
 
@@ -157,7 +157,7 @@ impl SessionConfig {
     }
 
     /// Set a configuration option
-    pub fn set(self, key: &str, value: ScalarValue) -> Self {
+    pub fn set(self, key: &str, value: &ScalarValue) -> Self {
         self.set_str(key, &value.to_string())
     }
 

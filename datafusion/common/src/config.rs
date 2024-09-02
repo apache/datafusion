@@ -781,7 +781,7 @@ impl ConfigOptions {
     ///
     /// Only the built-in configurations will be extracted from the hash map
     /// and other key value pairs will be ignored.
-    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+    pub fn from_string_hash_map(settings: &HashMap<String, String>) -> Result<Self> {
         struct Visitor(Vec<String>);
 
         impl Visit for Visitor {
