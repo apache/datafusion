@@ -1386,7 +1386,7 @@ impl Unparser<'_> {
             DataType::Timestamp(time_unit, tz) => {
                 Ok(self.dialect.timestamp_cast_dtype(time_unit, tz))
             }
-            DataType::Date32 => Ok(ast::DataType::Date),
+            DataType::Date32 => Ok(self.dialect.date32_cast_dtype()),
             DataType::Date64 => Ok(self.ast_type_for_date64_in_cast()),
             DataType::Time32(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
@@ -2242,7 +2242,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_dialect_with_teimstamp_cast_dtype() -> Result<()> {
+    fn custom_dialect_with_timestamp_cast_dtype() -> Result<()> {
         let default_dialect = CustomDialectBuilder::new().build();
         let mysql_dialect = CustomDialectBuilder::new()
             .with_timestamp_cast_dtype(
@@ -2269,6 +2269,33 @@ mod tests {
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
                 data_type: data_type.clone(),
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_date32_ast_dtype() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::default().build();
+        let sqlite_custom_dialect = CustomDialectBuilder::new()
+            .with_date32_cast_dtype(ast::DataType::Text)
+            .build();
+
+        for (dialect, data_type, identifier) in [
+            (&default_dialect, DataType::Date32, "DATE"),
+            (&sqlite_custom_dialect, DataType::Date32, "TEXT"),
+        ] {
+            let unparser = Unparser::new(dialect);
+
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type,
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
