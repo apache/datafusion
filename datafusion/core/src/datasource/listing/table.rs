@@ -826,7 +826,7 @@ impl TableProvider for ListingTable {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        let support: Vec<_> = filters
+        Ok(filters
             .iter()
             .map(|filter| {
                 if expr_applicable_for_cols(
@@ -834,7 +834,7 @@ impl TableProvider for ListingTable {
                         .options
                         .table_partition_cols
                         .iter()
-                        .map(|x| x.0.clone())
+                        .map(|x| x.0.as_str())
                         .collect::<Vec<_>>(),
                     filter,
                 ) {
@@ -846,8 +846,7 @@ impl TableProvider for ListingTable {
                     TableProviderFilterPushDown::Inexact
                 }
             })
-            .collect();
-        Ok(support)
+            .collect())
     }
 
     fn get_table_definition(&self) -> Option<&str> {
