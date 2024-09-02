@@ -904,23 +904,17 @@ async fn roundtrip_expr_api() -> Result<()> {
             vec![lit(10), lit(20), lit(30)],
         ),
         row_number(),
-        nth_value(col("b"), 1, None),
+        nth_value(col("b"), 1, vec![]),
         nth_value(
             col("b"),
             1,
-            Some(vec![
-                col("a").sort(false, false),
-                col("b").sort(true, false),
-            ]),
+            vec![col("a").sort(false, false), col("b").sort(true, false)],
         ),
-        nth_value(col("b"), -1, None),
+        nth_value(col("b"), -1, vec![]),
         nth_value(
             col("b"),
             -1,
-            Some(vec![
-                col("a").sort(false, false),
-                col("b").sort(true, false),
-            ]),
+            vec![col("a").sort(false, false), col("b").sort(true, false)],
         ),
     ];
 

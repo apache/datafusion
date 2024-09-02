@@ -44,10 +44,10 @@ create_func!(NthValueAgg, nth_value_udaf);
 pub fn nth_value(
     expr: datafusion_expr::Expr,
     n: i64,
-    order_by: Option<Vec<SortExpr>>,
+    order_by: Vec<SortExpr>,
 ) -> datafusion_expr::Expr {
     let args = vec![expr, lit(n)];
-    if let Some(order_by) = order_by {
+    if !order_by.is_empty() {
         nth_value_udaf()
             .call(args)
             .order_by(order_by)
