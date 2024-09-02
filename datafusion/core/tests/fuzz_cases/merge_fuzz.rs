@@ -181,6 +181,7 @@ fn concat(mut v1: Vec<RecordBatch>, v2: Vec<RecordBatch>) -> Vec<RecordBatch> {
     v1
 }
 
+/// It returns pending for the 1st partition until the 2nd partition is polled.
 #[derive(Debug, Clone)]
 struct CongestedExec {
     schema: Schema,
@@ -235,7 +236,7 @@ impl ExecutionPlan for CongestedExec {
         Ok(Box::pin(CongestedStream {
             schema: Arc::new(self.schema.clone()),
             batch_size: self.batch_size,
-            offset: 0,
+            offset: (0, 0),
             congestion_cleared: self.congestion_cleared.clone(),
             limit: self.limit,
             partition,
@@ -254,11 +255,12 @@ impl DisplayAs for CongestedExec {
     }
 }
 
+/// It returns pending for the 1st partition until the 2nd partition is polled.
 #[derive(Debug)]
 pub struct CongestedStream {
     schema: SchemaRef,
     batch_size: u64,
-    offset: u64,
+    offset: (u64, u64),
     limit: u64,
     congestion_cleared: Arc<Mutex<bool>>,
     partition: usize,
@@ -288,7 +290,7 @@ impl Stream for CongestedStream {
                 let cleared = self.congestion_cleared.lock().unwrap();
                 if *cleared {
                     std::mem::drop(cleared);
-                    if self.offset == self.limit {
+                    if self.offset.0 == self.limit {
                         return Poll::Ready(None);
                     }
                     let batch = CongestedStream::create_record_batch(
@@ -296,14 +298,14 @@ impl Stream for CongestedStream {
                         0,
                         self.batch_size,
                     );
-                    self.offset += self.batch_size;
+                    self.offset.0 += self.batch_size;
                     Poll::Ready(Some(Ok(batch)))
                 } else {
                     Poll::Pending
                 }
             }
             1 => {
-                if self.offset == self.limit {
+                if self.offset.1 == self.limit {
                     return Poll::Ready(None);
                 }
                 let batch = CongestedStream::create_record_batch(
@@ -311,7 +313,7 @@ impl Stream for CongestedStream {
                     0,
                     self.batch_size,
                 );
-                self.offset += self.batch_size;
+                self.offset.1 += self.batch_size;
                 let mut cleared = self.congestion_cleared.lock().unwrap();
                 *cleared = true;
                 Poll::Ready(Some(Ok(batch)))

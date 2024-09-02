@@ -190,7 +190,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 if self.uninitiated_cursors.is_empty() {
                     break;
                 }
-                return Poll::Pending;
+                if return_pending {
+                    return Poll::Pending;
+                }
             }
             self.init_loser_tree();
         }
