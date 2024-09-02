@@ -251,7 +251,7 @@ SELECT COUNT(*) FROM timestamp_with_tz;
 ----
 131072
 
-# Perform the query asserting that output timestamp columns will contain TZ
+# Ensure that output timestamp columns preserve the timezone from the input
 # and output record count will match input file record count
 query TPI
 SELECT arrow_typeof(lag_timestamp),
