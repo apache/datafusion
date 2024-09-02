@@ -79,8 +79,8 @@ pub mod bit_and_or_xor;
 pub mod bool_and_or;
 pub mod grouping;
 pub mod nth_value;
+pub mod skewness;
 pub mod string_agg;
-mod skewness;
 
 use crate::approx_percentile_cont::approx_percentile_cont_udaf;
 use crate::approx_percentile_cont_with_weight::approx_percentile_cont_with_weight_udaf;
@@ -170,6 +170,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         average::avg_udaf(),
         grouping::grouping_udaf(),
         nth_value::nth_value_udaf(),
+        skewness::skewness_udaf(),
     ]
 }
 
