@@ -96,6 +96,12 @@ pub trait Dialect: Send + Sync {
 
         ast::DataType::Timestamp(None, tz_info)
     }
+
+    /// The SQL type to use for Arrow Date32 unparsing
+    /// Most dialects use Date, but some, like SQLite require TEXT
+    fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
+        sqlparser::ast::DataType::Date
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -210,6 +216,9 @@ impl Dialect for SqliteDialect {
 
     fn date_field_extract_style(&self) -> DateFieldExtractStyle {
         DateFieldExtractStyle::Strftime
+
+    fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
+        sqlparser::ast::DataType::Text
     }
 }
 
@@ -225,6 +234,7 @@ pub struct CustomDialect {
     int64_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
+    date32_cast_dtype: sqlparser::ast::DataType,
 }
 
 impl Default for CustomDialect {
@@ -244,6 +254,7 @@ impl Default for CustomDialect {
                 None,
                 TimezoneInfo::WithTimeZone,
             ),
+            date32_cast_dtype: sqlparser::ast::DataType::Date,
         }
     }
 }
@@ -307,6 +318,10 @@ impl Dialect for CustomDialect {
             self.timestamp_cast_dtype.clone()
         }
     }
+
+    fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
+        self.date32_cast_dtype.clone()
+    }
 }
 
 /// `CustomDialectBuilder` to build `CustomDialect` using builder pattern
@@ -335,6 +350,7 @@ pub struct CustomDialectBuilder {
     int64_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
+    date32_cast_dtype: ast::DataType,
 }
 
 impl Default for CustomDialectBuilder {
@@ -360,6 +376,7 @@ impl CustomDialectBuilder {
                 None,
                 TimezoneInfo::WithTimeZone,
             ),
+            date32_cast_dtype: sqlparser::ast::DataType::Date,
         }
     }
 
@@ -376,6 +393,7 @@ impl CustomDialectBuilder {
             int64_cast_dtype: self.int64_cast_dtype,
             timestamp_cast_dtype: self.timestamp_cast_dtype,
             timestamp_tz_cast_dtype: self.timestamp_tz_cast_dtype,
+            date32_cast_dtype: self.date32_cast_dtype,
         }
     }
 
@@ -456,6 +474,11 @@ impl CustomDialectBuilder {
     ) -> Self {
         self.timestamp_cast_dtype = timestamp_cast_dtype;
         self.timestamp_tz_cast_dtype = timestamp_tz_cast_dtype;
+        self
+    }
+
+    pub fn with_date32_cast_dtype(mut self, date32_cast_dtype: ast::DataType) -> Self {
+        self.date32_cast_dtype = date32_cast_dtype;
         self
     }
 }

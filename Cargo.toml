@@ -16,6 +16,7 @@
 # under the License.
 
 [workspace]
+# datafusion-cli is excluded because of its Cargo.lock. See datafusion-cli/README.md.
 exclude = ["datafusion-cli", "dev/depcheck"]
 members = [
     "datafusion/common",
@@ -33,7 +34,6 @@ members = [
     "datafusion/optimizer",
     "datafusion/physical-expr",
     "datafusion/physical-expr-common",
-    "datafusion/physical-expr-functions-aggregate",
     "datafusion/physical-optimizer",
     "datafusion/physical-plan",
     "datafusion/proto",
@@ -106,7 +106,6 @@ datafusion-functions-window = { path = "datafusion/functions-window", version = 
 datafusion-optimizer = { path = "datafusion/optimizer", version = "41.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "41.0.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "41.0.0", default-features = false }
-datafusion-physical-expr-functions-aggregate = { path = "datafusion/physical-expr-functions-aggregate", version = "41.0.0" }
 datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "41.0.0" }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "41.0.0" }
 datafusion-proto = { path = "datafusion/proto", version = "41.0.0" }
@@ -130,6 +129,8 @@ parquet = { version = "52.2.0", default-features = false, features = [
     "async",
     "object_store",
 ] }
+# Should match arrow-flight's version of prost.
+prost = "0.12.3"
 rand = "0.8"
 regex = "1.8"
 rstest = "0.22.0"

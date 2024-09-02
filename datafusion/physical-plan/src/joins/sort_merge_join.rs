@@ -1474,6 +1474,12 @@ impl SMJStream {
                                 [chunk.buffered_batch_idx.unwrap()];
 
                             for i in 0..pre_mask.len() {
+                                // If the buffered row is not joined with streamed side,
+                                // skip it.
+                                if buffered_indices.is_null(i) {
+                                    continue;
+                                }
+
                                 let buffered_index = buffered_indices.value(i);
 
                                 buffered_batch.join_filter_failed_map.insert(
@@ -1972,7 +1978,7 @@ mod tests {
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::disk_manager::DiskManagerConfig;
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::TaskContext;
 
     use crate::expressions::Column;
@@ -2894,10 +2900,10 @@ mod tests {
         ];
 
         // Disable DiskManager to prevent spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            .with_disk_manager(DiskManagerConfig::Disabled)
+            .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
         for join_type in join_types {
@@ -2979,10 +2985,10 @@ mod tests {
         ];
 
         // Disable DiskManager to prevent spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            .with_disk_manager(DiskManagerConfig::Disabled)
+            .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
         for join_type in join_types {
@@ -3042,10 +3048,10 @@ mod tests {
         ];
 
         // Enable DiskManager to allow spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            .with_disk_manager(DiskManagerConfig::NewOs)
+            .build_arc()?;
 
         for batch_size in [1, 50] {
             let session_config = SessionConfig::default().with_batch_size(batch_size);
@@ -3150,10 +3156,11 @@ mod tests {
         ];
 
         // Enable DiskManager to allow spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(500, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            .with_disk_manager(DiskManagerConfig::NewOs)
+            .build_arc()?;
+
         for batch_size in [1, 50] {
             let session_config = SessionConfig::default().with_batch_size(batch_size);
 

@@ -22,9 +22,7 @@ use std::{
     borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc, vec,
 };
 
-use super::{
-    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
-};
+use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 
@@ -294,19 +292,6 @@ impl FileScanConfig {
                 .copied()
                 .collect()
         })
-    }
-
-    #[allow(missing_docs)]
-    #[deprecated(since = "33.0.0", note = "Use SessionContext::new_with_config")]
-    pub fn repartition_file_groups(
-        file_groups: Vec<Vec<PartitionedFile>>,
-        target_partitions: usize,
-        repartition_file_min_size: usize,
-    ) -> Option<Vec<Vec<PartitionedFile>>> {
-        FileGroupPartitioner::new()
-            .with_target_partitions(target_partitions)
-            .with_repartition_file_min_size(repartition_file_min_size)
-            .repartition_file_groups(&file_groups)
     }
 
     /// Attempts to do a bin-packing on files into file groups, such that any two files
@@ -908,7 +893,7 @@ mod tests {
             schema.clone(),
             Some(vec![0, 3, 5, schema.fields().len()]),
             Statistics::new_unknown(&schema),
-            to_partition_cols(partition_cols.clone()),
+            to_partition_cols(partition_cols),
         )
         .projected_file_schema();
 
@@ -941,7 +926,7 @@ mod tests {
             schema.clone(),
             None,
             Statistics::new_unknown(&schema),
-            to_partition_cols(partition_cols.clone()),
+            to_partition_cols(partition_cols),
         )
         .projected_file_schema();
 
@@ -979,7 +964,7 @@ mod tests {
             name: &'static str,
             file_schema: Schema,
             files: Vec<File>,
-            sort: Vec<datafusion_expr::Expr>,
+            sort: Vec<datafusion_expr::SortExpr>,
             expected_result: Result<Vec<Vec<&'static str>>, &'static str>,
         }
 

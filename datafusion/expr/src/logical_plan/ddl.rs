@@ -22,8 +22,9 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::{Expr, LogicalPlan, Volatility};
+use crate::{Expr, LogicalPlan, SortExpr, Volatility};
 
+use crate::expr::Sort;
 use arrow::datatypes::DataType;
 use datafusion_common::{Constraints, DFSchemaRef, SchemaReference, TableReference};
 use sqlparser::ast::Ident;
@@ -204,7 +205,7 @@ pub struct CreateExternalTable {
     /// SQL used to create the table, if available
     pub definition: Option<String>,
     /// Order expressions supplied by user
-    pub order_exprs: Vec<Vec<Expr>>,
+    pub order_exprs: Vec<Vec<Sort>>,
     /// Whether the table is an infinite streams
     pub unbounded: bool,
     /// Table(provider) specific options
@@ -365,7 +366,7 @@ pub struct CreateIndex {
     pub name: Option<String>,
     pub table: TableReference,
     pub using: Option<String>,
-    pub columns: Vec<Expr>,
+    pub columns: Vec<SortExpr>,
     pub unique: bool,
     pub if_not_exists: bool,
     pub schema: DFSchemaRef,

@@ -39,7 +39,7 @@ mod non_windows {
     use datafusion::datasource::TableProvider;
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::{exec_err, Result};
-    use datafusion_expr::Expr;
+    use datafusion_expr::SortExpr;
 
     // Number of lines written to FIFO
     const TEST_BATCH_SIZE: usize = 5;
@@ -49,7 +49,7 @@ mod non_windows {
     fn fifo_table(
         schema: SchemaRef,
         path: impl Into<PathBuf>,
-        sort: Vec<Vec<Expr>>,
+        sort: Vec<Vec<SortExpr>>,
     ) -> Arc<dyn TableProvider> {
         let source = FileStreamProvider::new_file(schema, path.into())
             .with_batch_size(TEST_BATCH_SIZE)
@@ -100,7 +100,7 @@ mod non_windows {
     ) {
         // Timeout for a long period of BrokenPipe error
         let broken_pipe_timeout = Duration::from_secs(10);
-        let sa = file_path.clone();
+        let sa = file_path;
         // Spawn a new thread to write to the FIFO file
         #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
         tasks.spawn_blocking(move || {

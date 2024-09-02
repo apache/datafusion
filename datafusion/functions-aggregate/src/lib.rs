@@ -113,6 +113,7 @@ pub mod expr_fn {
     pub use super::median::median;
     pub use super::min_max::max;
     pub use super::min_max::min;
+    pub use super::nth_value::nth_value;
     pub use super::regr::regr_avgx;
     pub use super::regr::regr_avgy;
     pub use super::regr::regr_count;
