@@ -105,6 +105,10 @@ pub enum TypeSignature {
     Uniform(usize, Vec<DataType>),
     /// Exact number of arguments of an exact type
     Exact(Vec<DataType>),
+    /// The number of arguments that can be coerced to in order
+    /// For example, `Coercible(vec![DataType::Float64])` accepts
+    /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
+    /// since i32 and f32 can be casted to f64
     Coercible(Vec<DataType>),
     /// Fixed number of arguments of arbitrary types
     /// If a function takes 0 argument, its `TypeSignature` should be `Any(0)`
