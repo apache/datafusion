@@ -80,7 +80,7 @@ impl SimplifyExpressions {
         execution_props: &ExecutionProps,
     ) -> Result<Transformed<LogicalPlan>> {
         let schema = if !plan.inputs().is_empty() {
-            DFSchemaRef::new(merge_schema(plan.inputs()))
+            DFSchemaRef::new(merge_schema(&plan.inputs()))
         } else if let LogicalPlan::TableScan(scan) = &plan {
             // When predicates are pushed into a table scan, there is no input
             // schema to resolve predicates against, so it must be handled specially

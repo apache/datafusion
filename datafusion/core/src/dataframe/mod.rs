@@ -3277,7 +3277,7 @@ mod tests {
     #[tokio::test]
     async fn with_column_renamed_case_sensitive() -> Result<()> {
         let config =
-            SessionConfig::from_string_hash_map(std::collections::HashMap::from([(
+            SessionConfig::from_string_hash_map(&std::collections::HashMap::from([(
                 "datafusion.sql_parser.enable_ident_normalization".to_owned(),
                 "false".to_owned(),
             )]))?;
@@ -3713,8 +3713,10 @@ mod tests {
     // Test issue: https://github.com/apache/datafusion/issues/12065
     #[tokio::test]
     async fn filtered_aggr_with_param_values() -> Result<()> {
-        let cfg = SessionConfig::new()
-            .set("datafusion.sql_parser.dialect", "PostgreSQL".into());
+        let cfg = SessionConfig::new().set(
+            "datafusion.sql_parser.dialect",
+            &ScalarValue::from("PostgreSQL"),
+        );
         let ctx = SessionContext::new_with_config(cfg);
         register_aggregate_csv(&ctx, "table1").await?;
 

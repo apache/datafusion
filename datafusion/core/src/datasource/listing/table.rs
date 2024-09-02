@@ -1781,7 +1781,7 @@ mod tests {
         // Create the initial context, schema, and batch.
         let session_ctx = match session_config_map {
             Some(cfg) => {
-                let config = SessionConfig::from_string_hash_map(cfg)?;
+                let config = SessionConfig::from_string_hash_map(&cfg)?;
                 SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),
@@ -1979,7 +1979,7 @@ mod tests {
         // Create the initial context
         let session_ctx = match session_config_map {
             Some(cfg) => {
-                let config = SessionConfig::from_string_hash_map(cfg)?;
+                let config = SessionConfig::from_string_hash_map(&cfg)?;
                 SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),
