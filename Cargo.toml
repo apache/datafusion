@@ -130,7 +130,7 @@ parquet = { version = "52.2.0", default-features = false, features = [
     "object_store",
 ] }
 # Should match arrow-flight's version of prost.
-prost = "0.12.3"
+prost = "0.13.2"
 rand = "0.8"
 regex = "1.8"
 rstest = "0.22.0"
