@@ -164,9 +164,17 @@ impl PhysicalGroupBy {
         }
     }
 
-    /// Returns true if this GROUP BY contains NULL expressions
-    pub fn contains_null(&self) -> bool {
-        self.groups.iter().flatten().any(|is_null| *is_null)
+    /// Calculate GROUP BY expressions nullable
+    pub fn exprs_nullable(&self) -> Vec<bool> {
+        let mut exprs_nullable = vec![false; self.expr.len()];
+        for group in self.groups.iter() {
+            group.iter().enumerate().for_each(|(index, is_null)| {
+                if *is_null {
+                    exprs_nullable[index] = true;
+                }
+            })
+        }
+        exprs_nullable
     }
 
     /// Returns the group expressions
@@ -278,7 +286,7 @@ pub struct AggregateExec {
 }
 
 impl AggregateExec {
-    /// Function used in `ConvertFirstLast` optimizer rule,
+    /// Function used in `OptimizeAggregateOrder` optimizer rule,
     /// where we need parts of the new value, others cloned from the old one
     /// Rewrites aggregate exec with new aggregate expressions.
     pub fn with_new_aggr_exprs(
@@ -319,7 +327,7 @@ impl AggregateExec {
             &input.schema(),
             &group_by.expr,
             &aggr_expr,
-            group_by.contains_null(),
+            group_by.exprs_nullable(),
             mode,
         )?;
 
@@ -793,18 +801,18 @@ fn create_schema(
     input_schema: &Schema,
     group_expr: &[(Arc<dyn PhysicalExpr>, String)],
     aggr_expr: &[Arc<AggregateFunctionExpr>],
-    contains_null_expr: bool,
+    group_expr_nullable: Vec<bool>,
     mode: AggregateMode,
 ) -> Result<Schema> {
     let mut fields = Vec::with_capacity(group_expr.len() + aggr_expr.len());
-    for (expr, name) in group_expr {
+    for (index, (expr, name)) in group_expr.iter().enumerate() {
         fields.push(Field::new(
             name,
             expr.data_type(input_schema)?,
             // In cases where we have multiple grouping sets, we will use NULL expressions in
             // order to align the grouping sets. So the field must be nullable even if the underlying
             // schema field is not.
-            contains_null_expr || expr.nullable(input_schema)?,
+            group_expr_nullable[index] || expr.nullable(input_schema)?,
         ))
     }
 
@@ -821,7 +829,7 @@ fn create_schema(
         | AggregateMode::SinglePartitioned => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
-                fields.push(expr.field()?)
+                fields.push(expr.field())
             }
         }
     }
@@ -1323,12 +1331,10 @@ mod tests {
 
     fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
         let session_config = SessionConfig::new().with_batch_size(batch_size);
-        let runtime = Arc::new(
-            RuntimeEnvBuilder::default()
-                .with_memory_pool(Arc::new(FairSpillPool::new(max_memory)))
-                .build()
-                .unwrap(),
-        );
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_pool(Arc::new(FairSpillPool::new(max_memory)))
+            .build_arc()
+            .unwrap();
         let task_ctx = TaskContext::default()
             .with_session_config(session_config)
             .with_runtime(runtime);
@@ -1807,11 +1813,9 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
         let input_schema = input.schema();
 
-        let runtime = Arc::new(
-            RuntimeEnvBuilder::default()
-                .with_memory_limit(1, 1.0)
-                .build()?,
-        );
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
         let task_ctx = TaskContext::default().with_runtime(runtime);
         let task_ctx = Arc::new(task_ctx);
 
@@ -2373,11 +2377,11 @@ mod tests {
         let mut session_config = SessionConfig::default();
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            ScalarValue::Int64(Some(2)),
+            &ScalarValue::Int64(Some(2)),
         );
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            ScalarValue::Float64(Some(0.1)),
+            &ScalarValue::Float64(Some(0.1)),
         );
 
         let ctx = TaskContext::default().with_session_config(session_config);
@@ -2462,11 +2466,11 @@ mod tests {
         let mut session_config = SessionConfig::default();
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            ScalarValue::Int64(Some(5)),
+            &ScalarValue::Int64(Some(5)),
         );
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            ScalarValue::Float64(Some(0.1)),
+            &ScalarValue::Float64(Some(0.1)),
         );
 
         let ctx = TaskContext::default().with_session_config(session_config);
@@ -2487,6 +2491,51 @@ mod tests {
         ];
         assert_batches_eq!(expected, &output);
 
+        Ok(())
+    }
+
+    #[test]
+    fn group_exprs_nullable() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float32, false),
+            Field::new("b", DataType::Float32, false),
+        ]));
+
+        let aggr_expr =
+            vec![
+                AggregateExprBuilder::new(count_udaf(), vec![col("a", &input_schema)?])
+                    .schema(Arc::clone(&input_schema))
+                    .alias("COUNT(a)")
+                    .build()?,
+            ];
+
+        let grouping_set = PhysicalGroupBy {
+            expr: vec![
+                (col("a", &input_schema)?, "a".to_string()),
+                (col("b", &input_schema)?, "b".to_string()),
+            ],
+            null_expr: vec![
+                (lit(ScalarValue::Float32(None)), "a".to_string()),
+                (lit(ScalarValue::Float32(None)), "b".to_string()),
+            ],
+            groups: vec![
+                vec![false, true],  // (a, NULL)
+                vec![false, false], // (a,b)
+            ],
+        };
+        let aggr_schema = create_schema(
+            &input_schema,
+            &grouping_set.expr,
+            &aggr_expr,
+            grouping_set.exprs_nullable(),
+            AggregateMode::Final,
+        )?;
+        let expected_schema = Schema::new(vec![
+            Field::new("a", DataType::Float32, false),
+            Field::new("b", DataType::Float32, true),
+            Field::new("COUNT(a)", DataType::Int64, false),
+        ]);
+        assert_eq!(aggr_schema, expected_schema);
         Ok(())
     }
 }

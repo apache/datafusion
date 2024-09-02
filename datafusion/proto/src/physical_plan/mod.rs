@@ -1444,11 +1444,8 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             let agg_names = exec
                 .aggr_expr()
                 .iter()
-                .map(|expr| match expr.field() {
-                    Ok(field) => Ok(field.name().clone()),
-                    Err(e) => Err(e),
-                })
-                .collect::<Result<_>>()?;
+                .map(|expr| expr.name().to_string())
+                .collect::<Vec<_>>();
 
             let agg_mode = match exec.mode() {
                 AggregateMode::Partial => protobuf::AggregateMode::Partial,

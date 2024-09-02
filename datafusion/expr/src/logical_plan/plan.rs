@@ -602,12 +602,6 @@ impl LogicalPlan {
         }
     }
 
-    /// Returns a copy of this `LogicalPlan` with the new inputs
-    #[deprecated(since = "35.0.0", note = "please use `with_new_exprs` instead")]
-    pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
-        self.with_new_exprs(self.expressions(), inputs.to_vec())
-    }
-
     /// Recomputes schema and type information for this LogicalPlan if needed.
     ///
     /// Some `LogicalPlan`s may need to recompute their schema if the number or
