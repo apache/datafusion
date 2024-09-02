@@ -51,12 +51,12 @@ use object_store::{ObjectMeta, ObjectStore};
 /// - the table provider can filter the table partition values with this expression
 /// - the expression can be marked as `TableProviderFilterPushDown::Exact` once this filtering
 ///   was performed
-pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
+pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
     let mut is_applicable = true;
     expr.apply(|expr| {
         match expr {
             Expr::Column(Column { ref name, .. }) => {
-                is_applicable &= col_names.contains(name);
+                is_applicable &= col_names.contains(&name.as_str());
                 if is_applicable {
                     Ok(TreeNodeRecursion::Jump)
                 } else {
@@ -102,11 +102,10 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             }
 
             // TODO other expressions are not handled yet:
-            // - AGGREGATE, WINDOW and SORT should not end up in filter conditions, except maybe in some edge cases
+            // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
             // - Can `Wildcard` be considered as a `Literal`?
             // - ScalarVariable could be `applicable`, but that would require access to the context
             Expr::AggregateFunction { .. }
-            | Expr::Sort { .. }
             | Expr::WindowFunction { .. }
             | Expr::Wildcard { .. }
             | Expr::Unnest { .. }
@@ -746,27 +745,27 @@ mod tests {
     #[test]
     fn test_expr_applicable_for_cols() {
         assert!(expr_applicable_for_cols(
-            &[String::from("c1")],
+            &["c1"],
             &Expr::eq(col("c1"), lit("value"))
         ));
         assert!(!expr_applicable_for_cols(
-            &[String::from("c1")],
+            &["c1"],
             &Expr::eq(col("c2"), lit("value"))
         ));
         assert!(!expr_applicable_for_cols(
-            &[String::from("c1")],
+            &["c1"],
             &Expr::eq(col("c1"), col("c2"))
         ));
         assert!(expr_applicable_for_cols(
-            &[String::from("c1"), String::from("c2")],
+            &["c1", "c2"],
             &Expr::eq(col("c1"), col("c2"))
         ));
         assert!(expr_applicable_for_cols(
-            &[String::from("c1"), String::from("c2")],
+            &["c1", "c2"],
             &(Expr::eq(col("c1"), col("c2").alias("c2_alias"))).not()
         ));
         assert!(expr_applicable_for_cols(
-            &[String::from("c1"), String::from("c2")],
+            &["c1", "c2"],
             &(case(col("c1"))
                 .when(lit("v1"), lit(true))
                 .otherwise(lit(false))

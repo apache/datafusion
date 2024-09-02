@@ -1506,11 +1506,9 @@ mod tests {
         let partitioning = Partitioning::RoundRobinBatch(4);
 
         // setup up context
-        let runtime = Arc::new(
-            RuntimeEnvBuilder::default()
-                .with_memory_limit(1, 1.0)
-                .build()?,
-        );
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
 
         let task_ctx = TaskContext::default().with_runtime(runtime);
         let task_ctx = Arc::new(task_ctx);

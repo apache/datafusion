@@ -36,6 +36,7 @@ use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
+use datafusion_expr::tree_node::replace_sort_expressions;
 use datafusion_expr::{col, BinaryExpr, Case, Expr, ExprSchemable, Operator};
 use indexmap::IndexMap;
 
@@ -228,7 +229,7 @@ impl CommonSubexprEliminate {
     fn rewrite_exprs_list<'n>(
         &self,
         exprs_list: Vec<Vec<Expr>>,
-        arrays_list: Vec<Vec<IdArray<'n>>>,
+        arrays_list: &[Vec<IdArray<'n>>],
         expr_stats: &ExprStats<'n>,
         common_exprs: &mut CommonExprs<'n>,
         alias_generator: &AliasGenerator,
@@ -283,10 +284,10 @@ impl CommonSubexprEliminate {
                 // Must clone as Identifiers use references to original expressions so we have
                 // to keep the original expressions intact.
                 exprs_list.clone(),
-                id_arrays_list,
+                &id_arrays_list,
                 &expr_stats,
                 &mut common_exprs,
-                &config.alias_generator(),
+                config.alias_generator().as_ref(),
             )?;
             assert!(!common_exprs.is_empty());
 
@@ -327,15 +328,16 @@ impl CommonSubexprEliminate {
     ) -> Result<Transformed<LogicalPlan>> {
         let Sort { expr, input, fetch } = sort;
         let input = Arc::unwrap_or_clone(input);
-        let new_sort = self.try_unary_plan(expr, input, config)?.update_data(
-            |(new_expr, new_input)| {
+        let sort_expressions = expr.iter().map(|sort| sort.expr.clone()).collect();
+        let new_sort = self
+            .try_unary_plan(sort_expressions, input, config)?
+            .update_data(|(new_expr, new_input)| {
                 LogicalPlan::Sort(Sort {
-                    expr: new_expr,
+                    expr: replace_sort_expressions(expr, new_expr),
                     input: Arc::new(new_input),
                     fetch,
                 })
-            },
-        );
+            });
         Ok(new_sort)
     }
 
@@ -882,7 +884,6 @@ enum ExprMask {
     /// - [`Columns`](Expr::Column)
     /// - [`ScalarVariable`](Expr::ScalarVariable)
     /// - [`Alias`](Expr::Alias)
-    /// - [`Sort`](Expr::Sort)
     /// - [`Wildcard`](Expr::Wildcard)
     /// - [`AggregateFunction`](Expr::AggregateFunction)
     Normal,
@@ -899,7 +900,6 @@ impl ExprMask {
                 | Expr::Column(..)
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
-                | Expr::Sort { .. }
                 | Expr::Wildcard { .. }
         );
 

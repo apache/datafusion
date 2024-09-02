@@ -59,7 +59,7 @@ use datafusion_common::{
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Sort, Unnest, WildcardOptions,
+    Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -71,6 +71,7 @@ use datafusion_expr::{
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
     approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
+    nth_value,
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_proto::bytes::{
@@ -903,6 +904,18 @@ async fn roundtrip_expr_api() -> Result<()> {
             vec![lit(10), lit(20), lit(30)],
         ),
         row_number(),
+        nth_value(col("b"), 1, vec![]),
+        nth_value(
+            col("b"),
+            1,
+            vec![col("a").sort(false, false), col("b").sort(true, false)],
+        ),
+        nth_value(col("b"), -1, vec![]),
+        nth_value(
+            col("b"),
+            -1,
+            vec![col("a").sort(false, false), col("b").sort(true, false)],
+        ),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -1932,14 +1945,6 @@ fn roundtrip_try_cast() {
 
     let test_expr =
         Expr::TryCast(TryCast::new(Box::new(lit("not a bool")), DataType::Boolean));
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
-fn roundtrip_sort_expr() {
-    let test_expr = Expr::Sort(Sort::new(Box::new(lit(1.0_f32)), true, true));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
