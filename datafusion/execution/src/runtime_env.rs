@@ -246,4 +246,9 @@ impl RuntimeEnvBuilder {
             object_store_registry: self.object_store_registry,
         })
     }
+
+    /// Convenience method to create a new `Arc<RuntimeEnv>`
+    pub fn build_arc(self) -> Result<Arc<RuntimeEnv>> {
+        self.build().map(Arc::new)
+    }
 }
