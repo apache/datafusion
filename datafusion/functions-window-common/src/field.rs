@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Common user-defined window functionality for [DataFusion]
-//!
-//! [DataFusion]: <https://crates.io/crates/datafusion>
-pub mod field;
+use datafusion_common::arrow::datatypes::DataType;
+
+pub struct FieldArgs {
+    pub return_type: DataType,
+}

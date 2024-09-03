@@ -51,6 +51,7 @@ mod utils;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+use datafusion_functions_window_common::field::FieldArgs;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -361,6 +362,9 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn field(&self) -> Result<Field> {
+        let _field_args = FieldArgs {
+            return_type: self.data_type.clone(),
+        };
         Ok(Field::new(
             &self.name,
             self.data_type.clone(),

@@ -1453,6 +1453,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-functions-window-common"
+version = "41.0.0"
+dependencies = [
+ "datafusion-common",
+]
+
+[[package]]
 name = "datafusion-optimizer"
 version = "41.0.0"
 dependencies = [
@@ -1541,6 +1548,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
+ "datafusion-functions-window-common",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "futures",
