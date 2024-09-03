@@ -31,6 +31,7 @@ members = [
     "datafusion/functions-aggregate-common",
     "datafusion/functions-nested",
     "datafusion/functions-window",
+    "datafusion/functions-window-common",
     "datafusion/optimizer",
     "datafusion/physical-expr",
     "datafusion/physical-expr-common",
