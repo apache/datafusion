@@ -1281,6 +1281,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_external_table_with_terminator() -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.sql(
+            r#"
+            CREATE EXTERNAL TABLE t1 (
+            col1 TEXT,
+            col2 TEXT
+            ) STORED AS CSV
+            LOCATION 'tests/data/cr_terminator.csv'
+            OPTIONS ('format.terminator' E'\r', 'format.has_header' 'true');
+    "#,
+        )
+        .await?
+        .collect()
+        .await?;
+
+        let df = ctx.sql(r#"select * from t1"#).await?.collect().await?;
+        let expected = [
+            "+------+--------+",
+            "| col1 | col2   |",
+            "+------+--------+",
+            "| id0  | value0 |",
+            "| id1  | value1 |",
+            "| id2  | value2 |",
+            "| id3  | value3 |",
+            "+------+--------+",
+        ];
+        crate::assert_batches_eq!(expected, &df);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_external_table_with_terminator_with_newlines_in_values(
+    ) -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.sql(r#"
+            CREATE EXTERNAL TABLE t1 (
+            col1 TEXT,
+            col2 TEXT
+            ) STORED AS CSV
+            LOCATION 'tests/data/newlines_in_values_cr_terminator.csv'
+            OPTIONS ('format.terminator' E'\r', 'format.has_header' 'true', 'format.newlines_in_values' 'true');
+    "#).await?.collect().await?;
+
+        let df = ctx.sql(r#"select * from t1"#).await?.collect().await?;
+        let expected = [
+            "+-------+-----------------------------+",
+            "| col1  | col2                        |",
+            "+-------+-----------------------------+",
+            "| 1     | hello\rworld                 |",
+            "| 2     | something\relse              |",
+            "| 3     | \rmany\rlines\rmake\rgood test\r |",
+            "| 4     | unquoted                    |",
+            "| value | end                         |",
+            "+-------+-----------------------------+",
+        ];
+        crate::assert_batches_eq!(expected, &df);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn write_csv_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
 
