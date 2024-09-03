@@ -79,7 +79,9 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 
-use crate::datasource::physical_plan::parquet::{can_expr_be_pushed_down_with_schemas, ParquetExecBuilder};
+use crate::datasource::physical_plan::parquet::{
+    can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
+};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
@@ -420,15 +422,15 @@ impl FileFormat for ParquetFormat {
         &self,
         file_schema: &Schema,
         table_schema: &Schema,
-        filters: &[&Expr]
+        filters: &[&Expr],
     ) -> Result<FilePushdownSupport> {
         if !self.options().global.pushdown_filters {
             return Ok(FilePushdownSupport::NoSupport);
         }
 
-        let all_supported = filters
-            .iter()
-            .all(|filter| can_expr_be_pushed_down_with_schemas(filter, file_schema, table_schema));
+        let all_supported = filters.iter().all(|filter| {
+            can_expr_be_pushed_down_with_schemas(filter, file_schema, table_schema)
+        });
 
         Ok(if all_supported {
             FilePushdownSupport::Supported

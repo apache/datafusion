@@ -146,7 +146,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         &self,
         _file_schema: &Schema,
         _table_schema: &Schema,
-        _filters: &[&Expr]
+        _filters: &[&Expr],
     ) -> Result<FilePushdownSupport> {
         Ok(FilePushdownSupport::NoSupport)
     }
@@ -165,7 +165,7 @@ pub enum FilePushdownSupport {
     NotSupportedForFilter,
     /// The file format/system being asked *does* support pushdown and *can* make it work for the
     /// provided filter/expression
-    Supported
+    Supported,
 }
 
 /// A container of [FileFormatFactory] which also implements [FileType].
