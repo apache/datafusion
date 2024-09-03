@@ -262,7 +262,7 @@ impl<'a> FilterCandidateBuilder<'a> {
     /// * `Ok(None)` if the expression cannot be used as an ArrowFilter
     /// * `Err(e)` if an error occurs while building the candidate
     pub fn build(self, metadata: &ParquetMetaData) -> Result<Option<FilterCandidate>> {
-        let Some((projection, rewritten_expr)) = non_pushdown_columns(
+        let Some((projection, rewritten_expr)) = pushdown_columns(
             Arc::clone(&self.expr),
             self.file_schema,
             self.table_schema,
@@ -328,6 +328,11 @@ impl<'schema> PushdownChecker<'schema> {
 
         None
     }
+
+    #[inline]
+    fn prevents_pushdown(&self) -> bool {
+        self.non_primitive_columns || self.projected_columns
+    }
 }
 
 impl<'schema> TreeNodeRewriter for PushdownChecker<'schema> {
@@ -346,18 +351,26 @@ impl<'schema> TreeNodeRewriter for PushdownChecker<'schema> {
         Ok(Transformed::no(node))
     }
 
+    /// After visiting all children, rewrite column references to nulls if
+    /// they are not in the file schema.
+    /// We do this because they won't be relevant if they're not in the file schema, since that's
+    /// the only thing we're dealing with here as this is only used for the parquet pushdown during
+    /// scanning
     fn f_up(
         &mut self,
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            // if the expression is a column, is it in the file schema?
             if self.file_schema.field_with_name(column.name()).is_err() {
-                // the column expr must be in the table schema
                 return self
                     .table_schema
                     .field_with_name(column.name())
                     .and_then(|field| {
-                        // return the null value corresponding to the data type
+                        // Replace the column reference with a NULL (using the type from the table schema)
+                        // e.g. `column = 'foo'` is rewritten be transformed to `NULL = 'foo'`
+                        //
+                        // See comments on `FilterCandidateBuilder` for more information
                         let null_value = ScalarValue::try_from(field.data_type())?;
                         Ok(Transformed::yes(Arc::new(Literal::new(null_value)) as _))
                     })
@@ -373,10 +386,10 @@ impl<'schema> TreeNodeRewriter for PushdownChecker<'schema> {
 type ProjectionAndExpr = (Vec<usize>, Arc<dyn PhysicalExpr>);
 
 // Checks if a given expression can be pushed down into `ParquetExec` as opposed to being evaluated
-// post-parquet-scan in a `FilterExec`. If it can be pushed down, this returns None. If it can't be
-// pushed down, this returns the content of [`PushdownChecker::required_column_indices`],
-// transformed into a [`Vec`].
-fn non_pushdown_columns(
+// post-parquet-scan in a `FilterExec`. If it can be pushed down, this returns returns all the
+// columns in the given expression so that they can be used in the parquet scanning, along with the
+// expression rewritten as defined in [`PushdownChecker::f_up`]
+fn pushdown_columns(
     expr: Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
     table_schema: &Schema,
@@ -386,7 +399,7 @@ fn non_pushdown_columns(
     let expr = expr.rewrite(&mut checker).data()?;
 
     Ok(
-        (!checker.non_primitive_columns && !checker.projected_columns)
+        (!checker.prevents_pushdown())
             .then(|| (checker.required_column_indices.into_iter().collect(), expr)),
     )
 }
@@ -408,7 +421,7 @@ fn would_column_prevent_pushdown(
     let _: Option<TreeNodeRecursion> = checker.check_single_column(column_name);
 
     // and then return a value based on the state of the checker
-    checker.non_primitive_columns || checker.projected_columns
+    checker.prevents_pushdown()
 }
 
 /// recurses through expr as a trea, finds all `column`s, and checks if any of them would prevent
