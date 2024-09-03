@@ -18,7 +18,7 @@
 use arrow::compute::concat_batches;
 use arrow_array::builder::StringViewBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_schema::SchemaRef;
 use std::sync::Arc;
 
@@ -265,7 +265,9 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
             }
         })
         .collect();
-    RecordBatch::try_new(batch.schema(), new_columns)
+    let mut options = RecordBatchOptions::new();
+    options = options.with_row_count(Some(batch.num_rows()));
+    RecordBatch::try_new_with_options(batch.schema(), new_columns, &options)
         .expect("Failed to re-create the gc'ed record batch")
 }
 
@@ -499,6 +501,15 @@ mod tests {
         compare_string_array_values(&array, &gc_array);
         assert_eq!(array.data_buffers().len(), 0);
         assert_eq!(array.data_buffers().len(), gc_array.data_buffers().len()); // no compaction
+    }
+
+    #[test]
+    fn test_gc_string_view_test_batch_empty() {
+        let schema = Schema::empty();
+        let batch = RecordBatch::new_empty(schema.into());
+        let output_batch = gc_string_view_batch(&batch);
+        assert_eq!(batch.num_columns(), output_batch.num_columns());
+        assert_eq!(batch.num_rows(), output_batch.num_rows());
     }
 
     #[test]
