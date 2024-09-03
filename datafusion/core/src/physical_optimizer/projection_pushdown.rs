@@ -631,7 +631,7 @@ fn try_pushdown_through_hash_join(
 
     if !join_allows_pushdown(
         &projection_as_columns,
-        hash_join.schema(),
+        &hash_join.schema(),
         far_right_left_col_ind,
         far_left_right_col_ind,
     ) {
@@ -662,7 +662,7 @@ fn try_pushdown_through_hash_join(
     };
 
     let (new_left, new_right) = new_join_children(
-        projection_as_columns,
+        &projection_as_columns,
         far_right_left_col_ind,
         far_left_right_col_ind,
         hash_join.left(),
@@ -700,7 +700,7 @@ fn try_swapping_with_cross_join(
 
     if !join_allows_pushdown(
         &projection_as_columns,
-        cross_join.schema(),
+        &cross_join.schema(),
         far_right_left_col_ind,
         far_left_right_col_ind,
     ) {
@@ -708,7 +708,7 @@ fn try_swapping_with_cross_join(
     }
 
     let (new_left, new_right) = new_join_children(
-        projection_as_columns,
+        &projection_as_columns,
         far_right_left_col_ind,
         far_left_right_col_ind,
         cross_join.left(),
@@ -740,7 +740,7 @@ fn try_swapping_with_nested_loop_join(
 
     if !join_allows_pushdown(
         &projection_as_columns,
-        nl_join.schema(),
+        &nl_join.schema(),
         far_right_left_col_ind,
         far_left_right_col_ind,
     ) {
@@ -762,7 +762,7 @@ fn try_swapping_with_nested_loop_join(
     };
 
     let (new_left, new_right) = new_join_children(
-        projection_as_columns,
+        &projection_as_columns,
         far_right_left_col_ind,
         far_left_right_col_ind,
         nl_join.left(),
@@ -796,7 +796,7 @@ fn try_swapping_with_sort_merge_join(
 
     if !join_allows_pushdown(
         &projection_as_columns,
-        sm_join.schema(),
+        &sm_join.schema(),
         far_right_left_col_ind,
         far_left_right_col_ind,
     ) {
@@ -813,7 +813,7 @@ fn try_swapping_with_sort_merge_join(
     };
 
     let (new_left, new_right) = new_join_children(
-        projection_as_columns,
+        &projection_as_columns,
         far_right_left_col_ind,
         far_left_right_col_ind,
         sm_join.children()[0],
@@ -850,7 +850,7 @@ fn try_swapping_with_sym_hash_join(
 
     if !join_allows_pushdown(
         &projection_as_columns,
-        sym_join.schema(),
+        &sym_join.schema(),
         far_right_left_col_ind,
         far_left_right_col_ind,
     ) {
@@ -881,7 +881,7 @@ fn try_swapping_with_sym_hash_join(
     };
 
     let (new_left, new_right) = new_join_children(
-        projection_as_columns,
+        &projection_as_columns,
         far_right_left_col_ind,
         far_left_right_col_ind,
         sym_join.left(),
@@ -1243,7 +1243,7 @@ fn new_indices_for_join_filter(
 /// - Left or right table is not lost after the projection.
 fn join_allows_pushdown(
     projection_as_columns: &[(Column, String)],
-    join_schema: SchemaRef,
+    join_schema: &SchemaRef,
     far_right_left_col_ind: i32,
     far_left_right_col_ind: i32,
 ) -> bool {
@@ -1260,7 +1260,7 @@ fn join_allows_pushdown(
 /// this function constructs the new [`ProjectionExec`]s that will come on top
 /// of the original children of the join.
 fn new_join_children(
-    projection_as_columns: Vec<(Column, String)>,
+    projection_as_columns: &[(Column, String)],
     far_right_left_col_ind: i32,
     far_left_right_col_ind: i32,
     left_child: &Arc<dyn ExecutionPlan>,

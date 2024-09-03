@@ -221,9 +221,9 @@ pub fn is_negative_of(not_expr: &Expr, expr: &Expr) -> bool {
 
 /// returns the contained boolean value in `expr` as
 /// `Expr::Literal(ScalarValue::Boolean(v))`.
-pub fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
+pub fn as_bool_lit(expr: &Expr) -> Result<Option<bool>> {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(v)) => Ok(v),
+        Expr::Literal(ScalarValue::Boolean(v)) => Ok(*v),
         _ => internal_err!("Expected boolean literal, got {expr:?}"),
     }
 }
