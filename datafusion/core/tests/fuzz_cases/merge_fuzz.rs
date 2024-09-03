@@ -260,14 +260,14 @@ pub struct CongestedStream {
 impl Stream for CongestedStream {
     type Item = Result<RecordBatch>;
     fn poll_next(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         match self.partition {
             0 => {
                 let cleared = self.congestion_cleared.lock().unwrap();
                 if *cleared {
-                    return Poll::Ready(None);
+                    Poll::Ready(None)
                 } else {
                     Poll::Pending
                 }
