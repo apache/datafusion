@@ -175,7 +175,14 @@ fn try_coerce_types(
     let mut valid_types = valid_types;
 
     // Well-supported signature that returns exact valid types.
-    if !valid_types.is_empty() && matches!(type_signature, TypeSignature::UserDefined) {
+    if !valid_types.is_empty()
+        && matches!(
+            type_signature,
+            TypeSignature::UserDefined
+                | TypeSignature::Numeric(_)
+                | TypeSignature::Coercible(_)
+        )
+    {
         // exact valid types
         assert_eq!(valid_types.len(), 1);
         let valid_types = valid_types.swap_remove(0);
@@ -396,6 +403,30 @@ fn get_valid_types(
             }
 
             vec![vec![valid_type; *number]]
+        }
+        TypeSignature::Coercible(target_types) => {
+            if target_types.is_empty() {
+                return plan_err!(
+                    "The signature expected at least one argument but received {}",
+                    current_types.len()
+                );
+            }
+            if target_types.len() != current_types.len() {
+                return plan_err!(
+                    "The signature expected {} arguments but received {}",
+                    target_types.len(),
+                    current_types.len()
+                );
+            }
+
+            for (data_type, target_type) in current_types.iter().zip(target_types.iter())
+            {
+                if !can_cast_types(data_type, target_type) {
+                    return plan_err!("{data_type} is not coercible to {target_type}");
+                }
+            }
+
+            vec![target_types.to_owned()]
         }
         TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()
