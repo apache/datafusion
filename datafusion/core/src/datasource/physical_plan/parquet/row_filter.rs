@@ -398,10 +398,8 @@ fn pushdown_columns(
 
     let expr = expr.rewrite(&mut checker).data()?;
 
-    Ok(
-        (!checker.prevents_pushdown())
-            .then(|| (checker.required_column_indices.into_iter().collect(), expr)),
-    )
+    Ok((!checker.prevents_pushdown())
+        .then(|| (checker.required_column_indices.into_iter().collect(), expr)))
 }
 
 /// creates a PushdownChecker for a single use to check a given column with the given schemes. Used
