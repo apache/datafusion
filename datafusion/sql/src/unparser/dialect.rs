@@ -216,6 +216,7 @@ impl Dialect for SqliteDialect {
 
     fn date_field_extract_style(&self) -> DateFieldExtractStyle {
         DateFieldExtractStyle::Strftime
+    }
 
     fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
         sqlparser::ast::DataType::Text
