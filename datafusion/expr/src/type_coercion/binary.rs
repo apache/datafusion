@@ -775,7 +775,6 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     use arrow::datatypes::DataType::*;
     use arrow::datatypes::IntervalUnit::*;
     use arrow::datatypes::TimeUnit::*;
-
     match (lhs_type, rhs_type) {
         // interval +/-
         (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
@@ -785,6 +784,9 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         }
         (Timestamp(_, _tz), Date32) | (Date32, Timestamp(_, _tz)) => {
             Some(Timestamp(Nanosecond, None))
+        }
+        (Timestamp(_, _tz), Date64) | (Date64, Timestamp(_, _tz)) => {
+            Some(Timestamp(Nanosecond, _tz.clone()))
         }
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
