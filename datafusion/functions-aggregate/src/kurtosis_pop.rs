@@ -56,7 +56,10 @@ impl Default for KurtosisPopFunction {
 impl KurtosisPopFunction {
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![DataType::Float64],
+                Volatility::Immutable,
+            ),
         }
     }
 }
