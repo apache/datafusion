@@ -595,8 +595,18 @@ NULL [[[3, 4], [5]], [[, 6], , [7, 8]]]
 8 [[[3, 4], [5]], [[, 6], , [7, 8]]]
 
 
+query I??
+select unnest(unnest(unnest(column3)['c1'])), unnest(unnest(column3)['c1']), column3 from recursive_unnest_table;
+----
+1 [1, 2] [{c0: [1], c1: [[1, 2]]}]
+2 NULL [{c0: [1], c1: [[1, 2]]}]
+3 [3] [{c0: [2], c1: [[3], [4]]}]
+NULL [4] [{c0: [2], c1: [[3], [4]]}]
+4 [3] [{c0: [2], c1: [[3], [4]]}]
+NULL [4] [{c0: [2], c1: [[3], [4]]}]
 
-
+## demonstrate where multiple unnest plan is needed
+## e.g unnest -> field_access -> unnest
 query TT
 explain select unnest(unnest(unnest(column3)['c1'])), unnest(unnest(column3)['c1']), column3 from recursive_unnest_table;
 ----
@@ -615,7 +625,6 @@ physical_plan
 05)--------UnnestExec
 06)----------ProjectionExec: expr=[column3@0 as unnest_placeholder(recursive_unnest_table.column3), column3@0 as column3]
 07)------------MemoryExec: partitions=1, partition_sizes=[1]
-
 
 
 
