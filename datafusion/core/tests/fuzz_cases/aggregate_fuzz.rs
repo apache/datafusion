@@ -207,7 +207,7 @@ async fn run_blocked_approach_aggregate_test(
     let mut session_config = SessionConfig::default();
     session_config = session_config.set(
         "datafusion.execution.batch_size",
-        ScalarValue::UInt64(Some(batch_size as u64)),
+        &ScalarValue::UInt64(Some(batch_size as u64)),
     );
     let usual_ctx = Arc::new(TaskContext::default().with_session_config(session_config));
 
@@ -215,11 +215,11 @@ async fn run_blocked_approach_aggregate_test(
     let mut session_config = SessionConfig::default();
     session_config = session_config.set(
         "datafusion.execution.enable_aggregation_intermediate_states_blocked_approach",
-        ScalarValue::Boolean(Some(true)),
+        &ScalarValue::Boolean(Some(true)),
     );
     session_config = session_config.set(
         "datafusion.execution.batch_size",
-        ScalarValue::UInt64(Some(batch_size as u64)),
+        &ScalarValue::UInt64(Some(batch_size as u64)),
     );
 
     let runtime = Arc::new(

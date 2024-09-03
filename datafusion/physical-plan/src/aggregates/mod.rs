@@ -2585,11 +2585,11 @@ mod tests {
         let mut session_config = SessionConfig::default();
         session_config = session_config.set(
             "datafusion.execution.enable_aggregation_intermediate_states_blocked_approach",
-            ScalarValue::Boolean(Some(true)),
+            &ScalarValue::Boolean(Some(true)),
         );
         session_config = session_config.set(
             "datafusion.execution.batch_size",
-            ScalarValue::UInt64(Some(1)),
+            &ScalarValue::UInt64(Some(1)),
         );
 
         let runtime = Arc::new(
@@ -2618,6 +2618,8 @@ mod tests {
             "+----+----+--------+",
         ];
         assert_batches_eq!(expected, &output);
+
+        Ok(())
     }
 
     #[test]
