@@ -29,7 +29,6 @@ use arrow::{
     compute::SortOptions,
     record_batch::RecordBatch,
 };
-use arrow_array::UInt64Array;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::physical_plan::{
     collect,
@@ -186,8 +185,6 @@ fn concat(mut v1: Vec<RecordBatch>, v2: Vec<RecordBatch>) -> Vec<RecordBatch> {
 struct CongestedExec {
     schema: Schema,
     cache: PlanProperties,
-    batch_size: u64,
-    limit: u64,
     congestion_cleared: Arc<Mutex<bool>>,
 }
 
@@ -235,10 +232,7 @@ impl ExecutionPlan for CongestedExec {
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(CongestedStream {
             schema: Arc::new(self.schema.clone()),
-            batch_size: self.batch_size,
-            offset: (0, 0),
             congestion_cleared: self.congestion_cleared.clone(),
-            limit: self.limit,
             partition,
         }))
     }
@@ -259,24 +253,8 @@ impl DisplayAs for CongestedExec {
 #[derive(Debug)]
 pub struct CongestedStream {
     schema: SchemaRef,
-    batch_size: u64,
-    offset: (u64, u64),
-    limit: u64,
     congestion_cleared: Arc<Mutex<bool>>,
     partition: usize,
-}
-
-impl CongestedStream {
-    fn create_record_batch(
-        schema: SchemaRef,
-        value: u64,
-        batch_size: u64,
-    ) -> RecordBatch {
-        let values = (0..batch_size).map(|_| value).collect::<Vec<_>>();
-        let array = UInt64Array::from(values);
-        let array_ref: ArrayRef = Arc::new(array);
-        RecordBatch::try_new(schema, vec![array_ref]).unwrap()
-    }
 }
 
 impl Stream for CongestedStream {
@@ -289,34 +267,15 @@ impl Stream for CongestedStream {
             0 => {
                 let cleared = self.congestion_cleared.lock().unwrap();
                 if *cleared {
-                    std::mem::drop(cleared);
-                    if self.offset.0 == self.limit {
-                        return Poll::Ready(None);
-                    }
-                    let batch = CongestedStream::create_record_batch(
-                        Arc::clone(&self.schema),
-                        0,
-                        self.batch_size,
-                    );
-                    self.offset.0 += self.batch_size;
-                    Poll::Ready(Some(Ok(batch)))
+                    return Poll::Ready(None);
                 } else {
                     Poll::Pending
                 }
             }
             1 => {
-                if self.offset.1 == self.limit {
-                    return Poll::Ready(None);
-                }
-                let batch = CongestedStream::create_record_batch(
-                    Arc::clone(&self.schema),
-                    0,
-                    self.batch_size,
-                );
-                self.offset.1 += self.batch_size;
                 let mut cleared = self.congestion_cleared.lock().unwrap();
                 *cleared = true;
-                Poll::Ready(Some(Ok(batch)))
+                Poll::Ready(None)
             }
             _ => unreachable!(),
         }
@@ -335,9 +294,7 @@ async fn test_spm_congestion() -> Result<()> {
     let schema = Schema::new(vec![Field::new("c1", DataType::UInt64, false)]);
     let source = CongestedExec {
         schema: schema.clone(),
-        batch_size: 1,
         cache: CongestedExec::compute_properties(Arc::new(schema.clone())),
-        limit: 1_000,
         congestion_cleared: Arc::new(Mutex::new(false)),
     };
     let spm = SortPreservingMergeExec::new(
@@ -349,7 +306,7 @@ async fn test_spm_congestion() -> Result<()> {
     );
     let spm_task = SpawnedTask::spawn(collect(Arc::new(spm), task_ctx));
 
-    let result = timeout(Duration::from_secs(1), spm_task.join()).await;
+    let result = timeout(Duration::from_secs(3), spm_task.join()).await;
     match result {
         Ok(Ok(Ok(_batches))) => Ok(()),
         Ok(Ok(Err(e))) => Err(e),

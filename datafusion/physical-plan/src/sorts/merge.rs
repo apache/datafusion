@@ -164,8 +164,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
         // try to initialize the loser tree
         if self.loser_tree.is_empty() {
-            // Ensure all non-exhausted streams have a cursor from which
-            // rows can be pulled
+            // Ensure all non-exhausted streams have a cursor from which rows can be pulled
             let remaining_partitions = self.uninitiated_partitions.clone();
             for i in remaining_partitions {
                 match self.maybe_poll_stream(cx, i) {
@@ -175,6 +174,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     }
                     Poll::Pending => {
                         self.uninitiated_partitions.rotate_left(1);
+                        cx.waker().wake_by_ref();
                         return Poll::Pending;
                     }
                     _ => {
