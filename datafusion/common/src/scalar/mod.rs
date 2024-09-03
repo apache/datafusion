@@ -3518,11 +3518,11 @@ impl fmt::Display for ScalarValue {
             | ScalarValue::LargeBinary(e)
             | ScalarValue::BinaryView(e) => match e {
                 Some(l) => {
-                    let data = l.iter().map(|v| format!("{v}")).collect::<Vec<_>>();
+                    let data = l.iter().map(|v| format!("{v:02X}")).collect::<Vec<_>>();
                     if data.len() > 10 {
-                        write!(f, "{},...", data[..10].join(","))?;
+                        write!(f, "{}...", data[..10].join(""))?;
                     } else {
-                        write!(f, "{}", data.join(","))?;
+                        write!(f, "{}", data.join(""))?;
                     }
                 }
                 None => write!(f, "NULL")?,
@@ -6545,30 +6545,30 @@ mod tests {
     #[test]
     fn test_binary_display() {
         let small_binary_value = ScalarValue::Binary(Some(vec![1u8, 2, 3]));
-        assert_eq!(format!("{small_binary_value}"), "1,2,3");
+        assert_eq!(format!("{small_binary_value}"), "010203");
         let large_binary_value =
             ScalarValue::Binary(Some(vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
-        assert_eq!(format!("{large_binary_value}"), "1,2,3,4,5,6,7,8,9,10,...");
+        assert_eq!(format!("{large_binary_value}"), "0102030405060708090A...");
 
         let small_binary_value = ScalarValue::BinaryView(Some(vec![1u8, 2, 3]));
-        assert_eq!(format!("{small_binary_value}"), "1,2,3");
+        assert_eq!(format!("{small_binary_value}"), "010203");
         let large_binary_value =
             ScalarValue::BinaryView(Some(vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
-        assert_eq!(format!("{large_binary_value}"), "1,2,3,4,5,6,7,8,9,10,...");
+        assert_eq!(format!("{large_binary_value}"), "0102030405060708090A...");
 
         let small_binary_value = ScalarValue::LargeBinary(Some(vec![1u8, 2, 3]));
-        assert_eq!(format!("{small_binary_value}"), "1,2,3");
+        assert_eq!(format!("{small_binary_value}"), "010203");
         let large_binary_value =
             ScalarValue::LargeBinary(Some(vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
-        assert_eq!(format!("{large_binary_value}"), "1,2,3,4,5,6,7,8,9,10,...");
+        assert_eq!(format!("{large_binary_value}"), "0102030405060708090A...");
 
         let small_binary_value = ScalarValue::FixedSizeBinary(3, Some(vec![1u8, 2, 3]));
-        assert_eq!(format!("{small_binary_value}"), "1,2,3");
+        assert_eq!(format!("{small_binary_value}"), "010203");
         let large_binary_value = ScalarValue::FixedSizeBinary(
             11,
             Some(vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
         );
-        assert_eq!(format!("{large_binary_value}"), "1,2,3,4,5,6,7,8,9,10,...");
+        assert_eq!(format!("{large_binary_value}"), "0102030405060708090A...");
     }
 
     #[test]
