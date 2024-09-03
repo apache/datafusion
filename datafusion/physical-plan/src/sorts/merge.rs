@@ -95,8 +95,12 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Optional number of rows to fetch
     fetch: Option<usize>,
 
-    /// number of rows produced
+    /// Number of rows produced
     produced: usize,
+
+    /// A vector having partition indices in a priortiy order
+    /// to visit the partitions in a round-robin fashion
+    partitions_in_priority_order: Vec<usize>,
 }
 
 impl<C: CursorValues> SortPreservingMergeStream<C> {
@@ -121,6 +125,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             batch_size,
             fetch,
             produced: 0,
+            partitions_in_priority_order: (0..stream_count).collect::<Vec<_>>(),
         }
     }
 
@@ -136,6 +141,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             // Cursor is not finished - don't need a new RecordBatch yet
             return Poll::Ready(Ok(()));
         }
+
+        cx.waker().wake_by_ref();
 
         match futures::ready!(self.streams.poll_next(cx, idx)) {
             None => Poll::Ready(Ok(())),
@@ -158,10 +165,18 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         if self.loser_tree.is_empty() {
             // Ensure all non-exhausted streams have a cursor from which
             // rows can be pulled
-            for i in 0..self.streams.partitions() {
-                if let Err(e) = ready!(self.maybe_poll_stream(cx, i)) {
-                    self.aborted = true;
-                    return Poll::Ready(Some(Err(e)));
+            let partitions = self.partitions_in_priority_order.clone();
+            for i in partitions {
+                match self.maybe_poll_stream(cx, i) {
+                    Poll::Ready(Err(e)) => {
+                        self.aborted = true;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    Poll::Pending => {
+                        self.partitions_in_priority_order.rotate_left(1);
+                        return Poll::Pending;
+                    }
+                    _ => {}
                 }
             }
             self.init_loser_tree();
