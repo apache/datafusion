@@ -17,7 +17,9 @@
 
 //! SQL planning extensions like [`NestedFunctionPlanner`] and [`FieldAccessPlanner`]
 
-use datafusion_common::{plan_err, utils::list_ndims, DFSchema, Result};
+use std::collections::HashSet;
+
+use datafusion_common::{exec_err, plan_err, utils::list_ndims, DFSchema, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
@@ -107,8 +109,18 @@ impl ExprPlanner for NestedFunctionPlanner {
 
         let (keys, values): (Vec<_>, Vec<_>) =
             args.into_iter().enumerate().partition(|(i, _)| i % 2 == 0);
-        let keys = make_array(keys.into_iter().map(|(_, e)| e).collect());
-        let values = make_array(values.into_iter().map(|(_, e)| e).collect());
+
+        let keys: Vec<Expr> = keys.into_iter().map(|(_, e)| e).collect();
+        let mut seen_keys = HashSet::with_capacity(keys.len());
+        for key in &keys {
+            if !seen_keys.insert(key) {
+                return exec_err!("map key must be unique, duplicate key found: {}", key);
+            }
+        }
+        let values = values.into_iter().map(|(_, e)| e).collect();
+
+        let keys = make_array(keys);
+        let values = make_array(values);
 
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
             ScalarFunction::new_udf(map_udf(), vec![keys, values]),
