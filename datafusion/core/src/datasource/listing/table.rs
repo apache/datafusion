@@ -26,11 +26,7 @@ use super::PartitionedFile;
 
 use super::ListingTableUrl;
 
-#[cfg(feature = "parquet")]
-use crate::datasource::{
-    file_format::parquet::ParquetFormat,
-    physical_plan::parquet::can_expr_be_pushed_down_with_schemas,
-};
+use crate::datasource::file_format::FilePushdownSupport;
 
 use crate::datasource::{create_ordering, get_statistics_with_limit};
 use crate::datasource::{
@@ -833,7 +829,7 @@ impl TableProvider for ListingTable {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        Ok(filters
+        filters
             .iter()
             .map(|filter| {
                 if expr_applicable_for_cols(
@@ -846,33 +842,20 @@ impl TableProvider for ListingTable {
                     filter,
                 ) {
                     // if filter can be handled by partition pruning, it is exact
-                    return TableProviderFilterPushDown::Exact;
+                    return Ok(TableProviderFilterPushDown::Exact);
                 }
 
-                #[cfg(feature = "parquet")]
-                {
-                    let parquet_pushdown_enabled = self
-                        .options
-                        .format
-                        .as_any()
-                        .downcast_ref::<ParquetFormat>()
-                        .is_some_and(|format| format.options().global.pushdown_filters);
-                    let columns_can_be_pushed_down = can_expr_be_pushed_down_with_schemas(
-                        filter,
-                        &self.file_schema,
-                        &self.table_schema,
-                    );
-                    if parquet_pushdown_enabled && columns_can_be_pushed_down {
-                        // if we can't push it down completely with only the filename-based/path-based
-                        // column names, then we should check if we can do parquet predicate pushdown
+                // if we can't push it down completely with only the filename-based/path-based
+                // column names, then we should check if we can do parquet predicate pushdown
+                let supports_pushdown = self.options.format.supports_filters_pushdown(&self.file_schema, &self.table_schema, &[filter])?;
 
-                        return TableProviderFilterPushDown::Exact;
-                    }
+                if supports_pushdown == FilePushdownSupport::Supported {
+                    return Ok(TableProviderFilterPushDown::Exact);
                 }
 
-                TableProviderFilterPushDown::Inexact
+                Ok(TableProviderFilterPushDown::Inexact)
             })
-            .collect())
+            .collect()
     }
 
     fn get_table_definition(&self) -> Option<&str> {

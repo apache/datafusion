@@ -422,7 +422,7 @@ fn would_column_prevent_pushdown(
     checker.prevents_pushdown()
 }
 
-/// recurses through expr as a trea, finds all `column`s, and checks if any of them would prevent
+/// Recurses through expr as a trea, finds all `column`s, and checks if any of them would prevent
 /// this expression from being predicate pushed down. If any of them would, this returns false.
 /// Otherwise, true.
 pub fn can_expr_be_pushed_down_with_schemas(
@@ -441,9 +441,9 @@ pub fn can_expr_be_pushed_down_with_schemas(
                 TreeNodeRecursion::Stop
             })
         }
-        _ => Ok(TreeNodeRecursion::Continue), // we never return an Err, so we can safely unwrap this
+        _ => Ok(TreeNodeRecursion::Continue),
     })
-    .unwrap();
+    .unwrap(); // we never return an Err, so we can safely unwrap this
     can_be_pushed
 }
 
