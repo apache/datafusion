@@ -5875,6 +5875,70 @@ SELECT skewness(DISTINCT col) FROM VALUES (-10), (-20), (100), (1000), (1000) AS
 1.928752451203
 
 query R
-SELECT skewness(1.0);
+SELECT skewness(1);
 ----
 NULL
+
+query R
+select skewness(NULL);
+----
+NULL
+
+query error
+select skewness(*);
+
+# out of range
+query R
+SELECT skewness(DISTINCT col) FROM VALUES (-2e307), (0), (2e307) AS tab(col);
+----
+NaN
+
+statement ok
+create table aggr(k int, v decimal(10,2), v2 decimal(10, 2));
+
+statement ok
+insert into aggr values
+    (1, 10, null),
+    (2, 10, 11),
+    (2, 10, 15),
+    (2, 10, 18),
+    (2, 20, 22),
+    (2, 20, 25),
+    (2, 25, null),
+    (2, 30, 35),
+    (2, 30, 40),
+    (2, 30, 50),
+    (2, 30, 51);
+
+query RRR
+select skewness(k), skewness(v), skewness(v2) from aggr;
+----
+-3.316624790355 -0.163443669352 0.365400851103
+
+query R
+select skewness(v2) as sv2 from aggr group by v ORDER BY sv2;
+----
+-0.423273160268
+-0.330140951366
+NULL
+NULL
+
+# Window Function
+query R
+select skewness(v2) over (partition by v)
+    from aggr order by v;
+----
+-0.423273160268
+-0.423273160268
+-0.423273160268
+-0.423273160268
+NULL
+NULL
+NULL
+-0.330140951366
+-0.330140951366
+-0.330140951366
+-0.330140951366
+
+statement ok
+drop table aggr;

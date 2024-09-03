@@ -26,10 +26,16 @@ use datafusion_functions_aggregate_common::accumulator::{
 use std::any::Any;
 use std::ops::{Div, Mul, Sub};
 
-make_udaf_expr_and_func!(SkewnessFunc, skewness, x, "The skewness.", skewness_udaf);
+make_udaf_expr_and_func!(
+    SkewnessFunc,
+    skewness,
+    x,
+    "Computes the skewness value.",
+    skewness_udaf
+);
 
 #[derive(Debug)]
-struct SkewnessFunc {
+pub struct SkewnessFunc {
     name: String,
     signature: Signature,
 }
@@ -96,10 +102,10 @@ impl AggregateUDFImpl for SkewnessFunc {
 }
 
 /// Accumulator for calculating the skewness
-/// This implementation follows the [DuckDB implementation] :
+/// This implementation follows the DuckDB implementation:
 /// <https://github.com/duckdb/duckdb/blob/main/src/core_functions/aggregate/distributive/skew.cpp>
 #[derive(Debug)]
-struct SkewnessAccumulator {
+pub struct SkewnessAccumulator {
     count: u64,
     sum: f64,
     sum_sqr: f64,
