@@ -151,23 +151,19 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
-        println!("111");
         if self.aborted {
             return Poll::Ready(None);
         }
         // try to initialize the loser tree
         if self.loser_tree.is_empty() {
-            println!("222");
             // Ensure all non-exhausted streams have a cursor from which
             // rows can be pulled
             for i in 0..self.streams.partitions() {
-                println!("i: {}", i);
                 if let Err(e) = ready!(self.maybe_poll_stream(cx, i)) {
                     self.aborted = true;
                     return Poll::Ready(Some(Err(e)));
                 }
             }
-            println!("333");
             self.init_loser_tree();
         }
 

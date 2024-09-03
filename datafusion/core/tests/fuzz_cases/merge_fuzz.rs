@@ -285,7 +285,6 @@ impl Stream for CongestedStream {
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        println!("asd");
         match self.partition {
             0 => {
                 let cleared = self.congestion_cleared.lock().unwrap();
