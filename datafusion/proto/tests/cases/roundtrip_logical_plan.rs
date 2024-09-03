@@ -74,6 +74,7 @@ use datafusion_functions_aggregate::expr_fn::{
     nth_value,
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
+use datafusion_functions_window_common::field::FieldArgs;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -2416,6 +2417,10 @@ fn roundtrip_window() {
 
         fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
             make_partition_evaluator()
+        }
+
+        fn field(&self, field_args: FieldArgs) -> Result<Field> {
+            Ok(Field::new(field_args.display_name, field_args.return_type, true))
         }
     }
 

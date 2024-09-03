@@ -29,12 +29,13 @@ use std::{
 
 use arrow::array::AsArray;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 use datafusion::{assert_batches_eq, prelude::SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     PartitionEvaluator, Signature, Volatility, WindowUDF, WindowUDFImpl,
 };
+use datafusion_functions_window_common::field::FieldArgs;
 
 /// A query with a window function evaluated over the entire partition
 const UNBOUNDED_WINDOW_QUERY: &str = "SELECT x, y, val, \
@@ -564,6 +565,10 @@ impl OddCounter {
 
             fn aliases(&self) -> &[String] {
                 &self.aliases
+            }
+
+            fn field(&self, field_args: FieldArgs) -> Result<Field> {
+                Ok(Field::new(field_args.display_name, field_args.return_type, true))
             }
         }
 

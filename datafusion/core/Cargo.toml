@@ -145,6 +145,7 @@ bigdecimal = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }
 csv = "1.1.6"
 ctor = { workspace = true }
+datafusion-functions-window-common = {workspace = true}
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
 half = { workspace = true, default-features = true }

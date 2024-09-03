@@ -25,9 +25,10 @@ use std::{
     sync::Arc,
 };
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
 use datafusion_common::{not_impl_err, Result};
+use datafusion_functions_window_common::field::FieldArgs;
 
 use crate::expr::WindowFunction;
 use crate::{
@@ -183,6 +184,10 @@ impl WindowUDF {
     /// See [`WindowUDFImpl::nullable`] for more details.
     pub fn nullable(&self) -> bool {
         self.inner.nullable()
+    }
+
+    pub fn field(&self, field_args: FieldArgs) -> Result<Field> {
+        self.inner.field(field_args)
     }
 
     /// Returns custom result ordering introduced by this window function
@@ -353,6 +358,8 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         true
     }
 
+    fn field(&self, field_args: FieldArgs) -> Result<Field>;
+
     /// Allows the window UDF to define a custom result ordering.
     ///
     /// By default, a window UDF doesn't introduce an ordering.
@@ -454,6 +461,10 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.nullable()
     }
 
+    fn field(&self, field_args: FieldArgs) -> Result<Field> {
+        self.inner.field(field_args)
+    }
+
     fn sort_options(&self) -> Option<SortOptions> {
         self.inner.sort_options()
     }
@@ -509,5 +520,9 @@ impl WindowUDFImpl for WindowUDFLegacyWrapper {
 
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         (self.partition_evaluator_factory)()
+    }
+
+    fn field(&self, field_args: FieldArgs) -> Result<Field> {
+        Ok(Field::new(field_args.display_name, field_args.return_type, true))
     }
 }

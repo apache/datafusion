@@ -17,6 +17,7 @@
 
 use datafusion_common::arrow::datatypes::DataType;
 
-pub struct FieldArgs {
+pub struct FieldArgs<'a> {
     pub return_type: DataType,
+    pub display_name: &'a str,
 }
