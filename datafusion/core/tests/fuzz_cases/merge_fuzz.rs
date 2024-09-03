@@ -285,6 +285,7 @@ impl Stream for CongestedStream {
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        println!("asd");
         match self.partition {
             0 => {
                 let cleared = self.congestion_cleared.lock().unwrap();
@@ -347,10 +348,9 @@ async fn test_spm_congestion() -> Result<()> {
         )],
         Arc::new(source),
     );
-    let spm_task =
-        SpawnedTask::spawn(async move { collect(Arc::new(spm), task_ctx).await });
+    let spm_task = SpawnedTask::spawn(collect(Arc::new(spm), task_ctx));
 
-    let result = timeout(Duration::from_secs(10), spm_task.join()).await;
+    let result = timeout(Duration::from_secs(5), spm_task.join()).await;
     match result {
         Ok(Ok(Ok(_batches))) => Ok(()),
         Ok(Ok(Err(e))) => Err(e),
