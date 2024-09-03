@@ -18,19 +18,22 @@
 //! Merge that deals with an arbitrary size of streaming inputs.
 //! This is an order-preserving merge.
 
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{ready, Context, Poll};
+
 use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
 use crate::RecordBatchStream;
+
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
+
 use futures::Stream;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{ready, Context, Poll};
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
 type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
@@ -95,12 +98,12 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Optional number of rows to fetch
     fetch: Option<usize>,
 
-    /// Number of rows produced
+    /// number of rows produced
     produced: usize,
 
-    /// A vector having partition indices in a priortiy order
-    /// to visit the partitions in a round-robin fashion
-    partitions_in_priority_order: Vec<usize>,
+    /// Unitiated partitions. They are stored in a vector to keep them in
+    /// a priortiy order to visit the partitions in a round-robin fashion
+    uninitiated_partitions: Vec<usize>,
 }
 
 impl<C: CursorValues> SortPreservingMergeStream<C> {
@@ -125,7 +128,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             batch_size,
             fetch,
             produced: 0,
-            partitions_in_priority_order: (0..stream_count).collect::<Vec<_>>(),
+            uninitiated_partitions: (0..stream_count).collect(),
         }
     }
 
@@ -141,8 +144,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             // Cursor is not finished - don't need a new RecordBatch yet
             return Poll::Ready(Ok(()));
         }
-
-        cx.waker().wake_by_ref();
 
         match futures::ready!(self.streams.poll_next(cx, idx)) {
             None => Poll::Ready(Ok(())),
@@ -165,18 +166,20 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         if self.loser_tree.is_empty() {
             // Ensure all non-exhausted streams have a cursor from which
             // rows can be pulled
-            let partitions = self.partitions_in_priority_order.clone();
-            for i in partitions {
+            let remaining_partitions = self.uninitiated_partitions.clone();
+            for i in remaining_partitions {
                 match self.maybe_poll_stream(cx, i) {
                     Poll::Ready(Err(e)) => {
                         self.aborted = true;
                         return Poll::Ready(Some(Err(e)));
                     }
                     Poll::Pending => {
-                        self.partitions_in_priority_order.rotate_left(1);
+                        self.uninitiated_partitions.rotate_left(1);
                         return Poll::Pending;
                     }
-                    _ => {}
+                    _ => {
+                        self.uninitiated_partitions.retain(|idx| *idx != i);
+                    }
                 }
             }
             self.init_loser_tree();
