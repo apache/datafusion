@@ -31,6 +31,7 @@ use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema, Result,
     TableReference,
 };
+use datafusion_functions_window_common::field::FieldArgs;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -166,7 +167,13 @@ impl ExprSchemable for Expr {
                 // expressiveness of `TypeSignature`), then infer return type
                 Ok(func.return_type_from_exprs(args, schema, &arg_data_types)?)
             }
-            Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
+            Expr::WindowFunction(WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                ..
+            }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
@@ -204,7 +211,16 @@ impl ExprSchemable for Expr {
                                     )
                                 )
                             })?;
-                        Ok(fun.return_type(&new_types, &nullability)?)
+                        // Ok(fun.return_type(&new_types, &nullability)?)
+                        let display_name = format!(
+                            "{}({:?}) PARTITION BY: [{:?}], ORDER BY: [{:?}]",
+                            fun, args, partition_by, order_by
+                        );
+                        udwf.field(FieldArgs {
+                            input_types: new_types.as_ref(),
+                            display_name: &display_name,
+                        })
+                        .map(|field| field.data_type().clone())
                     }
                     _ => fun.return_type(&data_types, &nullability),
                 }
