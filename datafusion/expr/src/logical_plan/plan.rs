@@ -2793,22 +2793,28 @@ fn calc_func_dependencies_for_project(
                         .filter_map(|(qualifier, f)| {
                             let flat_name = qualifier
                                 .map(|t| format!("{}.{}", t, f.name()))
-                                .unwrap_or(f.name().clone());
+                                .unwrap_or_else(|| f.name().clone());
                             input_fields.iter().position(|item| *item == flat_name)
                         })
                         .collect::<Vec<_>>(),
                 )
             }
-            Expr::Alias(alias) => Ok(input_fields
-                .iter()
-                .position(|item| *item == format!("{}", alias.expr))
-                .map(|i| vec![i])
-                .unwrap_or(vec![])),
-            _ => Ok(input_fields
-                .iter()
-                .position(|item| *item == format!("{}", expr))
-                .map(|i| vec![i])
-                .unwrap_or(vec![])),
+            Expr::Alias(alias) => {
+                let name = format!("{}", alias.expr);
+                Ok(input_fields
+                    .iter()
+                    .position(|item| *item == name)
+                    .map(|i| vec![i])
+                    .unwrap_or(vec![]))
+            }
+            _ => {
+                let name = format!("{}", expr);
+                Ok(input_fields
+                    .iter()
+                    .position(|item| *item == name)
+                    .map(|i| vec![i])
+                    .unwrap_or(vec![]))
+            }
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
