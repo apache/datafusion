@@ -665,19 +665,13 @@ pub async fn from_substrait_rel(
                     substrait_datafusion_err!("No base schema provided for Named Scan")
                 })?;
                 let substrait_schema =
-                    from_substrait_named_struct(named_struct, extensions)?;
-                let qualified_substrait_schema = substrait_schema
-                    .as_ref()
-                    .clone()
-                    .replace_qualifier(table_reference);
+                    from_substrait_named_struct(named_struct, extensions)?
+                        .replace_qualifier(table_reference);
 
-                if !validate_substrait_schema(
-                    datafusion_schema,
-                    &qualified_substrait_schema,
-                ) {
+                if !validate_substrait_schema(datafusion_schema, &substrait_schema) {
                     return Err(substrait_datafusion_err!(
                         "Schema mismatch in ReadRel: substrait: {:?}, DataFusion: {:?}",
-                        qualified_substrait_schema,
+                        substrait_schema,
                         datafusion_schema
                     ));
                 };
@@ -693,7 +687,7 @@ pub async fn from_substrait_rel(
                 if vt.values.is_empty() {
                     return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
-                        schema,
+                        schema: DFSchemaRef::new(schema),
                     }));
                 }
 
@@ -726,7 +720,10 @@ pub async fn from_substrait_rel(
                     })
                     .collect::<Result<_>>()?;
 
-                Ok(LogicalPlan::Values(Values { schema, values }))
+                Ok(LogicalPlan::Values(Values {
+                    schema: DFSchemaRef::new(schema),
+                    values,
+                }))
             }
             Some(ReadType::LocalFiles(lf)) => {
                 fn extract_filename(name: &str) -> Option<String> {
@@ -1637,7 +1634,7 @@ fn next_struct_field_name(
 pub fn from_substrait_named_struct(
     base_schema: &NamedStruct,
     extensions: &Extensions,
-) -> Result<DFSchemaRef> {
+) -> Result<DFSchema> {
     let mut name_idx = 0;
     let fields = from_substrait_struct_type(
         base_schema.r#struct.as_ref().ok_or_else(|| {
@@ -1654,8 +1651,7 @@ pub fn from_substrait_named_struct(
             base_schema.names.len()
         );
     }
-    let df_schema = DFSchema::try_from(Schema::new(fields?))?;
-    Ok(DFSchemaRef::new(df_schema))
+    DFSchema::try_from(Schema::new(fields?))
 }
 
 fn from_substrait_bound(
