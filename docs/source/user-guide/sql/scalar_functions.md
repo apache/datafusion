@@ -2087,6 +2087,7 @@ to_unixtime(expression[, ..., format_n])
 
 ## Array Functions
 
+- [array_any_value](#array_any_value)
 - [array_append](#array_append)
 - [array_sort](#array_sort)
 - [array_cat](#array_cat)
@@ -2131,6 +2132,7 @@ to_unixtime(expression[, ..., format_n])
 - [empty](#empty)
 - [flatten](#flatten)
 - [generate_series](#generate_series)
+- [list_any_value] (#list_any_value)
 - [list_append](#list_append)
 - [list_sort](#list_sort)
 - [list_cat](#list_cat)
@@ -2174,6 +2176,30 @@ to_unixtime(expression[, ..., format_n])
 - [trim_array](#trim_array)
 - [unnest](#unnest)
 - [range](#range)
+
+### `array_any_value`
+
+Returns the first non-null element in the array.
+
+```
+array_any_value(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+> select array_any_value([NULL, 1, 2, 3]);
++--------------------------------------------------------------+
+| array_any_value(List([NULL,1,2,3]))                          |
++--------------------------------------------------------------+
+| 1                                                            |
++--------------------------------------------------------------+
+```
 
 ### `array_append`
 
@@ -3239,6 +3265,10 @@ generate_series(start, stop, step)
 | [1, 2, 3]                          |
 +------------------------------------+
 ```
+
+### `list_any_value`
+
+_Alias of [array_any_value](#array_any_value)._
 
 ### `list_append`
 

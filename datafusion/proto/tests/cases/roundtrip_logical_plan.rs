@@ -839,6 +839,12 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
         array_pop_front(make_array(vec![lit(1), lit(2), lit(3)])),
         array_pop_back(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_any_value(make_array(vec![
+            lit(ScalarValue::Null),
+            lit(1),
+            lit(2),
+            lit(3),
+        ])),
         array_reverse(make_array(vec![lit(1), lit(2), lit(3)])),
         array_position(
             make_array(vec![lit(1), lit(2), lit(3), lit(4)]),
