@@ -229,7 +229,7 @@ mod tests {
                 WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 vec![wildcard()],
             ))
-            .order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
+            .order_by(vec![Sort::new(col("a"), false, true)])
             .window_frame(WindowFrame::new_bounds(
                 WindowFrameUnits::Range,
                 WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),

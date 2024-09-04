@@ -46,7 +46,7 @@ use crate::{
 use std::sync::Arc;
 
 use crate::expr::{Exists, InSubquery};
-use crate::tree_node::transform_option_vec;
+use crate::tree_node::{transform_sort_option_vec, transform_sort_vec};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion, TreeNodeRewriter,
     TreeNodeVisitor,
@@ -481,7 +481,9 @@ impl LogicalPlan {
                     .apply_until_stop(|e| f(&e))?
                     .visit_sibling(|| filter.iter().apply_until_stop(f))
             }
-            LogicalPlan::Sort(Sort { expr, .. }) => expr.iter().apply_until_stop(f),
+            LogicalPlan::Sort(Sort { expr, .. }) => {
+                expr.iter().apply_until_stop(|sort| f(&sort.expr))
+            }
             LogicalPlan::Extension(extension) => {
                 // would be nice to avoid this copy -- maybe can
                 // update extension to just observer Exprs
@@ -507,7 +509,7 @@ impl LogicalPlan {
             })) => on_expr
                 .iter()
                 .chain(select_expr.iter())
-                .chain(sort_expr.iter().flatten())
+                .chain(sort_expr.iter().flatten().map(|sort| &sort.expr))
                 .apply_until_stop(f),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
@@ -658,10 +660,10 @@ impl LogicalPlan {
                     null_equals_null,
                 })
             }),
-            LogicalPlan::Sort(Sort { expr, input, fetch }) => expr
-                .into_iter()
-                .map_until_stop_and_collect(f)?
-                .update_data(|expr| LogicalPlan::Sort(Sort { expr, input, fetch })),
+            LogicalPlan::Sort(Sort { expr, input, fetch }) => {
+                transform_sort_vec(expr, &mut f)?
+                    .update_data(|expr| LogicalPlan::Sort(Sort { expr, input, fetch }))
+            }
             LogicalPlan::Extension(Extension { node }) => {
                 // would be nice to avoid this copy -- maybe can
                 // update extension to just observer Exprs
@@ -709,7 +711,7 @@ impl LogicalPlan {
                 select_expr,
                 select_expr.into_iter().map_until_stop_and_collect(&mut f),
                 sort_expr,
-                transform_option_vec(sort_expr, &mut f)
+                transform_sort_option_vec(sort_expr, &mut f)
             )?
             .update_data(|(on_expr, select_expr, sort_expr)| {
                 LogicalPlan::Distinct(Distinct::On(DistinctOn {

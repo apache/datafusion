@@ -309,7 +309,7 @@ fn adjust_input_keys_ordering(
                 return reorder_partitioned_join_keys(
                     requirements,
                     on,
-                    vec![],
+                    &[],
                     &join_constructor,
                 )
                 .map(Transformed::yes);
@@ -373,7 +373,7 @@ fn adjust_input_keys_ordering(
         return reorder_partitioned_join_keys(
             requirements,
             on,
-            sort_options.clone(),
+            sort_options,
             &join_constructor,
         )
         .map(Transformed::yes);
@@ -421,7 +421,7 @@ fn adjust_input_keys_ordering(
 fn reorder_partitioned_join_keys<F>(
     mut join_plan: PlanWithKeyRequirements,
     on: &[(PhysicalExprRef, PhysicalExprRef)],
-    sort_options: Vec<SortOptions>,
+    sort_options: &[SortOptions],
     join_constructor: &F,
 ) -> Result<PlanWithKeyRequirements>
 where

@@ -685,10 +685,12 @@ impl ExecutionPlan for ParquetExec {
         partition_index: usize,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let projection = match self.base_config.file_column_projection_indices() {
-            Some(proj) => proj,
-            None => (0..self.base_config.file_schema.fields().len()).collect(),
-        };
+        let projection = self
+            .base_config
+            .file_column_projection_indices()
+            .unwrap_or_else(|| {
+                (0..self.base_config.file_schema.fields().len()).collect()
+            });
 
         let parquet_file_reader_factory = self
             .parquet_file_reader_factory
@@ -698,8 +700,7 @@ impl ExecutionPlan for ParquetExec {
                 ctx.runtime_env()
                     .object_store(&self.base_config.object_store_url)
                     .map(|store| {
-                        Arc::new(DefaultParquetFileReaderFactory::new(store))
-                            as Arc<dyn ParquetFileReaderFactory>
+                        Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
                     })
             })?;
 

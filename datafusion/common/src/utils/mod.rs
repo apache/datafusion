@@ -35,7 +35,7 @@ use arrow_array::{
     Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
     RecordBatchOptions,
 };
-use arrow_schema::{DataType, Fields};
+use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -444,8 +444,13 @@ pub fn arrays_into_list_array(
 }
 
 /// Helper function to convert a ListArray into a vector of ArrayRefs.
-pub fn list_to_arrays<O: OffsetSizeTrait>(a: ArrayRef) -> Vec<ArrayRef> {
+pub fn list_to_arrays<O: OffsetSizeTrait>(a: &ArrayRef) -> Vec<ArrayRef> {
     a.as_list::<O>().iter().flatten().collect::<Vec<_>>()
+}
+
+/// Helper function to convert a FixedSizeListArray into a vector of ArrayRefs.
+pub fn fixed_size_list_to_arrays(a: &ArrayRef) -> Vec<ArrayRef> {
+    a.as_fixed_size_list().iter().flatten().collect::<Vec<_>>()
 }
 
 /// Get the base type of a data type.
@@ -752,21 +757,6 @@ pub fn combine_limit(
     };
 
     (combined_skip, combined_fetch)
-}
-
-pub fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
-    match data_type {
-        DataType::Map(field, _) => {
-            let field_data_type = field.data_type();
-            match field_data_type {
-                DataType::Struct(fields) => Ok(fields),
-                _ => {
-                    _internal_err!("Expected a Struct type, got {:?}", field_data_type)
-                }
-            }
-        }
-        _ => _internal_err!("Expected a Map type, got {:?}", data_type),
-    }
 }
 
 #[cfg(test)]

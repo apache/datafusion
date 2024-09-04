@@ -24,7 +24,6 @@ use arrow::datatypes::DataType;
 use arrow_array::{Array, MapArray};
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::Field;
-use datafusion_common::utils::get_map_entry_field;
 
 use datafusion_common::{cast::as_map_array, exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -32,7 +31,7 @@ use std::any::Any;
 use std::sync::Arc;
 use std::vec;
 
-use crate::utils::make_scalar_function;
+use crate::utils::{get_map_entry_field, make_scalar_function};
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(

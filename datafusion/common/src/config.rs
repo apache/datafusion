@@ -261,9 +261,6 @@ config_namespace! {
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
 
-        /// Aggregate options
-        pub aggregate: AggregateOptions, default = Default::default()
-
         /// Fan-out during initial physical planning.
         ///
         /// This is mostly use to plan `UNION` children in parallel.
@@ -490,27 +487,6 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
-    }
-}
-
-config_namespace! {
-    /// Options related to aggregate execution
-    ///
-    /// See also: [`SessionConfig`]
-    ///
-    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
-    pub struct AggregateOptions {
-        /// Specifies the threshold for using `ScalarValue`s to update
-        /// accumulators during high-cardinality aggregations for each input batch.
-        ///
-        /// The aggregation is considered high-cardinality if the number of affected groups
-        /// is greater than or equal to `batch_size / scalar_update_factor`. In such cases,
-        /// `ScalarValue`s are utilized for updating accumulators, rather than the default
-        /// batch-slice approach. This can lead to performance improvements.
-        ///
-        /// By adjusting the `scalar_update_factor`, you can balance the trade-off between
-        /// more efficient accumulator updates and the number of groups affected.
-        pub scalar_update_factor: usize, default = 10
     }
 }
 
@@ -781,7 +757,7 @@ impl ConfigOptions {
     ///
     /// Only the built-in configurations will be extracted from the hash map
     /// and other key value pairs will be ignored.
-    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+    pub fn from_string_hash_map(settings: &HashMap<String, String>) -> Result<Self> {
         struct Visitor(Vec<String>);
 
         impl Visit for Visitor {
