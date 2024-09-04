@@ -811,7 +811,7 @@ impl LogicalPlan {
             // Since expr may be different than the previous expr, schema of the projection
             // may change. We need to use try_new method instead of try_new_with_schema method.
             LogicalPlan::Projection(Projection { .. }) => {
-                let input = self.only_input(inputs);
+                let input = self.only_input(inputs)?;
                 Projection::try_new(expr, Arc::new(input)).map(LogicalPlan::Projection)
             }
             LogicalPlan::Dml(DmlStatement {
@@ -820,8 +820,8 @@ impl LogicalPlan {
                 op,
                 ..
             }) => {
-                self.check_no_expressions(expr);
-                let input = self.only_input(inputs);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Dml(DmlStatement::new(
                     table_name.clone(),
                     Arc::clone(table_schema),
@@ -836,8 +836,8 @@ impl LogicalPlan {
                 options,
                 partition_by,
             }) => {
-                self.check_no_expressions(expr);
-                let input = self.only_input(inputs);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Copy(CopyTo {
                     input: Arc::new(input),
                     output_url: output_url.clone(),
@@ -847,7 +847,7 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Values(Values { schema, .. }) => {
-                self.check_no_inputs(inputs);
+                self.assert_no_inputs(inputs)?;
                 Ok(LogicalPlan::Values(Values {
                     schema: Arc::clone(schema),
                     values: expr
@@ -857,8 +857,8 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Filter { .. } => {
-                let predicate = self.only_expr(expr);
-                let input = self.only_input(inputs);
+                let predicate = self.only_expr(expr)?;
+                let input = self.only_input(inputs)?;
 
                 Filter::try_new(predicate, Arc::new(input)).map(LogicalPlan::Filter)
             }
@@ -867,22 +867,22 @@ impl LogicalPlan {
                 ..
             }) => match partitioning_scheme {
                 Partitioning::RoundRobinBatch(n) => {
-                    self.check_no_expressions(expr);
-                    let input = self.only_input(inputs);
+                    self.assert_no_expressions(expr)?;
+                    let input = self.only_input(inputs)?;
                     Ok(LogicalPlan::Repartition(Repartition {
                         partitioning_scheme: Partitioning::RoundRobinBatch(*n),
                         input: Arc::new(input),
                     }))
                 }
                 Partitioning::Hash(_, n) => {
-                    let input = self.only_input(inputs);
+                    let input = self.only_input(inputs)?;
                     Ok(LogicalPlan::Repartition(Repartition {
                         partitioning_scheme: Partitioning::Hash(expr, *n),
                         input: Arc::new(input),
                     }))
                 }
                 Partitioning::DistributeBy(_) => {
-                    let input = self.only_input(inputs);
+                    let input = self.only_input(inputs)?;
                     Ok(LogicalPlan::Repartition(Repartition {
                         partitioning_scheme: Partitioning::DistributeBy(expr),
                         input: Arc::new(input),
@@ -891,11 +891,11 @@ impl LogicalPlan {
             },
             LogicalPlan::Window(Window { window_expr, .. }) => {
                 assert_eq!(window_expr.len(), expr.len());
-                let input = self.only_input(inputs);
+                let input = self.only_input(inputs)?;
                 Window::try_new(expr, Arc::new(input)).map(LogicalPlan::Window)
             }
             LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
-                let input = self.only_input(inputs);
+                let input = self.only_input(inputs)?;
                 // group exprs are the first expressions
                 let agg_expr = expr.split_off(group_expr.len());
 
@@ -907,7 +907,7 @@ impl LogicalPlan {
                 fetch,
                 ..
             }) => {
-                let input = self.only_input(inputs);
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Sort(Sort {
                     expr: replace_sort_expressions(sort_expr.clone(), expr),
                     input: Arc::new(input),
@@ -921,7 +921,7 @@ impl LogicalPlan {
                 null_equals_null,
                 ..
             }) => {
-                let (left, right) = self.only_two_inputs(inputs);
+                let (left, right) = self.only_two_inputs(inputs)?;
                 let schema = build_join_schema(left.schema(), right.schema(), join_type)?;
 
                 let equi_expr_count = on.len();
@@ -962,15 +962,15 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::CrossJoin(_) => {
-                self.check_no_expressions(expr);
-                let (left, right) = self.only_two_inputs(inputs);
+                self.assert_no_expressions(expr)?;
+                let (left, right) = self.only_two_inputs(inputs)?;
                 LogicalPlanBuilder::from(left).cross_join(right)?.build()
             }
             LogicalPlan::Subquery(Subquery {
                 outer_ref_columns, ..
             }) => {
-                self.check_no_expressions(expr);
-                let input = self.only_input(inputs);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 let subquery = LogicalPlanBuilder::from(input).build()?;
                 Ok(LogicalPlan::Subquery(Subquery {
                     subquery: Arc::new(subquery),
@@ -978,14 +978,14 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-                self.check_no_expressions(expr);
-                let input = self.only_input(inputs);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 SubqueryAlias::try_new(Arc::new(input), alias.clone())
                     .map(LogicalPlan::SubqueryAlias)
             }
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
-                self.check_no_expressions(expr);
-                let input = self.only_input(inputs);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Limit(Limit {
                     skip: *skip,
                     fetch: *fetch,
@@ -999,8 +999,8 @@ impl LogicalPlan {
                 column_defaults,
                 ..
             })) => {
-                self.check_no_expressions(expr);
-                let input = self.only_input(inputs);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                     CreateMemoryTable {
                         input: Arc::new(input),
@@ -1018,8 +1018,8 @@ impl LogicalPlan {
                 definition,
                 ..
             })) => {
-                self.check_no_expressions(expr);
-                let input = self.only_input(inputs);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                     input: Arc::new(input),
                     name: name.clone(),
@@ -1031,7 +1031,7 @@ impl LogicalPlan {
                 node: e.node.with_exprs_and_inputs(expr, inputs)?,
             })),
             LogicalPlan::Union(Union { schema, .. }) => {
-                self.check_no_expressions(expr);
+                self.assert_no_expressions(expr)?;
                 let input_schema = inputs[0].schema();
                 // If inputs are not pruned do not change schema.
                 let schema = if schema.fields().len() == input_schema.fields().len() {
@@ -1047,8 +1047,8 @@ impl LogicalPlan {
             LogicalPlan::Distinct(distinct) => {
                 let distinct = match distinct {
                     Distinct::All(_) => {
-                        self.check_no_expressions(expr);
-                        let input = self.only_input(inputs);
+                        self.assert_no_expressions(expr)?;
+                        let input = self.only_input(inputs)?;
                         Distinct::All(Arc::new(input))
                     }
                     Distinct::On(DistinctOn {
@@ -1056,7 +1056,7 @@ impl LogicalPlan {
                         select_expr,
                         ..
                     }) => {
-                        let input = self.only_input(inputs);
+                        let input = self.only_input(inputs)?;
                         let sort_expr = expr.split_off(on_expr.len() + select_expr.len());
                         let select_expr = expr.split_off(on_expr.len());
                         assert!(sort_expr.is_empty(), "with_new_exprs for Distinct does not support sort expressions");
@@ -1073,8 +1073,8 @@ impl LogicalPlan {
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name, is_distinct, ..
             }) => {
-                self.check_no_expressions(expr);
-                let (static_term, recursive_term) = self.only_two_inputs(inputs);
+                self.assert_no_expressions(expr)?;
+                let (static_term, recursive_term) = self.only_two_inputs(inputs)?;
                 Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
                     name: name.clone(),
                     static_term: Arc::new(static_term),
@@ -1083,8 +1083,8 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Analyze(a) => {
-                self.check_no_expressions(expr);
-                let input = self.only_input(inputs);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Analyze(Analyze {
                     verbose: a.verbose,
                     schema: Arc::clone(&a.schema),
@@ -1092,8 +1092,8 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Explain(e) => {
-                self.check_no_expressions(expr);
-                let input = self.only_input(inputs);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Explain(Explain {
                     verbose: e.verbose,
                     plan: Arc::new(input),
@@ -1105,8 +1105,8 @@ impl LogicalPlan {
             LogicalPlan::Prepare(Prepare {
                 name, data_types, ..
             }) => {
-                self.check_no_expressions(expr);
-                let input = self.only_input(inputs);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Prepare(Prepare {
                     name: name.clone(),
                     data_types: data_types.clone(),
@@ -1114,7 +1114,7 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::TableScan(ts) => {
-                self.check_no_inputs(inputs);
+                self.assert_no_inputs(inputs)?;
                 Ok(LogicalPlan::TableScan(TableScan {
                     filters: expr,
                     ..ts.clone()
@@ -1125,8 +1125,8 @@ impl LogicalPlan {
             | LogicalPlan::Statement(_)
             | LogicalPlan::DescribeTable(_) => {
                 // All of these plan types have no inputs / exprs so should not be called
-                self.check_no_expressions(expr);
-                self.check_no_inputs(inputs);
+                self.assert_no_expressions(expr)?;
+                self.assert_no_inputs(inputs)?;
                 Ok(self.clone())
             }
             LogicalPlan::Unnest(Unnest {
@@ -1134,8 +1134,8 @@ impl LogicalPlan {
                 options,
                 ..
             }) => {
-                self.check_no_expressions(expr);
-                let input = self.only_input(inputs);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 // Update schema with unnested column type.
                 let new_plan =
                     unnest_with_options(input, columns.clone(), options.clone())?;
@@ -1146,60 +1146,58 @@ impl LogicalPlan {
 
     #[inline]
     #[allow(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
-    fn check_no_expressions(&self, expr: Vec<Expr>) {
-        assert!(
-            expr.is_empty(),
-            "{self:?} should have no exprs, got {:?}",
-            expr
-        );
+    fn assert_no_expressions(&self, expr: Vec<Expr>) -> Result<()> {
+        if !expr.is_empty() {
+            return internal_err!("{self:?} should have no exprs, got {:?}", expr);
+        }
+        Ok(())
     }
 
     #[inline]
     #[allow(clippy::needless_pass_by_value)] // inputs is moved intentionally to ensure it's not used again
-    fn check_no_inputs(&self, inputs: Vec<LogicalPlan>) {
-        assert!(
-            inputs.is_empty(),
-            "{self:?} should have no inputs, got: {:?}",
-            inputs
-        );
+    fn assert_no_inputs(&self, inputs: Vec<LogicalPlan>) -> Result<()> {
+        if !inputs.is_empty() {
+            return internal_err!("{self:?} should have no inputs, got: {:?}", inputs);
+        }
+        Ok(())
     }
 
     #[inline]
-    fn only_expr(&self, mut expr: Vec<Expr>) -> Expr {
-        assert_eq!(
-            expr.len(),
-            1,
-            "{self:?} should have exactly one expression, got {:?}",
-            expr
-        );
-        expr.remove(0)
+    fn only_expr(&self, mut expr: Vec<Expr>) -> Result<Expr> {
+        if expr.len() != 1 {
+            return internal_err!(
+                "{self:?} should have exactly one expr, got {:?}",
+                expr
+            );
+        }
+        Ok(expr.remove(0))
     }
 
     #[inline]
-    fn only_input(&self, mut inputs: Vec<LogicalPlan>) -> LogicalPlan {
-        assert_eq!(
-            inputs.len(),
-            1,
-            "{self:?} should have exactly one input, got {:?}",
-            inputs
-        );
-        inputs.remove(0)
+    fn only_input(&self, mut inputs: Vec<LogicalPlan>) -> Result<LogicalPlan> {
+        if inputs.len() != 1 {
+            return internal_err!(
+                "{self:?} should have exactly one input, got {:?}",
+                inputs
+            );
+        }
+        Ok(inputs.remove(0))
     }
 
     #[inline]
     fn only_two_inputs(
         &self,
         mut inputs: Vec<LogicalPlan>,
-    ) -> (LogicalPlan, LogicalPlan) {
-        assert_eq!(
-            inputs.len(),
-            2,
-            "{self:?} should have exactly two inputs, got {:?}",
-            inputs
-        );
+    ) -> Result<(LogicalPlan, LogicalPlan)> {
+        if inputs.len() != 2 {
+            return internal_err!(
+                "{self:?} should have exactly two inputs, got {:?}",
+                inputs
+            );
+        }
         let right = inputs.remove(1);
         let left = inputs.remove(0);
-        (left, right)
+        Ok((left, right))
     }
 
     /// Replaces placeholder param values (like `$1`, `$2`) in [`LogicalPlan`]
