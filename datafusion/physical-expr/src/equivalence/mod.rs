@@ -239,7 +239,7 @@ mod tests {
     // Convert each tuple to PhysicalSortRequirement
     pub fn convert_to_sort_reqs(
         in_data: &[(&Arc<dyn PhysicalExpr>, Option<SortOptions>)],
-    ) -> Vec<PhysicalSortRequirement> {
+    ) -> LexRequirement {
         in_data
             .iter()
             .map(|(expr, options)| {

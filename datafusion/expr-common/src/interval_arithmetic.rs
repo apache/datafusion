@@ -1877,11 +1877,7 @@ mod tests {
                 .sub(value.clone())
                 .unwrap()
                 .lt(&eps));
-            assert!(value
-                .clone()
-                .sub(prev_value(value.clone()))
-                .unwrap()
-                .lt(&eps));
+            assert!(value.sub(prev_value(value.clone())).unwrap().lt(&eps));
             assert_ne!(next_value(value.clone()), value);
             assert_ne!(prev_value(value.clone()), value);
         });
@@ -1913,11 +1909,11 @@ mod tests {
         min_max.into_iter().zip(inf).for_each(|((min, max), inf)| {
             assert_eq!(next_value(max.clone()), inf);
             assert_ne!(prev_value(max.clone()), max);
-            assert_ne!(prev_value(max.clone()), inf);
+            assert_ne!(prev_value(max), inf);
 
             assert_eq!(prev_value(min.clone()), inf);
             assert_ne!(next_value(min.clone()), min);
-            assert_ne!(next_value(min.clone()), inf);
+            assert_ne!(next_value(min), inf);
 
             assert_eq!(next_value(inf.clone()), inf);
             assert_eq!(prev_value(inf.clone()), inf);

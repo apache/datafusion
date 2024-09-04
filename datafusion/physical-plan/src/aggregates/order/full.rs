@@ -21,7 +21,7 @@ use datafusion_expr::EmitTo;
 /// group keys
 ///
 /// When the group values are sorted, as soon as we see group `n+1` we
-/// know we will never see any rows for group `n again and thus they
+/// know we will never see any rows for group `n` again and thus they
 /// can be emitted.
 ///
 /// For example, given `SUM(amt) GROUP BY id` if the input is sorted
@@ -63,7 +63,7 @@ enum State {
     /// Seen no input yet
     Start,
 
-    /// Data is in progress. `current is the current group for which
+    /// Data is in progress. `current` is the current group for which
     /// values are being generated. Can emit `current` - 1
     InProgress { current: usize },
 

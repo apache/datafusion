@@ -26,7 +26,9 @@ use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
-use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
+use crate::expr_rewriter::{
+    create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
+};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -51,7 +53,7 @@ use datafusion_common::{
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
-use crate::logical_plan::tree_node::unwrap_arc;
+use crate::tree_node::replace_sort_expressions;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -600,12 +602,6 @@ impl LogicalPlan {
         }
     }
 
-    /// Returns a copy of this `LogicalPlan` with the new inputs
-    #[deprecated(since = "35.0.0", note = "please use `with_new_exprs` instead")]
-    pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
-        self.with_new_exprs(self.expressions(), inputs.to_vec())
-    }
-
     /// Recomputes schema and type information for this LogicalPlan if needed.
     ///
     /// Some `LogicalPlan`s may need to recompute their schema if the number or
@@ -643,9 +639,12 @@ impl LogicalPlan {
                 // todo it isn't clear why the schema is not recomputed here
                 Ok(LogicalPlan::Values(Values { schema, values }))
             }
-            LogicalPlan::Filter(Filter { predicate, input }) => {
-                Filter::try_new(predicate, input).map(LogicalPlan::Filter)
-            }
+            LogicalPlan::Filter(Filter {
+                predicate,
+                input,
+                having,
+            }) => Filter::try_new_internal(predicate, input, having)
+                .map(LogicalPlan::Filter),
             LogicalPlan::Repartition(_) => Ok(self),
             LogicalPlan::Window(Window {
                 input,
@@ -767,7 +766,7 @@ impl LogicalPlan {
                 ..
             }) => {
                 // Update schema with unnested column type.
-                unnest_with_options(unwrap_arc(input), exec_columns, options)
+                unnest_with_options(Arc::unwrap_or_clone(input), exec_columns, options)
             }
         }
     }
@@ -882,8 +881,12 @@ impl LogicalPlan {
                 Aggregate::try_new(Arc::new(inputs.swap_remove(0)), expr, agg_expr)
                     .map(LogicalPlan::Aggregate)
             }
-            LogicalPlan::Sort(Sort { fetch, .. }) => Ok(LogicalPlan::Sort(Sort {
-                expr,
+            LogicalPlan::Sort(Sort {
+                expr: sort_expr,
+                fetch,
+                ..
+            }) => Ok(LogicalPlan::Sort(Sort {
+                expr: replace_sort_expressions(sort_expr.clone(), expr),
                 input: Arc::new(inputs.swap_remove(0)),
                 fetch: *fetch,
             })),
@@ -1012,14 +1015,11 @@ impl LogicalPlan {
                     }) => {
                         let sort_expr = expr.split_off(on_expr.len() + select_expr.len());
                         let select_expr = expr.split_off(on_expr.len());
+                        assert!(sort_expr.is_empty(), "with_new_exprs for Distinct does not support sort expressions");
                         Distinct::On(DistinctOn::try_new(
                             expr,
                             select_expr,
-                            if !sort_expr.is_empty() {
-                                Some(sort_expr)
-                            } else {
-                                None
-                            },
+                            None, // no sort expressions accepted
                             Arc::new(inputs.swap_remove(0)),
                         )?)
                     }
@@ -1157,10 +1157,7 @@ impl LogicalPlan {
         Ok(if let LogicalPlan::Prepare(prepare_lp) = plan_with_values {
             param_values.verify(&prepare_lp.data_types)?;
             // try and take ownership of the input if is not shared, clone otherwise
-            match Arc::try_unwrap(prepare_lp.input) {
-                Ok(input) => input,
-                Err(arc_input) => arc_input.as_ref().clone(),
-            }
+            Arc::unwrap_or_clone(prepare_lp.input)
         } else {
             plan_with_values
         })
@@ -1336,15 +1333,20 @@ impl LogicalPlan {
     ) -> Result<LogicalPlan> {
         self.transform_up_with_subqueries(|plan| {
             let schema = Arc::clone(plan.schema());
+            let name_preserver = NamePreserver::new(&plan);
             plan.map_expressions(|e| {
-                e.infer_placeholder_types(&schema)?.transform_up(|e| {
-                    if let Expr::Placeholder(Placeholder { id, .. }) = e {
-                        let value = param_values.get_placeholders_with_values(&id)?;
-                        Ok(Transformed::yes(Expr::Literal(value)))
-                    } else {
-                        Ok(Transformed::no(e))
-                    }
-                })
+                let original_name = name_preserver.save(&e)?;
+                let transformed_expr =
+                    e.infer_placeholder_types(&schema)?.transform_up(|e| {
+                        if let Expr::Placeholder(Placeholder { id, .. }) = e {
+                            let value = param_values.get_placeholders_with_values(&id)?;
+                            Ok(Transformed::yes(Expr::Literal(value)))
+                        } else {
+                            Ok(Transformed::no(e))
+                        }
+                    })?;
+                // Preserve name to avoid breaking column references to this expression
+                transformed_expr.map_data(|expr| original_name.restore(expr))
             })
         })
         .map(|res| res.data)
@@ -2080,6 +2082,8 @@ pub struct Filter {
     pub predicate: Expr,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
+    /// The flag to indicate if the filter is a having clause
+    pub having: bool,
 }
 
 impl Filter {
@@ -2088,6 +2092,20 @@ impl Filter {
     /// Notes: as Aliases have no effect on the output of a filter operator,
     /// they are removed from the predicate expression.
     pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+        Self::try_new_internal(predicate, input, false)
+    }
+
+    /// Create a new filter operator for a having clause.
+    /// This is similar to a filter, but its having flag is set to true.
+    pub fn try_new_with_having(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+        Self::try_new_internal(predicate, input, true)
+    }
+
+    fn try_new_internal(
+        predicate: Expr,
+        input: Arc<LogicalPlan>,
+        having: bool,
+    ) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -2104,6 +2122,7 @@ impl Filter {
         Ok(Self {
             predicate: predicate.unalias_nested().data,
             input,
+            having,
         })
     }
 
@@ -2538,7 +2557,7 @@ pub struct DistinctOn {
     /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause when
     /// present. Note that those matching expressions actually wrap the `ON` expressions with
     /// additional info pertaining to the sorting procedure (i.e. ASC/DESC, and NULLS FIRST/LAST).
-    pub sort_expr: Option<Vec<Expr>>,
+    pub sort_expr: Option<Vec<SortExpr>>,
     /// The logical plan that is being DISTINCT'd
     pub input: Arc<LogicalPlan>,
     /// The schema description of the DISTINCT ON output
@@ -2550,7 +2569,7 @@ impl DistinctOn {
     pub fn try_new(
         on_expr: Vec<Expr>,
         select_expr: Vec<Expr>,
-        sort_expr: Option<Vec<Expr>>,
+        sort_expr: Option<Vec<SortExpr>>,
         input: Arc<LogicalPlan>,
     ) -> Result<Self> {
         if on_expr.is_empty() {
@@ -2585,20 +2604,15 @@ impl DistinctOn {
     /// Try to update `self` with a new sort expressions.
     ///
     /// Validates that the sort expressions are a super-set of the `ON` expressions.
-    pub fn with_sort_expr(mut self, sort_expr: Vec<Expr>) -> Result<Self> {
-        let sort_expr = normalize_cols(sort_expr, self.input.as_ref())?;
+    pub fn with_sort_expr(mut self, sort_expr: Vec<SortExpr>) -> Result<Self> {
+        let sort_expr = normalize_sorts(sort_expr, self.input.as_ref())?;
 
         // Check that the left-most sort expressions are the same as the `ON` expressions.
         let mut matched = true;
         for (on, sort) in self.on_expr.iter().zip(sort_expr.iter()) {
-            match sort {
-                Expr::Sort(SortExpr { expr, .. }) => {
-                    if on != &**expr {
-                        matched = false;
-                        break;
-                    }
-                }
-                _ => return plan_err!("Not a sort expression: {sort}"),
+            if on != &sort.expr {
+                matched = false;
+                break;
             }
         }
 
@@ -2779,22 +2793,28 @@ fn calc_func_dependencies_for_project(
                         .filter_map(|(qualifier, f)| {
                             let flat_name = qualifier
                                 .map(|t| format!("{}.{}", t, f.name()))
-                                .unwrap_or(f.name().clone());
+                                .unwrap_or_else(|| f.name().clone());
                             input_fields.iter().position(|item| *item == flat_name)
                         })
                         .collect::<Vec<_>>(),
                 )
             }
-            Expr::Alias(alias) => Ok(input_fields
-                .iter()
-                .position(|item| *item == format!("{}", alias.expr))
-                .map(|i| vec![i])
-                .unwrap_or(vec![])),
-            _ => Ok(input_fields
-                .iter()
-                .position(|item| *item == format!("{}", expr))
-                .map(|i| vec![i])
-                .unwrap_or(vec![])),
+            Expr::Alias(alias) => {
+                let name = format!("{}", alias.expr);
+                Ok(input_fields
+                    .iter()
+                    .position(|item| *item == name)
+                    .map(|i| vec![i])
+                    .unwrap_or(vec![]))
+            }
+            _ => {
+                let name = format!("{}", expr);
+                Ok(input_fields
+                    .iter()
+                    .position(|item| *item == name)
+                    .map(|i| vec![i])
+                    .unwrap_or(vec![]))
+            }
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -2812,7 +2832,7 @@ fn calc_func_dependencies_for_project(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Sort {
     /// The sort expressions
-    pub expr: Vec<Expr>,
+    pub expr: Vec<SortExpr>,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// Optional fetch limit
@@ -2907,7 +2927,11 @@ impl Debug for Subquery {
     }
 }
 
-/// Logical partitioning schemes supported by the repartition operator.
+/// Logical partitioning schemes supported by [`LogicalPlan::Repartition`]
+///
+/// See [`Partitioning`] for more details on partitioning
+///
+/// [`Partitioning`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html#
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions

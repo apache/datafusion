@@ -25,7 +25,7 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
@@ -144,19 +144,23 @@ where
             let result = iter
                 .zip(start_array.iter())
                 .zip(count_array.iter())
-                .map(|((string, start), count)| match (string, start, count) {
-                    (Some(string), Some(start), Some(count)) => {
-                        if count < 0 {
-                            exec_err!(
+                .map(|((string, start), count)| {
+                    match (string, start, count) {
+                        (Some(string), Some(start), Some(count)) => {
+                            if count < 0 {
+                                exec_err!(
                                 "negative substring length not allowed: substr(<str>, {start}, {count})"
                             )
-                        } else {
-                            let skip = max(0, start - 1);
-                            let count = max(0, count + (if start < 1 {start - 1} else {0}));
-                            Ok(Some(string.chars().skip(skip as usize).take(count as usize).collect::<String>()))
+                            } else {
+                                let skip = max(0, start.checked_sub(1).ok_or_else(
+                                    || exec_datafusion_err!("negative overflow when calculating skip value")
+                                )?);
+                                let count = max(0, count + (if start < 1 { start - 1 } else { 0 }));
+                                Ok(Some(string.chars().skip(skip as usize).take(count as usize).collect::<String>()))
+                            }
                         }
+                        _ => Ok(None),
                     }
-                    _ => Ok(None),
                 })
                 .collect::<Result<GenericStringArray<T>>>()?;
 
@@ -478,6 +482,29 @@ mod tests {
             internal_err!(
                 "function substr requires compilation with feature flag: unicode_expressions."
             ),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("abc")),
+                ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
+            ],
+            Ok(Some("abc")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::from("overflow")),
+                ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
+                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+            ],
+            exec_err!("negative overflow when calculating skip value"),
             &str,
             Utf8,
             StringArray

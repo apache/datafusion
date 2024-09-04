@@ -165,7 +165,7 @@ impl ExecutionPlan for OutputRequirementExec {
         vec![&self.input]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![self.order_requirement.clone()]
     }
 

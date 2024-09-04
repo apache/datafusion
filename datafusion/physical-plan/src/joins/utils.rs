@@ -31,7 +31,7 @@ use crate::{
 
 use arrow::array::{
     downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
-    UInt32BufferBuilder, UInt32Builder, UInt64Array, UInt64BufferBuilder,
+    UInt32Builder, UInt64Array,
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder, UInt32Type, UInt64Type};
@@ -163,8 +163,8 @@ macro_rules! chain_traverse {
             } else {
                 i
             };
-            $match_indices.append(match_row_idx);
-            $input_indices.append($input_idx as u32);
+            $match_indices.push(match_row_idx);
+            $input_indices.push($input_idx as u32);
             $remaining_output -= 1;
             // Follow the chain to get the next index value
             let next = $next_chain[match_row_idx as usize];
@@ -238,9 +238,9 @@ pub trait JoinHashMapType {
         &self,
         iter: impl Iterator<Item = (usize, &'a u64)>,
         deleted_offset: Option<usize>,
-    ) -> (UInt32BufferBuilder, UInt64BufferBuilder) {
-        let mut input_indices = UInt32BufferBuilder::new(0);
-        let mut match_indices = UInt64BufferBuilder::new(0);
+    ) -> (Vec<u32>, Vec<u64>) {
+        let mut input_indices = vec![];
+        let mut match_indices = vec![];
 
         let hash_map = self.get_map();
         let next_chain = self.get_list();
@@ -261,8 +261,8 @@ pub trait JoinHashMapType {
                     } else {
                         i
                     };
-                    match_indices.append(match_row_idx);
-                    input_indices.append(row_idx as u32);
+                    match_indices.push(match_row_idx);
+                    input_indices.push(row_idx as u32);
                     // Follow the chain to get the next index value
                     let next = next_chain[match_row_idx as usize];
                     if next == 0 {
@@ -289,13 +289,9 @@ pub trait JoinHashMapType {
         deleted_offset: Option<usize>,
         limit: usize,
         offset: JoinHashMapOffset,
-    ) -> (
-        UInt32BufferBuilder,
-        UInt64BufferBuilder,
-        Option<JoinHashMapOffset>,
-    ) {
-        let mut input_indices = UInt32BufferBuilder::new(0);
-        let mut match_indices = UInt64BufferBuilder::new(0);
+    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
+        let mut input_indices = vec![];
+        let mut match_indices = vec![];
 
         let mut remaining_output = limit;
 
@@ -2447,7 +2443,7 @@ mod tests {
             Statistics {
                 num_rows: Absent,
                 total_byte_size: Absent,
-                column_statistics: dummy_column_stats.clone(),
+                column_statistics: dummy_column_stats,
             },
             &join_on,
         );
