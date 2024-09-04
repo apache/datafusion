@@ -41,7 +41,7 @@ use crate::variation_const::{
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::common::{
-    exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
+    exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err, ToDFSchema,
 };
 use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
@@ -125,6 +125,11 @@ pub fn to_substrait_rel(
 ) -> Result<Box<Rel>> {
     match plan {
         LogicalPlan::TableScan(scan) => {
+            let base_schema = to_substrait_named_struct(
+                &scan.source.schema().to_dfschema_ref()?,
+                extensions,
+            )?;
+
             let projection = scan.projection.as_ref().map(|p| {
                 p.iter()
                     .map(|i| StructItem {
@@ -133,7 +138,6 @@ pub fn to_substrait_rel(
                     })
                     .collect()
             });
-
             let projection = projection.map(|struct_items| MaskExpression {
                 select: Some(StructSelect { struct_items }),
                 maintain_singular_struct: false,
@@ -142,16 +146,7 @@ pub fn to_substrait_rel(
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
-                    base_schema: Some(NamedStruct {
-                        names: scan
-                            .source
-                            .schema()
-                            .fields()
-                            .iter()
-                            .map(|f| f.name().to_owned())
-                            .collect(),
-                        r#struct: None,
-                    }),
+                    base_schema: Some(base_schema),
                     filter: None,
                     best_effort_filter: None,
                     projection,
