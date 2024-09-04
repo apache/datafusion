@@ -346,6 +346,7 @@ LOCATION '../core/tests/data/cr_terminator.csv'
 OPTIONS ('format.terminator' E'\r', 'format.has_header' 'true');
 
 # TODO: It should be passed but got the error: External error: query failed: DataFusion error: Object Store error: Generic LocalFileSystem error: Requested range was invalid
+# See the issue: https://github.com/apache/datafusion/issues/12328
 # query TT
 # select * from stored_table_with_cr_terminator;
 # ----
