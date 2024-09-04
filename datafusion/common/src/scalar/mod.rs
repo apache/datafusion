@@ -3646,18 +3646,22 @@ fn fmt_list(arr: ArrayRef, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{value_formatter}")
 }
 
+/// writes a byte array to formatter. `[1, 2, 3]` ==> `"1,2,3"`
+fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
+    let mut first = true;
+    for b in data {
+        if !first {
+            write!(f, ",{b}")?;
+        } else {
+            write!(f, "{}", b)?;
+        }
+        first = false;
+    }
+    Ok(())
+}
+
 impl fmt::Debug for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
-            write!(
-                f,
-                "{}",
-                data.iter()
-                    .map(|v| format!("{v}"))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        }
         match self {
             ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({self})"),
             ScalarValue::Decimal256(_, _, _) => write!(f, "Decimal256({self})"),
