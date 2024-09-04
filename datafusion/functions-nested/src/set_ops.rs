@@ -206,7 +206,7 @@ impl ScalarUDFImpl for ArrayDistinct {
 
 /// array_distinct SQL function
 /// example: from list [1, 3, 2, 3, 1, 2, 4] to [1, 2, 3, 4]
-pub(crate) fn array_distinct_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_distinct_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 {
         return exec_err!("array_distinct needs one argument");
     }

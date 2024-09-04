@@ -64,6 +64,9 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     // check the keys array is unique
     let keys = get_first_array_ref(&args[0])?;
+    if keys.null_count() > 0 {
+        return exec_err!("map key cannot be null");
+    }
     let key_array = keys.as_ref();
 
     match &args[0] {
@@ -97,10 +100,6 @@ fn check_unique_keys(array: &dyn Array) -> Result<()> {
     let mut seen_keys = HashSet::with_capacity(array.len());
 
     for i in 0..array.len() {
-        if array.is_null(i) {
-            return exec_err!("map key cannot be null");
-        }
-
         let key = ScalarValue::try_from_array(array, i)?;
         if seen_keys.contains(&key) {
             return exec_err!("map key must be unique, duplicate key found: {}", key);
@@ -128,10 +127,6 @@ fn make_map_batch_internal(
     can_evaluate_to_const: bool,
     data_type: DataType,
 ) -> Result<ColumnarValue> {
-    if keys.null_count() > 0 {
-        return exec_err!("map key cannot be null");
-    }
-
     if keys.len() != values.len() {
         return exec_err!("map requires key and value lists to have the same length");
     }
