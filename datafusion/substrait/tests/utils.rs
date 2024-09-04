@@ -115,21 +115,23 @@ pub mod test {
                     ReadType::NamedTable(nt) => self.collect_named_table(r, nt),
                     ReadType::ExtensionTable(_) => todo!(),
                 },
-                RelType::Filter(f) => self.apply(f.input.as_ref()),
-                RelType::Fetch(f) => self.apply(f.input.as_ref()),
-                RelType::Aggregate(a) => self.apply(a.input.as_ref()),
-                RelType::Sort(s) => self.apply(s.input.as_ref()),
+                RelType::Filter(f) => self.apply(f.input.as_ref().map(|b| b.as_ref())),
+                RelType::Fetch(f) => self.apply(f.input.as_ref().map(|b| b.as_ref())),
+                RelType::Aggregate(a) => self.apply(a.input.as_ref().map(|b| b.as_ref())),
+                RelType::Sort(s) => self.apply(s.input.as_ref().map(|b| b.as_ref())),
                 RelType::Join(j) => {
-                    self.apply(j.left.as_ref());
-                    self.apply(j.right.as_ref())
+                    self.apply(j.left.as_ref().map(|b| b.as_ref()));
+                    self.apply(j.right.as_ref().map(|b| b.as_ref()));
                 }
-                RelType::Project(p) => self.apply(p.input.as_ref()),
+                RelType::Project(p) => self.apply(p.input.as_ref().map(|b| b.as_ref())),
                 RelType::Set(s) => {
                     for input in s.inputs.iter() {
                         self.collect_schemas(input);
                     }
                 }
-                RelType::ExtensionSingle(s) => self.apply(s.input.as_ref()),
+                RelType::ExtensionSingle(s) => {
+                    self.apply(s.input.as_ref().map(|b| b.as_ref()))
+                }
                 RelType::ExtensionMulti(m) => {
                     for input in m.inputs.iter() {
                         self.collect_schemas(input)
@@ -137,32 +139,32 @@ pub mod test {
                 }
                 RelType::ExtensionLeaf(_) => {}
                 RelType::Cross(c) => {
-                    self.apply(c.left.as_ref());
-                    self.apply(c.right.as_ref());
+                    self.apply(c.left.as_ref().map(|b| b.as_ref()));
+                    self.apply(c.right.as_ref().map(|b| b.as_ref()));
                 }
                 // RelType::Reference(_) => {}
                 // RelType::Write(_) => {}
                 // RelType::Ddl(_) => {}
                 RelType::HashJoin(j) => {
-                    self.apply(j.left.as_ref());
-                    self.apply(j.right.as_ref());
+                    self.apply(j.left.as_ref().map(|b| b.as_ref()));
+                    self.apply(j.right.as_ref().map(|b| b.as_ref()));
                 }
                 RelType::MergeJoin(j) => {
-                    self.apply(j.left.as_ref());
-                    self.apply(j.right.as_ref());
+                    self.apply(j.left.as_ref().map(|b| b.as_ref()));
+                    self.apply(j.right.as_ref().map(|b| b.as_ref()));
                 }
                 RelType::NestedLoopJoin(j) => {
-                    self.apply(j.left.as_ref());
-                    self.apply(j.right.as_ref());
+                    self.apply(j.left.as_ref().map(|b| b.as_ref()));
+                    self.apply(j.right.as_ref().map(|b| b.as_ref()));
                 }
-                RelType::Window(w) => self.apply(w.input.as_ref()),
-                RelType::Exchange(e) => self.apply(e.input.as_ref()),
-                RelType::Expand(e) => self.apply(e.input.as_ref()),
+                RelType::Window(w) => self.apply(w.input.as_ref().map(|b| b.as_ref())),
+                RelType::Exchange(e) => self.apply(e.input.as_ref().map(|b| b.as_ref())),
+                RelType::Expand(e) => self.apply(e.input.as_ref().map(|b| b.as_ref())),
                 _ => todo!(),
             }
         }
 
-        fn apply(&mut self, input: Option<&Box<Rel>>) {
+        fn apply(&mut self, input: Option<&Rel>) {
             match input {
                 None => {}
                 Some(rel) => self.collect_schemas(rel),
