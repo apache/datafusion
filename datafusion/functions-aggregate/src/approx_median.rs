@@ -62,7 +62,10 @@ impl ApproxMedian {
     /// Create a new APPROX_MEDIAN aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![DataType::Float64],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -111,9 +114,5 @@ impl AggregateUDFImpl for ApproxMedian {
             0.5_f64,
             acc_args.exprs[0].data_type(acc_args.schema)?,
         )))
-    }
-
-    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        Ok(vec![DataType::Float64])
     }
 }
