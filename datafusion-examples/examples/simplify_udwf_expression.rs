@@ -65,7 +65,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
     }
 
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        unimplemented!()
+        todo!()
     }
 
     /// this function will simplify `SimplifySmoothItUdf` to `SmoothItUdf`.
