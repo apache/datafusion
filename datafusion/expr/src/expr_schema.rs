@@ -211,7 +211,6 @@ impl ExprSchemable for Expr {
                                     )
                                 )
                             })?;
-                        // Ok(fun.return_type(&new_types, &nullability)?)
                         let display_name = format!(
                             "{}({:?}) PARTITION BY: [{:?}], ORDER BY: [{:?}]",
                             fun, args, partition_by, order_by
