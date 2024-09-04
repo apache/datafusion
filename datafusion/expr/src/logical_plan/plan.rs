@@ -1144,6 +1144,7 @@ impl LogicalPlan {
         }
     }
 
+    #[inline]
     #[allow(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
     fn check_no_expressions(&self, expr: Vec<Expr>) {
         assert!(
@@ -1153,6 +1154,7 @@ impl LogicalPlan {
         );
     }
 
+    #[inline]
     #[allow(clippy::needless_pass_by_value)] // inputs is moved intentionally to ensure it's not used again
     fn check_no_inputs(&self, inputs: Vec<LogicalPlan>) {
         assert!(
@@ -1162,6 +1164,7 @@ impl LogicalPlan {
         );
     }
 
+    #[inline]
     fn only_expr(&self, mut expr: Vec<Expr>) -> Expr {
         assert_eq!(
             expr.len(),
@@ -1172,6 +1175,7 @@ impl LogicalPlan {
         expr.remove(0)
     }
 
+    #[inline]
     fn only_input(&self, mut inputs: Vec<LogicalPlan>) -> LogicalPlan {
         assert_eq!(
             inputs.len(),
@@ -1182,6 +1186,7 @@ impl LogicalPlan {
         inputs.remove(0)
     }
 
+    #[inline]
     fn only_two_inputs(
         &self,
         mut inputs: Vec<LogicalPlan>,
