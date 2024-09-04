@@ -33,8 +33,6 @@ readme = "README.md"
 arrow = { version = "52.2.0" }
 async-trait = "0.1.73"
 aws-config = "1.5.5"
-# Lock the version to pass the MSRV check
-aws-sdk-sts = "1.39.0"
 aws-credential-types = "1.2.0"
 clap = { version = "4.5.16", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "41.0.0", features = [
