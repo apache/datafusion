@@ -93,13 +93,16 @@ pub mod test {
                 type_variations: Default::default(),
             };
 
-            let df_schema = from_substrait_named_struct(
-                substrait_schema,
-                &empty_extensions,
-                Some(table_reference.clone()),
-            )
-            .expect("Unable to generate DataFusion schema from Substrait NamedStruct");
-            let table = EmptyTable::new(df_schema.inner().clone());
+            let df_schema =
+                from_substrait_named_struct(substrait_schema, &empty_extensions).expect(
+                    "Unable to generate DataFusion schema from Substrait NamedStruct",
+                );
+            let qualified_df_schema = df_schema
+                .as_ref()
+                .clone()
+                .replace_qualifier(table_reference.clone());
+
+            let table = EmptyTable::new(qualified_df_schema.inner().clone());
             self.ctx
                 .register_table(table_reference, Arc::new(table))
                 .expect("Failed to register table");

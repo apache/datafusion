@@ -664,16 +664,20 @@ pub async fn from_substrait_rel(
                 let named_struct = read.base_schema.as_ref().ok_or_else(|| {
                     substrait_datafusion_err!("No base schema provided for Named Scan")
                 })?;
-                let substrait_schema = from_substrait_named_struct(
-                    named_struct,
-                    extensions,
-                    Some(table_reference),
-                )?;
+                let substrait_schema =
+                    from_substrait_named_struct(named_struct, extensions)?;
+                let qualified_substrait_schema = substrait_schema
+                    .as_ref()
+                    .clone()
+                    .replace_qualifier(table_reference);
 
-                if !validate_substrait_schema(datafusion_schema, &substrait_schema) {
+                if !validate_substrait_schema(
+                    datafusion_schema,
+                    &qualified_substrait_schema,
+                ) {
                     return Err(substrait_datafusion_err!(
                         "Schema mismatch in ReadRel: substrait: {:?}, DataFusion: {:?}",
-                        substrait_schema,
+                        qualified_substrait_schema,
                         datafusion_schema
                     ));
                 };
@@ -684,7 +688,7 @@ pub async fn from_substrait_rel(
                     substrait_datafusion_err!("No base schema provided for Virtual Table")
                 })?;
 
-                let schema = from_substrait_named_struct(base_schema, extensions, None)?;
+                let schema = from_substrait_named_struct(base_schema, extensions)?;
 
                 if vt.values.is_empty() {
                     return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -1633,8 +1637,6 @@ fn next_struct_field_name(
 pub fn from_substrait_named_struct(
     base_schema: &NamedStruct,
     extensions: &Extensions,
-    // optional qualifier to apply to every field in the schema
-    field_qualifier: Option<TableReference>,
 ) -> Result<DFSchemaRef> {
     let mut name_idx = 0;
     let fields = from_substrait_struct_type(
@@ -1652,11 +1654,7 @@ pub fn from_substrait_named_struct(
             base_schema.names.len()
         );
     }
-    let mut df_schema = DFSchema::try_from(Schema::new(fields?))?;
-    match field_qualifier {
-        None => (),
-        Some(fq) => df_schema = df_schema.replace_qualifier(fq),
-    }
+    let df_schema = DFSchema::try_from(Schema::new(fields?))?;
     Ok(DFSchemaRef::new(df_schema))
 }
 
