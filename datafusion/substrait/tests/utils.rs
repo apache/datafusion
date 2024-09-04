@@ -51,7 +51,7 @@ pub mod test {
             let mut schema_collector = Self::new();
 
             for plan_rel in plan.relations.iter() {
-                match plan_rel.rel_type.as_ref().expect("blah") {
+                match plan_rel.rel_type.as_ref().expect("PlanRel must set rel_type") {
                     substrait::proto::plan_rel::RelType::Rel(r) => {
                         schema_collector.collect_schemas(r)
                     }
