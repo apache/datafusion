@@ -120,7 +120,7 @@ fn optimize_projections(
     match plan {
         LogicalPlan::Projection(proj) => {
             return merge_consecutive_projections(proj)?.transform_data(|proj| {
-                rewrite_projection_given_requirements(proj, config, indices)
+                rewrite_projection_given_requirements(proj, config, &indices)
             })
         }
         LogicalPlan::Aggregate(aggregate) => {
@@ -754,7 +754,7 @@ fn add_projection_on_top_if_helpful(
 fn rewrite_projection_given_requirements(
     proj: Projection,
     config: &dyn OptimizerConfig,
-    indices: RequiredIndicies,
+    indices: &RequiredIndicies,
 ) -> Result<Transformed<LogicalPlan>> {
     let Projection { expr, input, .. } = proj;
 

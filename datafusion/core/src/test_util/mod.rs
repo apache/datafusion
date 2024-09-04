@@ -46,7 +46,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::TableReference;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_expr::{CreateExternalTable, Expr, TableType};
+use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::{expressions, EquivalenceProperties, PhysicalExpr};
 
@@ -360,7 +360,7 @@ pub fn register_unbounded_file_with_ordering(
     schema: SchemaRef,
     file_path: &Path,
     table_name: &str,
-    file_sort_order: Vec<Vec<Expr>>,
+    file_sort_order: Vec<Vec<SortExpr>>,
 ) -> Result<()> {
     let source = FileStreamProvider::new_file(schema, file_path.into());
     let config = StreamConfig::new(Arc::new(source)).with_order(file_sort_order);

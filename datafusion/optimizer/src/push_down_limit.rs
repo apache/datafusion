@@ -347,13 +347,13 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![col("a")])?
+            .sort_by(vec![col("a")])?
             .limit(0, Some(10))?
             .build()?;
 
         // Should push down limit to sort
         let expected = "Limit: skip=0, fetch=10\
-        \n  Sort: test.a, fetch=10\
+        \n  Sort: test.a ASC NULLS LAST, fetch=10\
         \n    TableScan: test";
 
         assert_optimized_plan_equal(plan, expected)
@@ -364,13 +364,13 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![col("a")])?
+            .sort_by(vec![col("a")])?
             .limit(5, Some(10))?
             .build()?;
 
         // Should push down limit to sort
         let expected = "Limit: skip=5, fetch=10\
-        \n  Sort: test.a, fetch=15\
+        \n  Sort: test.a ASC NULLS LAST, fetch=15\
         \n    TableScan: test";
 
         assert_optimized_plan_equal(plan, expected)
