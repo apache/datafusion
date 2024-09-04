@@ -46,9 +46,7 @@ impl Default for ConcatWsFunc {
 impl ConcatWsFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(
-                Volatility::Immutable,
-            ),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -436,7 +434,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow::datatypes::DataType::{Utf8, LargeUtf8, Utf8View};
+    use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 
     use crate::string::concat_ws::ConcatWsFunc;
     use datafusion_common::Result;
