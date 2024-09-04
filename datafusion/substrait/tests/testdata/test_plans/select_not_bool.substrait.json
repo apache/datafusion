@@ -34,7 +34,7 @@
                 },
                 "baseSchema": {
                   "names": [
-                    "D"
+                    "d"
                   ],
                   "struct": {
                     "types": [

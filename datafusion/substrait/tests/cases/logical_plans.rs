@@ -39,14 +39,15 @@ mod tests {
 
         // File generated with substrait-java's Isthmus:
         // ./isthmus-cli/build/graal/isthmus "select not d from data" -c "create table data (d boolean)"
+        // and column names lowercased
         let proto = read_json("tests/testdata/test_plans/select_not_bool.substrait.json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
 
         assert_eq!(
             format!("{}", plan),
-            "Projection: NOT DATA.a AS EXPR$0\
-            \n  TableScan: DATA projection=[a, b, c, d, e, f]"
+            "Projection: NOT DATA.d AS EXPR$0\
+            \n  TableScan: DATA projection=[d]"
         );
         Ok(())
     }
@@ -64,7 +65,8 @@ mod tests {
         let ctx = create_context().await?;
 
         // File generated with substrait-java's Isthmus:
-        // ./isthmus-cli/build/graal/isthmus "select sum(d) OVER (PARTITION BY part ORDER BY ord ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) AS lead_expr from data" -c "create table data (d int, part int, ord int)"
+        // ./isthmus-cli/build/graal/isthmus "select sum(a) OVER (PARTITION BY b ORDER BY c ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) AS lead_expr from data" -c "create table data (a bigint, b float, c date)"
+        // and column names lowercased
         let proto = read_json("tests/testdata/test_plans/select_window.substrait.json");
 
         let plan = from_substrait_plan(&ctx, &proto).await?;
@@ -73,7 +75,7 @@ mod tests {
             format!("{}", plan),
             "Projection: sum(DATA.a) PARTITION BY [DATA.b] ORDER BY [DATA.c ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR\
             \n  WindowAggr: windowExpr=[[sum(DATA.a) PARTITION BY [DATA.b] ORDER BY [DATA.c ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]\
-            \n    TableScan: DATA projection=[a, b, c, d, e, f]"
+            \n    TableScan: DATA projection=[a, b, c]"
         );
         Ok(())
     }

@@ -34,26 +34,26 @@
                 },
                 "baseSchema": {
                   "names": [
-                    "D",
-                    "PART",
-                    "ORD"
+                    "a",
+                    "b",
+                    "c"
                   ],
                   "struct": {
                     "types": [
                       {
-                        "i32": {
+                        "i64": {
                           "typeVariationReference": 0,
                           "nullability": "NULLABILITY_NULLABLE"
                         }
                       },
                       {
-                        "i32": {
+                        "fp64": {
                           "typeVariationReference": 0,
                           "nullability": "NULLABILITY_NULLABLE"
                         }
                       },
                       {
-                        "i32": {
+                        "date": {
                           "typeVariationReference": 0,
                           "nullability": "NULLABILITY_NULLABLE"
                         }
