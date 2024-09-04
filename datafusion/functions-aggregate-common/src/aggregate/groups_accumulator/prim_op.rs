@@ -143,7 +143,7 @@ where
     /// - null otherwise
     ///
     fn convert_to_state(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {

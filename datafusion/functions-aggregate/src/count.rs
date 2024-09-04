@@ -453,7 +453,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     /// * `1` (for non-null, non filtered values)
     /// * `0` (for null values)
     fn convert_to_state(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
