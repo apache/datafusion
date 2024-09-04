@@ -443,6 +443,48 @@ FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 4 417
 5 284
 
+# Test approx_distinct with filter
+query III
+SELECT
+  c2,
+  approx_distinct(c3) FILTER (WHERE c3 > 0),
+  approx_distinct(c3) FILTER (WHERE c11 > 10)
+FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 13 0
+2 12 0
+3 11 0
+4 13 0
+5 5 0
+
+# Test median with filter
+query III
+SELECT
+  c2,
+  median(c3) FILTER (WHERE c3 > 0),
+  median(c3) FILTER (WHERE c3 < 0)
+FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 57 -56
+2 52 -60
+3 71 -74
+4 65 -69
+5 64 -59
+
+# Test approx_median with filter
+query III
+SELECT
+  c2,
+  approx_median(c3) FILTER (WHERE c3 > 0),
+  approx_median(c3) FILTER (WHERE c3 < 0)
+FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 57 -56
+2 52 -60
+3 71 -76
+4 65 -64
+5 64 -59
+
 # Test count with nullable fields and filter
 query III
 SELECT c2,
@@ -526,6 +568,79 @@ FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 4 -171 56 2.10740506649 1.939846396446
 5 -86 -76 1.8741710186 1.600569307804
 
+# Test approx_distinct with nullable fields and filter
+query II
+SELECT c2,
+       approx_distinct(c3) FILTER (WHERE c5 > 0)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 11
+2 6
+3 6
+4 11
+5 8
+
+# Test approx_distinct with nullable fields and nullable filter
+query II
+SELECT c2,
+       approx_distinct(c3) FILTER (WHERE c11 > 0.5)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 10
+2 6
+3 3
+4 3
+5 6
+
+# Test median with nullable fields and filter
+query IIR
+SELECT c2,
+       median(c3) FILTER (WHERE c5 > 0),
+       median(c11) FILTER (WHERE c5 < 0)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 -5 0.6623719
+2 15 0.52930677
+3 13 0.32792538
+4 -38 0.49774808
+5 -18 0.49842384
+
+# Test min / max with nullable fields and nullable filter
+query II
+SELECT c2,
+       median(c3) FILTER (WHERE c11 > 0.5)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 33
+2 -29
+3 22
+4 -90
+5 -22
+
+# Test approx_median with nullable fields and filter
+query IIR
+SELECT c2,
+       approx_median(c3) FILTER (WHERE c5 > 0),
+       approx_median(c11) FILTER (WHERE c5 < 0)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 -5 0.6623719
+2 12 0.52930677
+3 13 0.32792538
+4 -38 0.49774808
+5 -21 0.47652745
+
+# Test approx_median with nullable fields and nullable filter
+query II
+SELECT c2,
+       approx_median(c3) FILTER (WHERE c11 > 0.5)
+FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 35
+2 -29
+3 22
+4 -90
+5 -32
 
 statement ok
 DROP TABLE aggregate_test_100_null;
