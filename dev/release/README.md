@@ -407,3 +407,7 @@ Here is an example blog post PR:
 - https://github.com/apache/arrow-site/pull/217
 
 Once the PR is merged, a GitHub action will publish the new blog post to https://arrow.apache.org/blog/.
+
+### Update the version on the download page
+
+Update the version on the [download page](https://datafusion.apache.org/download) to point to the latest release [here](../../docs/source/download.md).

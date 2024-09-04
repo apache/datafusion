@@ -21,7 +21,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result};
+use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::utils as expr_utils;
 use datafusion_expr::{logical_plan::LogicalPlan, Expr, Operator};
@@ -83,7 +83,7 @@ pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) ->
 
 pub(crate) fn collect_subquery_cols(
     exprs: &[Expr],
-    subquery_schema: DFSchemaRef,
+    subquery_schema: &DFSchema,
 ) -> Result<BTreeSet<Column>> {
     exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
         let mut using_cols: Vec<Column> = vec![];
@@ -296,5 +296,5 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
     note = "use `datafusion_expr::utils::merge_schema` instead"
 )]
 pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
-    expr_utils::merge_schema(inputs)
+    expr_utils::merge_schema(&inputs)
 }

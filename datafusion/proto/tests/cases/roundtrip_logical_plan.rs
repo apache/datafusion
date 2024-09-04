@@ -71,7 +71,9 @@ use datafusion_expr::{
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
     approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
+    nth_value,
 };
+use datafusion_functions_aggregate::kurtosis_pop::kurtosis_pop;
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -903,6 +905,19 @@ async fn roundtrip_expr_api() -> Result<()> {
             vec![lit(10), lit(20), lit(30)],
         ),
         row_number(),
+        kurtosis_pop(lit(1)),
+        nth_value(col("b"), 1, vec![]),
+        nth_value(
+            col("b"),
+            1,
+            vec![col("a").sort(false, false), col("b").sort(true, false)],
+        ),
+        nth_value(col("b"), -1, vec![]),
+        nth_value(
+            col("b"),
+            -1,
+            vec![col("a").sort(false, false), col("b").sort(true, false)],
+        ),
     ];
 
     // ensure expressions created with the expr api can be round tripped

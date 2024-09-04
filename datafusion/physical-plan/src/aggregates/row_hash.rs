@@ -95,7 +95,7 @@ struct SpillState {
     // ========================================================================
     // STATES:
     // Fields changes during execution. Can be buffer, or state flags that
-    // influence the exeuction in parent `GroupedHashAggregateStream`
+    // influence the execution in parent `GroupedHashAggregateStream`
     // ========================================================================
     /// If data has previously been spilled, the locations of the
     /// spill files (in Arrow IPC format)

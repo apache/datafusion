@@ -367,7 +367,10 @@ has_integer!(u8, u16, u32, u64);
 has_integer!(IntervalDayTime, IntervalMonthDayNano);
 hash_float!(f16, f32, f64);
 
-pub fn new_hash_table(limit: usize, kt: DataType) -> Result<Box<dyn ArrowHashTable>> {
+pub fn new_hash_table(
+    limit: usize,
+    kt: DataType,
+) -> Result<Box<dyn ArrowHashTable + Send>> {
     macro_rules! downcast_helper {
         ($kt:ty, $d:ident) => {
             return Ok(Box::new(PrimitiveHashTable::<$kt>::new(limit)))
