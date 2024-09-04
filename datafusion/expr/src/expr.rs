@@ -714,7 +714,7 @@ impl WindowFunctionDefinition {
             WindowFunctionDefinition::AggregateUDF(fun) => {
                 fun.return_type(input_expr_types)
             }
-            WindowFunctionDefinition::WindowUDF(_) => unimplemented!(),
+            WindowFunctionDefinition::WindowUDF(_) => unreachable!(),
         }
     }
 
