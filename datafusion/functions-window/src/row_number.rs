@@ -100,7 +100,11 @@ impl WindowUDFImpl for RowNumber {
     }
 
     fn field(&self, field_args: FieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.display_name, field_args.return_type, false))
+        Ok(Field::new(
+            field_args.display_name,
+            field_args.return_type,
+            false,
+        ))
     }
 
     fn sort_options(&self) -> Option<SortOptions> {
