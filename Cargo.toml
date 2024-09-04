@@ -69,7 +69,7 @@ version = "41.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "52.2.0", features = [
+arrow = { version = "53.0.0", features = [
     "prettyprint",
 ] }
 arrow-array = { version = "52.2.0", default-features = false, features = [
