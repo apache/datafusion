@@ -89,7 +89,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// been updated
     loser_tree_adjusted: bool,
 
-    /// target batch size
+    /// Target batch size
     batch_size: usize,
 
     /// Cursors for each input partition. `None` means the input is exhausted
@@ -101,8 +101,10 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// number of rows produced
     produced: usize,
 
-    /// Unitiated partitions. They are stored in a vector to keep them in
-    /// a priortiy order to visit the partitions in a round-robin fashion
+    /// This vector contains partition indices in order. When a partition is polled and returns `Poll::Ready`,
+    /// it is removed from the vector. If a partition returns `Poll::Pending`, it is moved to the end of the
+    /// vector to ensure the next iteration starts with a different partition, preventing the same partition
+    /// from being continuously polled.
     uninitiated_partitions: Vec<usize>,
 }
 
