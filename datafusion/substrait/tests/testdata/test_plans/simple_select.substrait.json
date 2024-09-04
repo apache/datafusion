@@ -7,7 +7,7 @@
         "project": {
           "common": {
             "emit": {
-              "outputMapping": [1]
+              "outputMapping": [2, 3]
             }
           },
           "input": {
@@ -17,12 +17,17 @@
                 }
               },
               "baseSchema": {
-                "names": ["A"],
+                "names": ["a", "b"],
                 "struct": {
                   "types": [{
                     "i32": {
                       "typeVariationReference": 0,
                       "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  }, {
+                    "i32": {
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_REQUIRED"
                     }
                   }],
                   "typeVariationReference": 0,
@@ -44,10 +49,20 @@
               "rootReference": {
               }
             }
+          }, {
+            "selection": {
+              "directReference": {
+                "structField": {
+                  "field": 1
+                }
+              },
+              "rootReference": {
+              }
+            }
           }]
         }
       },
-      "names": ["A"]
+      "names": ["a", "b"]
     }
   }],
   "expectedTypeUrls": []

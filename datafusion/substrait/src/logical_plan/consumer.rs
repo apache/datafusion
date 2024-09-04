@@ -53,6 +53,7 @@ use crate::variation_const::{
 };
 use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::common::scalar::ScalarStructBuilder;
+use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -640,6 +641,10 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
+                let named_struct = read.base_schema.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("No base schema provided for Named Table")
+                })?;
+
                 let table_reference = match nt.names.len() {
                     0 => {
                         return plan_err!("No table name found in NamedTable");
@@ -657,24 +662,14 @@ pub async fn from_substrait_rel(
                         table: nt.names[2].clone().into(),
                     },
                 };
-                let t = ctx.table(table_reference.clone()).await?;
-                let t = t.into_optimized_plan()?;
-                let datafusion_schema = t.schema();
 
-                let named_struct = read.base_schema.as_ref().ok_or_else(|| {
-                    substrait_datafusion_err!("No base schema provided for Named Scan")
-                })?;
                 let substrait_schema =
                     from_substrait_named_struct(named_struct, extensions)?
-                        .replace_qualifier(table_reference);
+                        .replace_qualifier(table_reference.clone());
 
-                if !validate_substrait_schema(datafusion_schema, &substrait_schema) {
-                    return Err(substrait_datafusion_err!(
-                        "Schema mismatch in ReadRel: substrait: {:?}, DataFusion: {:?}",
-                        substrait_schema,
-                        datafusion_schema
-                    ));
-                };
+                let t = ctx.table(table_reference.clone()).await?;
+                let t = ensure_schema_compatability(t, substrait_schema)?;
+                let t = t.into_optimized_plan()?;
                 extract_projection(t, &read.projection)
             }
             Some(ReadType::VirtualTable(vt)) => {
@@ -869,29 +864,80 @@ pub async fn from_substrait_rel(
     }
 }
 
-/// Validates that the given Substrait schema matches the given DataFusion schema
-/// Returns true if the two schemas have the same qualified named fields with the same data types.
-/// Returns false otherwise.
-/// Ignores case when comparing field names
+/// Ensures that the given Substrait schema is compatible with the schema as given by DataFusion
 ///
-/// This code is equivalent to [DFSchema::equivalent_names_and_types] except that the field name
-/// checking is case-insensitive
-fn validate_substrait_schema(
-    datafusion_schema: &DFSchema,
-    substrait_schema: &DFSchema,
-) -> bool {
-    if datafusion_schema.fields().len() != substrait_schema.fields().len() {
-        return false;
+/// This means:
+/// 1. All fields present in the Substrait schema are present in the DataFusion schema. The
+///    DataFusion schema may have MORE fields, but not the other way around.
+/// 2. All fields are compatible. See [`ensure_field_compatability`] for details
+///
+/// This function returns a DataFrame with fields adjusted if necessary in the event that the
+/// SubstraitSchema is a subset of the DataFusion schema.
+// ```
+fn ensure_schema_compatability(
+    table: DataFrame,
+    substrait_schema: DFSchema,
+) -> Result<DataFrame> {
+    // For now strip the qualifiers from the DataFusion and Substrait schemas to make comparisons
+    // easier as there are issues around qualifier case.
+    // TODO: ensure that qualifiers are the same
+    let df_schema = table.schema().to_owned().strip_qualifiers();
+    if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
+        return Ok(table);
     }
-    let datafusion_fields = datafusion_schema.iter();
-    let substrait_fields = substrait_schema.iter();
-    datafusion_fields
-        .zip(substrait_fields)
-        .all(|((q1, f1), (q2, f2))| {
-            q1 == q2
-                && f1.name().to_lowercase() == f2.name().to_lowercase()
-                && f1.data_type().equals_datatype(f2.data_type())
+    let selected_columns = substrait_schema
+        .strip_qualifiers()
+        .fields()
+        .iter()
+        .map(|substrait_field| {
+            let df_field =
+                df_schema.field_with_unqualified_name(substrait_field.name())?;
+            ensure_field_compatability(df_field, substrait_field)?;
+            Ok(col(format!("\"{}\"", df_field.name())))
         })
+        .collect::<Result<_>>()?;
+
+    table.select(selected_columns)
+}
+
+///
+/// Ensures that the given Substrait field is compatible with the given DataFusion field
+///
+/// A field is compatible between Substrait and DataFusion if:
+/// 1. They have logically equivalent types.
+/// 2. They have the same nullability OR the Substrait field is nullable and the DataFusion fields
+///    is not nullable.
+///
+/// If a Substrait field is not nullable, the Substrait plan may be built around assuming it is not
+/// nullable. As such if DataFusion has that field as not nullable the plan should be rejected.
+//
+fn ensure_field_compatability(
+    datafusion_field: &Field,
+    substrait_field: &Field,
+) -> Result<()> {
+    if DFSchema::datatype_is_logically_equal(
+        datafusion_field.data_type(),
+        substrait_field.data_type(),
+    ) {
+        if (datafusion_field.is_nullable() == substrait_field.is_nullable())
+            || (substrait_field.is_nullable() && !datafusion_field.is_nullable())
+        {
+            Ok(())
+        } else {
+            // TODO: from_substrait_struct_type needs to be updated to set the nullability correctly. It defaults to true for now.
+            substrait_err!(
+                "Field '{}' is nullable in the Substrait schema but not nullable in the DataFusion schema.",
+                substrait_field.name()
+                )
+        }
+    } else {
+        substrait_err!(
+                    "Field '{}' in Substrait schema has a different type ({}) than the corresponding field in the table schema ({}).",
+                    substrait_field.name(),
+                    substrait_field.data_type(),
+                    datafusion_field.data_type()
+                    )
+    }
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise

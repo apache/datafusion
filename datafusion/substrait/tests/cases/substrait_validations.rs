@@ -17,85 +17,110 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::test::read_json;
-    use datafusion::arrow::datatypes::{DataType, Field};
-    use datafusion::catalog_common::TableReference;
-    use datafusion::common::{DFSchema, Result};
-    use datafusion::datasource::empty::EmptyTable;
-    use datafusion::prelude::SessionContext;
-    use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
-    use std::collections::HashMap;
-    use std::sync::Arc;
 
-    fn generate_context_with_table(
-        table_name: &str,
-        field_data_type_pairs: Vec<(&str, DataType)>,
-    ) -> Result<SessionContext> {
-        let table_ref = TableReference::bare(table_name);
-        let fields: Vec<(Option<TableReference>, Arc<Field>)> = field_data_type_pairs
-            .into_iter()
-            .map(|pair| {
-                let (field_name, data_type) = pair;
-                (
-                    Some(table_ref.clone()),
-                    Arc::new(Field::new(field_name, data_type, false)),
-                )
-            })
-            .collect();
+    // verify the schema compatability validations
+    mod schema_compatability {
+        use crate::utils::test::read_json;
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::catalog_common::TableReference;
+        use datafusion::common::{DFSchema, Result};
+        use datafusion::datasource::empty::EmptyTable;
+        use datafusion::prelude::SessionContext;
+        use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+        use std::collections::HashMap;
+        use std::sync::Arc;
 
-        let df_schema = DFSchema::new_with_metadata(fields, HashMap::default())?;
+        fn generate_context_with_table(
+            table_name: &str,
+            fields: Vec<(&str, DataType, bool)>,
+        ) -> Result<SessionContext> {
+            let table_ref = TableReference::bare(table_name);
+            let fields: Vec<(Option<TableReference>, Arc<Field>)> = fields
+                .into_iter()
+                .map(|pair| {
+                    let (field_name, data_type, nullable) = pair;
+                    (
+                        Some(table_ref.clone()),
+                        Arc::new(Field::new(field_name, data_type, nullable)),
+                    )
+                })
+                .collect();
 
-        let ctx = SessionContext::new();
-        ctx.register_table(
-            table_ref,
-            Arc::new(EmptyTable::new(df_schema.inner().clone())),
-        )?;
-        Ok(ctx)
-    }
+            let df_schema = DFSchema::new_with_metadata(fields, HashMap::default())?;
 
-    #[tokio::test]
-    async fn substrait_schema_validation_ignores_field_name_case() -> Result<()> {
-        let proto_plan =
-            read_json("tests/testdata/test_plans/simple_select.substrait.json");
+            let ctx = SessionContext::new();
+            ctx.register_table(
+                table_ref,
+                Arc::new(EmptyTable::new(df_schema.inner().clone())),
+            )?;
+            Ok(ctx)
+        }
 
-        let ctx = generate_context_with_table("DATA", vec![("a", DataType::Int32)])?;
-        from_substrait_plan(&ctx, &proto_plan).await?;
-        Ok(())
-    }
+        #[tokio::test]
+        async fn ensure_schema_match_exact() -> Result<()> {
+            let proto_plan =
+                read_json("tests/testdata/test_plans/simple_select.substrait.json");
+            // this is the exact schema of the Substrait plan
+            let df_schema =
+                vec![("a", DataType::Int32, false), ("b", DataType::Int32, true)];
 
-    #[tokio::test]
-    async fn reject_plans_with_mismatched_number_of_fields() -> Result<()> {
-        let proto_plan =
-            read_json("tests/testdata/test_plans/simple_select.substrait.json");
+            let ctx = generate_context_with_table("DATA", df_schema)?;
+            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
 
-        let ctx = generate_context_with_table(
-            "DATA",
-            vec![("a", DataType::Int32), ("b", DataType::Int32)],
-        )?;
-        let res = from_substrait_plan(&ctx, &proto_plan).await;
-        assert!(res.is_err());
-        Ok(())
-    }
+            assert_eq!(
+                format!("{}", plan),
+                "Projection: DATA.a, DATA.b\
+                \n  TableScan: DATA projection=[a, b]"
+            );
+            Ok(())
+        }
 
-    #[tokio::test]
-    async fn reject_plans_with_mismatched_field_names() -> Result<()> {
-        let proto_plan =
-            read_json("tests/testdata/test_plans/simple_select.substrait.json");
+        #[tokio::test]
+        async fn ensure_schema_match_subset() -> Result<()> {
+            let proto_plan =
+                read_json("tests/testdata/test_plans/simple_select.substrait.json");
+            // the DataFusion schema { b, a, c } contains the Substrait schema { a, b }
+            let df_schema = vec![
+                ("b", DataType::Int32, true),
+                ("a", DataType::Int32, false),
+                ("c", DataType::Int32, false),
+            ];
+            let ctx = generate_context_with_table("DATA", df_schema)?;
+            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
 
-        let ctx = generate_context_with_table("DATA", vec![("b", DataType::Date32)])?;
-        let res = from_substrait_plan(&ctx, &proto_plan).await;
-        assert!(res.is_err());
-        Ok(())
-    }
+            assert_eq!(
+                format!("{}", plan),
+                "Projection: DATA.a, DATA.b\
+                \n  Projection: DATA.a, DATA.b\
+                \n    TableScan: DATA projection=[b, a]"
+            );
+            Ok(())
+        }
 
-    #[tokio::test]
-    async fn reject_plans_with_incompatible_field_types() -> Result<()> {
-        let proto_plan =
-            read_json("tests/testdata/test_plans/simple_select.substrait.json");
+        #[tokio::test]
+        async fn ensure_schema_match_not_subset() -> Result<()> {
+            let proto_plan =
+                read_json("tests/testdata/test_plans/simple_select.substrait.json");
+            // the substrait plans contains a field b which is not in the schema
+            let df_schema =
+                vec![("a", DataType::Int32, false), ("c", DataType::Int32, true)];
 
-        let ctx = generate_context_with_table("DATA", vec![("a", DataType::Date32)])?;
-        let res = from_substrait_plan(&ctx, &proto_plan).await;
-        assert!(res.is_err());
-        Ok(())
+            let ctx = generate_context_with_table("DATA", df_schema)?;
+            let res = from_substrait_plan(&ctx, &proto_plan).await;
+            assert!(res.is_err());
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn reject_plans_with_incompatible_field_types() -> Result<()> {
+            let proto_plan =
+                read_json("tests/testdata/test_plans/simple_select.substrait.json");
+
+            let ctx =
+                generate_context_with_table("DATA", vec![("a", DataType::Date32, true)])?;
+            let res = from_substrait_plan(&ctx, &proto_plan).await;
+            assert!(res.is_err());
+            Ok(())
+        }
     }
 }
