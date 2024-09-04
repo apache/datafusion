@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::array::{Array, ArrayRef, Float64Array, UInt64Array};
-use arrow::compute::cast;
 use arrow_schema::{DataType, Field};
 use datafusion_common::cast::as_float64_array;
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
@@ -122,8 +121,7 @@ impl KurtosisPopAccumulator {
 
 impl Accumulator for KurtosisPopAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &cast(&values[0], &DataType::Float64)?;
-        let array = as_float64_array(&values)?;
+        let array = as_float64_array(&values[0])?;
         for value in array.iter().flatten() {
             self.count += 1;
             self.sum += value;
