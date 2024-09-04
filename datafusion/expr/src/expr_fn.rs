@@ -670,7 +670,7 @@ impl WindowUDFImpl for SimpleWindowUDF {
     fn field(&self, field_args: FieldArgs) -> Result<Field> {
         Ok(Field::new(
             field_args.display_name,
-            field_args.return_type,
+            self.return_type.clone(),
             true,
         ))
     }
