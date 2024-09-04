@@ -796,7 +796,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: concat_ws(Utf8(", "), CAST(test.column1_utf8view AS Utf8), CAST(test.column2_utf8view AS Utf8)) AS c
+01)Projection: concat_ws(Utf8(", "), test.column1_utf8view, test.column2_utf8view) AS c
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for CONTAINS
@@ -925,6 +925,83 @@ FROM test;
 AndrewX
 XiangpengXiangpeng
 RaphaelR
+R
+
+## Should run CONCAT successfully with utf8view
+query T
+SELECT
+  concat(column1_utf8view, column2_utf8view) as c
+FROM test;
+----
+AndrewX
+XiangpengXiangpeng
+RaphaelR
+R
+
+## Should run CONCAT_WS successfully with utf8
+query T
+SELECT
+  concat_ws(',', column1_utf8, column2_utf8) as c
+FROM test;
+----
+Andrew,X
+Xiangpeng,Xiangpeng
+Raphael,R
+R
+
+## Should run CONCAT_WS successfully with utf8view
+query T
+SELECT
+  concat_ws(',', column1_utf8view, column2_utf8view) as c
+FROM test;
+----
+Andrew,X
+Xiangpeng,Xiangpeng
+Raphael,R
+R
+
+## Should run CONCAT_WS successfully with largeutf8
+query T
+SELECT
+  concat_ws(',', column1_large_utf8, column2_large_utf8) as c
+FROM test;
+----
+Andrew,X
+Xiangpeng,Xiangpeng
+Raphael,R
+R
+
+## Should run CONCAT_WS successfully with utf8 and largeutf8
+query T
+SELECT
+  concat_ws(',', column1_utf8, column2_large_utf8) as c
+FROM test;
+----
+Andrew,X
+Xiangpeng,Xiangpeng
+Raphael,R
+R
+
+## Should run CONCAT_WS successfully with utf8 and utf8view
+query T
+SELECT
+  concat_ws(',', column1_utf8view, column2_utf8) as c
+FROM test;
+----
+Andrew,X
+Xiangpeng,Xiangpeng
+Raphael,R
+R
+
+## Should run CONCAT_WS successfully with largeutf8 and utf8view
+query T
+SELECT
+  concat_ws(',', column1_utf8view, column2_large_utf8) as c
+FROM test;
+----
+Andrew,X
+Xiangpeng,Xiangpeng
+Raphael,R
 R
 
 ## Ensure no casts for LPAD
