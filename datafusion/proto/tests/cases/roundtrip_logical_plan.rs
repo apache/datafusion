@@ -73,6 +73,7 @@ use datafusion_functions_aggregate::expr_fn::{
     approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
     nth_value,
 };
+use datafusion_functions_aggregate::kurtosis_pop::kurtosis_pop;
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_functions_window_common::field::FieldArgs;
 use datafusion_proto::bytes::{
@@ -905,6 +906,7 @@ async fn roundtrip_expr_api() -> Result<()> {
             vec![lit(10), lit(20), lit(30)],
         ),
         row_number(),
+        kurtosis_pop(lit(1)),
         nth_value(col("b"), 1, vec![]),
         nth_value(
             col("b"),

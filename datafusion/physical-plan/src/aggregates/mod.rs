@@ -1006,7 +1006,8 @@ pub fn get_finer_aggregate_exprs_requirement(
     Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
 }
 
-/// returns physical expressions for arguments to evaluate against a batch
+/// Returns physical expressions for arguments to evaluate against a batch.
+///
 /// The expressions are different depending on `mode`:
 /// * Partial: AggregateFunctionExpr::expressions
 /// * Final: columns of `AggregateFunctionExpr::state_fields()`

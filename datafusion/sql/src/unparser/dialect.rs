@@ -130,6 +130,7 @@ pub enum IntervalStyle {
 pub enum DateFieldExtractStyle {
     DatePart,
     Extract,
+    Strftime,
 }
 
 pub struct DefaultDialect {}
@@ -211,6 +212,10 @@ pub struct SqliteDialect {}
 impl Dialect for SqliteDialect {
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
+    }
+
+    fn date_field_extract_style(&self) -> DateFieldExtractStyle {
+        DateFieldExtractStyle::Strftime
     }
 
     fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
