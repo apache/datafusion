@@ -72,7 +72,7 @@ ahash = { version = "0.8", default-features = false, features = [
 arrow = { version = "52.2.0", features = [
     "prettyprint",
 ] }
-arrow-array = { version = "52.2.0", default-features = false, features = [
+arrow-array = { version = "53.0.0", default-features = false, features = [
     "chrono-tz",
 ] }
 arrow-buffer = { version = "52.2.0", default-features = false }
