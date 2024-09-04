@@ -267,6 +267,36 @@ SELECT c2, sum(c5), sum(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 4 16155718643 9.531112968922
 5 6449337880 7.074412226677
 
+# Test median for int / float
+query IIR
+SELECT c2, median(c5), median(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 23971150 0.5922606
+2 -562486880 0.43422085
+3 240273900 0.40199697
+4 762932956 0.48515016
+5 604973998 0.49842384
+
+# Test approx_median for int / float
+query IIR
+SELECT c2, approx_median(c5), approx_median(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 191655437 0.59926736
+2 -587831330 0.43230486
+3 240273900 0.40199697
+4 762932956 0.48515016
+5 593204320 0.5156586
+
+# Test approx_distinct for varchar / int
+query III
+SELECT c2, approx_distinct(c1), approx_distinct(c5) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 5 22
+2 5 22
+3 5 19
+4 5 23
+5 5 14
+
 # Test count with nullable fields
 query III
 SELECT c2, count(c3), count(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
@@ -296,6 +326,36 @@ SELECT c2, sum(c3), sum(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 3 395 9.590891361237
 4 29 9.531112968922
 5 -194 7.074412226677
+
+# Test median with nullable fields
+query IIR
+SELECT c2, median(c3), median(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 12 0.6067944
+2 1 0.46076488
+3 14 0.40154034
+4 -17 0.48515016
+5 -35 0.5536642
+
+# Test approx_median with nullable fields
+query IIR
+SELECT c2, approx_median(c3), approx_median(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 12 0.6067944
+2 1 0.46076488
+3 14 0.40154034
+4 -7 0.48515016
+5 -39 0.5536642
+
+# Test approx_distinct with nullable fields
+query II
+SELECT c2, approx_distinct(c3) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
+----
+1 19
+2 16
+3 13
+4 16
+5 12
 
 # Test avg for tinyint / float
 query TRR
