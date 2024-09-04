@@ -872,8 +872,7 @@ pub async fn from_substrait_rel(
 /// 2. All fields are compatible. See [`ensure_field_compatability`] for details
 ///
 /// This function returns a DataFrame with fields adjusted if necessary in the event that the
-/// SubstraitSchema is a subset of the DataFusion schema.
-// ```
+/// Substrait schema is a subset of the DataFusion schema.
 fn ensure_schema_compatability(
     table: DataFrame,
     substrait_schema: DFSchema,
@@ -900,7 +899,6 @@ fn ensure_schema_compatability(
     table.select(selected_columns)
 }
 
-///
 /// Ensures that the given Substrait field is compatible with the given DataFusion field
 ///
 /// A field is compatible between Substrait and DataFusion if:
@@ -910,7 +908,6 @@ fn ensure_schema_compatability(
 ///
 /// If a Substrait field is not nullable, the Substrait plan may be built around assuming it is not
 /// nullable. As such if DataFusion has that field as not nullable the plan should be rejected.
-//
 fn ensure_field_compatability(
     datafusion_field: &Field,
     substrait_field: &Field,
