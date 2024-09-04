@@ -1144,6 +1144,7 @@ impl LogicalPlan {
         }
     }
 
+    /// Helper for [Self::with_new_exprs] to use when no expressions are expected.
     #[inline]
     #[allow(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
     fn assert_no_expressions(&self, expr: Vec<Expr>) -> Result<()> {
@@ -1153,6 +1154,7 @@ impl LogicalPlan {
         Ok(())
     }
 
+    /// Helper for [Self::with_new_exprs] to use when no inputs are expected.
     #[inline]
     #[allow(clippy::needless_pass_by_value)] // inputs is moved intentionally to ensure it's not used again
     fn assert_no_inputs(&self, inputs: Vec<LogicalPlan>) -> Result<()> {
@@ -1162,6 +1164,7 @@ impl LogicalPlan {
         Ok(())
     }
 
+    /// Helper for [Self::with_new_exprs] to use when exactly one expression is expected.
     #[inline]
     fn only_expr(&self, mut expr: Vec<Expr>) -> Result<Expr> {
         if expr.len() != 1 {
@@ -1173,6 +1176,7 @@ impl LogicalPlan {
         Ok(expr.remove(0))
     }
 
+    /// Helper for [Self::with_new_exprs] to use when exactly one input is expected.
     #[inline]
     fn only_input(&self, mut inputs: Vec<LogicalPlan>) -> Result<LogicalPlan> {
         if inputs.len() != 1 {
@@ -1184,6 +1188,7 @@ impl LogicalPlan {
         Ok(inputs.remove(0))
     }
 
+    /// Helper for [Self::with_new_exprs] to use when exactly two inputs are expected.
     #[inline]
     fn only_two_inputs(
         &self,
