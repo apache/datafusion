@@ -84,7 +84,7 @@ arrow-ipc = { version = "52.2.0", default-features = false, features = [
 ] }
 arrow-ord = { version = "52.2.0", default-features = false }
 arrow-schema = { version = "52.2.0", default-features = false }
-arrow-string = { version = "52.2.0", default-features = false }
+arrow-string = { version = "53.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
