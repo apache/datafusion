@@ -74,7 +74,16 @@ pub fn schema_add_window_field(
         .iter()
         .map(|e| Arc::clone(e).as_ref().nullable(schema))
         .collect::<Result<Vec<_>>>()?;
-    let window_expr_return_type = window_fn.return_type(&data_types, &nullability)?;
+    let window_expr_return_type =
+        if let WindowFunctionDefinition::WindowUDF(udwf) = window_fn {
+            udwf.field(FieldArgs {
+                input_types: &data_types,
+                display_name: fn_name,
+            })
+            .map(|field| field.data_type().clone())?
+        } else {
+            window_fn.return_type(&data_types, &nullability)?
+        };
     let mut window_fields = schema
         .fields()
         .iter()
@@ -329,19 +338,11 @@ fn create_udwf_window_expr(
     input_schema: &Schema,
     name: String,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
-    // need to get the types into an owned vec for some reason
-    let input_types: Vec<_> = args
-        .iter()
-        .map(|arg| arg.data_type(input_schema))
-        .collect::<Result<_>>()?;
-
-    // figure out the output type
-    let data_type = fun.return_type(&input_types)?;
     Ok(Arc::new(WindowUDFExpr {
         fun: Arc::clone(fun),
         args: args.to_vec(),
+        input_schema: input_schema.clone(),
         name,
-        data_type,
     }))
 }
 
@@ -350,10 +351,9 @@ fn create_udwf_window_expr(
 struct WindowUDFExpr {
     fun: Arc<WindowUDF>,
     args: Vec<Arc<dyn PhysicalExpr>>,
+    input_schema: Schema,
     /// Display name
     name: String,
-    /// result type
-    data_type: DataType,
 }
 
 impl BuiltInWindowFunctionExpr for WindowUDFExpr {
@@ -362,8 +362,14 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn field(&self) -> Result<Field> {
+        let input_types: Vec<DataType> = self
+            .args
+            .iter()
+            .map(|arg| arg.data_type(&self.input_schema))
+            .collect::<Result<_>>()?;
+
         self.fun.field(FieldArgs {
-            return_type: self.data_type.clone(),
+            input_types: &input_types,
             display_name: &self.name,
         })
     }
