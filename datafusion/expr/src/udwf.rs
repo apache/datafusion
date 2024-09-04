@@ -226,10 +226,11 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
-/// # use arrow::datatypes::DataType;
+/// # use arrow::datatypes::{DataType, Field};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
+/// use datafusion_functions_window_common::field::FieldArgs;
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
 ///   signature: Signature
@@ -256,6 +257,7 @@ where
 ///    }
 ///    // The actual implementation would add one to the argument
 ///    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
+///    fn field(&self, field_args: FieldArgs) -> Result<Field> { unimplemented!() }
 /// }
 ///
 /// // Create a new WindowUDF from the implementation
