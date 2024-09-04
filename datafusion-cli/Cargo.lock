@@ -1348,6 +1348,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr-common",
  "datafusion-functions-aggregate-common",
+ "datafusion-functions-window-common",
  "datafusion-physical-expr-common",
  "paste",
  "serde_json",
@@ -1448,6 +1449,7 @@ version = "41.0.0"
 dependencies = [
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-functions-window-common",
  "datafusion-physical-expr-common",
  "log",
 ]
