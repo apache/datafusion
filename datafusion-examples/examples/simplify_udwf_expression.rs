@@ -85,8 +85,8 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
         Some(Box::new(simplify))
     }
 
-    fn field(&self, _field_args: FieldArgs) -> Result<Field> {
-        unimplemented!()
+    fn field(&self, field_args: FieldArgs) -> Result<Field> {
+        Ok(Field::new(field_args.display_name, DataType::Float64, true))
     }
 }
 
