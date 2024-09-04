@@ -83,8 +83,12 @@ impl WindowUDFImpl for SmoothItUdf {
         Ok(Box::new(MyPartitionEvaluator::new()))
     }
 
-    fn field(&self, _field_args: FieldArgs) -> Result<Field> {
-        unimplemented!()
+    fn field(&self, field_args: FieldArgs) -> Result<Field> {
+        Ok(Field::new(
+            field_args.display_name,
+            field_args.return_type,
+            true,
+        ))
     }
 }
 
