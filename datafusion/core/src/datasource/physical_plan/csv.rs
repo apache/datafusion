@@ -1272,12 +1272,14 @@ mod tests {
 
         crate::assert_batches_eq!(expected, &result);
 
-        match session_ctx
+        let e = session_ctx
             .read_csv("memory:///", CsvReadOptions::new().terminator(Some(b'\n')))
-            .await.unwrap().collect().await {
-            Ok(_) => panic!("Expected error"),
-            Err(e) => assert_eq!(e.strip_backtrace(), "Arrow error: Csv error: incorrect number of fields for line 1, expected 2 got more than 2"),
-        }
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap_err();
+        assert_eq!(e.strip_backtrace(), "Arrow error: Csv error: incorrect number of fields for line 1, expected 2 got more than 2")
     }
 
     #[tokio::test]
