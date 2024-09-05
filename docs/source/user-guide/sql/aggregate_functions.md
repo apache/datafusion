@@ -550,13 +550,14 @@ Returns the value of the first expression corresponding to the maximum value in 
 ```
 max_by(expression1, expression2)
 ```
+
 #### Arguments
 
 - **expression1**: First expression to return the value from.
-Can be a constant, column, or function, and any combination of arithmetic operators.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 - **expression2** Second expression used to determine the maximum value.
-Can be a constant, column, or function, and any combination of arithmetic operators.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `min_by`
 
@@ -565,13 +566,14 @@ Returns the value of the first expression corresponding to the minimum value in 
 ```
 min_by(expression1, expression2)
 ```
+
 #### Arguments
 
 - **expression1**: First expression to return the value from.
-Can be a constant, column, or function, and any combination of arithmetic operators.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 - **expression2** Second expression used to determine the maximum value.
-Can be a constant, column, or function, and any combination of arithmetic operators.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ## Approximate
 
