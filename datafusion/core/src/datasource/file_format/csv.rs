@@ -247,6 +247,13 @@ impl CsvFormat {
         self
     }
 
+    /// The character used to indicate the end of a row.
+    /// - default to None (CRLF)
+    pub fn with_terminator(mut self, terminator: Option<u8>) -> Self {
+        self.options.terminator = terminator;
+        self
+    }
+
     /// Specifies whether newlines in (quoted) values are supported.
     ///
     /// Parsing newlines in quoted values may be affected by execution behaviour such as
@@ -359,6 +366,7 @@ impl FileFormat for CsvFormat {
             .with_has_header(has_header)
             .with_delimeter(self.options.delimiter)
             .with_quote(self.options.quote)
+            .with_terminator(self.options.terminator)
             .with_escape(self.options.escape)
             .with_comment(self.options.comment)
             .with_newlines_in_values(newlines_in_values)
@@ -680,7 +688,7 @@ mod tests {
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::{col, lit};
 
     use crate::execution::session_state::SessionStateBuilder;
@@ -863,7 +871,7 @@ mod tests {
     async fn query_compress_data(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new()).unwrap());
+        let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
         let mut cfg = SessionConfig::new();
         cfg.options_mut().catalog.has_header = true;
         let session_state = SessionStateBuilder::new()

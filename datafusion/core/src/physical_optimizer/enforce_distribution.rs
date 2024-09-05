@@ -309,7 +309,7 @@ fn adjust_input_keys_ordering(
                 return reorder_partitioned_join_keys(
                     requirements,
                     on,
-                    vec![],
+                    &[],
                     &join_constructor,
                 )
                 .map(Transformed::yes);
@@ -373,7 +373,7 @@ fn adjust_input_keys_ordering(
         return reorder_partitioned_join_keys(
             requirements,
             on,
-            sort_options.clone(),
+            sort_options,
             &join_constructor,
         )
         .map(Transformed::yes);
@@ -421,7 +421,7 @@ fn adjust_input_keys_ordering(
 fn reorder_partitioned_join_keys<F>(
     mut join_plan: PlanWithKeyRequirements,
     on: &[(PhysicalExprRef, PhysicalExprRef)],
-    sort_options: Vec<SortOptions>,
+    sort_options: &[SortOptions],
     join_constructor: &F,
 ) -> Result<PlanWithKeyRequirements>
 where
@@ -3908,7 +3908,7 @@ pub(crate) mod tests {
         let alias = vec![("a".to_string(), "a".to_string())];
         let plan_parquet =
             aggregate_exec_with_alias(parquet_exec_multiple(), alias.clone());
-        let plan_csv = aggregate_exec_with_alias(csv_exec_multiple(), alias.clone());
+        let plan_csv = aggregate_exec_with_alias(csv_exec_multiple(), alias);
 
         let expected_parquet = [
             "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
@@ -3934,7 +3934,7 @@ pub(crate) mod tests {
         let alias = vec![("a".to_string(), "a".to_string())];
         let plan_parquet =
             aggregate_exec_with_alias(parquet_exec_multiple(), alias.clone());
-        let plan_csv = aggregate_exec_with_alias(csv_exec_multiple(), alias.clone());
+        let plan_csv = aggregate_exec_with_alias(csv_exec_multiple(), alias);
 
         let expected_parquet = [
             "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
@@ -3964,7 +3964,7 @@ pub(crate) mod tests {
             options: SortOptions::default(),
         }];
         let plan_parquet = limit_exec(sort_exec(sort_key.clone(), parquet_exec(), false));
-        let plan_csv = limit_exec(sort_exec(sort_key.clone(), csv_exec(), false));
+        let plan_csv = limit_exec(sort_exec(sort_key, csv_exec(), false));
 
         let expected_parquet = &[
             "GlobalLimitExec: skip=0, fetch=100",
@@ -4000,8 +4000,7 @@ pub(crate) mod tests {
             parquet_exec(),
             false,
         )));
-        let plan_csv =
-            limit_exec(filter_exec(sort_exec(sort_key.clone(), csv_exec(), false)));
+        let plan_csv = limit_exec(filter_exec(sort_exec(sort_key, csv_exec(), false)));
 
         let expected_parquet = &[
             "GlobalLimitExec: skip=0, fetch=100",
@@ -4042,7 +4041,7 @@ pub(crate) mod tests {
         );
         let plan_csv = aggregate_exec_with_alias(
             limit_exec(filter_exec(limit_exec(csv_exec()))),
-            alias.clone(),
+            alias,
         );
 
         let expected_parquet = &[
@@ -4126,7 +4125,7 @@ pub(crate) mod tests {
         );
         let plan_csv = sort_preserving_merge_exec(
             sort_key.clone(),
-            csv_exec_with_sort(vec![sort_key.clone()]),
+            csv_exec_with_sort(vec![sort_key]),
         );
 
         // parallelization is not beneficial for SortPreservingMerge
@@ -4154,7 +4153,7 @@ pub(crate) mod tests {
             union_exec(vec![parquet_exec_with_sort(vec![sort_key.clone()]); 2]);
         let input_csv = union_exec(vec![csv_exec_with_sort(vec![sort_key.clone()]); 2]);
         let plan_parquet = sort_preserving_merge_exec(sort_key.clone(), input_parquet);
-        let plan_csv = sort_preserving_merge_exec(sort_key.clone(), input_csv);
+        let plan_csv = sort_preserving_merge_exec(sort_key, input_csv);
 
         // should not repartition (union doesn't benefit from increased parallelism)
         // should not sort (as the data was already sorted)
@@ -4224,8 +4223,8 @@ pub(crate) mod tests {
             ("c".to_string(), "c2".to_string()),
         ];
         let proj_parquet = projection_exec_with_alias(
-            parquet_exec_with_sort(vec![sort_key.clone()]),
-            alias_pairs.clone(),
+            parquet_exec_with_sort(vec![sort_key]),
+            alias_pairs,
         );
         let sort_key_after_projection = vec![PhysicalSortExpr {
             expr: col("c2", &proj_parquet.schema()).unwrap(),
@@ -4560,7 +4559,7 @@ pub(crate) mod tests {
         }];
         let alias = vec![("a".to_string(), "a".to_string())];
         let input = parquet_exec_with_sort(vec![sort_key]);
-        let physical_plan = aggregate_exec_with_alias(input, alias.clone());
+        let physical_plan = aggregate_exec_with_alias(input, alias);
 
         let expected = &[
             "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
@@ -4584,7 +4583,7 @@ pub(crate) mod tests {
         let alias = vec![("a".to_string(), "a".to_string())];
         let input = parquet_exec_multiple_sorted(vec![sort_key]);
         let aggregate = aggregate_exec_with_alias(input, alias.clone());
-        let physical_plan = aggregate_exec_with_alias(aggregate, alias.clone());
+        let physical_plan = aggregate_exec_with_alias(aggregate, alias);
 
         let expected = &[
             "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",

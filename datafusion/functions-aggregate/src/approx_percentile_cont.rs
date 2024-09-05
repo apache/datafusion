@@ -126,9 +126,9 @@ impl ApproxPercentileCont {
             | DataType::Float32
             | DataType::Float64) => {
                 if let Some(max_size) = tdigest_max_size {
-                    ApproxPercentileAccumulator::new_with_max_size(percentile, t.clone(), max_size)
+                    ApproxPercentileAccumulator::new_with_max_size(percentile, t, max_size)
                 }else{
-                    ApproxPercentileAccumulator::new(percentile, t.clone())
+                    ApproxPercentileAccumulator::new(percentile, t)
 
                 }
             }

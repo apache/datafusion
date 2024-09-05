@@ -17,8 +17,8 @@
 
 //! Default TableSource implementation used in DataFusion physical plans
 
-use std::any::Any;
 use std::sync::Arc;
+use std::{any::Any, borrow::Cow};
 
 use crate::datasource::TableProvider;
 
@@ -70,7 +70,7 @@ impl TableSource for DefaultTableSource {
         self.table_provider.supports_filters_pushdown(filter)
     }
 
-    fn get_logical_plan(&self) -> Option<&datafusion_expr::LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<datafusion_expr::LogicalPlan>> {
         self.table_provider.get_logical_plan()
     }
 

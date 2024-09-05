@@ -24,7 +24,7 @@ use std::vec;
 
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
-use datafusion::physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
+use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -47,7 +47,6 @@ use datafusion::datasource::physical_plan::{
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
-use datafusion::physical_expr::aggregate::utils::down_cast_any_ref;
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
@@ -70,13 +69,12 @@ use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
 };
-use datafusion::physical_plan::{
-    AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
-};
+use datafusion::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr, Statistics};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
@@ -362,7 +360,7 @@ fn rountrip_aggregate() -> Result<()> {
             .alias("NTH_VALUE(b, 1)")
             .build()?;
 
-    let test_cases: Vec<Vec<Arc<dyn AggregateExpr>>> = vec![
+    let test_cases: Vec<Vec<Arc<AggregateFunctionExpr>>> = vec![
         // AVG
         vec![avg_expr],
         // NTH_VALUE
@@ -395,7 +393,7 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> =
+    let aggregates: Vec<Arc<AggregateFunctionExpr>> =
         vec![
             AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
@@ -406,7 +404,7 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
         PhysicalGroupBy::new_single(groups.clone()),
-        aggregates.clone(),
+        aggregates,
         vec![None],
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
@@ -424,7 +422,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![AggregateExprBuilder::new(
+    let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![AggregateExprBuilder::new(
         approx_percentile_cont_udaf(),
         vec![col("b", &schema)?, lit(0.5)],
     )
@@ -435,7 +433,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
         PhysicalGroupBy::new_single(groups.clone()),
-        aggregates.clone(),
+        aggregates,
         vec![None],
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
@@ -459,7 +457,7 @@ fn rountrip_aggregate_with_sort() -> Result<()> {
         },
     }];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> =
+    let aggregates: Vec<Arc<AggregateFunctionExpr>> =
         vec![
             AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
@@ -471,7 +469,7 @@ fn rountrip_aggregate_with_sort() -> Result<()> {
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
         PhysicalGroupBy::new_single(groups.clone()),
-        aggregates.clone(),
+        aggregates,
         vec![None],
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
@@ -526,7 +524,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<dyn AggregateExpr>> =
+    let aggregates: Vec<Arc<AggregateFunctionExpr>> =
         vec![
             AggregateExprBuilder::new(Arc::new(udaf), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
@@ -538,7 +536,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
         Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::new_single(groups.clone()),
-            aggregates.clone(),
+            aggregates,
             vec![None],
             Arc::new(EmptyExec::new(schema.clone())),
             schema,
@@ -642,7 +640,7 @@ fn roundtrip_coalesce_with_fetch() -> Result<()> {
     )))?;
 
     roundtrip_test(Arc::new(
-        CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema.clone())), 8096)
+        CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema)), 8096)
             .with_fetch(Some(10)),
     ))
 }
@@ -748,7 +746,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     }
     impl PartialEq<dyn Any> for CustomPredicateExpr {
         fn eq(&self, other: &dyn Any) -> bool {
-            down_cast_any_ref(other)
+            other
                 .downcast_ref::<Self>()
                 .map(|x| self.inner.eq(&x.inner))
                 .unwrap_or(false)
@@ -823,11 +821,10 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
 
         fn try_encode_expr(
             &self,
-            node: Arc<dyn PhysicalExpr>,
+            node: &Arc<dyn PhysicalExpr>,
             buf: &mut Vec<u8>,
         ) -> Result<()> {
             if node
-                .as_ref()
                 .as_any()
                 .downcast_ref::<CustomPredicateExpr>()
                 .is_some()
@@ -993,18 +990,16 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         )),
         input,
     )?);
-    let aggr_expr = AggregateExprBuilder::new(
-        max_udaf(),
-        vec![udf_expr.clone() as Arc<dyn PhysicalExpr>],
-    )
-    .schema(schema.clone())
-    .alias("max")
-    .build()?;
+    let aggr_expr =
+        AggregateExprBuilder::new(max_udaf(), vec![udf_expr as Arc<dyn PhysicalExpr>])
+            .schema(schema.clone())
+            .alias("max")
+            .build()?;
 
     let window = Arc::new(WindowAggExec::try_new(
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr.clone(),
-            &[col("author", &schema.clone())?],
+            &[col("author", &schema)?],
             &[],
             Arc::new(WindowFrame::new(None)),
         ))],
@@ -1015,10 +1010,10 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     let aggregate = Arc::new(AggregateExec::try_new(
         AggregateMode::Final,
         PhysicalGroupBy::new(vec![], vec![], vec![]),
-        vec![aggr_expr.clone()],
+        vec![aggr_expr],
         vec![None],
         window,
-        schema.clone(),
+        schema,
     )?);
 
     let ctx = SessionContext::new();
@@ -1056,7 +1051,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         Arc::new(BinaryExpr::new(
             col("published", &schema)?,
             Operator::And,
-            Arc::new(BinaryExpr::new(udf_expr.clone(), Operator::Gt, lit(0))),
+            Arc::new(BinaryExpr::new(udf_expr, Operator::Gt, lit(0))),
         )),
         input,
     )?);
@@ -1085,7 +1080,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         vec![aggr_expr],
         vec![None],
         window,
-        schema.clone(),
+        schema,
     )?);
 
     let ctx = SessionContext::new();
@@ -1160,7 +1155,7 @@ fn roundtrip_json_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema.clone(),
+        schema,
         Some(sort_order),
     )))
 }
@@ -1199,7 +1194,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         Arc::new(DataSinkExec::new(
             input,
             data_sink,
-            schema.clone(),
+            schema,
             Some(sort_order),
         )),
         &ctx,
@@ -1255,7 +1250,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema.clone(),
+        schema,
         Some(sort_order),
     )))
 }
@@ -1344,7 +1339,7 @@ fn roundtrip_interleave() -> Result<()> {
     )?;
     let right = RepartitionExec::try_new(
         Arc::new(EmptyExec::new(Arc::new(schema_right))),
-        partition.clone(),
+        partition,
     )?;
     let inputs: Vec<Arc<dyn ExecutionPlan>> = vec![Arc::new(left), Arc::new(right)];
     let interleave = InterleaveExec::try_new(inputs)?;

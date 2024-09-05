@@ -23,8 +23,9 @@ use std::sync::Arc;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
-    reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalSortRequirement,
+    reverse_order_bys, EquivalenceProperties, PhysicalSortRequirement,
 };
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::concat_slices;
@@ -117,7 +118,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
 ///
 /// # Parameters
 ///
-/// * `aggr_exprs` - A vector of `Arc<dyn AggregateExpr>` representing the
+/// * `aggr_exprs` - A vector of `Arc<AggregateFunctionExpr>` representing the
 ///   aggregate expressions to be optimized.
 /// * `prefix_requirement` - An array slice representing the ordering
 ///   requirements preceding the aggregate expressions.
@@ -130,10 +131,10 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
 /// successfully. Any errors occurring during the conversion process are
 /// passed through.
 fn try_convert_aggregate_if_better(
-    aggr_exprs: Vec<Arc<dyn AggregateExpr>>,
+    aggr_exprs: Vec<Arc<AggregateFunctionExpr>>,
     prefix_requirement: &[PhysicalSortRequirement],
     eq_properties: &EquivalenceProperties,
-) -> Result<Vec<Arc<dyn AggregateExpr>>> {
+) -> Result<Vec<Arc<AggregateFunctionExpr>>> {
     aggr_exprs
         .into_iter()
         .map(|aggr_expr| {

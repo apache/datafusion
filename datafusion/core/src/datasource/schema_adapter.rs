@@ -369,7 +369,7 @@ mod tests {
             let f1 = Field::new("id", DataType::Int32, true);
             let f2 = Field::new("extra_column", DataType::Utf8, true);
 
-            let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
+            let schema = Arc::new(Schema::new(vec![f1, f2]));
 
             let extra_column = Arc::new(StringArray::from(vec!["foo"]));
             let mut new_columns = batch.columns().to_vec();
