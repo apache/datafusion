@@ -100,7 +100,7 @@ impl AggregateUDFImpl for MaxByFunction {
     ) -> Option<datafusion_expr::function::AggregateFunctionSimplification> {
         let simplify = |mut aggr_func: datafusion_expr::expr::AggregateFunction,
                         _: &dyn SimplifyInfo| {
-            let mut order_by = aggr_func.order_by.unwrap_or_else(|| vec![]);
+            let mut order_by = aggr_func.order_by.unwrap_or_else(Vec::new);
             let (second_arg, first_arg) =
                 (aggr_func.args.remove(1), aggr_func.args.remove(0));
 
@@ -185,7 +185,7 @@ impl AggregateUDFImpl for MinByFunction {
     ) -> Option<datafusion_expr::function::AggregateFunctionSimplification> {
         let simplify = |mut aggr_func: datafusion_expr::expr::AggregateFunction,
                         _: &dyn SimplifyInfo| {
-            let mut order_by = aggr_func.order_by.unwrap_or_else(|| vec![]);
+            let mut order_by = aggr_func.order_by.unwrap_or_else(Vec::new);
             let (second_arg, first_arg) =
                 (aggr_func.args.remove(1), aggr_func.args.remove(0));
 
