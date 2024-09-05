@@ -20,15 +20,15 @@ use datafusion_common::arrow::datatypes::DataType;
 /// Contains metadata which may be useful for a user-defined window
 /// function to specify the field of the final result of evaluating the
 /// user-defined window function.
-pub struct FieldArgs<'a> {
+pub struct WindowUDFResultArgs<'a> {
     /// The data types of input expressions.
     input_types: &'a [DataType],
     /// The display name.
     schema_name: &'a str,
 }
 
-impl<'a> FieldArgs<'a> {
-    /// Create an instance of [`FieldArgs`].
+impl<'a> WindowUDFResultArgs<'a> {
+    /// Create an instance of [`WindowUDFResultArgs`].
     ///
     /// # Arguments
     ///
@@ -39,9 +39,9 @@ impl<'a> FieldArgs<'a> {
     ///
     /// # Returns
     ///
-    /// A new [`FieldArgs`] instance.
+    /// A new [`WindowUDFResultArgs`] instance.
     pub fn new(input_types: &'a [DataType], schema_name: &'a str) -> Self {
-        FieldArgs {
+        WindowUDFResultArgs {
             input_types,
             schema_name,
         }

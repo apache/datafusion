@@ -26,7 +26,7 @@ use arrow_schema::Field;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::ScalarValue;
-use datafusion_expr::function::FieldArgs;
+use datafusion_expr::function::WindowUDFResultArgs;
 use datafusion_expr::{
     PartitionEvaluator, Signature, WindowFrame, WindowUDF, WindowUDFImpl,
 };
@@ -83,7 +83,7 @@ impl WindowUDFImpl for SmoothItUdf {
         Ok(Box::new(MyPartitionEvaluator::new()))
     }
 
-    fn field(&self, field_args: FieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFResultArgs) -> Result<Field> {
         Ok(Field::new(field_args.name(), DataType::Float64, true))
     }
 }

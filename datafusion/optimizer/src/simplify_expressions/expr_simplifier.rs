@@ -1798,7 +1798,7 @@ mod tests {
         interval_arithmetic::Interval,
         *,
     };
-    use datafusion_functions_window_common::field::FieldArgs;
+    use datafusion_functions_window_common::result::WindowUDFResultArgs;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
@@ -3918,7 +3918,7 @@ mod tests {
             unimplemented!("not needed for tests")
         }
 
-        fn field(&self, _field_args: FieldArgs) -> Result<Field> {
+        fn field(&self, _field_args: WindowUDFResultArgs) -> Result<Field> {
             unimplemented!("not needed for tests")
         }
     }

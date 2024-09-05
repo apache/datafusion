@@ -38,7 +38,7 @@ use arrow::compute::kernels::cast_utils::{
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, Column, Result, ScalarValue, TableReference};
-use datafusion_functions_window_common::field::FieldArgs;
+use datafusion_functions_window_common::result::WindowUDFResultArgs;
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
@@ -667,7 +667,7 @@ impl WindowUDFImpl for SimpleWindowUDF {
         (self.partition_evaluator_factory)()
     }
 
-    fn field(&self, field_args: FieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFResultArgs) -> Result<Field> {
         Ok(Field::new(
             field_args.name(),
             self.return_type.clone(),

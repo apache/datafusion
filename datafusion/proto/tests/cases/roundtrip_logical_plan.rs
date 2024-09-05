@@ -75,7 +75,7 @@ use datafusion_functions_aggregate::expr_fn::{
 };
 use datafusion_functions_aggregate::kurtosis_pop::kurtosis_pop;
 use datafusion_functions_aggregate::string_agg::string_agg;
-use datafusion_functions_window_common::field::FieldArgs;
+use datafusion_functions_window_common::result::WindowUDFResultArgs;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -2421,7 +2421,7 @@ fn roundtrip_window() {
             make_partition_evaluator()
         }
 
-        fn field(&self, field_args: FieldArgs) -> Result<Field> {
+        fn field(&self, field_args: WindowUDFResultArgs) -> Result<Field> {
             if let Some(return_type) = field_args.get_input_type(0) {
                 Ok(Field::new(field_args.name(), return_type, true))
             } else {

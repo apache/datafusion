@@ -18,4 +18,4 @@
 //! Common user-defined window functionality for [DataFusion]
 //!
 //! [DataFusion]: <https://crates.io/crates/datafusion>
-pub mod field;
+pub mod result;

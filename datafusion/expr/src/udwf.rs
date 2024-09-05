@@ -28,7 +28,7 @@ use std::{
 use arrow::datatypes::{DataType, Field};
 
 use datafusion_common::{not_impl_err, Result};
-use datafusion_functions_window_common::field::FieldArgs;
+use datafusion_functions_window_common::result::WindowUDFResultArgs;
 
 use crate::expr::WindowFunction;
 use crate::{
@@ -183,7 +183,7 @@ impl WindowUDF {
     /// Returns the field of the final result of evaluating this window function.
     ///
     /// See [`WindowUDFImpl::field`] for more details.
-    pub fn field(&self, field_args: FieldArgs) -> Result<Field> {
+    pub fn field(&self, field_args: WindowUDFResultArgs) -> Result<Field> {
         self.inner.field(field_args)
     }
 
@@ -227,7 +227,7 @@ where
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
-/// use datafusion_functions_window_common::field::FieldArgs;
+/// use datafusion_functions_window_common::result::WindowUDFResultArgs;
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
 ///   signature: Signature
@@ -254,7 +254,7 @@ where
 ///    }
 ///    // The actual implementation would add one to the argument
 ///    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
-///    fn field(&self, field_args: FieldArgs) -> Result<Field> { unimplemented!() }
+///    fn field(&self, field_args: WindowUDFResultArgs) -> Result<Field> { unimplemented!() }
 /// }
 ///
 /// // Create a new WindowUDF from the implementation
@@ -354,9 +354,9 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
 
     /// The field of the final result of evaluating this window function.
     ///
-    /// The [`FieldArgs`] argument allows the window UDF to customize the
+    /// The [`WindowUDFResultArgs`] argument allows the window UDF to customize the
     /// field given the types of the input expressions.
-    fn field(&self, field_args: FieldArgs) -> Result<Field>;
+    fn field(&self, field_args: WindowUDFResultArgs) -> Result<Field>;
 
     /// Allows the window UDF to define a custom result ordering.
     ///
@@ -456,7 +456,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         hasher.finish()
     }
 
-    fn field(&self, field_args: FieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFResultArgs) -> Result<Field> {
         self.inner.field(field_args)
     }
 
@@ -517,7 +517,7 @@ impl WindowUDFImpl for WindowUDFLegacyWrapper {
         (self.partition_evaluator_factory)()
     }
 
-    fn field(&self, field_args: FieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFResultArgs) -> Result<Field> {
         let return_type = (self.return_type)(field_args.input_types())?;
 
         Ok(Field::new(
