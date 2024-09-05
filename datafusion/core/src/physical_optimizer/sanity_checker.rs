@@ -132,7 +132,7 @@ pub fn check_plan_sanity(
                 return plan_err!(
                     "Plan: {:?} does not satisfy order requirements: {:?}. Child-{} order: {:?}",
                     plan_str,
-               sort_req,
+                    sort_req,
                     idx,
                     child_eq_props.oeq_class
                 );
