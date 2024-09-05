@@ -6669,6 +6669,8 @@ mod tests {
     fn test_binary_display() {
         let no_binary_value = ScalarValue::Binary(None);
         assert_eq!(format!("{no_binary_value}"), "NULL");
+        let single_binary_value = ScalarValue::Binary(Some(vec![42u8]));
+        assert_eq!(format!("{single_binary_value}"), "2A");
         let small_binary_value = ScalarValue::Binary(Some(vec![1u8, 2, 3]));
         assert_eq!(format!("{small_binary_value}"), "010203");
         let large_binary_value =
