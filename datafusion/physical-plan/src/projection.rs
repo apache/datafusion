@@ -318,6 +318,7 @@ impl ProjectionStream {
             RecordBatch::try_new_with_options(Arc::clone(&self.schema), arrays, &options)
                 .map_err(Into::into)
         } else {
+            // println!("arrays.len(): {:?}", arrays[0].len());
             RecordBatch::try_new(Arc::clone(&self.schema), arrays).map_err(Into::into)
         }
     }

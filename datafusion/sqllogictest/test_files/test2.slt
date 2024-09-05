@@ -1,0 +1,22 @@
+statement ok
+create table t(a int, b varchar) as values (1, 'a'), (2, 'c'), (1, 'a'), (2, 'c'), (1, 'a');
+
+query ITI
+select a, b, count(*) as c from t group by a, b order by c desc;
+----
+1 a 3
+2 c 2
+
+query TT
+explain select a, b, count(*) as c from t group by a, b order by c desc;
+----
+logical_plan
+01)Sort: c DESC NULLS FIRST
+02)--Projection: t.a, t.b, count(*) AS c
+03)----Aggregate: groupBy=[[t.a, t.b]], aggr=[[count(Int64(1)) AS count(*)]]
+04)------TableScan: t projection=[a, b]
+physical_plan
+01)SortExec: expr=[c@2 DESC], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[a@0 as a, b@1 as b, count(*)@2 as c]
+03)----AggregateExec: mode=SinglePartitioned, gby=[a@0 as a, b@1 as b], aggr=[count(*)]
+04)------MemoryExec: partitions=1, partition_sizes=[1]

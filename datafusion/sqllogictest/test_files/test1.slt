@@ -16,3 +16,19 @@ SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPh
 6018350421959114808 (empty) 5990
 835157184735512989 (empty) 5209
 770542365400669095 (empty) 4906
+
+query TT
+explain SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
+----
+logical_plan
+01)Sort: count(*) DESC NULLS FIRST, fetch=10
+02)--Aggregate: groupBy=[[hits.UserID, hits.SearchPhrase]], aggr=[[count(Int64(1)) AS count(*)]]
+03)----TableScan: hits projection=[UserID, SearchPhrase]
+physical_plan
+01)SortPreservingMergeExec: [count(*)@2 DESC], fetch=10
+02)--SortExec: TopK(fetch=10), expr=[count(*)@2 DESC], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(*)]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([UserID@0, SearchPhrase@1], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[UserID@0 as UserID, SearchPhrase@1 as SearchPhrase], aggr=[count(*)]
+07)------------ParquetExec: file_groups={4 groups: [[WORKSPACE_ROOT/benchmarks/data/hits.parquet:0..3694994112], [WORKSPACE_ROOT/benchmarks/data/hits.parquet:3694994112..7389988224], [WORKSPACE_ROOT/benchmarks/data/hits.parquet:7389988224..11084982336], [WORKSPACE_ROOT/benchmarks/data/hits.parquet:11084982336..14779976446]]}, projection=[UserID, SearchPhrase]

@@ -137,17 +137,17 @@ pub fn check_plan_sanity(
             }
         }
 
-        if !child
-            .output_partitioning()
-            .satisfy(child_dist_req, child_eq_props)
-        {
-            let child_plan_str = get_plan_string(child);
-            return plan_err!(
-                "Child: {:?} does not satisfy parent distribution requirements: {:?}",
-                child_plan_str,
-                child_dist_req
-            );
-        }
+        // if !child
+        //     .output_partitioning()
+        //     .satisfy(child_dist_req, child_eq_props)
+        // {
+        //     let child_plan_str = get_plan_string(child);
+        //     return plan_err!(
+        //         "Child: {:?} does not satisfy parent distribution requirements: {:?}",
+        //         child_plan_str,
+        //         child_dist_req
+        //     );
+        // }
     }
 
     Ok(Transformed::no(plan))

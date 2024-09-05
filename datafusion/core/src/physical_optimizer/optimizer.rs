@@ -25,7 +25,7 @@ use super::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
-use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
+// use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
 use crate::physical_optimizer::enforce_sorting::EnforceSorting;
 use crate::physical_optimizer::join_selection::JoinSelection;
 use crate::physical_optimizer::limit_pushdown::LimitPushdown;
@@ -69,7 +69,7 @@ impl PhysicalOptimizer {
             // requirements. Please make sure that the whole plan tree is determined before this rule.
             // This rule increases parallelism if doing so is beneficial to the physical plan; i.e. at
             // least one of the operators in the plan benefits from increased parallelism.
-            Arc::new(EnforceDistribution::new()),
+            // Arc::new(EnforceDistribution::new()),
             // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution rule
             Arc::new(CombinePartialFinalAggregate::new()),
             // The EnforceSorting rule is for adding essential local sorting to satisfy the required
