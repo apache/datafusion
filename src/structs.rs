@@ -19,6 +19,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, StructArray};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::logical_expr::ColumnarValue;
+use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{DataFusionError, Result as DataFusionResult, ScalarValue};
 use datafusion_physical_expr::PhysicalExpr;
 use std::{
@@ -27,8 +28,6 @@ use std::{
     hash::{Hash, Hasher},
     sync::Arc,
 };
-
-use crate::utils::down_cast_any_ref;
 
 #[derive(Debug, Hash)]
 pub struct CreateNamedStruct {

@@ -26,10 +26,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion::logical_expr::ColumnarValue;
+use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::Result;
 use datafusion_physical_expr::{expressions::CaseExpr, PhysicalExpr};
-
-use crate::utils::down_cast_any_ref;
 
 /// IfExpr is a wrapper around CaseExpr, because `IF(a, b, c)` is semantically equivalent to
 /// `CASE WHEN a THEN b ELSE c END`.

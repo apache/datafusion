@@ -50,6 +50,7 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::PhysicalExpr;
 
 use chrono::{NaiveDate, NaiveDateTime, TimeZone, Timelike};
+use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use num::{
     cast::AsPrimitive, integer::div_floor, traits::CheckedNeg, CheckedSub, Integer, Num,
     ToPrimitive,
@@ -57,7 +58,7 @@ use num::{
 use regex::Regex;
 
 use crate::timezone;
-use crate::utils::{array_with_timezone, down_cast_any_ref};
+use crate::utils::array_with_timezone;
 
 use crate::{EvalMode, SparkError, SparkResult};
 

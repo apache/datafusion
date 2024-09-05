@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::down_cast_any_ref;
 use crate::SparkError;
 use arrow::compute::take;
 use arrow_array::builder::BooleanBuilder;
 use arrow_array::types::Int32Type;
 use arrow_array::{Array, BooleanArray, DictionaryArray, RecordBatch, StringArray};
 use arrow_schema::{DataType, Schema};
+use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::PhysicalExpr;

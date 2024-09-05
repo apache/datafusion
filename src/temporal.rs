@@ -28,10 +28,11 @@ use arrow::{
 };
 use arrow_schema::{DataType, Schema, TimeUnit::Microsecond};
 use datafusion::logical_expr::ColumnarValue;
+use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{DataFusionError, ScalarValue::Utf8};
 use datafusion_physical_expr::PhysicalExpr;
 
-use crate::utils::{array_with_timezone, down_cast_any_ref};
+use crate::utils::array_with_timezone;
 
 use crate::kernels::temporal::{
     date_trunc_array_fmt_dyn, date_trunc_dyn, timestamp_trunc_array_fmt_dyn, timestamp_trunc_dyn,
