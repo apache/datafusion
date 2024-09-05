@@ -167,13 +167,7 @@ impl ExprSchemable for Expr {
                 // expressiveness of `TypeSignature`), then infer return type
                 Ok(func.return_type_from_exprs(args, schema, &arg_data_types)?)
             }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                ..
-            }) => {
+            Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
@@ -211,13 +205,9 @@ impl ExprSchemable for Expr {
                                     )
                                 )
                             })?;
-                        let display_name = format!(
-                            "{}({:?}) PARTITION BY: [{:?}], ORDER BY: [{:?}]",
-                            fun, args, partition_by, order_by
-                        );
                         udwf.field(FieldArgs {
                             input_types: new_types.as_ref(),
-                            display_name: &display_name,
+                            display_name: self.schema_name().to_string().as_ref(),
                         })
                         .map(|field| field.data_type().clone())
                     }
