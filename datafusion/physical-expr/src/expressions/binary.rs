@@ -4242,4 +4242,62 @@ mod tests {
             .contains("Overflow happened on: 2147483647 * 2"));
         Ok(())
     }
+
+    /// Test helper for SIMILAR TO binary operation
+    fn apply_similar_to(
+        schema: &SchemaRef,
+        va: Vec<&str>,
+        vb: Vec<&str>,
+        negated: bool,
+        case_insensitive: bool,
+        expected: &BooleanArray,
+    ) -> Result<()> {
+        let a = StringArray::from(va);
+        let b = StringArray::from(vb);
+        let op = similar_to(
+            negated,
+            case_insensitive,
+            col("a", schema)?,
+            col("b", schema)?,
+        );
+        let batch =
+            RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a), Arc::new(b)])?;
+        let result = op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        assert_eq!(result.as_ref(), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_similar_to() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+
+        let expected = [true, false].iter().collect();
+        // case-sensitive
+        apply_similar_to(
+            &schema,
+            vec!["hello world", "Hello World"],
+            vec!["hello.*", "hello.*"],
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+        // case-insensitive
+        apply_similar_to(
+            &schema,
+            vec!["hello world", "bye"],
+            vec!["hello.*", "hello.*"],
+            false,
+            true,
+            &expected,
+        )
+        .unwrap();
+    }
 }
