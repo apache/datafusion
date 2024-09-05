@@ -459,7 +459,7 @@ impl Unparser<'_> {
                 if !columns.is_empty()
                     && !self.dialect.supports_column_alias_in_table_alias()
                 {
-                    // if columns are returned than plan corresponds to a projection
+                    // if columns are returned then the plan corresponds to a projection
                     let LogicalPlan::Projection(inner_p) = plan else {
                         return plan_err!(
                             "Inner projection for subquery alias is expected"
