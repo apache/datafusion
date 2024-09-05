@@ -345,7 +345,7 @@ impl ExprSchemable for Expr {
             Expr::AggregateFunction(AggregateFunction { func, .. }) => {
                 Ok(func.is_nullable())
             }
-            Expr::WindowFunction(WindowFunction { fun, .. }) => match fun {
+            Expr::WindowFunction(WindowFunction { fun, args, .. }) => match fun {
                 WindowFunctionDefinition::BuiltInWindowFunction(func) => {
                     if func.name() == "RANK"
                         || func.name() == "NTILE"
@@ -357,7 +357,18 @@ impl ExprSchemable for Expr {
                     }
                 }
                 WindowFunctionDefinition::AggregateUDF(func) => Ok(func.is_nullable()),
-                WindowFunctionDefinition::WindowUDF(udwf) => Ok(udwf.nullable()),
+                WindowFunctionDefinition::WindowUDF(udwf) => {
+                    let data_types = args
+                        .iter()
+                        .map(|e| e.get_type(input_schema))
+                        .collect::<Result<Vec<_>>>()?;
+                    let input_types = data_types_with_window_udf(&data_types, udwf)?;
+                    let schema_name = self.schema_name().to_string();
+                    let field_args = FieldArgs::new(&input_types, &schema_name);
+                    let field = udwf.field(field_args)?;
+
+                    Ok(field.is_nullable())
+                }
             },
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }

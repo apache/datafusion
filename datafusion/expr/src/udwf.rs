@@ -180,13 +180,6 @@ impl WindowUDF {
         self.inner.partition_evaluator()
     }
 
-    /// Returns if column values are nullable for this window function.
-    ///
-    /// See [`WindowUDFImpl::nullable`] for more details.
-    pub fn nullable(&self) -> bool {
-        self.inner.nullable()
-    }
-
     /// Returns the field of the final result of evaluating this window function.
     ///
     /// See [`WindowUDFImpl::field`] for more details.
@@ -359,15 +352,6 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         hasher.finish()
     }
 
-    /// Allows customizing nullable of column for this window UDF.
-    ///
-    /// By default, the final result of evaluating the window UDF is
-    /// allowed to have null values. But if that is not the case then
-    /// it can be customized in the window UDF implementation.
-    fn nullable(&self) -> bool {
-        true
-    }
-
     /// The field of the final result of evaluating this window function.
     ///
     /// The [`FieldArgs`] argument allows the window UDF to customize the
@@ -470,10 +454,6 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.hash_value().hash(hasher);
         self.aliases.hash(hasher);
         hasher.finish()
-    }
-
-    fn nullable(&self) -> bool {
-        self.inner.nullable()
     }
 
     fn field(&self, field_args: FieldArgs) -> Result<Field> {

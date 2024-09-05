@@ -95,10 +95,6 @@ impl WindowUDFImpl for RowNumber {
         Ok(Box::<NumRowsEvaluator>::default())
     }
 
-    fn nullable(&self) -> bool {
-        false
-    }
-
     fn field(&self, field_args: FieldArgs) -> Result<Field> {
         Ok(Field::new(field_args.name(), DataType::UInt64, false))
     }
