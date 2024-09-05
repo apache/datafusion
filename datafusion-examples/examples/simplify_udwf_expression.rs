@@ -22,7 +22,7 @@ use arrow_schema::{DataType, Field};
 use datafusion::execution::context::SessionContext;
 use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion::{error::Result, execution::options::CsvReadOptions};
-use datafusion_expr::function::{WindowUDFResultArgs, WindowFunctionSimplification};
+use datafusion_expr::function::{WindowFunctionSimplification, WindowUDFResultArgs};
 use datafusion_expr::{
     expr::WindowFunction, simplify::SimplifyInfo, Expr, PartitionEvaluator, Signature,
     Volatility, WindowUDF, WindowUDFImpl,

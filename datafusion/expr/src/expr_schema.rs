@@ -206,7 +206,8 @@ impl ExprSchemable for Expr {
                                 )
                             })?;
                         let schema_name = self.schema_name().to_string();
-                        let field_args = WindowUDFResultArgs::new(&new_types, &schema_name);
+                        let field_args =
+                            WindowUDFResultArgs::new(&new_types, &schema_name);
 
                         udwf.field(field_args)
                             .map(|field| field.data_type().clone())

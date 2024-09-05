@@ -33,9 +33,9 @@ impl<'a> WindowUDFResultArgs<'a> {
     /// # Arguments
     ///
     /// * `input_types` - The data types derived from the input
-    /// expressions to the window function.
+    ///     expressions to the window function.
     /// * `schema_name` - The formatted display name for the window
-    /// function derived from the input schema.
+    ///     function derived from the input schema.
     ///
     /// # Returns
     ///
