@@ -1009,14 +1009,11 @@ impl GroupedHashAggregateStream {
     }
 
     /// Updates skip aggregation probe state.
-    ///
-    /// In case stream has any spills, the probe is forcefully set to
-    /// forbid aggregation skipping, and locked, since spilling resets
-    /// total number of unique groups.
-    ///
-    /// Note: currently spilling is not supported for Partial aggregation
     fn update_skip_aggregation_probe(&mut self, input_rows: usize) {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
+            // Skip aggregation probe is not supported if stream has any spills,
+            // currently spilling is not supported for Partial aggregation
+            assert!(self.spill_state.spills.is_empty());
             probe.update_state(input_rows, self.group_values.len());
         };
     }
