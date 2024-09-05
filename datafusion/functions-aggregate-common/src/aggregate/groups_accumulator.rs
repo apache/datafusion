@@ -24,9 +24,7 @@ pub mod nulls;
 pub mod prim_op;
 
 use arrow::{
-    array::{
-        ArrayRef, AsArray, BooleanArray, PrimitiveArray,
-    },
+    array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
     datatypes::{
         DataType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
@@ -462,11 +460,8 @@ macro_rules! filter_primitive_array {
     }};
 }
 
-// TODO: 
-fn filter_array(
-    values: &ArrayRef,
-    filter: &BooleanArray,
-) -> Result<ArrayRef> {
+// TODO:
+fn filter_array(values: &ArrayRef, filter: &BooleanArray) -> Result<ArrayRef> {
     match values.data_type() {
         DataType::Boolean => {
             let array = values.as_boolean().clone();
@@ -488,8 +483,6 @@ fn filter_array(
         DataType::Float16 => filter_primitive_array!(values, Float16Type, Some(filter)),
         DataType::Float32 => filter_primitive_array!(values, Float32Type, Some(filter)),
         DataType::Float64 => filter_primitive_array!(values, Float64Type, Some(filter)),
-        _ => {
-            compute::filter(values, filter).map_err(|e| arrow_datafusion_err!(e))
-        }
+        _ => compute::filter(values, filter).map_err(|e| arrow_datafusion_err!(e)),
     }
 }
