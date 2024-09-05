@@ -163,6 +163,7 @@ impl WindowUDF {
     /// Return the type of the function given its input types
     ///
     /// See [`WindowUDFImpl::return_type`] for more details.
+    #[allow(deprecated)]
     pub fn return_type(&self, args: &[DataType]) -> Result<DataType> {
         self.inner.return_type(args)
     }
@@ -288,6 +289,10 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
 
     /// What [`DataType`] will be returned by this function, given the types of
     /// the arguments
+    #[deprecated(
+        since = "41.0.0",
+        note = "Use `field` instead to define the final result of evaluating this user-defined window function."
+    )]
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
     /// Invoke the function, returning the [`PartitionEvaluator`] instance
@@ -428,6 +433,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.signature()
     }
 
+    #[allow(deprecated)]
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         self.inner.return_type(arg_types)
     }
