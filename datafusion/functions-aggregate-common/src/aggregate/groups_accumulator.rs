@@ -24,7 +24,7 @@ pub mod nulls;
 pub mod prim_op;
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray},
+    array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
     datatypes::UInt32Type,
 };
@@ -292,6 +292,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
         result
     }
+
     // filtered_null_mask(opt_filter, &values);
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let vec_size_pre = self.states.allocated_size();
