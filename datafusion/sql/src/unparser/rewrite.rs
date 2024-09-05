@@ -274,15 +274,11 @@ pub(super) fn inject_column_aliases(
         .iter()
         .zip(aliases)
         .map(|(expr, col_alias)| match expr {
-            Expr::Column(col) => {
-                let new_expr = Expr::Alias(Alias {
-                    expr: Box::new(expr.clone()),
-                    relation: col.relation.clone(),
-                    name: col_alias.to_string(),
-                });
-
-                new_expr
-            }
+            Expr::Column(col) => Expr::Alias(Alias {
+                expr: Box::new(expr.clone()),
+                relation: col.relation.clone(),
+                name: col_alias.to_string(),
+            }),
             _ => expr.clone(),
         })
         .collect::<Vec<_>>();
