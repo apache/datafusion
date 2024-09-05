@@ -205,11 +205,11 @@ impl ExprSchemable for Expr {
                                     )
                                 )
                             })?;
-                        udwf.field(FieldArgs {
-                            input_types: new_types.as_ref(),
-                            schema_name: self.schema_name().to_string().as_ref(),
-                        })
-                        .map(|field| field.data_type().clone())
+                        let schema_name = self.schema_name().to_string();
+                        let field_args = FieldArgs::new(&new_types, &schema_name);
+
+                        udwf.field(field_args)
+                            .map(|field| field.data_type().clone())
                     }
                     _ => fun.return_type(&data_types, &nullability),
                 }

@@ -18,11 +18,26 @@
 use datafusion_common::arrow::datatypes::DataType;
 
 pub struct FieldArgs<'a> {
-    pub input_types: &'a [DataType],
-    pub schema_name: &'a str,
+    input_types: &'a [DataType],
+    schema_name: &'a str,
 }
 
-impl FieldArgs<'_> {
+impl<'a> FieldArgs<'a> {
+    pub fn new(input_types: &'a [DataType], schema_name: &'a str) -> Self {
+        FieldArgs {
+            input_types,
+            schema_name,
+        }
+    }
+
+    pub fn input_types(&self) -> &[DataType] {
+        self.input_types
+    }
+
+    pub fn name(&self) -> &str {
+        self.schema_name
+    }
+
     pub fn get_input_type(&self, index: usize) -> Option<DataType> {
         self.input_types.get(index).cloned()
     }

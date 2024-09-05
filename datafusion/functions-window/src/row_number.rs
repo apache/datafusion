@@ -100,7 +100,7 @@ impl WindowUDFImpl for RowNumber {
     }
 
     fn field(&self, field_args: FieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.schema_name, DataType::UInt64, false))
+        Ok(Field::new(field_args.name(), DataType::UInt64, false))
     }
 
     fn sort_options(&self) -> Option<SortOptions> {

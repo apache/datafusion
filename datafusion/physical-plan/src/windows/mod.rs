@@ -76,11 +76,10 @@ pub fn schema_add_window_field(
         .collect::<Result<Vec<_>>>()?;
     let window_expr_return_type =
         if let WindowFunctionDefinition::WindowUDF(udwf) = window_fn {
-            udwf.field(FieldArgs {
-                input_types: &data_types,
-                schema_name: fn_name,
-            })
-            .map(|field| field.data_type().clone())?
+            let field_args = FieldArgs::new(&data_types, fn_name);
+
+            udwf.field(field_args)
+                .map(|field| field.data_type().clone())?
         } else {
             window_fn.return_type(&data_types, &nullability)?
         };
@@ -369,10 +368,9 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        self.fun.field(FieldArgs {
-            input_types: &self.input_types,
-            schema_name: &self.name,
-        })
+        let field_args = FieldArgs::new(&self.input_types, &self.name);
+
+        self.fun.field(field_args)
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {

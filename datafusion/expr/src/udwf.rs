@@ -538,10 +538,10 @@ impl WindowUDFImpl for WindowUDFLegacyWrapper {
     }
 
     fn field(&self, field_args: FieldArgs) -> Result<Field> {
-        let return_type = (self.return_type)(field_args.input_types)?;
+        let return_type = (self.return_type)(field_args.input_types())?;
 
         Ok(Field::new(
-            field_args.schema_name,
+            field_args.name(),
             return_type.as_ref().clone(),
             true,
         ))
