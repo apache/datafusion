@@ -912,29 +912,40 @@ fn ensure_field_compatability(
     datafusion_field: &Field,
     substrait_field: &Field,
 ) -> Result<()> {
-    if DFSchema::datatype_is_logically_equal(
+    if !DFSchema::datatype_is_logically_equal(
         datafusion_field.data_type(),
         substrait_field.data_type(),
     ) {
-        if (datafusion_field.is_nullable() == substrait_field.is_nullable())
-            || (substrait_field.is_nullable() && !datafusion_field.is_nullable())
-        {
-            Ok(())
-        } else {
-            // TODO: from_substrait_struct_type needs to be updated to set the nullability correctly. It defaults to true for now.
-            substrait_err!(
-                "Field '{}' is nullable in the DataFusion schema but not nullable in the Substrait schema.",
-                substrait_field.name()
-                )
-        }
-    } else {
-        substrait_err!(
-                    "Field '{}' in Substrait schema has a different type ({}) than the corresponding field in the table schema ({}).",
-                    substrait_field.name(),
-                    substrait_field.data_type(),
-                    datafusion_field.data_type()
-                    )
+        return substrait_err!(
+            "Field '{}' in Substrait schema has a different type ({}) than the corresponding field in the table schema ({}).",
+            substrait_field.name(),
+            substrait_field.data_type(),
+            datafusion_field.data_type()
+        );
     }
+
+    if !compatible_nullabilities(
+        datafusion_field.is_nullable(),
+        substrait_field.is_nullable(),
+    ) {
+        // TODO: from_substrait_struct_type needs to be updated to set the nullability correctly. It defaults to true for now.
+        return substrait_err!(
+            "Field '{}' is nullable in the DataFusion schema but not nullable in the Substrait schema.",
+            substrait_field.name()
+        );
+    }
+    Ok(())
+}
+
+/// Returns true if the DataFusion and Substrait nullabilities are compatible, false otherwise
+fn compatible_nullabilities(
+    datafusion_nullability: bool,
+    substrait_nullability: bool,
+) -> bool {
+    // DataFusion and Substrait have the same nullability
+    (datafusion_nullability == substrait_nullability)
+    // DataFusion is not nullable and Substrait is nullable
+     || (!datafusion_nullability && substrait_nullability)
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
