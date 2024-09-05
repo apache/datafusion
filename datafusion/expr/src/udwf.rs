@@ -187,6 +187,9 @@ impl WindowUDF {
         self.inner.nullable()
     }
 
+    /// Returns the field of the final result of evaluating this window function.
+    ///
+    /// See [`WindowUDFImpl::field`] for more details.
     pub fn field(&self, field_args: FieldArgs) -> Result<Field> {
         self.inner.field(field_args)
     }
@@ -365,6 +368,10 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         true
     }
 
+    /// The field of the final result of evaluating this window function.
+    ///
+    /// The [`FieldArgs`] argument allows the window UDF to customize the
+    /// field given the types of the input expressions.
     fn field(&self, field_args: FieldArgs) -> Result<Field>;
 
     /// Allows the window UDF to define a custom result ordering.
