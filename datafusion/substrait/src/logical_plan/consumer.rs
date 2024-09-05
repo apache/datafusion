@@ -877,9 +877,6 @@ fn ensure_schema_compatability(
     table: DataFrame,
     substrait_schema: DFSchema,
 ) -> Result<DataFrame> {
-    // For now strip the qualifiers from the DataFusion and Substrait schemas to make comparisons
-    // easier as there are issues around qualifier case.
-    // TODO: ensure that qualifiers are the same
     let df_schema = table.schema().to_owned().strip_qualifiers();
     if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
         return Ok(table);
