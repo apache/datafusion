@@ -3648,14 +3648,12 @@ fn fmt_list(arr: ArrayRef, f: &mut fmt::Formatter) -> fmt::Result {
 
 /// writes a byte array to formatter. `[1, 2, 3]` ==> `"1,2,3"`
 fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
-    let mut first = true;
-    for b in data {
-        if !first {
-            write!(f, ",{b}")?;
-        } else {
-            write!(f, "{}", b)?;
-        }
-        first = false;
+    let mut iter = data.iter();
+    if let Some(b) = iter.next() {
+        write!(f, "{b}")?;
+    }
+    for b in iter {
+        write!(f, ",{b}")?;
     }
     Ok(())
 }
