@@ -367,10 +367,10 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         // Each row has its respective group
         let mut results = vec![];
         for row_idx in 0..num_rows {
-            // Take the empty to update, and replace with the new empty
+            // Create the empty accumulator for converting
             let mut converted_accumulator = (self.factory)()?;
 
-            // Convert row to state by applying it to the empty accumulator.\
+            // Convert row to states
             let values_to_accumulate =
                 slice_and_maybe_filter(values, opt_filter, &[row_idx, row_idx + 1])?;
             converted_accumulator.update_batch(&values_to_accumulate)?;
@@ -378,6 +378,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
             // Resize results to have enough columns according to the converted states
             results.resize_with(states.len(), || Vec::with_capacity(num_rows));
+
             // Add the states to results
             for (idx, state_val) in states.into_iter().enumerate() {
                 results[idx].push(state_val);
