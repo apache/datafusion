@@ -4356,7 +4356,7 @@ mod tests {
             .strip_backtrace();
         assert_eq!(
             err,
-            "Arrow error: Compute error: Overflow happened on: 2147483647 - -2147483648"
+            "Arrow error: Arithmetic overflow: Overflow happened on: 2147483647 - -2147483648"
         )
     }
 
@@ -4377,7 +4377,7 @@ mod tests {
             .sub_checked(&int_value_2)
             .unwrap_err()
             .strip_backtrace();
-        assert_eq!(err, "Arrow error: Compute error: Overflow happened on: 9223372036854775807 - -9223372036854775808")
+        assert_eq!(err, "Arrow error: Arithmetic overflow: Overflow happened on: 9223372036854775807 - -9223372036854775808")
     }
 
     #[test]
@@ -5893,7 +5893,7 @@ mod tests {
                     let root_err = err.find_root();
                     match  root_err{
                         DataFusionError::ArrowError(
-                            ArrowError::ComputeError(_),
+                            ArrowError::ArithmeticOverflow(_),
                             _,
                         ) => {}
                         _ => return Err(err),

@@ -2010,7 +2010,7 @@ mod tests {
 
         // test result in int_col
         let int_col_index = page_index.get(4).unwrap();
-        let int_col_offset = offset_index.get(4).unwrap();
+        let int_col_offset = offset_index.get(4).unwrap().page_locations();
 
         // 325 pages in int_col
         assert_eq!(int_col_offset.len(), 325);

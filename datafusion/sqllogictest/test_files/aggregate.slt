@@ -1916,7 +1916,7 @@ from values
   (interval '2 month 15 days'),
   (interval '-2 month')
 ----
-Interval(MonthDayNano) 0 years -2 mons 0 days 0 hours 0 mins 0.000000000 secs 0 years 2 mons 15 days 0 hours 0 mins 0.000000000 secs
+Interval(MonthDayNano) -2 mons 2 mons 15 days
 
 # aggregate Interval(DayTime) min/max
 query T??
@@ -1927,7 +1927,7 @@ from values
   (arrow_cast('-3 minutes', 'Interval(DayTime)')),
   (arrow_cast('30 minutes', 'Interval(DayTime)'));
 ----
-Interval(DayTime) 0 years 0 mons 0 days 0 hours -3 mins 0.000 secs 0 years 0 mons 0 days 1 hours 0 mins 0.000 secs
+Interval(DayTime) -3 mins 1 hours
 
 # aggregate Interval(YearMonth) min/max
 query T??
@@ -1938,7 +1938,7 @@ from values
   (arrow_cast('13 months', 'Interval(YearMonth)')),
   (arrow_cast('1 year', 'Interval(YearMonth)'));
 ----
-Interval(YearMonth) -1 years 0 mons 0 days 0 hours 0 mins 0.00 secs 1 years 1 mons 0 days 0 hours 0 mins 0.00 secs
+Interval(YearMonth) -1 years 0 mons 1 years 1 mons
 
 # aggregate
 query II
