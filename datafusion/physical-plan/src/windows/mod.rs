@@ -338,10 +338,16 @@ fn create_udwf_window_expr(
     input_schema: &Schema,
     name: String,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
+    // need to get the types into an owned vec for some reason
+    let input_types: Vec<_> = args
+        .iter()
+        .map(|arg| arg.data_type(input_schema))
+        .collect::<Result<_>>()?;
+
     Ok(Arc::new(WindowUDFExpr {
         fun: Arc::clone(fun),
         args: args.to_vec(),
-        input_schema: input_schema.clone(),
+        input_types,
         name,
     }))
 }
@@ -351,9 +357,10 @@ fn create_udwf_window_expr(
 struct WindowUDFExpr {
     fun: Arc<WindowUDF>,
     args: Vec<Arc<dyn PhysicalExpr>>,
-    input_schema: Schema,
     /// Display name
     name: String,
+    /// Types of input expressions
+    input_types: Vec<DataType>,
 }
 
 impl BuiltInWindowFunctionExpr for WindowUDFExpr {
@@ -362,14 +369,8 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        let input_types: Vec<DataType> = self
-            .args
-            .iter()
-            .map(|arg| arg.data_type(&self.input_schema))
-            .collect::<Result<_>>()?;
-
         self.fun.field(FieldArgs {
-            input_types: &input_types,
+            input_types: &self.input_types,
             display_name: &self.name,
         })
     }
