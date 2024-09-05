@@ -55,9 +55,6 @@ pub struct GroupsAccumulatorAdapter {
     /// state for each group, stored in group_index order
     states: Vec<AccumulatorState>,
 
-    /// Buffer used for `convert_to_state`
-    convert_state_buffer: Vec<Box<dyn Accumulator>>,
-
     /// Current memory usage, in bytes.
     ///
     /// Note this is incrementally updated with deltas to avoid the
@@ -103,7 +100,6 @@ impl GroupsAccumulatorAdapter {
         Self {
             factory: Box::new(factory),
             states: vec![],
-            convert_state_buffer: vec![],
             allocation_bytes: 0,
         }
     }
@@ -124,30 +120,6 @@ impl GroupsAccumulatorAdapter {
         }
 
         self.adjust_allocation(vec_size_pre, self.states.allocated_size());
-        Ok(())
-    }
-
-    /// Ensure that the buffer has the enough room to convert the state
-    fn ensure_convert_buffer_large_enough(
-        &mut self,
-        input_batch_size: usize,
-    ) -> Result<()> {
-        // If the buffer is not large enough, enlarge it.
-        if input_batch_size > self.convert_state_buffer.len() {
-            let vec_size_pre = self.convert_state_buffer.allocated_size();
-
-            let new_accumulators = input_batch_size - self.convert_state_buffer.len();
-            for _ in 0..new_accumulators {
-                let accumulator = (self.factory)()?;
-                self.convert_state_buffer.push(accumulator);
-            }
-
-            self.adjust_allocation(
-                vec_size_pre,
-                self.convert_state_buffer.allocated_size(),
-            );
-        }
-
         Ok(())
     }
 
@@ -402,7 +374,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
             // Convert row to state by applying it to the empty accumulator.\
             let values_to_accumulate =
-                slice_and_maybe_filter(&values, opt_filter, &[row_idx, row_idx + 1])?;
+                slice_and_maybe_filter(values, opt_filter, &[row_idx, row_idx + 1])?;
             converted_accumulator.update_batch(&values_to_accumulate)?;
             let states = converted_accumulator.state()?;
 
