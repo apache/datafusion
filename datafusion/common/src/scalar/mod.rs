@@ -6706,6 +6706,8 @@ mod tests {
     fn test_binary_debug() {
         let no_binary_value = ScalarValue::Binary(None);
         assert_eq!(format!("{no_binary_value:?}"), "Binary(NULL)");
+        let single_binary_value = ScalarValue::Binary(Some(vec![42u8]));
+        assert_eq!(format!("{single_binary_value:?}"), "Binary(\"42\")");
         let small_binary_value = ScalarValue::Binary(Some(vec![1u8, 2, 3]));
         assert_eq!(format!("{small_binary_value:?}"), "Binary(\"1,2,3\")");
         let large_binary_value =
