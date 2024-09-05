@@ -21,12 +21,11 @@ use std::sync::Arc;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
-    make_view, Array, ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray,
-    OffsetSizeTrait, StringViewArray,
+    make_view, Array, ArrayAccessor, ArrayIter, ArrayRef, AsArray, ByteView,
+    GenericStringArray, OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
-use arrow_data::ByteView;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;

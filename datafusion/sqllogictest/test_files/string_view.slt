@@ -768,16 +768,25 @@ logical_plan
 01)Projection: character_length(test.column1_utf8view) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
-## Ensure no casts for CONCAT
-## TODO https://github.com/apache/datafusion/issues/11836
+## Ensure no casts for CONCAT Utf8View
 query TT
 EXPLAIN SELECT
   concat(column1_utf8view, column2_utf8view) as c
 FROM test;
 ----
 logical_plan
-01)Projection: concat(CAST(test.column1_utf8view AS Utf8), CAST(test.column2_utf8view AS Utf8)) AS c
+01)Projection: concat(test.column1_utf8view, test.column2_utf8view) AS c
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
+
+## Ensure no casts for CONCAT LargeUtf8
+query TT
+EXPLAIN SELECT
+  concat(column1_large_utf8, column2_large_utf8) as c
+FROM test;
+----
+logical_plan
+01)Projection: concat(test.column1_large_utf8, test.column2_large_utf8) AS c
+02)--TableScan: test projection=[column1_large_utf8, column2_large_utf8]
 
 ## Ensure no casts for CONCAT_WS
 ## TODO https://github.com/apache/datafusion/issues/11837
@@ -862,6 +871,61 @@ ANDREW
 XIANGPENG
 RAPHAEL
 NULL
+
+## Should run CONCAT successfully with utf8view
+query T
+SELECT
+  concat(column1_utf8view, column2_utf8view) as c
+FROM test;
+----
+AndrewX
+XiangpengXiangpeng
+RaphaelR
+R
+
+## Should run CONCAT successfully with utf8
+query T
+SELECT
+  concat(column1_utf8, column2_utf8) as c
+FROM test;
+----
+AndrewX
+XiangpengXiangpeng
+RaphaelR
+R
+
+## Should run CONCAT successfully with utf8 and utf8view
+query T
+SELECT
+  concat(column1_utf8view, column2_utf8) as c
+FROM test;
+----
+AndrewX
+XiangpengXiangpeng
+RaphaelR
+R
+
+## Should run CONCAT successfully with utf8 utf8view and largeutf8
+query T
+SELECT
+  concat(column1_utf8view, column2_utf8, column2_large_utf8) as c
+FROM test;
+----
+AndrewXX
+XiangpengXiangpengXiangpeng
+RaphaelRR
+RR
+
+## Should run CONCAT successfully with utf8large
+query T
+SELECT
+  concat(column1_large_utf8, column2_large_utf8) as c
+FROM test;
+----
+AndrewX
+XiangpengXiangpeng
+RaphaelR
+R
 
 ## Ensure no casts for LPAD
 query TT
@@ -1307,3 +1371,4 @@ select column2|| ' ' ||column3 from temp;
 ----
 rust fast
 datafusion cool
+

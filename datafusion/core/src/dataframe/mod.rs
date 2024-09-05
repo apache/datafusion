@@ -21,6 +21,7 @@
 mod parquet;
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -51,7 +52,7 @@ use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
-use datafusion_expr::{case, is_null, lit};
+use datafusion_expr::{case, is_null, lit, SortExpr};
 use datafusion_expr::{
     utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
@@ -576,7 +577,7 @@ impl DataFrame {
         self,
         on_expr: Vec<Expr>,
         select_expr: Vec<Expr>,
-        sort_expr: Option<Vec<Expr>>,
+        sort_expr: Option<Vec<SortExpr>>,
     ) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .distinct_on(on_expr, select_expr, sort_expr)?
@@ -775,6 +776,15 @@ impl DataFrame {
         })
     }
 
+    /// Apply a sort by provided expressions with default direction
+    pub fn sort_by(self, expr: Vec<Expr>) -> Result<DataFrame> {
+        self.sort(
+            expr.into_iter()
+                .map(|e| e.sort(true, false))
+                .collect::<Vec<SortExpr>>(),
+        )
+    }
+
     /// Sort the DataFrame by the specified sorting expressions.
     ///
     /// Note that any expression can be turned into
@@ -796,7 +806,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn sort(self, expr: Vec<Expr>) -> Result<DataFrame> {
+    pub fn sort(self, expr: Vec<SortExpr>) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan).sort(expr)?.build()?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -1648,8 +1658,8 @@ impl TableProvider for DataFrameTableProvider {
         self
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
-        Some(&self.plan)
+    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+        Some(Cow::Borrowed(&self.plan))
     }
 
     fn supports_filters_pushdown(
@@ -2418,7 +2428,8 @@ mod tests {
         let df: Vec<RecordBatch> = df.select(aggr_expr)?.collect().await?;
 
         assert_batches_sorted_eq!(
-            ["+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
+            [
+                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
                 "| first_value | last_val | approx_distinct | approx_median | median | max | min  | c2 | c3   |",
                 "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
                 "|             |          |                 |               |        |     |      | 1  | -85  |",
@@ -2442,7 +2453,8 @@ mod tests {
                 "| -85         | 45       | 8               | -34           | 45     | 83  | -85  | 3  | -72  |",
                 "| -85         | 65       | 17              | -17           | 65     | 83  | -101 | 5  | -101 |",
                 "| -85         | 83       | 5               | -25           | 83     | 83  | -85  | 2  | -48  |",
-                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+"],
+                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
+            ],
             &df
         );
 
@@ -3267,7 +3279,7 @@ mod tests {
     #[tokio::test]
     async fn with_column_renamed_case_sensitive() -> Result<()> {
         let config =
-            SessionConfig::from_string_hash_map(std::collections::HashMap::from([(
+            SessionConfig::from_string_hash_map(&std::collections::HashMap::from([(
                 "datafusion.sql_parser.enable_ident_normalization".to_owned(),
                 "false".to_owned(),
             )]))?;
@@ -3703,8 +3715,10 @@ mod tests {
     // Test issue: https://github.com/apache/datafusion/issues/12065
     #[tokio::test]
     async fn filtered_aggr_with_param_values() -> Result<()> {
-        let cfg = SessionConfig::new()
-            .set("datafusion.sql_parser.dialect", "PostgreSQL".into());
+        let cfg = SessionConfig::new().set(
+            "datafusion.sql_parser.dialect",
+            &ScalarValue::from("PostgreSQL"),
+        );
         let ctx = SessionContext::new_with_config(cfg);
         register_aggregate_csv(&ctx, "table1").await?;
 

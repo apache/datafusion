@@ -33,7 +33,7 @@ use arrow_schema::SchemaRef;
 use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_expr::{CreateExternalTable, Expr, TableType};
+use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
@@ -248,7 +248,7 @@ impl StreamProvider for FileStreamProvider {
 #[derive(Debug)]
 pub struct StreamConfig {
     source: Arc<dyn StreamProvider>,
-    order: Vec<Vec<Expr>>,
+    order: Vec<Vec<SortExpr>>,
     constraints: Constraints,
 }
 
@@ -263,7 +263,7 @@ impl StreamConfig {
     }
 
     /// Specify a sort order for the stream
-    pub fn with_order(mut self, order: Vec<Vec<Expr>>) -> Self {
+    pub fn with_order(mut self, order: Vec<Vec<SortExpr>>) -> Self {
         self.order = order;
         self
     }

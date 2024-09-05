@@ -511,6 +511,85 @@ select stddev(sq.column1) from (values (1.1), (2.0), (3.0)) as sq
 ----
 0.950438495292
 
+# csv_query_stddev_7
+query IR
+SELECT c2, stddev_samp(c12) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.303641032262
+2 0.284581967411
+3 0.296002660506
+4 0.284324609109
+5 0.331034486752
+
+# csv_query_stddev_8
+query IR
+SELECT c2, stddev_pop(c12) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.296659845456
+2 0.278038978602
+3 0.288107833475
+4 0.278074953424
+5 0.318992813225
+
+# csv_query_stddev_9
+query IR
+SELECT c2, var_pop(c12) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.088007063906
+2 0.077305673622
+3 0.083006123709
+4 0.077325679722
+5 0.101756414889
+
+# csv_query_stddev_10
+query IR
+SELECT c2, var_samp(c12) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.092197876473
+2 0.080986896176
+3 0.087617575027
+4 0.080840483345
+5 0.109583831419
+
+# csv_query_stddev_11
+query IR
+SELECT c2, var_samp(c12) FROM aggregate_test_100 WHERE c12 > 0.90 GROUP BY c2 ORDER BY c2
+----
+1 0.000889240174
+2 0.000785878272
+3 NULL
+4 NULL
+5 0.000269544643
+
+# Use PostgresSQL dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+# csv_query_stddev_12
+query IR
+SELECT c2, var_samp(c12) FILTER (WHERE c12 > 0.90) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.000889240174
+2 0.000785878272
+3 NULL
+4 NULL
+5 0.000269544643
+
+# Restore the default dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
+
+# csv_query_stddev_13
+query IR
+SELECT c2, var_samp(CASE WHEN c12 > 0.90 THEN c12 ELSE null END) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.000889240174
+2 0.000785878272
+3 NULL
+4 NULL
+5 0.000269544643
+
+
 # csv_query_approx_median_1
 query I
 SELECT approx_median(c2) FROM aggregate_test_100
@@ -1837,7 +1916,7 @@ from values
   (interval '2 month 15 days'),
   (interval '-2 month')
 ----
-Interval(MonthDayNano) 0 years -2 mons 0 days 0 hours 0 mins 0.000000000 secs 0 years 2 mons 15 days 0 hours 0 mins 0.000000000 secs
+Interval(MonthDayNano) -2 mons 2 mons 15 days
 
 # aggregate Interval(DayTime) min/max
 query T??
@@ -1848,7 +1927,7 @@ from values
   (arrow_cast('-3 minutes', 'Interval(DayTime)')),
   (arrow_cast('30 minutes', 'Interval(DayTime)'));
 ----
-Interval(DayTime) 0 years 0 mons 0 days 0 hours -3 mins 0.000 secs 0 years 0 mons 0 days 1 hours 0 mins 0.000 secs
+Interval(DayTime) -3 mins 1 hours
 
 # aggregate Interval(YearMonth) min/max
 query T??
@@ -1859,7 +1938,7 @@ from values
   (arrow_cast('13 months', 'Interval(YearMonth)')),
   (arrow_cast('1 year', 'Interval(YearMonth)'));
 ----
-Interval(YearMonth) -1 years 0 mons 0 days 0 hours 0 mins 0.00 secs 1 years 1 mons 0 days 0 hours 0 mins 0.00 secs
+Interval(YearMonth) -1 years 0 mons 1 years 1 mons
 
 # aggregate
 query II
@@ -5784,3 +5863,64 @@ ORDER BY k;
 ----
 1 1.8125 6.8007813 Float16 Float16
 2 8.5 8.5 Float16 Float16
+
+# The result is 0.19432323191699075 actually
+query R
+SELECT kurtosis_pop(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col);
+----
+0.194323231917
+
+# The result is -1.153061224489787 actually
+query R
+SELECT kurtosis_pop(col) FROM VALUES (1), (2), (3), (2), (1) as tab(col);
+----
+-1.15306122449
+
+query R
+SELECT kurtosis_pop(col) FROM VALUES (1.0), (10.0), (100.0), (10.0), (1.0) as tab(col);
+----
+0.194323231917
+
+query R
+SELECT kurtosis_pop(col) FROM VALUES ('1'), ('10'), ('100'), ('10'), ('1') as tab(col);
+----
+0.194323231917
+
+query R
+SELECT kurtosis_pop(col) FROM VALUES (1.0) as tab(col);
+----
+NULL
+
+query R
+SELECT kurtosis_pop(1)
+----
+NULL
+
+query R
+SELECT kurtosis_pop(1.0)
+----
+NULL
+
+query R
+SELECT kurtosis_pop(null)
+----
+NULL
+
+statement ok
+CREATE TABLE t1(c1 int);
+
+query R
+SELECT kurtosis_pop(c1) FROM t1;
+----
+NULL
+
+statement ok
+INSERT INTO t1 VALUES (1), (10), (100), (10), (1);
+
+query R
+SELECT kurtosis_pop(c1) FROM t1;
+----
+0.194323231917
+
+statement ok
+DROP TABLE t1;

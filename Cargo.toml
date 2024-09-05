@@ -16,6 +16,7 @@
 # under the License.
 
 [workspace]
+# datafusion-cli is excluded because of its Cargo.lock. See datafusion-cli/README.md.
 exclude = ["datafusion-cli", "dev/depcheck"]
 members = [
     "datafusion/common",
@@ -33,7 +34,6 @@ members = [
     "datafusion/optimizer",
     "datafusion/physical-expr",
     "datafusion/physical-expr-common",
-    "datafusion/physical-expr-functions-aggregate",
     "datafusion/physical-optimizer",
     "datafusion/physical-plan",
     "datafusion/proto",
@@ -69,23 +69,22 @@ version = "41.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "52.2.0", features = [
+arrow = { version = "53.0.0", features = [
     "prettyprint",
 ] }
-arrow-array = { version = "52.2.0", default-features = false, features = [
+arrow-array = { version = "53.0.0", default-features = false, features = [
     "chrono-tz",
 ] }
-arrow-buffer = { version = "52.2.0", default-features = false }
-arrow-data = { version = "52.2.0", default-features = false }
-arrow-flight = { version = "52.2.0", features = [
+arrow-buffer = { version = "53.0.0", default-features = false }
+arrow-flight = { version = "53.0.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "52.2.0", default-features = false, features = [
+arrow-ipc = { version = "53.0.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "52.2.0", default-features = false }
-arrow-schema = { version = "52.2.0", default-features = false }
-arrow-string = { version = "52.2.0", default-features = false }
+arrow-ord = { version = "53.0.0", default-features = false }
+arrow-schema = { version = "53.0.0", default-features = false }
+arrow-string = { version = "53.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
@@ -107,7 +106,6 @@ datafusion-functions-window = { path = "datafusion/functions-window", version = 
 datafusion-optimizer = { path = "datafusion/optimizer", version = "41.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "41.0.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "41.0.0", default-features = false }
-datafusion-physical-expr-functions-aggregate = { path = "datafusion/physical-expr-functions-aggregate", version = "41.0.0" }
 datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "41.0.0" }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "41.0.0" }
 datafusion-proto = { path = "datafusion/proto", version = "41.0.0" }
@@ -124,13 +122,17 @@ indexmap = "2.0.0"
 itertools = "0.13"
 log = "^0.4"
 num_cpus = "1.13.0"
-object_store = { version = "0.10.2", default-features = false }
+object_store = { version = "0.11.0", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "52.2.0", default-features = false, features = [
+parquet = { version = "53.0.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
 ] }
+pbjson = { version = "0.7.0" }
+# Should match arrow-flight's version of prost.
+prost = "0.13.1"
+prost-derive = "0.13.1"
 rand = "0.8"
 regex = "1.8"
 rstest = "0.22.0"

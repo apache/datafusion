@@ -203,7 +203,7 @@ fn roundtrip_crossjoin() -> Result<()> {
     println!("plan {}", plan.display_indent());
 
     let plan_roundtrip = sql_to_rel
-        .sql_statement_to_plan(roundtrip_statement.clone())
+        .sql_statement_to_plan(roundtrip_statement)
         .unwrap();
 
     let expected = "Projection: j1.j1_id, j2.j2_string\
@@ -611,7 +611,7 @@ fn sql_round_trip(query: &str, expect: &str) {
 fn test_interval_lhs_eq() {
     sql_round_trip(
         "select interval '2 seconds' = interval '2 seconds'",
-        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' = INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+        "SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')",
     );
 }
 
@@ -619,6 +619,6 @@ fn test_interval_lhs_eq() {
 fn test_interval_lhs_lt() {
     sql_round_trip(
         "select interval '2 seconds' < interval '2 seconds'",
-        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' < INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+        "SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')",
     );
 }
