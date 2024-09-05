@@ -102,6 +102,12 @@ pub trait Dialect: Send + Sync {
     fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
         sqlparser::ast::DataType::Date
     }
+
+    /// Does the dialect support specifying column aliases as part of alias table definition?
+    /// (SELECT col1, col2 from my_table) AS my_table_alias(col1_alias, col2_alias)
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        true
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -221,6 +227,10 @@ impl Dialect for SqliteDialect {
     fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
         sqlparser::ast::DataType::Text
     }
+
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        false
+    }
 }
 
 pub struct CustomDialect {
@@ -236,6 +246,7 @@ pub struct CustomDialect {
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
     date32_cast_dtype: sqlparser::ast::DataType,
+    supports_column_alias_in_table_alias: bool,
 }
 
 impl Default for CustomDialect {
@@ -256,6 +267,7 @@ impl Default for CustomDialect {
                 TimezoneInfo::WithTimeZone,
             ),
             date32_cast_dtype: sqlparser::ast::DataType::Date,
+            supports_column_alias_in_table_alias: true,
         }
     }
 }
@@ -323,6 +335,10 @@ impl Dialect for CustomDialect {
     fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
         self.date32_cast_dtype.clone()
     }
+
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        self.supports_column_alias_in_table_alias
+    }
 }
 
 /// `CustomDialectBuilder` to build `CustomDialect` using builder pattern
@@ -352,6 +368,7 @@ pub struct CustomDialectBuilder {
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
     date32_cast_dtype: ast::DataType,
+    supports_column_alias_in_table_alias: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -378,6 +395,7 @@ impl CustomDialectBuilder {
                 TimezoneInfo::WithTimeZone,
             ),
             date32_cast_dtype: sqlparser::ast::DataType::Date,
+            supports_column_alias_in_table_alias: true,
         }
     }
 
@@ -395,6 +413,8 @@ impl CustomDialectBuilder {
             timestamp_cast_dtype: self.timestamp_cast_dtype,
             timestamp_tz_cast_dtype: self.timestamp_tz_cast_dtype,
             date32_cast_dtype: self.date32_cast_dtype,
+            supports_column_alias_in_table_alias: self
+                .supports_column_alias_in_table_alias,
         }
     }
 
@@ -480,6 +500,15 @@ impl CustomDialectBuilder {
 
     pub fn with_date32_cast_dtype(mut self, date32_cast_dtype: ast::DataType) -> Self {
         self.date32_cast_dtype = date32_cast_dtype;
+        self
+    }
+
+    /// Customize the dialect to supports column aliases as part of alias table definition
+    pub fn with_supports_column_alias_in_table_alias(
+        mut self,
+        supports_column_alias_in_table_alias: bool,
+    ) -> Self {
+        self.supports_column_alias_in_table_alias = supports_column_alias_in_table_alias;
         self
     }
 }
