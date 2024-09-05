@@ -120,32 +120,36 @@ pub fn check_plan_sanity(
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     check_finiteness_requirements(plan.clone(), optimizer_options)?;
 
-    for (child, child_sort_req, child_dist_req) in izip!(
-        plan.children().iter(),
+    for ((idx, child), sort_req, dist_req) in izip!(
+        plan.children().iter().enumerate(),
         plan.required_input_ordering().iter(),
         plan.required_input_distribution().iter()
     ) {
         let child_eq_props = child.equivalence_properties();
-        if let Some(child_sort_req) = child_sort_req {
-            if !child_eq_props.ordering_satisfy_requirement(child_sort_req) {
-                let child_plan_str = get_plan_string(child);
+        if let Some(sort_req) = sort_req {
+            if !child_eq_props.ordering_satisfy_requirement(sort_req) {
+                let plan_str = get_plan_string(&plan);
                 return plan_err!(
-                    "Child: {:?} does not satisfy parent order requirements: {:?}",
-                    child_plan_str,
-                    child_sort_req
+                    "Plan: {:?} does not satisfy order requirements: {:?}. Child-{} order: {:?}",
+                    plan_str,
+               sort_req,
+                    idx,
+                    child_eq_props.oeq_class
                 );
             }
         }
 
         if !child
             .output_partitioning()
-            .satisfy(child_dist_req, child_eq_props)
+            .satisfy(dist_req, child_eq_props)
         {
-            let child_plan_str = get_plan_string(child);
+            let plan_str = get_plan_string(&plan);
             return plan_err!(
-                "Child: {:?} does not satisfy parent distribution requirements: {:?}",
-                child_plan_str,
-                child_dist_req
+                "Plan: {:?} does not satisfy distribution requirements: {:?}. Child-{} output partitioning: {:?}",
+                plan_str,
+                dist_req,
+                idx,
+                child.output_partitioning()
             );
         }
     }
