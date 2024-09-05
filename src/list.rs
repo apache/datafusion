@@ -19,6 +19,7 @@ use arrow::{array::MutableArrayData, datatypes::ArrowNativeType, record_batch::R
 use arrow_array::{Array, GenericListArray, Int32Array, OffsetSizeTrait};
 use arrow_schema::{DataType, FieldRef, Schema};
 use datafusion::logical_expr::ColumnarValue;
+use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{
     cast::{as_int32_array, as_large_list_array, as_list_array},
     internal_err, DataFusionError, Result as DataFusionResult, ScalarValue,
@@ -30,9 +31,6 @@ use std::{
     hash::{Hash, Hasher},
     sync::Arc,
 };
-
-use crate::utils::down_cast_any_ref;
-
 #[derive(Debug, Hash)]
 pub struct ListExtract {
     child: Arc<dyn PhysicalExpr>,
