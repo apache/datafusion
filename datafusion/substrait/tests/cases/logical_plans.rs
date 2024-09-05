@@ -97,25 +97,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn virtual_table_no_columns() -> Result<()> {
-        // DataFusion doesn't have an easy mechanism for creating a table without columns, but Substrait does
-        // This test confirms that reading a plan with a virtual table with no columns works as expected.
-        let ctx = create_context().await?;
-        let proto = read_json(
-            "tests/testdata/test_plans/virtual_table_no_columns.substrait.json",
-        );
-
-        let plan = from_substrait_plan(&ctx, &proto).await?;
-
-        assert_eq!(format!("{}", &plan), "Values: (), ()");
-
-        // Need to trigger execution to ensure that Arrow has validated the plan
-        DataFrame::new(ctx.state(), plan).show().await?;
-
-        Ok(())
-    }
-
     fn read_json(path: &str) -> Plan {
         serde_json::from_reader::<_, Plan>(BufReader::new(
             File::open(path).expect("file not found"),

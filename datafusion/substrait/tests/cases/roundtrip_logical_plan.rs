@@ -22,9 +22,6 @@ use datafusion_substrait::logical_plan::{
     consumer::from_substrait_plan, producer::to_substrait_plan,
 };
 
-use std::hash::Hash;
-use std::sync::Arc;
-
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
 use datafusion::error::Result;
@@ -32,10 +29,12 @@ use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
-    Volatility,
+    Values, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
+use std::hash::Hash;
+use std::sync::Arc;
 
 use datafusion::execution::session_state::SessionStateBuilder;
 use substrait::proto::extensions::simple_extension_declaration::{
@@ -766,6 +765,18 @@ async fn roundtrip_values() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_values_no_columns() -> Result<()> {
+    let ctx = create_context().await?;
+    // "VALUES ()" is not yet supported by the SQL parser, so we construct the plan manually
+    let plan = LogicalPlan::Values(Values {
+        values: vec![vec![], vec![]], // two rows, no columns
+        schema: DFSchemaRef::new(DFSchema::empty()),
+    });
+    roundtrip_logical_plan_with_ctx(&plan, ctx).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_values_empty_relation() -> Result<()> {
     roundtrip("SELECT * FROM (VALUES ('a')) LIMIT 0").await
 }
@@ -1119,9 +1130,10 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     Ok(())
 }
 
-async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<Box<Plan>> {
-    let df = ctx.sql(sql).await?;
-    let plan = df.into_optimized_plan()?;
+async fn roundtrip_logical_plan_with_ctx(
+    plan: &LogicalPlan,
+    ctx: SessionContext,
+) -> Result<Box<Plan>> {
     let proto = to_substrait_plan(&plan, &ctx)?;
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
@@ -1139,6 +1151,12 @@ async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<Box<Plan>>
 
     DataFrame::new(ctx.state(), plan2).show().await?;
     Ok(proto)
+}
+
+async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<Box<Plan>> {
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_optimized_plan()?;
+    roundtrip_logical_plan_with_ctx(&plan, ctx).await
 }
 
 async fn roundtrip(sql: &str) -> Result<()> {
