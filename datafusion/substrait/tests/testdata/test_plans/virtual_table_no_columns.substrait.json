@@ -1,0 +1,38 @@
+{
+  "extensionUris": [],
+  "extensions": [],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "read": {
+            "common": {
+              "direct": {
+              }
+            },
+            "baseSchema": {
+              "names": [],
+              "struct": {
+                "types": [],
+                "typeVariationReference": 0,
+                "nullability": "NULLABILITY_REQUIRED"
+              }
+            },
+            "virtualTable": {
+              "values": [
+                {
+                  "fields": []
+                },
+                {
+                  "fields": []
+                }
+              ]
+            }
+          }
+        },
+        "names": []
+      }
+    }
+  ],
+  "expectedTypeUrls": []
+}
