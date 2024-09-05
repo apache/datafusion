@@ -4259,7 +4259,7 @@ mod tests {
             case_insensitive,
             col("a", schema)?,
             col("b", schema)?,
-        );
+        )?;
         let batch =
             RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a), Arc::new(b)])?;
         let result = op
@@ -4278,7 +4278,7 @@ mod tests {
             Field::new("b", DataType::Utf8, false),
         ]));
 
-        let expected = [true, false].iter().collect();
+        let expected = [Some(true), Some(false)].iter().collect();
         // case-sensitive
         apply_similar_to(
             &schema,
