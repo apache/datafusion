@@ -209,7 +209,7 @@ impl GroupsAccumulatorAdapter {
 
             let values_to_accumulate =
                 slice_and_maybe_filter(&values, opt_filter.as_ref(), offsets)?;
-            (f)(state.accumulator.as_mut(), &values_to_accumulate)?;
+            f(state.accumulator.as_mut(), &values_to_accumulate)?;
 
             // clear out the state so they are empty for next
             // iteration
