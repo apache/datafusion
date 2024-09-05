@@ -45,10 +45,10 @@ pub struct ParquetFormat {
     pub options: ::core::option::Option<TableParquetOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct AvroFormat {}
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct NdJsonFormat {
     #[prost(message, optional, tag = "1")]
     pub options: ::core::option::Option<JsonOptions>,
@@ -89,10 +89,10 @@ pub struct Constraints {
     pub constraints: ::prost::alloc::vec::Vec<Constraint>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct AvroOptions {}
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ArrowOptions {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -137,7 +137,7 @@ pub struct Timestamp {
     pub timezone: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct Decimal {
     #[prost(uint32, tag = "3")]
     pub precision: u32,
@@ -145,7 +145,7 @@ pub struct Decimal {
     pub scale: i32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct Decimal256Type {
     #[prost(uint32, tag = "3")]
     pub precision: u32,
@@ -223,7 +223,7 @@ pub mod scalar_nested_value {
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ScalarTime32Value {
     #[prost(oneof = "scalar_time32_value::Value", tags = "1, 2")]
     pub value: ::core::option::Option<scalar_time32_value::Value>,
@@ -231,7 +231,7 @@ pub struct ScalarTime32Value {
 /// Nested message and enum types in `ScalarTime32Value`.
 pub mod scalar_time32_value {
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum Value {
         #[prost(int32, tag = "1")]
         Time32SecondValue(i32),
@@ -240,7 +240,7 @@ pub mod scalar_time32_value {
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ScalarTime64Value {
     #[prost(oneof = "scalar_time64_value::Value", tags = "1, 2")]
     pub value: ::core::option::Option<scalar_time64_value::Value>,
@@ -248,7 +248,7 @@ pub struct ScalarTime64Value {
 /// Nested message and enum types in `ScalarTime64Value`.
 pub mod scalar_time64_value {
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum Value {
         #[prost(int64, tag = "1")]
         Time64MicrosecondValue(i64),
@@ -267,7 +267,7 @@ pub struct ScalarTimestampValue {
 /// Nested message and enum types in `ScalarTimestampValue`.
 pub mod scalar_timestamp_value {
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum Value {
         #[prost(int64, tag = "1")]
         TimeMicrosecondValue(i64),
@@ -288,7 +288,7 @@ pub struct ScalarDictionaryValue {
     pub value: ::core::option::Option<::prost::alloc::boxed::Box<ScalarValue>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct IntervalDayTimeValue {
     #[prost(int32, tag = "1")]
     pub days: i32,
@@ -296,7 +296,7 @@ pub struct IntervalDayTimeValue {
     pub milliseconds: i32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct IntervalMonthDayNanoValue {
     #[prost(int32, tag = "1")]
     pub months: i32,
@@ -558,10 +558,10 @@ pub mod arrow_type {
 ///    }
 /// }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct EmptyMessage {}
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct JsonWriterOptions {
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
     pub compression: i32,
@@ -655,7 +655,7 @@ pub struct CsvOptions {
 }
 /// Options controlling CSV format
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct JsonOptions {
     /// Compression type
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
@@ -720,7 +720,7 @@ pub struct ParquetColumnOptions {
 /// Nested message and enum types in `ParquetColumnOptions`.
 pub mod parquet_column_options {
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum BloomFilterEnabledOpt {
         #[prost(bool, tag = "1")]
         BloomFilterEnabled(bool),
@@ -732,7 +732,7 @@ pub mod parquet_column_options {
         Encoding(::prost::alloc::string::String),
     }
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum DictionaryEnabledOpt {
         #[prost(bool, tag = "3")]
         DictionaryEnabled(bool),
@@ -750,19 +750,19 @@ pub mod parquet_column_options {
         StatisticsEnabled(::prost::alloc::string::String),
     }
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum BloomFilterFppOpt {
         #[prost(double, tag = "6")]
         BloomFilterFpp(f64),
     }
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum BloomFilterNdvOpt {
         #[prost(uint64, tag = "7")]
         BloomFilterNdv(u64),
     }
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum MaxStatisticsSizeOpt {
         #[prost(uint32, tag = "8")]
         MaxStatisticsSize(u32),
@@ -857,7 +857,7 @@ pub struct ParquetOptions {
 /// Nested message and enum types in `ParquetOptions`.
 pub mod parquet_options {
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum MetadataSizeHintOpt {
         #[prost(uint64, tag = "4")]
         MetadataSizeHint(u64),
@@ -869,7 +869,7 @@ pub mod parquet_options {
         Compression(::prost::alloc::string::String),
     }
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum DictionaryEnabledOpt {
         #[prost(bool, tag = "11")]
         DictionaryEnabled(bool),
@@ -881,13 +881,13 @@ pub mod parquet_options {
         StatisticsEnabled(::prost::alloc::string::String),
     }
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum MaxStatisticsSizeOpt {
         #[prost(uint64, tag = "14")]
         MaxStatisticsSize(u64),
     }
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum ColumnIndexTruncateLengthOpt {
         #[prost(uint64, tag = "17")]
         ColumnIndexTruncateLength(u64),
@@ -899,13 +899,13 @@ pub mod parquet_options {
         Encoding(::prost::alloc::string::String),
     }
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum BloomFilterFppOpt {
         #[prost(double, tag = "21")]
         BloomFilterFpp(f64),
     }
     #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum BloomFilterNdvOpt {
         #[prost(uint64, tag = "22")]
         BloomFilterNdv(u64),

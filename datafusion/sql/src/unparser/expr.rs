@@ -2083,49 +2083,49 @@ mod tests {
                     "1 YEAR 1 MONTH 1 DAY 3 HOUR 10 MINUTE 20 SECOND",
                 ),
                 IntervalStyle::PostgresVerbose,
-                r#"INTERVAL '0 YEARS 13 MONS 1 DAYS 3 HOURS 10 MINS 20.000000000 SECS'"#,
+                r#"INTERVAL '13 MONS 1 DAYS 3 HOURS 10 MINS 20.000000000 SECS'"#,
             ),
             (
                 interval_month_day_nano_lit("1.5 MONTH"),
                 IntervalStyle::PostgresVerbose,
-                r#"INTERVAL '0 YEARS 1 MONS 15 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
+                r#"INTERVAL '1 MONS 15 DAYS'"#,
             ),
             (
                 interval_month_day_nano_lit("-3 MONTH"),
                 IntervalStyle::PostgresVerbose,
-                r#"INTERVAL '0 YEARS -3 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS'"#,
+                r#"INTERVAL '-3 MONS'"#,
             ),
             (
                 interval_month_day_nano_lit("1 MONTH")
                     .add(interval_month_day_nano_lit("1 DAY")),
                 IntervalStyle::PostgresVerbose,
-                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' + INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
+                r#"(INTERVAL '1 MONS' + INTERVAL '1 DAYS')"#,
             ),
             (
                 interval_month_day_nano_lit("1 MONTH")
                     .sub(interval_month_day_nano_lit("1 DAY")),
                 IntervalStyle::PostgresVerbose,
-                r#"(INTERVAL '0 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.000000000 SECS' - INTERVAL '0 YEARS 0 MONS 1 DAYS 0 HOURS 0 MINS 0.000000000 SECS')"#,
+                r#"(INTERVAL '1 MONS' - INTERVAL '1 DAYS')"#,
             ),
             (
                 interval_datetime_lit("10 DAY 1 HOUR 10 MINUTE 20 SECOND"),
                 IntervalStyle::PostgresVerbose,
-                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 10 MINS 20.000 SECS'"#,
+                r#"INTERVAL '10 DAYS 1 HOURS 10 MINS 20.000 SECS'"#,
             ),
             (
                 interval_datetime_lit("10 DAY 1.5 HOUR 10 MINUTE 20 SECOND"),
                 IntervalStyle::PostgresVerbose,
-                r#"INTERVAL '0 YEARS 0 MONS 10 DAYS 1 HOURS 40 MINS 20.000 SECS'"#,
+                r#"INTERVAL '10 DAYS 1 HOURS 40 MINS 20.000 SECS'"#,
             ),
             (
                 interval_year_month_lit("1 YEAR 1 MONTH"),
                 IntervalStyle::PostgresVerbose,
-                r#"INTERVAL '1 YEARS 1 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
+                r#"INTERVAL '1 YEARS 1 MONS'"#,
             ),
             (
                 interval_year_month_lit("1.5 YEAR 1 MONTH"),
                 IntervalStyle::PostgresVerbose,
-                r#"INTERVAL '1 YEARS 7 MONS 0 DAYS 0 HOURS 0 MINS 0.00 SECS'"#,
+                r#"INTERVAL '1 YEARS 7 MONS'"#,
             ),
             (
                 interval_year_month_lit("1 YEAR 1 MONTH"),
