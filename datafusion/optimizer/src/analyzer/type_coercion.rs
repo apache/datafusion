@@ -29,7 +29,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Column,
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like,
@@ -537,44 +537,40 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
 /// Transform a schema to use non-view types for Utf8View and BinaryView
 fn transform_schema_to_nonview(dfschema: &DFSchemaRef) -> Option<Result<DFSchema>> {
     let metadata = dfschema.as_arrow().metadata.clone();
-    let len = dfschema.fields().len();
     let mut transformed = false;
 
-    let (qualifiers, transformed_fields) = dfschema
-        .iter()
-        .map(|(qualifier, field)| match field.data_type() {
-            DataType::Utf8View => {
-                transformed = true;
-                (
-                    qualifier,
-                    Arc::new(Field::new(
-                        field.name(),
-                        DataType::LargeUtf8,
-                        field.is_nullable(),
-                    )),
-                )
-            }
-            DataType::BinaryView => {
-                transformed = true;
-                (
-                    qualifier,
-                    Arc::new(Field::new(
-                        field.name(),
-                        DataType::LargeBinary,
-                        field.is_nullable(),
-                    )),
-                )
-            }
-            _ => (qualifier, Arc::clone(field)),
-        })
-        .fold(
-            (Vec::with_capacity(len), Vec::with_capacity(len)),
-            |(mut qs, mut fs), (q, f)| {
-                qs.push(q.cloned());
-                fs.push(f);
-                (qs, fs)
-            },
-        );
+    let (qualifiers, transformed_fields): (Vec<Option<TableReference>>, Vec<Arc<Field>>) =
+        dfschema
+            .iter()
+            .map(|(qualifier, field)| match field.data_type() {
+                DataType::Utf8View => {
+                    transformed = true;
+                    (
+                        qualifier.cloned() as Option<TableReference>,
+                        Arc::new(Field::new(
+                            field.name(),
+                            DataType::LargeUtf8,
+                            field.is_nullable(),
+                        )),
+                    )
+                }
+                DataType::BinaryView => {
+                    transformed = true;
+                    (
+                        qualifier.cloned() as Option<TableReference>,
+                        Arc::new(Field::new(
+                            field.name(),
+                            DataType::LargeBinary,
+                            field.is_nullable(),
+                        )),
+                    )
+                }
+                _ => (
+                    qualifier.cloned() as Option<TableReference>,
+                    Arc::clone(field),
+                ),
+            })
+            .unzip();
 
     if !transformed {
         return None;
@@ -1086,15 +1082,15 @@ mod test {
             vec![bool_expr],
             Arc::clone(&empty),
         )?);
-        let expect_no_cast =
-            "Projection: a < CAST(Utf8(\"foo\") AS Utf8View)\n  EmptyRelation";
+        let expect_no_additional_cast =
+            "Projection: a < CAST(Utf8(\"foo\") AS Utf8View)\n  EmptyRelation"; // outer bool not re-casted
         let mut options = ConfigOptions::default();
         options.optimizer.expand_views_at_output = true;
         assert_analyzed_plan_with_config_eq(
             options,
             Arc::new(TypeCoercion::new()),
             plan_no_cast.clone(),
-            expect_no_cast,
+            expect_no_additional_cast,
         )?;
 
         // coerce start with a non-projection root logical plan node
