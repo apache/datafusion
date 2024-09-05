@@ -78,9 +78,8 @@ mod test {
     use super::*;
     use datafusion::execution::context::SessionContext;
     use datafusion_execution::{
-        config::SessionConfig,
-        disk_manager::DiskManagerConfig,
-        runtime_env::{RuntimeConfig, RuntimeEnv},
+        config::SessionConfig, disk_manager::DiskManagerConfig,
+        runtime_env::RuntimeEnvBuilder,
     };
     use datafusion_physical_plan::collect;
     use datafusion_sql::parser::DFParser;
@@ -99,12 +98,10 @@ mod test {
         let sql = "SELECT 2 + 2;";
 
         // Execute SQL (using datafusion)
-        let rt = Arc::new(
-            RuntimeEnv::new(
-                RuntimeConfig::new().with_disk_manager(DiskManagerConfig::Disabled),
-            )
-            .unwrap(),
-        );
+        let rt = RuntimeEnvBuilder::new()
+            .with_disk_manager(DiskManagerConfig::Disabled)
+            .build_arc()
+            .unwrap();
         let session_config = SessionConfig::new().with_target_partitions(1);
         let session_context =
             Arc::new(SessionContext::new_with_config_rt(session_config, rt));

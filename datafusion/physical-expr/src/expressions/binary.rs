@@ -33,6 +33,7 @@ use arrow::compute::kernels::comparison::{
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
+use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
@@ -41,6 +42,7 @@ use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 
+use crate::expressions::binary::kernels::concat_elements_utf8view;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -131,41 +133,16 @@ impl std::fmt::Display for BinaryExpr {
     }
 }
 
-/// Invoke a compute kernel on a pair of binary data arrays
-macro_rules! compute_utf8_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast left side array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast right side array");
-        Ok(Arc::new(paste::expr! {[<$OP _utf8>]}(&ll, &rr)?))
-    }};
-}
-
-macro_rules! binary_string_array_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        match $LEFT.data_type() {
-            DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
-            DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
-            other => internal_err!(
-                "Data type {:?} not supported for binary operation '{}' on string arrays",
-                other, stringify!($OP)
-            ),
-        }
-    }};
-}
-
 /// Invoke a boolean kernel on a pair of arrays
-macro_rules! boolean_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        let ll = as_boolean_array($LEFT).expect("boolean_op failed to downcast array");
-        let rr = as_boolean_array($RIGHT).expect("boolean_op failed to downcast array");
-        Ok(Arc::new($OP(&ll, &rr)?))
-    }};
+#[inline]
+fn boolean_op(
+    left: &dyn Array,
+    right: &dyn Array,
+    op: impl FnOnce(&BooleanArray, &BooleanArray) -> Result<BooleanArray, ArrowError>,
+) -> Result<Arc<(dyn Array + 'static)>, ArrowError> {
+    let ll = as_boolean_array(left).expect("boolean_op failed to downcast left array");
+    let rr = as_boolean_array(right).expect("boolean_op failed to downcast right array");
+    op(ll, rr).map(|t| Arc::new(t) as _)
 }
 
 macro_rules! binary_string_array_flag_op {
@@ -318,10 +295,14 @@ impl PhysicalExpr for BinaryExpr {
         // Attempt to use special kernels if one input is scalar and the other is an array
         let scalar_result = match (&lhs, &rhs) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
-                // if left is array and right is literal - use scalar operations
-                self.evaluate_array_scalar(array, scalar.clone())?.map(|r| {
-                    r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
-                })
+                // if left is array and right is literal(not NULL) - use scalar operations
+                if scalar.is_null() {
+                    None
+                } else {
+                    self.evaluate_array_scalar(array, scalar.clone())?.map(|r| {
+                        r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
+                    })
+                }
             }
             (_, _) => None, // default to array implementation
         };
@@ -619,7 +600,7 @@ impl BinaryExpr {
             | NotLikeMatch | NotILikeMatch => unreachable!(),
             And => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(&left, &right, and_kleene)
+                    Ok(boolean_op(&left, &right, and_kleene)?)
                 } else {
                     internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -631,7 +612,7 @@ impl BinaryExpr {
             }
             Or => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(&left, &right, or_kleene)
+                    Ok(boolean_op(&left, &right, or_kleene)?)
                 } else {
                     internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -658,12 +639,34 @@ impl BinaryExpr {
             BitwiseXor => bitwise_xor_dyn(left, right),
             BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
             BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            StringConcat => binary_string_array_op!(left, right, concat_elements),
+            StringConcat => concat_elements(left, right),
             AtArrow | ArrowAt => {
                 unreachable!("ArrowAt and AtArrow should be rewritten to function")
             }
         }
     }
+}
+
+fn concat_elements(left: Arc<dyn Array>, right: Arc<dyn Array>) -> Result<ArrayRef> {
+    Ok(match left.data_type() {
+        DataType::Utf8 => Arc::new(concat_elements_utf8(
+            left.as_string::<i32>(),
+            right.as_string::<i32>(),
+        )?),
+        DataType::LargeUtf8 => Arc::new(concat_elements_utf8(
+            left.as_string::<i64>(),
+            right.as_string::<i64>(),
+        )?),
+        DataType::Utf8View => Arc::new(concat_elements_utf8view(
+            left.as_string_view(),
+            right.as_string_view(),
+        )?),
+        other => {
+            return internal_err!(
+                "Data type {other:?} not supported for binary operation 'concat_elements' on string arrays"
+            );
+        }
+    })
 }
 
 /// Create a binary expression whose arguments are correctly coerced.
@@ -2494,6 +2497,111 @@ mod tests {
             None,
         ]);
         apply_logic_op(&Arc::new(schema), &a, &b, Operator::And, expected)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn regex_with_nulls() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let a = Arc::new(StringArray::from(vec![
+            Some("abc"),
+            None,
+            Some("abc"),
+            None,
+            Some("abc"),
+        ])) as ArrayRef;
+        let b = Arc::new(StringArray::from(vec![
+            Some("^a"),
+            Some("^A"),
+            None,
+            None,
+            Some("^(b|c)"),
+        ])) as ArrayRef;
+
+        let regex_expected =
+            BooleanArray::from(vec![Some(true), None, None, None, Some(false)]);
+        let regex_not_expected =
+            BooleanArray::from(vec![Some(false), None, None, None, Some(true)]);
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexMatch,
+            regex_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexIMatch,
+            regex_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexNotMatch,
+            regex_not_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema),
+            &a,
+            &b,
+            Operator::RegexNotIMatch,
+            regex_not_expected.clone(),
+        )?;
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::LargeUtf8, true),
+            Field::new("b", DataType::LargeUtf8, true),
+        ]);
+        let a = Arc::new(LargeStringArray::from(vec![
+            Some("abc"),
+            None,
+            Some("abc"),
+            None,
+            Some("abc"),
+        ])) as ArrayRef;
+        let b = Arc::new(LargeStringArray::from(vec![
+            Some("^a"),
+            Some("^A"),
+            None,
+            None,
+            Some("^(b|c)"),
+        ])) as ArrayRef;
+
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexMatch,
+            regex_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexIMatch,
+            regex_expected,
+        )?;
+        apply_logic_op(
+            &Arc::new(schema.clone()),
+            &a,
+            &b,
+            Operator::RegexNotMatch,
+            regex_not_expected.clone(),
+        )?;
+        apply_logic_op(
+            &Arc::new(schema),
+            &a,
+            &b,
+            Operator::RegexNotIMatch,
+            regex_not_expected,
+        )?;
 
         Ok(())
     }

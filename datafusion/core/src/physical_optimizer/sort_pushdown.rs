@@ -36,6 +36,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
@@ -46,7 +47,7 @@ use datafusion_physical_expr::{
 /// [`EnforceSorting`]: crate::physical_optimizer::enforce_sorting::EnforceSorting
 #[derive(Default, Clone)]
 pub struct ParentRequirements {
-    ordering_requirement: Option<Vec<PhysicalSortRequirement>>,
+    ordering_requirement: Option<LexRequirement>,
     fetch: Option<usize>,
 }
 
@@ -159,12 +160,12 @@ fn pushdown_sorts_helper(
 fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
     parent_required: LexRequirementRef,
-) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
+) -> Result<Option<Vec<Option<LexRequirement>>>> {
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
         let required_input_ordering = plan.required_input_ordering();
         let request_child = required_input_ordering[0].as_deref().unwrap_or(&[]);
-        let child_plan = plan.children().swap_remove(0).clone();
+        let child_plan = plan.children().swap_remove(0);
         match determine_children_requirement(parent_required, request_child, child_plan) {
             RequirementsCompatibility::Satisfy => {
                 let req = (!request_child.is_empty()).then(|| request_child.to_vec());
@@ -224,7 +225,7 @@ fn pushdown_requirement_to_children(
             Some(JoinSide::Left) => try_pushdown_requirements_to_join(
                 smj,
                 parent_required,
-                parent_required_expr,
+                &parent_required_expr,
                 JoinSide::Left,
             ),
             Some(JoinSide::Right) => {
@@ -237,7 +238,7 @@ fn pushdown_requirement_to_children(
                 try_pushdown_requirements_to_join(
                     smj,
                     parent_required,
-                    new_right_required_expr,
+                    &new_right_required_expr,
                     JoinSide::Right,
                 )
             }
@@ -320,7 +321,7 @@ fn pushdown_would_violate_requirements(
 fn determine_children_requirement(
     parent_required: LexRequirementRef,
     request_child: LexRequirementRef,
-    child_plan: Arc<dyn ExecutionPlan>,
+    child_plan: &Arc<dyn ExecutionPlan>,
 ) -> RequirementsCompatibility {
     if child_plan
         .equivalence_properties()
@@ -343,9 +344,9 @@ fn determine_children_requirement(
 fn try_pushdown_requirements_to_join(
     smj: &SortMergeJoinExec,
     parent_required: LexRequirementRef,
-    sort_expr: Vec<PhysicalSortExpr>,
+    sort_expr: &[PhysicalSortExpr],
     push_side: JoinSide,
-) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
+) -> Result<Option<Vec<Option<LexRequirement>>>> {
     let left_eq_properties = smj.left().equivalence_properties();
     let right_eq_properties = smj.right().equivalence_properties();
     let mut smj_required_orderings = smj.required_input_ordering();
@@ -355,25 +356,27 @@ fn try_pushdown_requirements_to_join(
     let right_ordering = smj.right().output_ordering().unwrap_or(&[]);
     let (new_left_ordering, new_right_ordering) = match push_side {
         JoinSide::Left => {
-            let left_eq_properties =
-                left_eq_properties.clone().with_reorder(sort_expr.clone());
+            let left_eq_properties = left_eq_properties
+                .clone()
+                .with_reorder(Vec::from(sort_expr));
             if left_eq_properties
                 .ordering_satisfy_requirement(&left_requirement.unwrap_or_default())
             {
                 // After re-ordering requirement is still satisfied
-                (sort_expr.as_slice(), right_ordering)
+                (sort_expr, right_ordering)
             } else {
                 return Ok(None);
             }
         }
         JoinSide::Right => {
-            let right_eq_properties =
-                right_eq_properties.clone().with_reorder(sort_expr.clone());
+            let right_eq_properties = right_eq_properties
+                .clone()
+                .with_reorder(Vec::from(sort_expr));
             if right_eq_properties
                 .ordering_satisfy_requirement(&right_requirement.unwrap_or_default())
             {
                 // After re-ordering requirement is still satisfied
-                (left_ordering, sort_expr.as_slice())
+                (left_ordering, sort_expr)
             } else {
                 return Ok(None);
             }
@@ -396,7 +399,7 @@ fn try_pushdown_requirements_to_join(
     let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required);
     Ok(should_pushdown.then(|| {
         let mut required_input_ordering = smj.required_input_ordering();
-        let new_req = Some(PhysicalSortRequirement::from_sort_exprs(&sort_expr));
+        let new_req = Some(PhysicalSortRequirement::from_sort_exprs(sort_expr));
         match push_side {
             JoinSide::Left => {
                 required_input_ordering[0] = new_req;
@@ -460,7 +463,7 @@ fn expr_source_side(
 fn shift_right_required(
     parent_required: LexRequirementRef,
     left_columns_len: usize,
-) -> Result<Vec<PhysicalSortRequirement>> {
+) -> Result<LexRequirement> {
     let new_right_required = parent_required
         .iter()
         .filter_map(|r| {
@@ -486,7 +489,7 @@ enum RequirementsCompatibility {
     /// Requirements satisfy
     Satisfy,
     /// Requirements compatible
-    Compatible(Option<Vec<PhysicalSortRequirement>>),
+    Compatible(Option<LexRequirement>),
     /// Requirements not compatible
     NonCompatible,
 }

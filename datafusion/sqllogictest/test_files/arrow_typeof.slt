@@ -102,7 +102,7 @@ query error Error unrecognized word: unknown
 SELECT arrow_cast('1', 'unknown')
 
 # Round Trip tests:
-query TTTTTTTTTTTTTTTTTTTTTTT
+query TTTTTTTTTTTTTTTTTTTTTTTTT
 SELECT
   arrow_typeof(arrow_cast(1, 'Int8')) as col_i8,
   arrow_typeof(arrow_cast(1, 'Int16')) as col_i16,
@@ -112,12 +112,12 @@ SELECT
   arrow_typeof(arrow_cast(1, 'UInt16')) as col_u16,
   arrow_typeof(arrow_cast(1, 'UInt32')) as col_u32,
   arrow_typeof(arrow_cast(1, 'UInt64')) as col_u64,
-  -- can't seem to cast to Float16 for some reason
-  -- arrow_typeof(arrow_cast(1, 'Float16')) as col_f16,
+  arrow_typeof(arrow_cast(1, 'Float16')) as col_f16,
   arrow_typeof(arrow_cast(1, 'Float32')) as col_f32,
   arrow_typeof(arrow_cast(1, 'Float64')) as col_f64,
   arrow_typeof(arrow_cast('foo', 'Utf8')) as col_utf8,
   arrow_typeof(arrow_cast('foo', 'LargeUtf8')) as col_large_utf8,
+  arrow_typeof(arrow_cast('foo', 'Utf8View')) as col_utf8_view,
   arrow_typeof(arrow_cast('foo', 'Binary')) as col_binary,
   arrow_typeof(arrow_cast('foo', 'LargeBinary')) as col_large_binary,
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)')) as col_ts_s,
@@ -130,7 +130,7 @@ SELECT
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, Some("+08:00"))')) as col_tstz_ns,
   arrow_typeof(arrow_cast('foo', 'Dictionary(Int32, Utf8)')) as col_dict
 ----
-Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Utf8 LargeUtf8 Binary LargeBinary Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None) Timestamp(Second, Some("+08:00")) Timestamp(Millisecond, Some("+08:00")) Timestamp(Microsecond, Some("+08:00")) Timestamp(Nanosecond, Some("+08:00")) Dictionary(Int32, Utf8)
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float16 Float32 Float64 Utf8 LargeUtf8 Utf8View Binary LargeBinary Timestamp(Second, None) Timestamp(Millisecond, None) Timestamp(Microsecond, None) Timestamp(Nanosecond, None) Timestamp(Second, Some("+08:00")) Timestamp(Millisecond, Some("+08:00")) Timestamp(Microsecond, Some("+08:00")) Timestamp(Nanosecond, Some("+08:00")) Dictionary(Int32, Utf8)
 
 
 
@@ -147,15 +147,14 @@ create table foo as select
   arrow_cast(1, 'UInt16') as col_u16,
   arrow_cast(1, 'UInt32') as col_u32,
   arrow_cast(1, 'UInt64') as col_u64,
-  -- can't seem to cast to Float16 for some reason
-  -- arrow_cast(1.0, 'Float16') as col_f16,
+  arrow_cast(1.0, 'Float16') as col_f16,
   arrow_cast(1.0, 'Float32') as col_f32,
   arrow_cast(1.0, 'Float64') as col_f64
 ;
 
 ## Ensure each column in the table has the expected type
 
-query TTTTTTTTTT
+query TTTTTTTTTTT
 SELECT
   arrow_typeof(col_i8),
   arrow_typeof(col_i16),
@@ -165,12 +164,12 @@ SELECT
   arrow_typeof(col_u16),
   arrow_typeof(col_u32),
   arrow_typeof(col_u64),
-  -- arrow_typeof(col_f16),
+  arrow_typeof(col_f16),
   arrow_typeof(col_f32),
   arrow_typeof(col_f64)
   FROM foo;
 ----
-Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float16 Float32 Float64
 
 
 statement ok
@@ -213,21 +212,23 @@ statement ok
 create table foo as select
   arrow_cast('foo', 'Utf8') as col_utf8,
   arrow_cast('foo', 'LargeUtf8') as col_large_utf8,
+  arrow_cast('foo', 'Utf8View') as col_utf8_view,
   arrow_cast('foo', 'Binary') as col_binary,
   arrow_cast('foo', 'LargeBinary') as col_large_binary
 ;
 
 ## Ensure each column in the table has the expected type
 
-query TTTT
+query TTTTT
 SELECT
   arrow_typeof(col_utf8),
   arrow_typeof(col_large_utf8),
+  arrow_typeof(col_utf8_view),
   arrow_typeof(col_binary),
   arrow_typeof(col_large_binary)
   FROM foo;
 ----
-Utf8 LargeUtf8 Binary LargeBinary
+Utf8 LargeUtf8 Utf8View Binary LargeBinary
 
 
 statement ok
@@ -289,22 +290,22 @@ query ?
 ---
 select arrow_cast(interval '30 minutes', 'Interval(MonthDayNano)');
 ----
-0 years 0 mons 0 days 0 hours 30 mins 0.000000000 secs
+30 mins
 
 query ?
 select arrow_cast('30 minutes', 'Interval(DayTime)');
 ----
-0 years 0 mons 0 days 0 hours 30 mins 0.000 secs
+30 mins
 
 query ?
 select arrow_cast('1 year 5 months', 'Interval(YearMonth)');
 ----
-1 years 5 mons 0 days 0 hours 0 mins 0.00 secs
+1 years 5 mons
 
 query ?
 select arrow_cast('30 minutes', 'Interval(MonthDayNano)');
 ----
-0 years 0 mons 0 days 0 hours 30 mins 0.000000000 secs
+30 mins
 
 
 ## Duration
@@ -424,11 +425,14 @@ select arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)');
 [1, 2, 3]
 
 # Tests for Utf8View
-query ?T
+query TT
 select arrow_cast('MyAwesomeString', 'Utf8View'), arrow_typeof(arrow_cast('MyAwesomeString', 'Utf8View'))
 ----
 MyAwesomeString Utf8View
 
-# Fails until we update arrow-rs with support for https://github.com/apache/arrow-rs/pull/5894
-query error DataFusion error: SQL error: ParserError\("Expected: an SQL statement, found: arrow_cast"\)
-arrow_cast('MyAwesomeString', 'BinaryView'), arrow_typeof(arrow_cast('MyAwesomeString', 'BinaryView'))
+# Fails until we update to use the arrow-cast release with support for casting utf8 types to BinaryView
+# refer to merge commit https://github.com/apache/arrow-rs/commit/4bd737dab2aa17aca200259347909d48ed793ba1
+query ?T
+select arrow_cast('MyAwesomeString', 'BinaryView'), arrow_typeof(arrow_cast('MyAwesomeString', 'BinaryView'))
+----
+4d79417765736f6d65537472696e67 BinaryView

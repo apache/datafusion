@@ -34,6 +34,7 @@ use arrow::error::ArrowError;
 #[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
 use sqlparser::parser::ParserError;
+use tokio::task::JoinError;
 
 /// Result type for operations that could result in an [DataFusionError]
 pub type Result<T, E = DataFusionError> = result::Result<T, E>;
@@ -112,6 +113,10 @@ pub enum DataFusionError {
     /// SQL method, opened a CSV file that is broken, or tried to divide an
     /// integer by zero.
     Execution(String),
+    /// [`JoinError`] during execution of the query.
+    ///
+    /// This error can unoccur for unjoined tasks, such as execution shutdown.
+    ExecutionJoin(JoinError),
     /// Error when resources (such as memory of scratch disk space) are exhausted.
     ///
     /// This error is thrown when a consumer cannot acquire additional memory
@@ -306,6 +311,7 @@ impl Error for DataFusionError {
             DataFusionError::Plan(_) => None,
             DataFusionError::SchemaError(e, _) => Some(e),
             DataFusionError::Execution(_) => None,
+            DataFusionError::ExecutionJoin(e) => Some(e),
             DataFusionError::ResourcesExhausted(_) => None,
             DataFusionError::External(e) => Some(e.as_ref()),
             DataFusionError::Context(_, e) => Some(e.as_ref()),
@@ -418,6 +424,7 @@ impl DataFusionError {
             DataFusionError::Configuration(_) => "Invalid or Unsupported Configuration: ",
             DataFusionError::SchemaError(_, _) => "Schema error: ",
             DataFusionError::Execution(_) => "Execution error: ",
+            DataFusionError::ExecutionJoin(_) => "ExecutionJoin error: ",
             DataFusionError::ResourcesExhausted(_) => "Resources exhausted: ",
             DataFusionError::External(_) => "External error: ",
             DataFusionError::Context(_, _) => "",
@@ -453,6 +460,7 @@ impl DataFusionError {
                 Cow::Owned(format!("{desc}{backtrace}"))
             }
             DataFusionError::Execution(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::ExecutionJoin(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::ResourcesExhausted(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::External(ref desc) => Cow::Owned(desc.to_string()),
             #[cfg(feature = "object_store")]
@@ -481,13 +489,6 @@ macro_rules! unwrap_or_internal_err {
     };
 }
 
-macro_rules! with_dollar_sign {
-    ($($body:tt)*) => {
-        macro_rules! __with_dollar_sign { $($body)* }
-        __with_dollar_sign!($);
-    }
-}
-
 /// Add a macros for concise  DataFusionError::* errors declaration
 /// supports placeholders the same way as `format!`
 /// Examples:
@@ -501,37 +502,41 @@ macro_rules! with_dollar_sign {
 /// `NAME_DF_ERR` -  macro name for wrapping DataFusionError::*. Needed to keep backtrace opportunity
 /// in construction where DataFusionError::* used directly, like `map_err`, `ok_or_else`, etc
 macro_rules! make_error {
-    ($NAME_ERR:ident, $NAME_DF_ERR: ident, $ERR:ident) => {
-        with_dollar_sign! {
-            ($d:tt) => {
-                /// Macro wraps `$ERR` to add backtrace feature
-                #[macro_export]
-                macro_rules! $NAME_DF_ERR {
-                    ($d($d args:expr),*) => {
-                        $crate::DataFusionError::$ERR(
-                            format!(
-                                "{}{}",
-                                format!($d($d args),*),
-                                $crate::DataFusionError::get_back_trace(),
-                            ).into()
-                        )
-                    }
-                }
-
-                /// Macro wraps Err(`$ERR`) to add backtrace feature
-                #[macro_export]
-                macro_rules! $NAME_ERR {
-                    ($d($d args:expr),*) => {
-                        Err($crate::DataFusionError::$ERR(
-                            format!(
-                                "{}{}",
-                                format!($d($d args),*),
-                                $crate::DataFusionError::get_back_trace(),
-                            ).into()
-                        ))
-                    }
+    ($NAME_ERR:ident, $NAME_DF_ERR: ident, $ERR:ident) => { make_error!(@inner ($), $NAME_ERR, $NAME_DF_ERR, $ERR); };
+    (@inner ($d:tt), $NAME_ERR:ident, $NAME_DF_ERR:ident, $ERR:ident) => {
+        ::paste::paste!{
+            /// Macro wraps `$ERR` to add backtrace feature
+            #[macro_export]
+            macro_rules! $NAME_DF_ERR {
+                ($d($d args:expr),*) => {
+                    $crate::DataFusionError::$ERR(
+                        ::std::format!(
+                            "{}{}",
+                            ::std::format!($d($d args),*),
+                            $crate::DataFusionError::get_back_trace(),
+                        ).into()
+                    )
                 }
             }
+
+            /// Macro wraps Err(`$ERR`) to add backtrace feature
+            #[macro_export]
+            macro_rules! $NAME_ERR {
+                ($d($d args:expr),*) => {
+                    Err($crate::[<_ $NAME_DF_ERR>]!($d($d args),*))
+                }
+            }
+
+
+            // Note: Certain macros are used in this  crate, but not all.
+            // This macro generates a use or all of them in case they are needed
+            // so we allow unused code to avoid warnings when they are not used
+            #[doc(hidden)]
+            #[allow(unused)]
+            pub use $NAME_ERR as [<_ $NAME_ERR>];
+            #[doc(hidden)]
+            #[allow(unused)]
+            pub use $NAME_DF_ERR as [<_ $NAME_DF_ERR>];
         }
     };
 }
@@ -613,12 +618,6 @@ macro_rules! schema_err {
 
 // To avoid compiler error when using macro in the same crate:
 // macros from the current crate cannot be referred to by absolute paths
-pub use config_err as _config_err;
-pub use internal_datafusion_err as _internal_datafusion_err;
-pub use internal_err as _internal_err;
-pub use not_impl_err as _not_impl_err;
-pub use plan_datafusion_err as _plan_datafusion_err;
-pub use plan_err as _plan_err;
 pub use schema_err as _schema_err;
 
 /// Create a "field not found" DataFusion::SchemaError

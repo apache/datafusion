@@ -22,6 +22,7 @@ use datafusion_common::{
     internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
     Dependency, Result,
 };
+use datafusion_expr::expr::WildcardOptions;
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{
     expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
@@ -244,8 +245,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Build Unnest expression
         if name.eq("unnest") {
-            let mut exprs =
-                self.function_args_to_expr(args.clone(), schema, planner_context)?;
+            let mut exprs = self.function_args_to_expr(args, schema, planner_context)?;
             if exprs.len() != 1 {
                 return plan_err!("unnest() requires exactly one argument");
             }
@@ -282,18 +282,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let func_deps = schema.functional_dependencies();
             // Find whether ties are possible in the given ordering
             let is_ordering_strict = order_by.iter().find_map(|orderby_expr| {
-                if let Expr::Sort(sort_expr) = orderby_expr {
-                    if let Expr::Column(col) = sort_expr.expr.as_ref() {
-                        let idx = schema.index_of_column(col).ok()?;
-                        return if func_deps.iter().any(|dep| {
-                            dep.source_indices == vec![idx]
-                                && dep.mode == Dependency::Single
-                        }) {
-                            Some(true)
-                        } else {
-                            Some(false)
-                        };
-                    }
+                if let Expr::Column(col) = &orderby_expr.expr {
+                    let idx = schema.index_of_column(col).ok()?;
+                    return if func_deps.iter().any(|dep| {
+                        dep.source_indices == vec![idx] && dep.mode == Dependency::Single
+                    }) {
+                        Some(true)
+                    } else {
+                        Some(false)
+                    };
                 }
                 Some(false)
             });
@@ -420,13 +417,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name: _,
                 arg: FunctionArgExpr::Wildcard,
                 operator: _,
-            } => Ok(Expr::Wildcard { qualifier: None }),
+            } => Ok(Expr::Wildcard {
+                qualifier: None,
+                options: WildcardOptions::default(),
+            }),
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
-            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
-                Ok(Expr::Wildcard { qualifier: None })
-            }
+            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(Expr::Wildcard {
+                qualifier: None,
+                options: WildcardOptions::default(),
+            }),
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }
     }

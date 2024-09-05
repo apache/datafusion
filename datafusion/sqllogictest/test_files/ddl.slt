@@ -470,7 +470,9 @@ statement ok
 CREATE EXTERNAL TABLE csv_with_timestamps (
 name VARCHAR,
 ts TIMESTAMP
-) STORED AS CSV LOCATION '../core/tests/data/timestamps.csv';
+) STORED AS CSV
+LOCATION '../core/tests/data/timestamps.csv'
+OPTIONS('format.has_header' 'false');
 
 query TP
 SELECT * from csv_with_timestamps
@@ -496,7 +498,8 @@ CREATE EXTERNAL TABLE csv_with_timestamps (
 )
 STORED AS CSV
 PARTITIONED BY (c_date)
-LOCATION '../core/tests/data/partitioned_table';
+LOCATION '../core/tests/data/partitioned_table'
+OPTIONS('format.has_header' 'false');
 
 query TPD
 SELECT * from csv_with_timestamps where c_date='2018-11-13'
@@ -707,7 +710,7 @@ create table t (i interval, x int) as values (interval '5 days 3 nanoseconds', C
 query ?I
 select * from t;
 ----
-0 years 0 mons 5 days 0 hours 0 mins 0.000000003 secs 1
+5 days 0.000000003 secs 1
 
 statement ok
 drop table t;

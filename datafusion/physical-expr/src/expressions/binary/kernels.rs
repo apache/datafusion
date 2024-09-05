@@ -27,6 +27,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::internal_err;
 use datafusion_common::{Result, ScalarValue};
 
+use arrow_schema::ArrowError;
 use std::sync::Arc;
 
 /// Downcasts $LEFT and $RIGHT to $ARRAY_TYPE and then calls $KERNEL($LEFT, $RIGHT)
@@ -131,3 +132,35 @@ create_dyn_scalar_kernel!(bitwise_or_dyn_scalar, bitwise_or_scalar);
 create_dyn_scalar_kernel!(bitwise_xor_dyn_scalar, bitwise_xor_scalar);
 create_dyn_scalar_kernel!(bitwise_shift_right_dyn_scalar, bitwise_shift_right_scalar);
 create_dyn_scalar_kernel!(bitwise_shift_left_dyn_scalar, bitwise_shift_left_scalar);
+
+pub fn concat_elements_utf8view(
+    left: &StringViewArray,
+    right: &StringViewArray,
+) -> std::result::Result<StringViewArray, ArrowError> {
+    let capacity = left
+        .data_buffers()
+        .iter()
+        .zip(right.data_buffers().iter())
+        .map(|(b1, b2)| b1.len() + b2.len())
+        .sum();
+    let mut result = StringViewBuilder::with_capacity(capacity);
+
+    // Avoid reallocations by writing to a reused buffer (note we
+    // could be even more efficient r by creating the view directly
+    // here and avoid the buffer but that would be more complex)
+    let mut buffer = String::new();
+
+    for (left, right) in left.iter().zip(right.iter()) {
+        if let (Some(left), Some(right)) = (left, right) {
+            use std::fmt::Write;
+            buffer.clear();
+            write!(&mut buffer, "{left}{right}")
+                .expect("writing into string buffer failed");
+            result.append_value(&buffer);
+        } else {
+            // at least one of the values is null, so the output is also null
+            result.append_null()
+        }
+    }
+    Ok(result.finish())
+}

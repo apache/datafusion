@@ -24,8 +24,8 @@ use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
 
 /// Output partitioning supported by [`ExecutionPlan`]s.
 ///
-/// When `executed`, `ExecutionPlan`s  produce one or more independent stream of
-/// data batches in parallel, referred to as partitions. The streams are Rust
+/// Calling [`ExecutionPlan::execute`] produce one or more independent streams of
+/// [`RecordBatch`]es in parallel, referred to as partitions. The streams are Rust
 /// `async` [`Stream`]s (a special kind of future). The number of output
 /// partitions varies based on the input and the operation performed.
 ///
@@ -102,6 +102,8 @@ use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
 /// Plans such as `FilterExec` produce the same number of output streams
 /// (partitions) as input streams (partitions).
 ///
+/// [`RecordBatch`]: arrow::record_batch::RecordBatch
+/// [`ExecutionPlan::execute`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#tymethod.execute
 /// [`ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
 /// [`Stream`]: https://docs.rs/futures/latest/futures/stream/trait.Stream.html
 #[derive(Debug, Clone)]

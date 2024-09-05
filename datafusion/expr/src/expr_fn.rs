@@ -19,16 +19,16 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WindowFunction,
+    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
     StateFieldsArgs,
 };
 use crate::{
-    conditional_expressions::CaseBuilder, logical_plan::Subquery, AggregateUDF, Expr,
-    LogicalPlan, Operator, ScalarFunctionImplementation, ScalarUDF, Signature,
-    Volatility,
+    conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
+    AggregateUDF, Expr, LogicalPlan, Operator, ScalarFunctionImplementation, ScalarUDF,
+    Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -37,7 +37,7 @@ use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{plan_err, Column, Result, ScalarValue};
+use datafusion_common::{plan_err, Column, Result, ScalarValue, TableReference};
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
@@ -119,7 +119,46 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
 /// assert_eq!(p.to_string(), "*")
 /// ```
 pub fn wildcard() -> Expr {
-    Expr::Wildcard { qualifier: None }
+    Expr::Wildcard {
+        qualifier: None,
+        options: WildcardOptions::default(),
+    }
+}
+
+/// Create an '*' [`Expr::Wildcard`] expression with the wildcard options
+pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
+    Expr::Wildcard {
+        qualifier: None,
+        options,
+    }
+}
+
+/// Create an 't.*' [`Expr::Wildcard`] expression that matches all columns from a specific table
+///
+/// # Example
+///
+/// ```rust
+/// # use datafusion_common::TableReference;
+/// # use datafusion_expr::{qualified_wildcard};
+/// let p = qualified_wildcard(TableReference::bare("t"));
+/// assert_eq!(p.to_string(), "t.*")
+/// ```
+pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> Expr {
+    Expr::Wildcard {
+        qualifier: Some(qualifier.into()),
+        options: WildcardOptions::default(),
+    }
+}
+
+/// Create an 't.*' [`Expr::Wildcard`] expression with the wildcard options
+pub fn qualified_wildcard_with_options(
+    qualifier: impl Into<TableReference>,
+    options: WildcardOptions,
+) -> Expr {
+    Expr::Wildcard {
+        qualifier: Some(qualifier.into()),
+        options,
+    }
 }
 
 /// Return a new expression `left <op> right`
@@ -355,7 +394,7 @@ pub fn create_udf(
     volatility: Volatility,
     fun: ScalarFunctionImplementation,
 ) -> ScalarUDF {
-    let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
+    let return_type = Arc::unwrap_or_clone(return_type);
     ScalarUDF::from(SimpleScalarUDF::new(
         name,
         input_types,
@@ -437,8 +476,8 @@ pub fn create_udaf(
     accumulator: AccumulatorFactoryFunction,
     state_type: Arc<Vec<DataType>>,
 ) -> AggregateUDF {
-    let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
-    let state_type = Arc::try_unwrap(state_type).unwrap_or_else(|t| t.as_ref().clone());
+    let return_type = Arc::unwrap_or_clone(return_type);
+    let state_type = Arc::unwrap_or_clone(state_type);
     let state_fields = state_type
         .into_iter()
         .enumerate()
@@ -555,7 +594,7 @@ pub fn create_udwf(
     volatility: Volatility,
     partition_evaluator_factory: PartitionEvaluatorFactory,
 ) -> WindowUDF {
-    let return_type = Arc::try_unwrap(return_type).unwrap_or_else(|t| t.as_ref().clone());
+    let return_type = Arc::unwrap_or_clone(return_type);
     WindowUDF::from(SimpleWindowUDF::new(
         name,
         input_type,
@@ -684,9 +723,7 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// ```
 pub trait ExprFunctionExt {
     /// Add `ORDER BY <order_by>`
-    ///
-    /// Note: `order_by` must be [`Expr::Sort`]
-    fn order_by(self, order_by: Vec<Expr>) -> ExprFuncBuilder;
+    fn order_by(self, order_by: Vec<Sort>) -> ExprFuncBuilder;
     /// Add `FILTER <filter>`
     fn filter(self, filter: Expr) -> ExprFuncBuilder;
     /// Add `DISTINCT`
@@ -714,7 +751,7 @@ pub enum ExprFuncKind {
 #[derive(Debug, Clone)]
 pub struct ExprFuncBuilder {
     fun: Option<ExprFuncKind>,
-    order_by: Option<Vec<Expr>>,
+    order_by: Option<Vec<Sort>>,
     filter: Option<Expr>,
     distinct: bool,
     null_treatment: Option<NullTreatment>,
@@ -759,16 +796,6 @@ impl ExprFuncBuilder {
             );
         };
 
-        if let Some(order_by) = &order_by {
-            for expr in order_by.iter() {
-                if !matches!(expr, Expr::Sort(_)) {
-                    return plan_err!(
-                        "ORDER BY expressions must be Expr::Sort, found {expr:?}"
-                    );
-                }
-            }
-        }
-
         let fun_expr = match fun {
             ExprFuncKind::Aggregate(mut udaf) => {
                 udaf.order_by = order_by;
@@ -794,9 +821,7 @@ impl ExprFuncBuilder {
 
 impl ExprFunctionExt for ExprFuncBuilder {
     /// Add `ORDER BY <order_by>`
-    ///
-    /// Note: `order_by` must be [`Expr::Sort`]
-    fn order_by(mut self, order_by: Vec<Expr>) -> ExprFuncBuilder {
+    fn order_by(mut self, order_by: Vec<Sort>) -> ExprFuncBuilder {
         self.order_by = Some(order_by);
         self
     }
@@ -834,7 +859,7 @@ impl ExprFunctionExt for ExprFuncBuilder {
 }
 
 impl ExprFunctionExt for Expr {
-    fn order_by(self, order_by: Vec<Expr>) -> ExprFuncBuilder {
+    fn order_by(self, order_by: Vec<Sort>) -> ExprFuncBuilder {
         let mut builder = match self {
             Expr::AggregateFunction(udaf) => {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))

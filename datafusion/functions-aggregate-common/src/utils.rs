@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::ArrowNativeType;
@@ -31,25 +31,6 @@ use arrow::{
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-
-use crate::aggregate::AggregateExpr;
-
-/// Downcast a `Box<dyn AggregateExpr>` or `Arc<dyn AggregateExpr>`
-/// and return the inner trait object as [`Any`] so
-/// that it can be downcast to a specific implementation.
-///
-/// This method is used when implementing the `PartialEq<dyn Any>`
-/// for [`AggregateExpr`] aggregation expressions and allows comparing the equality
-/// between the trait objects.
-pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
-    if let Some(obj) = any.downcast_ref::<Arc<dyn AggregateExpr>>() {
-        obj.as_any()
-    } else if let Some(obj) = any.downcast_ref::<Box<dyn AggregateExpr>>() {
-        obj.as_any()
-    } else {
-        any
-    }
-}
 
 /// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(

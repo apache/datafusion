@@ -97,7 +97,8 @@ use datafusion::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
-use datafusion_expr::Projection;
+use datafusion_expr::tree_node::replace_sort_expression;
+use datafusion_expr::{Projection, SortExpr};
 use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
 
@@ -113,7 +114,11 @@ async fn exec_sql(ctx: &SessionContext, sql: &str) -> Result<String> {
 
 /// Create a test table.
 async fn setup_table(ctx: SessionContext) -> Result<SessionContext> {
-    let sql = "CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT) STORED AS CSV location 'tests/data/customer.csv'";
+    let sql = "
+        CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT)
+        STORED AS CSV location 'tests/data/customer.csv'
+        OPTIONS('format.has_header' 'false')
+    ";
 
     let expected = vec!["++", "++"];
 
@@ -125,8 +130,11 @@ async fn setup_table(ctx: SessionContext) -> Result<SessionContext> {
 }
 
 async fn setup_table_without_schemas(ctx: SessionContext) -> Result<SessionContext> {
-    let sql =
-        "CREATE EXTERNAL TABLE sales STORED AS CSV location 'tests/data/customer.csv'";
+    let sql = "
+        CREATE EXTERNAL TABLE sales
+        STORED AS CSV location 'tests/data/customer.csv'
+        OPTIONS('format.has_header' 'false')
+    ";
 
     let expected = vec!["++", "++"];
 
@@ -385,7 +393,7 @@ struct TopKPlanNode {
     input: LogicalPlan,
     /// The sort expression (this example only supports a single sort
     /// expr)
-    expr: Expr,
+    expr: SortExpr,
 }
 
 impl Debug for TopKPlanNode {
@@ -411,7 +419,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        vec![self.expr.clone()]
+        vec![self.expr.expr.clone()]
     }
 
     /// For example: `TopK: k=10`
@@ -429,7 +437,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         Ok(Self {
             k: self.k,
             input: inputs.swap_remove(0),
-            expr: exprs.swap_remove(0),
+            expr: replace_sort_expression(self.expr.clone(), exprs.swap_remove(0)),
         })
     }
 }

@@ -21,6 +21,7 @@
 mod parquet;
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -51,7 +52,7 @@ use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
-use datafusion_expr::{case, is_null, lit};
+use datafusion_expr::{case, is_null, lit, SortExpr};
 use datafusion_expr::{
     utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
@@ -576,7 +577,7 @@ impl DataFrame {
         self,
         on_expr: Vec<Expr>,
         select_expr: Vec<Expr>,
-        sort_expr: Option<Vec<Expr>>,
+        sort_expr: Option<Vec<SortExpr>>,
     ) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .distinct_on(on_expr, select_expr, sort_expr)?
@@ -775,6 +776,15 @@ impl DataFrame {
         })
     }
 
+    /// Apply a sort by provided expressions with default direction
+    pub fn sort_by(self, expr: Vec<Expr>) -> Result<DataFrame> {
+        self.sort(
+            expr.into_iter()
+                .map(|e| e.sort(true, false))
+                .collect::<Vec<SortExpr>>(),
+        )
+    }
+
     /// Sort the DataFrame by the specified sorting expressions.
     ///
     /// Note that any expression can be turned into
@@ -796,7 +806,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn sort(self, expr: Vec<Expr>) -> Result<DataFrame> {
+    pub fn sort(self, expr: Vec<SortExpr>) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan).sort(expr)?.build()?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -1441,14 +1451,18 @@ impl DataFrame {
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
         let window_func_exprs = find_window_exprs(&[expr.clone()]);
-        let plan = if window_func_exprs.is_empty() {
-            self.plan
+
+        let (plan, mut col_exists, window_func) = if window_func_exprs.is_empty() {
+            (self.plan, false, false)
         } else {
-            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
+            (
+                LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?,
+                true,
+                true,
+            )
         };
 
         let new_column = expr.alias(name);
-        let mut col_exists = false;
         let mut fields: Vec<Expr> = plan
             .schema()
             .iter()
@@ -1456,6 +1470,8 @@ impl DataFrame {
                 if field.name() == name {
                     col_exists = true;
                     new_column.clone()
+                } else if window_func && qualifier.is_none() {
+                    col(Column::from((qualifier, field))).alias(name)
                 } else {
                     col(Column::from((qualifier, field)))
                 }
@@ -1642,8 +1658,8 @@ impl TableProvider for DataFrameTableProvider {
         self
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
-        Some(&self.plan)
+    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+        Some(Cow::Borrowed(&self.plan))
     }
 
     fn supports_filters_pushdown(
@@ -1701,15 +1717,19 @@ mod tests {
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
     use arrow::array::{self, Int32Array};
-    use datafusion_common::{Constraint, Constraints, ScalarValue};
+    use datafusion_common::{assert_batches_eq, Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
+    use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::{
         cast, create_udf, expr, lit, BuiltInWindowFunction, ExprFunctionExt,
-        ScalarFunctionImplementation, Volatility, WindowFunctionDefinition,
+        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFrameBound,
+        WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::expr_fn::{array_agg, count_distinct};
+    use datafusion_functions_window::expr_fn::row_number;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
+    use sqlparser::ast::NullTreatment;
 
     // Get string representation of the plan
     async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {
@@ -2355,6 +2375,92 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn window_using_aggregates() -> Result<()> {
+        // build plan using DataFrame API
+        let df = test_table().await?.filter(col("c1").eq(lit("a")))?;
+        let mut aggr_expr = vec![
+            (
+                datafusion_functions_aggregate::first_last::first_value_udaf(),
+                "first_value",
+            ),
+            (
+                datafusion_functions_aggregate::first_last::last_value_udaf(),
+                "last_val",
+            ),
+            (
+                datafusion_functions_aggregate::approx_distinct::approx_distinct_udaf(),
+                "approx_distinct",
+            ),
+            (
+                datafusion_functions_aggregate::approx_median::approx_median_udaf(),
+                "approx_median",
+            ),
+            (
+                datafusion_functions_aggregate::median::median_udaf(),
+                "median",
+            ),
+            (datafusion_functions_aggregate::min_max::max_udaf(), "max"),
+            (datafusion_functions_aggregate::min_max::min_udaf(), "min"),
+        ]
+        .into_iter()
+        .map(|(func, name)| {
+            let w = WindowFunction::new(
+                WindowFunctionDefinition::AggregateUDF(func),
+                vec![col("c3")],
+            );
+
+            Expr::WindowFunction(w)
+                .null_treatment(NullTreatment::IgnoreNulls)
+                .order_by(vec![col("c2").sort(true, true), col("c3").sort(true, true)])
+                .window_frame(WindowFrame::new_bounds(
+                    WindowFrameUnits::Rows,
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
+                ))
+                .build()
+                .unwrap()
+                .alias(name)
+        })
+        .collect::<Vec<_>>();
+        aggr_expr.extend_from_slice(&[col("c2"), col("c3")]);
+
+        let df: Vec<RecordBatch> = df.select(aggr_expr)?.collect().await?;
+
+        assert_batches_sorted_eq!(
+            [
+                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
+                "| first_value | last_val | approx_distinct | approx_median | median | max | min  | c2 | c3   |",
+                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
+                "|             |          |                 |               |        |     |      | 1  | -85  |",
+                "| -85         | -101     | 14              | -12           | -101   | 83  | -101 | 4  | -54  |",
+                "| -85         | -101     | 17              | -25           | -101   | 83  | -101 | 5  | -31  |",
+                "| -85         | -12      | 10              | -32           | -12    | 83  | -85  | 3  | 13   |",
+                "| -85         | -25      | 3               | -56           | -25    | -25 | -85  | 1  | -5   |",
+                "| -85         | -31      | 18              | -29           | -31    | 83  | -101 | 5  | 36   |",
+                "| -85         | -38      | 16              | -25           | -38    | 83  | -101 | 4  | 65   |",
+                "| -85         | -43      | 7               | -43           | -43    | 83  | -85  | 2  | 45   |",
+                "| -85         | -48      | 6               | -35           | -48    | 83  | -85  | 2  | -43  |",
+                "| -85         | -5       | 4               | -37           | -5     | -5  | -85  | 1  | 83   |",
+                "| -85         | -54      | 15              | -17           | -54    | 83  | -101 | 4  | -38  |",
+                "| -85         | -56      | 2               | -70           | -56    | -56 | -85  | 1  | -25  |",
+                "| -85         | -72      | 9               | -43           | -72    | 83  | -85  | 3  | -12  |",
+                "| -85         | -85      | 1               | -85           | -85    | -85 | -85  | 1  | -56  |",
+                "| -85         | 13       | 11              | -17           | 13     | 83  | -85  | 3  | 14   |",
+                "| -85         | 13       | 11              | -25           | 13     | 83  | -85  | 3  | 13   |",
+                "| -85         | 14       | 12              | -12           | 14     | 83  | -85  | 3  | 17   |",
+                "| -85         | 17       | 13              | -11           | 17     | 83  | -85  | 4  | -101 |",
+                "| -85         | 45       | 8               | -34           | 45     | 83  | -85  | 3  | -72  |",
+                "| -85         | 65       | 17              | -17           | 65     | 83  | -101 | 5  | -101 |",
+                "| -85         | 83       | 5               | -25           | 83     | 83  | -85  | 2  | -48  |",
+                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
+            ],
+            &df
+        );
+
+        Ok(())
+    }
+
     // Test issue: https://github.com/apache/datafusion/issues/10346
     #[tokio::test]
     async fn test_select_over_aggregate_schema() -> Result<()> {
@@ -2869,6 +2975,35 @@ mod tests {
         Ok(())
     }
 
+    // Test issue: https://github.com/apache/datafusion/issues/11982
+    // Window function was creating unwanted projection when using with_column() method.
+    #[tokio::test]
+    async fn test_window_function_with_column() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
+        let ctx = SessionContext::new();
+        let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
+        let func = row_number().alias("row_num");
+
+        // Should create an additional column with alias 'r' that has window func results
+        let df = df_impl.with_column("r", func)?.limit(0, Some(2))?;
+        assert_eq!(4, df.schema().fields().len());
+
+        let df_results = df.clone().collect().await?;
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+-----+---+",
+                "| c1 | c2 | c3  | r |",
+                "+----+----+-----+---+",
+                "| c  | 2  | 1   | 1 |",
+                "| d  | 5  | -40 | 2 |",
+                "+----+----+-----+---+",
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
     // Test issue: https://github.com/apache/datafusion/issues/7790
     // The join operation outputs two identical column names, but they belong to different relations.
     #[tokio::test]
@@ -2923,13 +3058,12 @@ mod tests {
         assert_eq!(
             "\
         Projection: t1.c1, t2.c1, Boolean(true) AS new_column\
-        \n  Limit: skip=0, fetch=1\
-        \n    Sort: t1.c1 ASC NULLS FIRST, fetch=1\
-        \n      Inner Join: t1.c1 = t2.c1\
-        \n        SubqueryAlias: t1\
-        \n          TableScan: aggregate_test_100 projection=[c1]\
-        \n        SubqueryAlias: t2\
-        \n          TableScan: aggregate_test_100 projection=[c1]",
+        \n  Sort: t1.c1 ASC NULLS FIRST, fetch=1\
+        \n    Inner Join: t1.c1 = t2.c1\
+        \n      SubqueryAlias: t1\
+        \n        TableScan: aggregate_test_100 projection=[c1]\
+        \n      SubqueryAlias: t2\
+        \n        TableScan: aggregate_test_100 projection=[c1]",
             format!("{}", df_with_column.clone().into_optimized_plan()?)
         );
 
@@ -3117,13 +3251,12 @@ mod tests {
 
         assert_eq!("\
         Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3\
-        \n  Limit: skip=0, fetch=1\
-        \n    Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1\
-        \n      Inner Join: t1.c1 = t2.c1\
-        \n        SubqueryAlias: t1\
-        \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]\
-        \n        SubqueryAlias: t2\
-        \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]",
+        \n  Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1\
+        \n    Inner Join: t1.c1 = t2.c1\
+        \n      SubqueryAlias: t1\
+        \n        TableScan: aggregate_test_100 projection=[c1, c2, c3]\
+        \n      SubqueryAlias: t2\
+        \n        TableScan: aggregate_test_100 projection=[c1, c2, c3]",
                    format!("{}", df_renamed.clone().into_optimized_plan()?)
         );
 
@@ -3146,7 +3279,7 @@ mod tests {
     #[tokio::test]
     async fn with_column_renamed_case_sensitive() -> Result<()> {
         let config =
-            SessionConfig::from_string_hash_map(std::collections::HashMap::from([(
+            SessionConfig::from_string_hash_map(&std::collections::HashMap::from([(
                 "datafusion.sql_parser.enable_ident_normalization".to_owned(),
                 "false".to_owned(),
             )]))?;
@@ -3576,6 +3709,36 @@ mod tests {
         // must be error
         result = ctx.sql("explain explain select 1").await;
         assert!(result.is_err());
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/datafusion/issues/12065
+    #[tokio::test]
+    async fn filtered_aggr_with_param_values() -> Result<()> {
+        let cfg = SessionConfig::new().set(
+            "datafusion.sql_parser.dialect",
+            &ScalarValue::from("PostgreSQL"),
+        );
+        let ctx = SessionContext::new_with_config(cfg);
+        register_aggregate_csv(&ctx, "table1").await?;
+
+        let df = ctx
+            .sql("select count (c2) filter (where c3 > $1) from table1")
+            .await?
+            .with_param_values(ParamValues::List(vec![ScalarValue::from(10u64)]));
+
+        let df_results = df?.collect().await?;
+        assert_batches_eq!(
+            &[
+                "+------------------------------------------------+",
+                "| count(table1.c2) FILTER (WHERE table1.c3 > $1) |",
+                "+------------------------------------------------+",
+                "| 54                                             |",
+                "+------------------------------------------------+",
+            ],
+            &df_results
+        );
+
         Ok(())
     }
 }

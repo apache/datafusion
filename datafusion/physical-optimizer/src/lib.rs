@@ -18,7 +18,9 @@
 #![deny(clippy::clone_on_ref_ptr)]
 
 pub mod aggregate_statistics;
+pub mod combine_partial_final_agg;
 pub mod limit_pushdown;
+pub mod limited_distinct_aggregation;
 mod optimizer;
 pub mod output_requirements;
 

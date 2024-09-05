@@ -22,7 +22,7 @@
 
 use std::any::Any;
 use std::cmp::Ordering;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Formatter;
 use std::fs::File;
 use std::io::BufReader;
@@ -51,6 +51,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
@@ -288,7 +289,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![
             Some(PhysicalSortRequirement::from_sort_exprs(
                 &self.left_sort_exprs,
@@ -595,8 +596,10 @@ struct BufferedBatch {
     /// Size estimation used for reserving / releasing memory
     pub size_estimation: usize,
     /// The indices of buffered batch that failed the join filter.
+    /// This is a map between buffered row index and a boolean value indicating whether all joined row
+    /// of the buffered row failed the join filter.
     /// When dequeuing the buffered batch, we need to produce null joined rows for these indices.
-    pub join_filter_failed_idxs: HashSet<u64>,
+    pub join_filter_failed_map: HashMap<u64, bool>,
     /// Current buffered batch number of rows. Equal to batch.num_rows()
     /// but if batch is spilled to disk this property is preferable
     /// and less expensive
@@ -637,7 +640,7 @@ impl BufferedBatch {
             join_arrays,
             null_joined: vec![],
             size_estimation,
-            join_filter_failed_idxs: HashSet::new(),
+            join_filter_failed_map: HashMap::new(),
             num_rows,
             spill_file: None,
         }
@@ -1229,11 +1232,19 @@ impl SMJStream {
             }
             buffered_batch.null_joined.clear();
 
-            // For buffered rows which are joined with streamed side but doesn't satisfy the join filter
+            // For buffered row which is joined with streamed side rows but all joined rows
+            // don't satisfy the join filter
             if output_not_matched_filter {
+                let not_matched_buffered_indices = buffered_batch
+                    .join_filter_failed_map
+                    .iter()
+                    .filter_map(|(idx, failed)| if *failed { Some(*idx) } else { None })
+                    .collect::<Vec<_>>();
+
                 let buffered_indices = UInt64Array::from_iter_values(
-                    buffered_batch.join_filter_failed_idxs.iter().copied(),
+                    not_matched_buffered_indices.iter().copied(),
                 );
+
                 if let Some(record_batch) = produce_buffered_null_batch(
                     &self.schema,
                     &self.streamed_schema,
@@ -1242,7 +1253,7 @@ impl SMJStream {
                 )? {
                     self.output_record_batches.push(record_batch);
                 }
-                buffered_batch.join_filter_failed_idxs.clear();
+                buffered_batch.join_filter_failed_map.clear();
             }
         }
         Ok(())
@@ -1459,24 +1470,26 @@ impl SMJStream {
                         // If it is joined with streamed side, but doesn't match the join filter,
                         // we need to output it with nulls as streamed side.
                         if matches!(self.join_type, JoinType::Full) {
+                            let buffered_batch = &mut self.buffered_data.batches
+                                [chunk.buffered_batch_idx.unwrap()];
+
                             for i in 0..pre_mask.len() {
-                                let buffered_batch = &mut self.buffered_data.batches
-                                    [chunk.buffered_batch_idx.unwrap()];
+                                // If the buffered row is not joined with streamed side,
+                                // skip it.
+                                if buffered_indices.is_null(i) {
+                                    continue;
+                                }
+
                                 let buffered_index = buffered_indices.value(i);
 
-                                if !pre_mask.value(i) {
-                                    // For a buffered row that is joined with streamed side but doesn't satisfy the join filter,
-                                    buffered_batch
-                                        .join_filter_failed_idxs
-                                        .insert(buffered_index);
-                                } else if buffered_batch
-                                    .join_filter_failed_idxs
-                                    .contains(&buffered_index)
-                                {
-                                    buffered_batch
-                                        .join_filter_failed_idxs
-                                        .remove(&buffered_index);
-                                }
+                                buffered_batch.join_filter_failed_map.insert(
+                                    buffered_index,
+                                    *buffered_batch
+                                        .join_filter_failed_map
+                                        .get(&buffered_index)
+                                        .unwrap_or(&true)
+                                        && !pre_mask.value(i),
+                                );
                             }
                         }
                     }
@@ -1965,7 +1978,7 @@ mod tests {
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::disk_manager::DiskManagerConfig;
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::TaskContext;
 
     use crate::expressions::Column;
@@ -2887,10 +2900,10 @@ mod tests {
         ];
 
         // Disable DiskManager to prevent spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            .with_disk_manager(DiskManagerConfig::Disabled)
+            .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
         for join_type in join_types {
@@ -2972,10 +2985,10 @@ mod tests {
         ];
 
         // Disable DiskManager to prevent spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::Disabled);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            .with_disk_manager(DiskManagerConfig::Disabled)
+            .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
         for join_type in join_types {
@@ -3035,10 +3048,10 @@ mod tests {
         ];
 
         // Enable DiskManager to allow spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(100, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            .with_disk_manager(DiskManagerConfig::NewOs)
+            .build_arc()?;
 
         for batch_size in [1, 50] {
             let session_config = SessionConfig::default().with_batch_size(batch_size);
@@ -3143,10 +3156,11 @@ mod tests {
         ];
 
         // Enable DiskManager to allow spilling
-        let runtime_config = RuntimeConfig::new()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(500, 1.0)
-            .with_disk_manager(DiskManagerConfig::NewOs);
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            .with_disk_manager(DiskManagerConfig::NewOs)
+            .build_arc()?;
+
         for batch_size in [1, 50] {
             let session_config = SessionConfig::default().with_batch_size(batch_size);
 

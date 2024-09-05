@@ -22,12 +22,12 @@
 use datafusion_common::{TableReference, UnnestOptions};
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Cast, GroupingSet, InList, Like, Placeholder,
-    ScalarFunction, Sort, Unnest,
+    ScalarFunction, Unnest,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, BuiltInWindowFunction, Expr,
-    JoinConstraint, JoinType, TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition,
+    JoinConstraint, JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunctionDefinition,
 };
 
 use crate::protobuf::{
@@ -120,7 +120,6 @@ impl From<&BuiltInWindowFunction> for protobuf::BuiltInWindowFunction {
             BuiltInWindowFunction::Ntile => Self::Ntile,
             BuiltInWindowFunction::CumeDist => Self::CumeDist,
             BuiltInWindowFunction::PercentRank => Self::PercentRank,
-            BuiltInWindowFunction::RowNumber => Self::RowNumber,
             BuiltInWindowFunction::Rank => Self::Rank,
             BuiltInWindowFunction::Lag => Self::Lag,
             BuiltInWindowFunction::Lead => Self::Lead,
@@ -344,7 +343,7 @@ pub fn serialize_expr(
                 None
             };
             let partition_by = serialize_exprs(partition_by, codec)?;
-            let order_by = serialize_exprs(order_by, codec)?;
+            let order_by = serialize_sorts(order_by, codec)?;
 
             let window_frame: Option<protobuf::WindowFrame> =
                 Some(window_frame.try_into()?);
@@ -381,7 +380,7 @@ pub fn serialize_expr(
                             None => None,
                         },
                         order_by: match order_by {
-                            Some(e) => serialize_exprs(e, codec)?,
+                            Some(e) => serialize_sorts(e, codec)?,
                             None => vec![],
                         },
                         fun_definition: (!buf.is_empty()).then_some(buf),
@@ -538,20 +537,6 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::TryCast(expr)),
             }
         }
-        Expr::Sort(Sort {
-            expr,
-            asc,
-            nulls_first,
-        }) => {
-            let expr = Box::new(protobuf::SortExprNode {
-                expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
-                asc: *asc,
-                nulls_first: *nulls_first,
-            });
-            protobuf::LogicalExprNode {
-                expr_type: Some(ExprType::Sort(expr)),
-            }
-        }
         Expr::Negative(expr) => {
             let expr = Box::new(protobuf::NegativeNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
@@ -582,7 +567,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::InList(expr)),
             }
         }
-        Expr::Wildcard { qualifier } => protobuf::LogicalExprNode {
+        Expr::Wildcard { qualifier, .. } => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
                 qualifier: qualifier.to_owned().map(|x| x.into()),
             })),
@@ -634,6 +619,30 @@ pub fn serialize_expr(
     };
 
     Ok(expr_node)
+}
+
+pub fn serialize_sorts<'a, I>(
+    sorts: I,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<Vec<protobuf::SortExprNode>, Error>
+where
+    I: IntoIterator<Item = &'a SortExpr>,
+{
+    sorts
+        .into_iter()
+        .map(|sort| {
+            let SortExpr {
+                expr,
+                asc,
+                nulls_first,
+            } = sort;
+            Ok(protobuf::SortExprNode {
+                expr: Some(serialize_expr(expr, codec)?),
+                asc: *asc,
+                nulls_first: *nulls_first,
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()
 }
 
 impl From<TableReference> for protobuf::TableReference {

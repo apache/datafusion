@@ -20,6 +20,7 @@
 pub mod expr;
 pub mod memory;
 pub mod proxy;
+pub mod string_utils;
 
 use crate::error::{_internal_datafusion_err, _internal_err};
 use crate::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
@@ -29,8 +30,10 @@ use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
+use arrow_array::cast::AsArray;
 use arrow_array::{
-    Array, FixedSizeListArray, LargeListArray, ListArray, RecordBatchOptions,
+    Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
+    RecordBatchOptions,
 };
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
@@ -438,6 +441,16 @@ pub fn arrays_into_list_array(
         arrow::compute::concat(values.as_slice())?,
         None,
     ))
+}
+
+/// Helper function to convert a ListArray into a vector of ArrayRefs.
+pub fn list_to_arrays<O: OffsetSizeTrait>(a: &ArrayRef) -> Vec<ArrayRef> {
+    a.as_list::<O>().iter().flatten().collect::<Vec<_>>()
+}
+
+/// Helper function to convert a FixedSizeListArray into a vector of ArrayRefs.
+pub fn fixed_size_list_to_arrays(a: &ArrayRef) -> Vec<ArrayRef> {
+    a.as_fixed_size_list().iter().flatten().collect::<Vec<_>>()
 }
 
 /// Get the base type of a data type.

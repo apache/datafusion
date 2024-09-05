@@ -15,9 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{not_impl_err, plan_err, DFSchema, Result, TableReference};
+use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, TableFactor};
 
 mod join;
@@ -36,6 +42,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if let Some(func_args) = args {
                     let tbl_func_name = name.0.first().unwrap().value.to_string();
                     let args = func_args
+                        .args
                         .into_iter()
                         .flat_map(|arg| {
                             if let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = arg
@@ -142,10 +149,86 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 );
             }
         };
+
+        let optimized_plan = optimize_subquery_sort(plan)?.data;
         if let Some(alias) = alias {
-            self.apply_table_alias(plan, alias)
+            self.apply_table_alias(optimized_plan, alias)
         } else {
-            Ok(plan)
+            Ok(optimized_plan)
         }
     }
+
+    pub(crate) fn create_relation_subquery(
+        &self,
+        subquery: TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        // At this point for a syntacitally valid query the outer_from_schema is
+        // guaranteed to be set, so the `.unwrap()` call will never panic. This
+        // is the case because we only call this method for lateral table
+        // factors, and those can never be the first factor in a FROM list. This
+        // means we arrived here through the `for` loop in `plan_from_tables` or
+        // the `for` loop in `plan_table_with_joins`.
+        let old_from_schema = planner_context
+            .set_outer_from_schema(None)
+            .unwrap_or_else(|| Arc::new(DFSchema::empty()));
+        let new_query_schema = match planner_context.outer_query_schema() {
+            Some(old_query_schema) => {
+                let mut new_query_schema = old_from_schema.as_ref().clone();
+                new_query_schema.merge(old_query_schema);
+                Some(Arc::new(new_query_schema))
+            }
+            None => Some(Arc::clone(&old_from_schema)),
+        };
+        let old_query_schema = planner_context.set_outer_query_schema(new_query_schema);
+
+        let plan = self.create_relation(subquery, planner_context)?;
+        let outer_ref_columns = plan.all_out_ref_exprs();
+
+        planner_context.set_outer_query_schema(old_query_schema);
+        planner_context.set_outer_from_schema(Some(old_from_schema));
+
+        match plan {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+                subquery_alias(
+                    LogicalPlan::Subquery(Subquery {
+                        subquery: input,
+                        outer_ref_columns,
+                    }),
+                    alias,
+                )
+            }
+            plan => Ok(LogicalPlan::Subquery(Subquery {
+                subquery: Arc::new(plan),
+                outer_ref_columns,
+            })),
+        }
+    }
+}
+
+fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    // When initializing subqueries, we examine sort options since they might be unnecessary.
+    // They are only important if the subquery result is affected by the ORDER BY statement,
+    // which can happen when we have:
+    // 1. DISTINCT ON / ARRAY_AGG ... => Handled by an `Aggregate` and its requirements.
+    // 2. RANK / ROW_NUMBER ... => Handled by a `WindowAggr` and its requirements.
+    // 3. LIMIT => Handled by a `Sort`, so we need to search for it.
+    let mut has_limit = false;
+    let new_plan = plan.transform_down(|c| {
+        if let LogicalPlan::Limit(_) = c {
+            has_limit = true;
+            return Ok(Transformed::no(c));
+        }
+        match c {
+            LogicalPlan::Sort(s) => {
+                if !has_limit {
+                    has_limit = false;
+                    return Ok(Transformed::yes(s.input.as_ref().clone()));
+                }
+                Ok(Transformed::no(LogicalPlan::Sort(s)))
+            }
+            _ => Ok(Transformed::no(c)),
+        }
+    });
+    new_plan
 }

@@ -324,7 +324,7 @@ fn collect_new_statistics(
                     (Precision::Inexact(lower), Precision::Inexact(upper))
                 };
                 ColumnStatistics {
-                    null_count: input_column_stats[idx].null_count.clone().to_inexact(),
+                    null_count: input_column_stats[idx].null_count.to_inexact(),
                     max_value,
                     min_value,
                     distinct_count: distinct_count.to_inexact(),
@@ -347,7 +347,7 @@ struct FilterExecStream {
     baseline_metrics: BaselineMetrics,
 }
 
-pub(crate) fn batch_filter(
+pub fn batch_filter(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Result<RecordBatch> {

@@ -147,7 +147,7 @@ fn flatten_internal<O: OffsetSizeTrait>(
                 let list_arr = GenericListArray::<O>::new(field, offsets, values, None);
                 Ok(list_arr)
             } else {
-                Ok(list_arr.clone())
+                Ok(list_arr)
             }
         }
     }

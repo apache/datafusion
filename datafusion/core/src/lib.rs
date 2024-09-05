@@ -490,7 +490,6 @@
 //! [`PhysicalOptimizerRule`]: datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule
 //! [`Schema`]: arrow::datatypes::Schema
 //! [`PhysicalExpr`]: physical_plan::PhysicalExpr
-//! [`AggregateExpr`]: physical_plan::AggregateExpr
 //! [`RecordBatch`]: arrow::record_batch::RecordBatch
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
@@ -556,11 +555,6 @@ pub mod physical_expr_common {
     pub use datafusion_physical_expr_common::*;
 }
 
-/// re-export of [`datafusion_physical_expr_functions_aggregate`] crate
-pub mod physical_expr_functions_aggregate {
-    pub use datafusion_physical_expr_functions_aggregate::*;
-}
-
 /// re-export of [`datafusion_physical_expr`] crate
 pub mod physical_expr {
     pub use datafusion_physical_expr::*;
@@ -601,6 +595,11 @@ pub mod functions_array {
 /// re-export of [`datafusion_functions_aggregate`] crate
 pub mod functions_aggregate {
     pub use datafusion_functions_aggregate::*;
+}
+
+/// re-export of [`datafusion_functions_window`] crate
+pub mod functions_window {
+    pub use datafusion_functions_window::*;
 }
 
 #[cfg(test)]
@@ -671,6 +670,12 @@ doc_comment::doctest!(
 doc_comment::doctest!(
     "../../../docs/source/library-user-guide/using-the-sql-api.md",
     library_user_guide_sql_api
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/building-logical-plans.md",
+    library_user_guide_logical_plans
 );
 
 #[cfg(doctest)]

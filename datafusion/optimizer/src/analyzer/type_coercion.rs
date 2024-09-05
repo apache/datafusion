@@ -19,20 +19,24 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, IntervalUnit};
+use itertools::izip;
 
+use arrow::datatypes::{DataType, Field, IntervalUnit};
+
+use crate::analyzer::AnalyzerRule;
+use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
-    DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Column,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
-    WindowFunction,
+    self, Alias, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like,
+    ScalarFunction, Sort, WindowFunction,
 };
+use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, get_input_types, like_coercion,
@@ -47,13 +51,12 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, Operator, ScalarUDF,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, LogicalPlan, Operator,
+    Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
-use crate::analyzer::AnalyzerRule;
-use crate::utils::NamePreserver;
-
+/// Performs type coercion by determining the schema
+/// and performing the expression rewrites.
 #[derive(Default)]
 pub struct TypeCoercion {}
 
@@ -88,7 +91,7 @@ fn analyze_internal(
 ) -> Result<Transformed<LogicalPlan>> {
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
-    let mut schema = merge_schema(plan.inputs());
+    let mut schema = merge_schema(&plan.inputs());
 
     if let LogicalPlan::TableScan(ts) = &plan {
         let source_schema = DFSchema::try_from_qualified_schema(
@@ -120,19 +123,34 @@ fn analyze_internal(
         expr.rewrite(&mut expr_rewrite)?
             .map_data(|expr| original_name.restore(expr))
     })?
-    // coerce join expressions specially
-    .map_data(|plan| expr_rewrite.coerce_joins(plan))?
+    // some plans need extra coercion after their expressions are coerced
+    .map_data(|plan| expr_rewrite.coerce_plan(plan))?
     // recompute the schema after the expressions have been rewritten as the types may have changed
     .map_data(|plan| plan.recompute_schema())
 }
 
-pub(crate) struct TypeCoercionRewriter<'a> {
+/// Rewrite expressions to apply type coercion.
+pub struct TypeCoercionRewriter<'a> {
     pub(crate) schema: &'a DFSchema,
 }
 
 impl<'a> TypeCoercionRewriter<'a> {
+    /// Create a new [`TypeCoercionRewriter`] with a provided schema
+    /// representing both the inputs and output of the [`LogicalPlan`] node.
     fn new(schema: &'a DFSchema) -> Self {
         Self { schema }
+    }
+
+    /// Coerce the [`LogicalPlan`].
+    ///
+    /// Refer to [`TypeCoercionRewriter::coerce_join`] and [`TypeCoercionRewriter::coerce_union`]
+    /// for type-coercion approach.
+    pub fn coerce_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        match plan {
+            LogicalPlan::Join(join) => self.coerce_join(join),
+            LogicalPlan::Union(union) => Self::coerce_union(union),
+            _ => Ok(plan),
+        }
     }
 
     /// Coerce join equality expressions and join filter
@@ -143,11 +161,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     ///
     /// For example, on_exprs like `t1.a = t2.b AND t1.x = t2.y` will be stored
     /// as a list of `(t1.a, t2.b), (t1.x, t2.y)`
-    fn coerce_joins(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
-        let LogicalPlan::Join(mut join) = plan else {
-            return Ok(plan);
-        };
-
+    pub fn coerce_join(&mut self, mut join: Join) -> Result<LogicalPlan> {
         join.on = join
             .on
             .into_iter()
@@ -166,6 +180,34 @@ impl<'a> TypeCoercionRewriter<'a> {
             .transpose()?;
 
         Ok(LogicalPlan::Join(join))
+    }
+
+    /// Coerce the union’s inputs to a common schema compatible with all inputs.
+    /// This occurs after wildcard expansion and the coercion of the input expressions.
+    pub fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
+        let union_schema = Arc::new(coerce_union_schema(&union_plan.inputs)?);
+        let new_inputs = union_plan
+            .inputs
+            .into_iter()
+            .map(|p| {
+                let plan =
+                    coerce_plan_expr_for_schema(Arc::unwrap_or_clone(p), &union_schema)?;
+                match plan {
+                    LogicalPlan::Projection(Projection { expr, input, .. }) => {
+                        Ok(Arc::new(project_with_column_index(
+                            expr,
+                            input,
+                            Arc::clone(&union_schema),
+                        )?))
+                    }
+                    other_plan => Ok(Arc::new(other_plan)),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(LogicalPlan::Union(Union {
+            inputs: new_inputs,
+            schema: union_schema,
+        }))
     }
 
     fn coerce_join_filter(&self, expr: Expr) -> Result<Expr> {
@@ -207,15 +249,19 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 subquery,
                 outer_ref_columns,
             }) => {
-                let new_plan = analyze_internal(self.schema, unwrap_arc(subquery))?.data;
+                let new_plan =
+                    analyze_internal(self.schema, Arc::unwrap_or_clone(subquery))?.data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
                 })))
             }
             Expr::Exists(Exists { subquery, negated }) => {
-                let new_plan =
-                    analyze_internal(self.schema, unwrap_arc(subquery.subquery))?.data;
+                let new_plan = analyze_internal(
+                    self.schema,
+                    Arc::unwrap_or_clone(subquery.subquery),
+                )?
+                .data;
                 Ok(Transformed::yes(Expr::Exists(Exists {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
@@ -229,8 +275,11 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 subquery,
                 negated,
             }) => {
-                let new_plan =
-                    analyze_internal(self.schema, unwrap_arc(subquery.subquery))?.data;
+                let new_plan = analyze_internal(
+                    self.schema,
+                    Arc::unwrap_or_clone(subquery.subquery),
+                )?
+                .data;
                 let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
                 let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
@@ -457,7 +506,6 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
             | Expr::Negative(_)
             | Expr::Cast(_)
             | Expr::TryCast(_)
-            | Expr::Sort(_)
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
@@ -496,12 +544,12 @@ fn coerce_scalar(target_type: &DataType, value: &ScalarValue) -> Result<ScalarVa
 /// Downstream code uses this signal to treat these values as *unbounded*.
 fn coerce_scalar_range_aware(
     target_type: &DataType,
-    value: ScalarValue,
+    value: &ScalarValue,
 ) -> Result<ScalarValue> {
-    coerce_scalar(target_type, &value).or_else(|err| {
+    coerce_scalar(target_type, value).or_else(|err| {
         // If type coercion fails, check if the largest type in family works:
         if let Some(largest_type) = get_widest_type_in_family(target_type) {
-            coerce_scalar(largest_type, &value).map_or_else(
+            coerce_scalar(largest_type, value).map_or_else(
                 |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
                 |_| ScalarValue::try_from(target_type),
             )
@@ -530,11 +578,11 @@ fn coerce_frame_bound(
 ) -> Result<WindowFrameBound> {
     match bound {
         WindowFrameBound::Preceding(v) => {
-            coerce_scalar_range_aware(target_type, v).map(WindowFrameBound::Preceding)
+            coerce_scalar_range_aware(target_type, &v).map(WindowFrameBound::Preceding)
         }
         WindowFrameBound::CurrentRow => Ok(WindowFrameBound::CurrentRow),
         WindowFrameBound::Following(v) => {
-            coerce_scalar_range_aware(target_type, v).map(WindowFrameBound::Following)
+            coerce_scalar_range_aware(target_type, &v).map(WindowFrameBound::Following)
         }
     }
 }
@@ -544,12 +592,12 @@ fn coerce_frame_bound(
 fn coerce_window_frame(
     window_frame: WindowFrame,
     schema: &DFSchema,
-    expressions: &[Expr],
+    expressions: &[Sort],
 ) -> Result<WindowFrame> {
     let mut window_frame = window_frame;
     let current_types = expressions
         .iter()
-        .map(|e| e.get_type(schema))
+        .map(|s| s.expr.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
@@ -772,6 +820,111 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
         .map(Box::new);
 
     Ok(Case::new(case_expr, when_then, else_expr))
+}
+
+/// Get a common schema that is compatible with all inputs of UNION.
+///
+/// This method presumes that the wildcard expansion is unneeded, or has already
+/// been applied.
+pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
+    let base_schema = inputs[0].schema();
+    let mut union_datatypes = base_schema
+        .fields()
+        .iter()
+        .map(|f| f.data_type().clone())
+        .collect::<Vec<_>>();
+    let mut union_nullabilities = base_schema
+        .fields()
+        .iter()
+        .map(|f| f.is_nullable())
+        .collect::<Vec<_>>();
+    let mut union_field_meta = base_schema
+        .fields()
+        .iter()
+        .map(|f| f.metadata().clone())
+        .collect::<Vec<_>>();
+
+    let mut metadata = base_schema.metadata().clone();
+
+    for (i, plan) in inputs.iter().enumerate().skip(1) {
+        let plan_schema = plan.schema();
+        metadata.extend(plan_schema.metadata().clone());
+
+        if plan_schema.fields().len() != base_schema.fields().len() {
+            return plan_err!(
+                "Union schemas have different number of fields: \
+                query 1 has {} fields whereas query {} has {} fields",
+                base_schema.fields().len(),
+                i + 1,
+                plan_schema.fields().len()
+            );
+        }
+
+        // coerce data type and nullablity for each field
+        for (union_datatype, union_nullable, union_field_map, plan_field) in izip!(
+            union_datatypes.iter_mut(),
+            union_nullabilities.iter_mut(),
+            union_field_meta.iter_mut(),
+            plan_schema.fields().iter()
+        ) {
+            let coerced_type =
+                comparison_coercion(union_datatype, plan_field.data_type()).ok_or_else(
+                    || {
+                        plan_datafusion_err!(
+                            "Incompatible inputs for Union: Previous inputs were \
+                            of type {}, but got incompatible type {} on column '{}'",
+                            union_datatype,
+                            plan_field.data_type(),
+                            plan_field.name()
+                        )
+                    },
+                )?;
+
+            *union_datatype = coerced_type;
+            *union_nullable = *union_nullable || plan_field.is_nullable();
+            union_field_map.extend(plan_field.metadata().clone());
+        }
+    }
+    let union_qualified_fields = izip!(
+        base_schema.iter(),
+        union_datatypes.into_iter(),
+        union_nullabilities,
+        union_field_meta.into_iter()
+    )
+    .map(|((qualifier, field), datatype, nullable, metadata)| {
+        let mut field = Field::new(field.name().clone(), datatype, nullable);
+        field.set_metadata(metadata);
+        (qualifier.cloned(), field.into())
+    })
+    .collect::<Vec<_>>();
+
+    DFSchema::new_with_metadata(union_qualified_fields, metadata)
+}
+
+/// See `<https://github.com/apache/datafusion/pull/2108>`
+fn project_with_column_index(
+    expr: Vec<Expr>,
+    input: Arc<LogicalPlan>,
+    schema: DFSchemaRef,
+) -> Result<LogicalPlan> {
+    let alias_expr = expr
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| match e {
+            Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
+                e.unalias().alias(schema.field(i).name())
+            }
+            Expr::Column(Column {
+                relation: _,
+                ref name,
+            }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
+            Expr::Alias { .. } | Expr::Column { .. } => e,
+            _ => e.alias(schema.field(i).name()),
+        })
+        .collect::<Vec<_>>();
+
+    Projection::try_new_with_schema(alias_expr, input, schema)
+        .map(LogicalPlan::Projection)
 }
 
 #[cfg(test)]
@@ -1286,7 +1439,6 @@ mod test {
         .eq(cast(lit("1998-03-18"), DataType::Date32));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        dbg!(&plan);
         let expected =
             "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) = CAST(CAST(Utf8(\"1998-03-18\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1307,26 +1459,26 @@ mod test {
 
     fn cast_helper(
         case: Case,
-        case_when_type: DataType,
-        then_else_type: DataType,
+        case_when_type: &DataType,
+        then_else_type: &DataType,
         schema: &DFSchemaRef,
     ) -> Case {
         let expr = case
             .expr
-            .map(|e| cast_if_not_same_type(e, &case_when_type, schema));
+            .map(|e| cast_if_not_same_type(e, case_when_type, schema));
         let when_then_expr = case
             .when_then_expr
             .into_iter()
             .map(|(when, then)| {
                 (
-                    cast_if_not_same_type(when, &case_when_type, schema),
-                    cast_if_not_same_type(then, &then_else_type, schema),
+                    cast_if_not_same_type(when, case_when_type, schema),
+                    cast_if_not_same_type(then, then_else_type, schema),
                 )
             })
             .collect::<Vec<_>>();
         let else_expr = case
             .else_expr
-            .map(|e| cast_if_not_same_type(e, &then_else_type, schema));
+            .map(|e| cast_if_not_same_type(e, then_else_type, schema));
 
         Case {
             expr,
@@ -1374,8 +1526,8 @@ mod test {
         let then_else_common_type = DataType::Utf8;
         let expected = cast_helper(
             case.clone(),
-            case_when_common_type,
-            then_else_common_type,
+            &case_when_common_type,
+            &then_else_common_type,
             &schema,
         );
         let actual = coerce_case_expression(case, &schema)?;
@@ -1394,8 +1546,8 @@ mod test {
         let then_else_common_type = DataType::Utf8;
         let expected = cast_helper(
             case.clone(),
-            case_when_common_type,
-            then_else_common_type,
+            &case_when_common_type,
+            &then_else_common_type,
             &schema,
         );
         let actual = coerce_case_expression(case, &schema)?;
@@ -1473,7 +1625,6 @@ mod test {
         ));
         let empty = empty();
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        dbg!(&plan);
         let expected =
             "Projection: CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None)) - CAST(Utf8(\"1998-03-18\") AS Timestamp(Nanosecond, None))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;

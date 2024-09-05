@@ -29,7 +29,7 @@ version.workspace = true
 
 [dependencies]
 arrow-schema = { workspace = true }
-async-trait = "0.1.41"
+async-trait = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
