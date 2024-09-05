@@ -79,6 +79,7 @@ pub mod bit_and_or_xor;
 pub mod bool_and_or;
 pub mod grouping;
 pub mod kurtosis_pop;
+pub mod max_min_by;
 pub mod nth_value;
 pub mod string_agg;
 
@@ -172,6 +173,8 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         grouping::grouping_udaf(),
         nth_value::nth_value_udaf(),
         kurtosis_pop::kurtosis_pop_udaf(),
+        max_min_by::max_by_udaf(),
+        max_min_by::min_by_udaf(),
     ]
 }
 

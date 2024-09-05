@@ -213,7 +213,7 @@ impl FirstValueAccumulator {
     }
 
     // Updates state with the values in the given row.
-    fn update_with_new_row(&mut self, row: &[ScalarValue]) {
+    pub fn update_with_new_row(&mut self, row: &[ScalarValue]) {
         self.first = row[0].clone();
         self.orderings = row[1..].to_vec();
         self.is_set = true;

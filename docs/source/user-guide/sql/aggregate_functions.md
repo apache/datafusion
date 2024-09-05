@@ -253,6 +253,8 @@ last_value(expression [ORDER BY expression])
 - [regr_syy](#regr_syy)
 - [regr_sxy](#regr_sxy)
 - [kurtosis_pop](#kurtosis_pop)
+- [max_by](#max_by)
+- [min_by](#min_by)
 
 ### `corr`
 
@@ -540,6 +542,36 @@ kurtois_pop(expression)
 
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `max_by`
+
+Returns the value of the first expression corresponding to the maximum value in the second expression. If there are multiple values in the first expression with the same maximum value in the second expression, the result will be the first occurrence of such a value based on the input order.
+
+```
+max_by(expression1, expression2)
+```
+#### Arguments
+
+- **expression1**: First expression to return the value from.
+Can be a constant, column, or function, and any combination of arithmetic operators.
+
+- **expression2** Second expression used to determine the maximum value.
+Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `min_by`
+
+Returns the value of the first expression corresponding to the minimum value in the second expression. If there are multiple values in the first expression with the same minimum value in the second expression, the result will be the first occurrence of such a value based on the input order.
+
+```
+min_by(expression1, expression2)
+```
+#### Arguments
+
+- **expression1**: First expression to return the value from.
+Can be a constant, column, or function, and any combination of arithmetic operators.
+
+- **expression2** Second expression used to determine the maximum value.
+Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ## Approximate
 

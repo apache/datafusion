@@ -5924,3 +5924,70 @@ SELECT kurtosis_pop(c1) FROM t1;
 
 statement ok
 DROP TABLE t1;
+
+# test max_by function
+query I
+SELECT max_by(num_column, value) AS max_num
+FROM VALUES 
+    (10, 1),
+    (20, 2),
+    (30, 3) AS tab(num_column, value);
+----
+30
+
+query R
+SELECT max_by(float_column, value) AS max_float
+FROM VALUES 
+    (10.5, 5),
+    (20.75, 10),
+    (15.25, 15) AS tab(float_column, value);
+----
+15.25
+
+query T
+SELECT max_by(date_column, value) AS max_date
+FROM VALUES 
+    ('2024-01-01', 1),
+    ('2024-02-01', 2),
+    ('2024-03-01', 3) AS tab(date_column, value);
+----
+2024-03-01
+
+
+# Test max_by function with same maximum values (order sensitivity)
+query T
+SELECT max_by(value_column, metric) AS max_value
+FROM VALUES 
+    ('A', 2),
+    ('B', 2), 
+    ('C', 1) AS tab(value_column, metric);
+----
+A
+
+query T
+SELECT max_by(value_column, metric) AS max_value
+FROM VALUES 
+    ('B', 2),  -- Reversed order
+    ('A', 2),
+    ('C', 1) AS tab(value_column, metric);
+----
+B
+
+
+query T
+SELECT min_by(value_column, metric) AS min_value
+FROM VALUES 
+    ('A', 1),
+    ('B', 0),  -- same min metric value as 'C'
+    ('C', 0) AS tab(value_column, metric);
+----
+B
+
+query T
+SELECT min_by(value_column, metric) AS min_value
+FROM VALUES 
+    ('C', 0),  -- Reversed order
+    ('B', 0),
+    ('A', 1) AS tab(value_column, metric);
+----
+C
