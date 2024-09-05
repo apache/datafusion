@@ -303,9 +303,11 @@ pub struct NamePreserver {
     use_alias: bool,
 }
 
+type QualifiedName = (Option<TableReference>, String);
+
 /// If the name of an expression is remembered, it will be preserved when
 /// rewriting the expression
-pub struct SavedName(Option<String>);
+pub struct SavedName(Option<QualifiedName>);
 
 impl NamePreserver {
     /// Create a new NamePreserver for rewriting the `expr` that is part of the specified plan
@@ -326,7 +328,7 @@ impl NamePreserver {
 
     pub fn save(&self, expr: &Expr) -> Result<SavedName> {
         let original_name = if self.use_alias {
-            Some(expr.name_for_alias()?)
+            Some(expr.qualified_name())
         } else {
             None
         };
@@ -336,12 +338,14 @@ impl NamePreserver {
 }
 
 impl SavedName {
-    /// Ensures the name of the rewritten expression is preserved
+    /// Ensures the qualified name of the rewritten expression is preserved
     pub fn restore(self, expr: Expr) -> Result<Expr> {
         let Self(original_name) = self;
         match original_name {
-            Some(name) => expr.alias_if_changed(name),
-            None => Ok(expr),
+            Some(old_name) if expr.qualified_name() != old_name => {
+                Ok(expr.alias_qualified(old_name.0, old_name.1))
+            }
+            _ => Ok(expr),
         }
     }
 }
