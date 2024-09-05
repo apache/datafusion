@@ -772,7 +772,7 @@ async fn roundtrip_values_no_columns() -> Result<()> {
         values: vec![vec![], vec![]], // two rows, no columns
         schema: DFSchemaRef::new(DFSchema::empty()),
     });
-    roundtrip_logical_plan_with_ctx(&plan, ctx).await?;
+    roundtrip_logical_plan_with_ctx(plan, ctx).await?;
     Ok(())
 }
 
@@ -1131,7 +1131,7 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
 }
 
 async fn roundtrip_logical_plan_with_ctx(
-    plan: &LogicalPlan,
+    plan: LogicalPlan,
     ctx: SessionContext,
 ) -> Result<Box<Plan>> {
     let proto = to_substrait_plan(&plan, &ctx)?;
@@ -1156,7 +1156,7 @@ async fn roundtrip_logical_plan_with_ctx(
 async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<Box<Plan>> {
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
-    roundtrip_logical_plan_with_ctx(&plan, ctx).await
+    roundtrip_logical_plan_with_ctx(plan, ctx).await
 }
 
 async fn roundtrip(sql: &str) -> Result<()> {
