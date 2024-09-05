@@ -24,7 +24,7 @@ pub mod nulls;
 pub mod prim_op;
 
 use arrow::{
-    array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
+    array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
     datatypes::{
         DataType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
@@ -446,44 +446,11 @@ pub(crate) fn slice_and_maybe_filter(
 
         sliced_arrays
             .iter()
-            .map(|array| filter_array(array, &filter))
+            .map(|array| {
+                compute::filter(&array, &filter).map_err(|e| arrow_datafusion_err!(e))
+            })
             .collect()
     } else {
         Ok(sliced_arrays)
-    }
-}
-
-macro_rules! filter_primitive_array {
-    ($Values:ident, $PType:ident, $Filter:expr) => {{
-        let array = $Values.as_primitive::<$PType>().clone();
-        let nulls = filtered_null_mask($Filter, &array);
-        Ok(std::sync::Arc::new(set_nulls(array, nulls)))
-    }};
-}
-
-// TODO: introduce this quick filter method to more data type.
-fn filter_array(values: &ArrayRef, filter: &BooleanArray) -> Result<ArrayRef> {
-    match values.data_type() {
-        DataType::Boolean => {
-            let array = values.as_boolean().clone();
-            let array_null_buffer_filtered = filtered_null_mask(Some(filter), &array);
-            let (array_values_buf, _) = array.into_parts();
-            Ok(std::sync::Arc::new(BooleanArray::new(
-                array_values_buf,
-                array_null_buffer_filtered,
-            )))
-        }
-        DataType::Int8 => filter_primitive_array!(values, Int8Type, Some(filter)),
-        DataType::Int16 => filter_primitive_array!(values, Int16Type, Some(filter)),
-        DataType::Int32 => filter_primitive_array!(values, Int32Type, Some(filter)),
-        DataType::Int64 => filter_primitive_array!(values, Int64Type, Some(filter)),
-        DataType::UInt8 => filter_primitive_array!(values, UInt8Type, Some(filter)),
-        DataType::UInt16 => filter_primitive_array!(values, UInt16Type, Some(filter)),
-        DataType::UInt32 => filter_primitive_array!(values, UInt32Type, Some(filter)),
-        DataType::UInt64 => filter_primitive_array!(values, UInt64Type, Some(filter)),
-        DataType::Float16 => filter_primitive_array!(values, Float16Type, Some(filter)),
-        DataType::Float32 => filter_primitive_array!(values, Float32Type, Some(filter)),
-        DataType::Float64 => filter_primitive_array!(values, Float64Type, Some(filter)),
-        _ => compute::filter(values, filter).map_err(|e| arrow_datafusion_err!(e)),
     }
 }
