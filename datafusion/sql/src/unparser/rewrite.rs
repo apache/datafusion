@@ -265,25 +265,28 @@ pub(super) fn subquery_alias_inner_query_and_columns(
 /// - `SELECT col1 AS alias_1, col2 AS some_alias_2 FROM table`
 pub(super) fn inject_column_aliases(
     projection: &datafusion_expr::Projection,
-    aliases: &Vec<Ident>,
+    aliases: impl IntoIterator<Item = Ident>,
 ) -> LogicalPlan {
     let mut updated_projection = projection.clone();
 
-    let new_exprs = projection
+    let new_exprs = updated_projection
         .expr
-        .iter()
+        .into_iter()
         .zip(aliases)
         .map(|(expr, col_alias)| match expr {
-            Expr::Column(col) => Expr::Alias(Alias {
-                expr: Box::new(expr.clone()),
-                relation: col.relation.clone(),
-                name: col_alias.to_string(),
-            }),
-            _ => expr.clone(),
+            Expr::Column(col) => {
+                let relation = col.relation.clone();
+                Expr::Alias(Alias {
+                    expr: Box::new(Expr::Column(col)),
+                    relation,
+                    name: col_alias.value,
+                })
+            }
+            _ => expr,
         })
         .collect::<Vec<_>>();
 
-    updated_projection.expr.clone_from(&new_exprs);
+    updated_projection.expr = new_exprs;
 
     LogicalPlan::Projection(updated_projection)
 }

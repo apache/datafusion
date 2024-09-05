@@ -467,8 +467,8 @@ impl Unparser<'_> {
                     };
 
                     // Instead of specifying column aliases as part of the outer table inject them directly into the inner projection
-                    let rewritten_plan = inject_column_aliases(inner_p, &columns);
-                    columns.clear();
+                    let rewritten_plan = inject_column_aliases(inner_p, columns);
+                    columns = vec![];
 
                     self.select_to_sql_recursively(
                         &rewritten_plan,
