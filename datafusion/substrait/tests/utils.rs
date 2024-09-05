@@ -19,6 +19,7 @@
 pub mod test {
     use datafusion::catalog_common::TableReference;
     use datafusion::datasource::empty::EmptyTable;
+    use datafusion::datasource::TableProvider;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::extensions::Extensions;
     use datafusion_substrait::logical_plan::consumer::from_substrait_named_struct;
@@ -36,18 +37,27 @@ pub mod test {
         .expect("failed to parse json")
     }
 
+    pub fn add_plan_schemas_to_ctx(ctx: SessionContext, plan: &Plan) -> SessionContext {
+        let schemas = TestSchemaCollector::collect_schemas(plan);
+        for (table_reference, table) in schemas {
+            ctx.register_table(table_reference, table)
+                .expect("Failed to register table");
+        }
+        ctx
+    }
+
     pub struct TestSchemaCollector {
-        ctx: SessionContext,
+        schemas: Vec<(TableReference, Arc<dyn TableProvider>)>,
     }
 
     impl TestSchemaCollector {
         fn new() -> Self {
             TestSchemaCollector {
-                ctx: SessionContext::new(),
+                schemas: Vec::new(),
             }
         }
 
-        pub fn generate_context_from_plan(plan: &Plan) -> SessionContext {
+        fn collect_schemas(plan: &Plan) -> Vec<(TableReference, Arc<dyn TableProvider>)> {
             let mut schema_collector = Self::new();
 
             for plan_rel in plan.relations.iter() {
@@ -57,15 +67,15 @@ pub mod test {
                     .expect("PlanRel must set rel_type")
                 {
                     substrait::proto::plan_rel::RelType::Rel(r) => {
-                        schema_collector.collect_schemas(r)
+                        schema_collector.collect_schemas_from_rel(r)
                     }
                     substrait::proto::plan_rel::RelType::Root(r) => schema_collector
-                        .collect_schemas(
+                        .collect_schemas_from_rel(
                             r.input.as_ref().expect("RelRoot must set input"),
                         ),
                 }
             }
-            schema_collector.ctx
+            schema_collector.schemas
         }
 
         fn collect_named_table(&mut self, read: &ReadRel, nt: &NamedTable) {
@@ -105,12 +115,10 @@ pub mod test {
                     .replace_qualifier(table_reference.clone());
 
             let table = EmptyTable::new(df_schema.inner().clone());
-            self.ctx
-                .register_table(table_reference, Arc::new(table))
-                .expect("Failed to register table");
+            self.schemas.push((table_reference, Arc::new(table)));
         }
 
-        fn collect_schemas(&mut self, rel: &Rel) {
+        fn collect_schemas_from_rel(&mut self, rel: &Rel) {
             match rel.rel_type.as_ref().unwrap() {
                 RelType::Read(r) => match r.read_type.as_ref().unwrap() {
                     // Virtual Tables do not contribute to the schema
@@ -130,7 +138,7 @@ pub mod test {
                 RelType::Project(p) => self.apply(p.input.as_ref().map(|b| b.as_ref())),
                 RelType::Set(s) => {
                     for input in s.inputs.iter() {
-                        self.collect_schemas(input);
+                        self.collect_schemas_from_rel(input);
                     }
                 }
                 RelType::ExtensionSingle(s) => {
@@ -138,7 +146,7 @@ pub mod test {
                 }
                 RelType::ExtensionMulti(m) => {
                     for input in m.inputs.iter() {
-                        self.collect_schemas(input)
+                        self.collect_schemas_from_rel(input)
                     }
                 }
                 RelType::ExtensionLeaf(_) => {}
@@ -171,7 +179,7 @@ pub mod test {
         fn apply(&mut self, input: Option<&Rel>) {
             match input {
                 None => {}
-                Some(rel) => self.collect_schemas(rel),
+                Some(rel) => self.collect_schemas_from_rel(rel),
             }
         }
     }

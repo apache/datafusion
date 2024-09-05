@@ -19,23 +19,16 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::test::TestSchemaCollector;
+    use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
+
     use datafusion::common::Result;
+    use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
-    use std::fs::File;
-    use std::io::BufReader;
-    use substrait::proto::Plan;
 
     #[tokio::test]
     async fn contains_function_test() -> Result<()> {
-        let path = "tests/testdata/contains_plan.substrait.json";
-
-        let proto_plan = serde_json::from_reader::<_, Plan>(BufReader::new(
-            File::open(path).expect("file not found"),
-        ))
-        .expect("failed to parse json");
-
-        let ctx = TestSchemaCollector::generate_context_from_plan(&proto_plan);
+        let proto_plan = read_json("tests/testdata/contains_plan.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan);
         let plan = from_substrait_plan(&ctx, &proto_plan).await?;
 
         let plan_str = format!("{}", plan);
