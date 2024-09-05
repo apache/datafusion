@@ -24,6 +24,7 @@ mod error;
 mod if_expr;
 
 mod kernels;
+mod list;
 mod regexp;
 pub mod scalar_funcs;
 pub mod spark_hash;
@@ -37,6 +38,7 @@ mod xxhash64;
 pub use cast::{spark_cast, Cast};
 pub use error::{SparkError, SparkResult};
 pub use if_expr::IfExpr;
+pub use list::ListExtract;
 pub use regexp::RLike;
 pub use structs::{CreateNamedStruct, GetStructField};
 pub use temporal::{DateTruncExpr, HourExpr, MinuteExpr, SecondExpr, TimestampTruncExpr};
