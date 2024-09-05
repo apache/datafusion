@@ -341,127 +341,103 @@ fn flatten_struct_cols(
     Ok(RecordBatch::try_new(Arc::clone(schema), columns_expanded)?)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct ListUnnest {
     pub index_in_input_schema: usize,
     pub depth: usize,
 }
 
-// a map of original index (track which column in the batch to be interested in)
-// input schema:
-// col1_unnest_placeholder: list[list[int]], col1: list[list[int]], col2 list[int]
-// with unnest on unnest(col1,depth=2), unnest(col1,depth=1) and unnest(col2,depth=1)
-// output schema:
-// unnest_col1_depth_2: int, unnest_col1_depth1: list[int], col1: list[list[int]], unnest_col2_depth_1: int
-// Meaning the placeholder column will be replaced by its unnested variation(s), note
-// the plural.
-
-/*
-    Note: unnest has a big difference in behavior between Postgres and DuckDB
-    Take this example
-    1.Postgres
-    ```ignored
-    create table temp (
-        i integer[][][], j integer[]
-    )
-    insert into temp values ('{{{1,2},{3,4}},{{5,6},{7,8}}}', '{1,2}');
-    select unnest(i), unnest(j) from temp;
-    ```
-
-    Result
-        1	1
-        2	2
-        3
-        4
-        5
-        6
-        7
-        8
-    2. DuckDB
-    ```ignore
-        create table temp (i integer[][][], j integer[]);
-        insert into temp values ([[[1,2],[3,4]],[[5,6],[7,8]]], [1,2]);
-        select unnest(i,recursive:=true), unnest(j,recursive:=true) from temp;
-    ```
-    Result:
-        ┌────────────────────────────────────────────────┬────────────────────────────────────────────────┐
-        │ unnest(i, "recursive" := CAST('t' AS BOOLEAN)) │ unnest(j, "recursive" := CAST('t' AS BOOLEAN)) │
-        │                     int32                      │                     int32                      │
-        ├────────────────────────────────────────────────┼────────────────────────────────────────────────┤
-        │                                              1 │                                              1 │
-        │                                              2 │                                              2 │
-        │                                              3 │                                              1 │
-        │                                              4 │                                              2 │
-        │                                              5 │                                              1 │
-        │                                              6 │                                              2 │
-        │                                              7 │                                              1 │
-        │                                              8 │                                              2 │
-        └────────────────────────────────────────────────┴────────────────────────────────────────────────┘
-    The following implementation refer to Postgres's implementation
-    For DuckDB's result to be similar, the above query can be written as
-
-
-
-*/
-
+/// Note: unnest has a big difference in behavior between Postgres and DuckDB
+/// Take this example
+/// 1.Postgres
+/// ```ignored
+/// create table temp (
+///     i integer[][][], j integer[]
+/// )
+/// insert into temp values ('{{{1,2},{3,4}},{{5,6},{7,8}}}', '{1,2}');
+/// select unnest(i), unnest(j) from temp;
+/// ```
+///
+/// Result
+///     1   1
+///     2   2
+///     3
+///     4
+///     5
+///     6
+///     7
+///     8
+/// 2. DuckDB
+/// ```ignore
+///     create table temp (i integer[][][], j integer[]);
+///     insert into temp values ([[[1,2],[3,4]],[[5,6],[7,8]]], [1,2]);
+///     select unnest(i,recursive:=true), unnest(j,recursive:=true) from temp;
+/// ```
+/// Result:
+///     ┌────────────────────────────────────────────────┬────────────────────────────────────────────────┐
+///     │ unnest(i, "recursive" := CAST('t' AS BOOLEAN)) │ unnest(j, "recursive" := CAST('t' AS BOOLEAN)) │
+///     │                     int32                      │                     int32                      │
+///     ├────────────────────────────────────────────────┼────────────────────────────────────────────────┤
+///     │                                              1 │                                              1 │
+///     │                                              2 │                                              2 │
+///     │                                              3 │                                              1 │
+///     │                                              4 │                                              2 │
+///     │                                              5 │                                              1 │
+///     │                                              6 │                                              2 │
+///     │                                              7 │                                              1 │
+///     │                                              8 │                                              2 │
+///     └────────────────────────────────────────────────┴────────────────────────────────────────────────┘
+/// The following implementation refer to DuckDB's implementation
+///
+/// Recursion happens for the highest level first
+/// Demonstatring with examples:
+///
+///
+/// Set "A" as a 3-dimension columns and "B" as an array (1-dimension)
+/// Query: select unnest(A, max_depth:=3), unnest(A,max_depth:=2), unnest(B, max_depth:=1) from temp;
+/// Let's given these projection names P1,P2,P3 respectively
+///
+/// Each combination of (column,depth) result in an entry in temp_batch
+/// This is needed, even if the same column is being unnested for different recursion levels
+///
+/// This function is called with the descending order of recursion
+/// Depth = 3
+/// - P1(3-dimension) unnest into temp column temp_P1(2_dimension)
+/// - A(3-dimension) having indice repeated by the unnesting above
+/// Depth = 2
+/// - temp_P1(2-dimension) unnest into temp column temp_P1(1-dimension)
+/// - A(3-dimension) unnest into temp column temp_P2(2-dimension)
+/// Depth = 1
+/// - temp_P1(1-dimension) unnest into P1
+/// - temp_P2(2-dimension) unnest into P2
+/// - B(1-dimension) unnest into P3
 fn unnest_at_level(
     batch: &[ArrayRef],
-    list_type_columns: &[ListUnnest],
-    temp_batch: &mut HashMap<(usize, usize), ArrayRef>,
+    list_type_unnests: &[ListUnnest],
+    temp_batch: &mut HashMap<ListUnnest, ArrayRef>,
     level_to_unnest: usize,
     options: &UnnestOptions,
 ) -> Result<(Vec<ArrayRef>, usize)> {
-    // unnested columns at this depth level
-    // now do some kind of projection-like
-    // This query:
-    // select unnest(col1, max_depth:=3), unnest(col1,max_depth:=2), unnest(col1, max_depth:=1)  from temp;
-    // is equivalent to
-    //
-    // unnest(depth3) , unnest(depth2), unnest(depth1)
-    // select (unnest)
-    // batch comes in as [a,b]
-    // in this example list_type_columns as value
-    // [(a,1), (a,2)] and [(b,1)]
-    // 1.microwork(level=2)
-    // new batch as [unnest_a,b]
-    // new list as [(a,1)] and [(b,1)]
-    // temp_batch_for_projection: [(a,depth=1,unnested(a))]
-    // 2.microwork(level=1)
-    // new batch as [unnest(unnest_a),b]
-    // new list as []
-    // temp_batch: [(a,depth=1,unnested(a)),(a,depth=2,unnested(unnested(a))),(b,depth=1,unnested(b))]
-    // this is final, now combine the mainbatch and temp_batch
-
-    let (temp_unnest_cols, unnested_locations): (Vec<Arc<dyn Array>>, Vec<_>) =
-        list_type_columns
-            .iter()
-            .filter_map(
-                |ListUnnest {
-                     depth,
-                     index_in_input_schema,
-                 }| {
-                    if *depth == level_to_unnest {
-                        return Some((
-                            Arc::clone(&batch[*index_in_input_schema]),
-                            (*index_in_input_schema, *depth),
-                        ));
-                    }
-                    // this means the depth to unnest is still on going, keep on unnesting
-                    // at current level
-                    if *depth > level_to_unnest {
-                        return Some((
-                            Arc::clone(
-                                temp_batch
-                                    .get(&(*index_in_input_schema, *depth))
-                                    .unwrap(),
-                            ),
-                            (*index_in_input_schema, *depth),
-                        ));
-                    }
-                    None
-                },
-            )
-            .unzip();
+    let (temp_unnest_cols, unnestings): (Vec<Arc<dyn Array>>, Vec<_>) = list_type_unnests
+        .iter()
+        .filter_map(|unnesting| {
+            if level_to_unnest == unnesting.depth {
+                return Some((
+                    Arc::clone(&batch[unnesting.index_in_input_schema]),
+                    *unnesting,
+                ));
+            }
+            // this means the unnesting on this item has started at higher level
+            // and need to continue until depth reaches 1
+            if level_to_unnest < unnesting.depth {
+                return Some((
+                    Arc::clone(temp_batch.get(unnesting).unwrap()),
+                    *unnesting,
+                ));
+            }
+            None
+        })
+        .unzip();
 
     // filter out so that list_arrays only contain column with the highest depth
     // at the same time, during iteration remove this depth so next time we don't have to unnest them again
@@ -489,9 +465,9 @@ fn unnest_at_level(
     let ret = flatten_batch_from_indices(batch, &take_indices)?;
     unnested_temp_arrays
         .into_iter()
-        .zip(unnested_locations.iter())
-        .for_each(|(flatten_arr, (index_in_input_schema, depth))| {
-            temp_batch.insert((*index_in_input_schema, *depth), flatten_arr);
+        .zip(unnestings.iter())
+        .for_each(|(flatten_arr, unnesting)| {
+            temp_batch.insert(*unnesting, flatten_arr);
         });
     Ok((ret, total_length))
 }
@@ -539,7 +515,14 @@ fn build_batch(
             let unnested_array_map: HashMap<usize, Vec<(Arc<dyn Array>, usize)>> =
                 temp_batch.into_iter().fold(
                     HashMap::new(),
-                    |mut acc, ((index_in_input_schema, depth), flattened_array)| {
+                    |mut acc,
+                     (
+                        ListUnnest {
+                            index_in_input_schema,
+                            depth,
+                        },
+                        flattened_array,
+                    )| {
                         acc.entry(index_in_input_schema)
                             .or_default()
                             .push((flattened_array, depth));
@@ -817,31 +800,12 @@ fn create_take_indicies(
 
 fn flatten_batch_from_indices(
     batch: &[ArrayRef],
-    // temp: &[(usize, Arc<dyn Array>)],
-    // mut unnested_list_arrays: HashMap<usize, Vec<ArrayRef>>,
     indices: &PrimitiveArray<Int64Type>,
 ) -> Result<Vec<Arc<dyn Array>>> {
-    return batch
+    batch
         .into_iter()
         .map(|arr| Ok(kernels::take::take(arr, indices, None)?))
-        .collect::<Result<_>>();
-    // return Ok(new_arrays);
-    // Ok(new_arrays)
-    // let arrays = batch
-    //     .columns()
-    //     .iter()
-    //     .enumerate()
-    //     .map(
-    //         |(col_idx, arr)| match unnested_list_arrays.remove(&col_idx) {
-    //             Some(unnested_arrays) => Ok(unnested_arrays),
-    //             None => Ok(vec![kernels::take::take(arr, indices, None)?]),
-    //         },
-    //     )
-    //     .collect::<Result<Vec<_>>>()?
-    //     .into_iter()
-    //     .flatten()
-    //     .collect::<Vec<_>>();
-    // Ok(arrays)
+        .collect::<Result<_>>()
 }
 
 /// Create the final batch given the unnested column arrays and a `indices` array
