@@ -17,12 +17,29 @@
 
 use datafusion_common::arrow::datatypes::DataType;
 
+/// Contains metadata which may be useful for a user-defined window
+/// function to specify the field of the final result of evaluating the
+/// user-defined window function.
 pub struct FieldArgs<'a> {
+    /// The data types of input expressions.
     input_types: &'a [DataType],
+    /// The display name.
     schema_name: &'a str,
 }
 
 impl<'a> FieldArgs<'a> {
+    /// Create an instance of [`FieldArgs`].
+    ///
+    /// # Arguments
+    ///
+    /// * `input_types` - The data types derived from the input
+    /// expressions to the window function.
+    /// * `schema_name` - The formatted display name for the window
+    /// function derived from the input schema.
+    ///
+    /// # Returns
+    ///
+    /// A new [`FieldArgs`] instance.
     pub fn new(input_types: &'a [DataType], schema_name: &'a str) -> Self {
         FieldArgs {
             input_types,
@@ -30,14 +47,20 @@ impl<'a> FieldArgs<'a> {
         }
     }
 
+    /// Returns the data types of input expressions to the window
+    /// function.
     pub fn input_types(&self) -> &[DataType] {
         self.input_types
     }
 
+    /// Returns the name of the output field of this window function.
     pub fn name(&self) -> &str {
         self.schema_name
     }
 
+    /// Returns an `Option<DataType>` containing the data type of the
+    /// input expression at the specified index. It returns `None` when
+    /// the index is out of bounds.
     pub fn get_input_type(&self, index: usize) -> Option<DataType> {
         self.input_types.get(index).cloned()
     }
