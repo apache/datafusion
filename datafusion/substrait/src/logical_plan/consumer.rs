@@ -923,7 +923,7 @@ fn ensure_field_compatability(
         } else {
             // TODO: from_substrait_struct_type needs to be updated to set the nullability correctly. It defaults to true for now.
             substrait_err!(
-                "Field '{}' is nullable in the Substrait schema but not nullable in the DataFusion schema.",
+                "Field '{}' is nullable in the DataFusion schema but not nullable in the Substrait schema.",
                 substrait_field.name()
                 )
         }
