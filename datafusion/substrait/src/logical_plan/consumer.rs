@@ -228,14 +228,32 @@ pub async fn from_substrait_plan(
                         match plan {
                             // If the last node of the plan produces expressions, bake the renames into those expressions.
                             // This isn't necessary for correctness, but helps with roundtrip tests.
-                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), &renamed_schema)?, p.input)?)),
+                            LogicalPlan::Projection(p) => {
+                                Ok(LogicalPlan::Projection(
+                                    Projection::try_new(
+                                        rename_expressions(p.expr, p.input.schema(), &renamed_schema)?,
+                                        p.input
+                                    )?
+                                ))
+                            },
                             LogicalPlan::Aggregate(a) => {
                                 let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), &renamed_schema)?;
-                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, a.group_expr, new_aggr_exprs)?))
+                                Ok(LogicalPlan::Aggregate(
+                                    Aggregate::try_new(a.input, a.group_expr, new_aggr_exprs)?
+                                ))
                             },
                             // There are probably more plans where we could bake things in, can add them later as needed.
                             // Otherwise, add a new Project to handle the renaming.
-                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), &renamed_schema)?, Arc::new(plan))?))
+                            _ => Ok(LogicalPlan::Projection(
+                                Projection::try_new(
+                                    rename_expressions(
+                                        plan.schema().columns().iter().map(|c| col(c.to_owned())),
+                                        plan.schema(),
+                                        &renamed_schema
+                                    )?,
+                                    Arc::new(plan)
+                                )?
+                            )),
                         }
                     }
                 },
@@ -363,7 +381,6 @@ fn make_renamed_schema(
     }
 
     let mut name_idx = 0;
-
     let (qualifiers, fields): (_, Vec<Field>) = schema
         .iter()
         .map(|(q, f)| {
@@ -390,7 +407,6 @@ fn make_renamed_schema(
             name_idx,
             dfs_names.len());
     }
-
     DFSchema::from_field_specific_qualified_schema(
         qualifiers,
         &Arc::new(Schema::new(fields)),
@@ -412,6 +428,10 @@ pub async fn from_substrait_rel(
                 );
                 let mut names: HashSet<String> = HashSet::new();
                 let mut exprs: Vec<Expr> = vec![];
+                input.schema().iter().for_each(|(qualifier, field)| {
+                    exprs.push(col(Column::from((qualifier, field))))
+                });
+
                 for e in &p.expressions {
                     let x =
                         from_substrait_rex(ctx, e, input.clone().schema(), extensions)

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod bugs_converage;
 mod consumer_integration;
 mod function_test;
 mod logical_plans;
