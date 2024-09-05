@@ -21,7 +21,6 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
-use chrono::Utc;
 
 use crate::datetime::common::*;
 use datafusion_common::error::DataFusionError;
@@ -37,13 +36,6 @@ impl Default for ToDateFunc {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn string_to_timestamp_millis_formatted(s: &str, format: &str) -> Result<i64> {
-    Ok(string_to_datetime_formatted(&Utc, s, format)?
-        .naive_utc()
-        .and_utc()
-        .timestamp_millis())
 }
 
 impl ToDateFunc {
