@@ -43,6 +43,7 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, Result, UnnestOptions,
 };
 use datafusion_execution::TaskContext;
+use datafusion_expr::Unnest;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
@@ -471,6 +472,10 @@ fn unnest_at_level(
         });
     Ok((ret, total_length))
 }
+struct UnnestingResult {
+    arr: ArrayRef,
+    depth: usize,
+}
 
 /// For each row in a `RecordBatch`, some list/struct columns need to be unnested.
 /// - For list columns: We will expand the values in each list into multiple rows,
@@ -489,14 +494,17 @@ fn build_batch(
         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
         _ => {
             let mut temp_batch = HashMap::new();
-            let highest_depth = list_type_columns
+            let max_recursion = list_type_columns
                 .iter()
                 .fold(0, |highest_depth, ListUnnest { depth, .. }| {
                     cmp::max(highest_depth, *depth)
                 });
             let mut unnested_original_columns = vec![];
-            for depth in (1..=highest_depth).rev() {
-                let input = match depth == highest_depth {
+
+            // original batch has the same columns
+            // all unnesting results are written to temp_batch
+            for depth in (1..=max_recursion).rev() {
+                let input = match depth == max_recursion {
                     true => batch.columns(),
                     false => &unnested_original_columns,
                 };
@@ -512,7 +520,7 @@ fn build_batch(
                 }
                 unnested_original_columns = temp;
             }
-            let unnested_array_map: HashMap<usize, Vec<(Arc<dyn Array>, usize)>> =
+            let unnested_array_map: HashMap<usize, Vec<UnnestingResult>> =
                 temp_batch.into_iter().fold(
                     HashMap::new(),
                     |mut acc,
@@ -523,41 +531,54 @@ fn build_batch(
                         },
                         flattened_array,
                     )| {
-                        acc.entry(index_in_input_schema)
-                            .or_default()
-                            .push((flattened_array, depth));
+                        acc.entry(index_in_input_schema).or_default().push(
+                            UnnestingResult {
+                                arr: flattened_array,
+                                depth,
+                            },
+                        );
                         acc
                     },
                 );
-            let output_order: HashMap<(usize, usize), usize> = list_type_columns
+            let output_order: HashMap<ListUnnest, usize> = list_type_columns
                 .iter()
                 .enumerate()
-                .map(|(order, unnest_def)| {
-                    let ListUnnest {
-                        depth,
-                        index_in_input_schema,
-                    } = unnest_def;
-                    ((*index_in_input_schema, *depth), order)
-                })
+                .map(|(order, unnest_def)| (*unnest_def, order))
                 .collect();
 
-            let mut ordered_unnested_array_map = unnested_array_map
+            // one original column may be unnested multiple times into separate columns
+            let mut multi_unnested_per_original_index = unnested_array_map
                 .into_iter()
                 .map(
                     // each item in unnested_columns is the result of unnesting the same input column
                     // we need to sort them to conform with the unnest definition
                     // e.g unnest(unnest(col)) must goes before unnest(col)
                     |(original_index, mut unnested_columns)| {
-                        unnested_columns.sort_by(|(_, depth), (_, depth2)| -> Ordering {
-                            output_order.get(&(original_index, *depth)).unwrap().cmp(
-                                output_order.get(&(original_index, *depth2)).unwrap(),
-                            )
-                        });
+                        unnested_columns.sort_by(
+                            |UnnestingResult { depth: depth1, .. },
+                             UnnestingResult { depth: depth2, .. }|
+                             -> Ordering {
+                                output_order
+                                    .get(&ListUnnest {
+                                        depth: *depth1,
+                                        index_in_input_schema: original_index,
+                                    })
+                                    .unwrap()
+                                    .cmp(
+                                        output_order
+                                            .get(&ListUnnest {
+                                                depth: *depth2,
+                                                index_in_input_schema: original_index,
+                                            })
+                                            .unwrap(),
+                                    )
+                            },
+                        );
                         (
                             original_index,
                             unnested_columns
                                 .into_iter()
-                                .map(|(arr, _)| arr)
+                                .map(|result| result.arr)
                                 .collect::<Vec<_>>(),
                         )
                     },
@@ -568,7 +589,8 @@ fn build_batch(
                 .into_iter()
                 .enumerate()
                 .flat_map(|(col_idx, arr)| {
-                    match ordered_unnested_array_map.remove(&col_idx) {
+                    // this column has some unnested output(s)
+                    match multi_unnested_per_original_index.remove(&col_idx) {
                         Some(unnested_arrays) => unnested_arrays,
                         None => vec![arr],
                     }
