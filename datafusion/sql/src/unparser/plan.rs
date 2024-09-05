@@ -459,14 +459,14 @@ impl Unparser<'_> {
                 if !columns.is_empty()
                     && !self.dialect.supports_column_alias_in_table_alias()
                 {
-                    // if columns are returned than plan corresponds to a projection
+                    // if columns are returned then the plan corresponds to a projection
                     let LogicalPlan::Projection(inner_p) = plan else {
                         return plan_err!(
                             "Inner projection for subquery alias is expected"
                         );
                     };
 
-                    // Instead of specifying column aliases as part of the outer table inject them directly into the inner projection
+                    // Instead of specifying column aliases as part of the outer table, inject them directly into the inner projection
                     let rewritten_plan = inject_column_aliases(inner_p, columns);
                     columns = vec![];
 
