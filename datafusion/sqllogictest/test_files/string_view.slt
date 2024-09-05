@@ -1226,42 +1226,82 @@ NULL NULL NULL
 # `~` operator (regex match)
 query TT
 EXPLAIN SELECT
-  column1_utf8view ~ 'foo' AS c1
+  column1_utf8view ~ 'an' AS c1
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) LIKE Utf8("%foo%") AS c1
+01)Projection: CAST(test.column1_utf8view AS Utf8) LIKE Utf8("%an%") AS c1
 02)--TableScan: test projection=[column1_utf8view]
+
+query B
+SELECT
+  column1_utf8view ~ 'an' AS c1
+FROM test;
+----
+false
+true
+false
+NULL
 
 # `~*` operator (regex match case-insensitive)
 query TT
 EXPLAIN SELECT
-  column1_utf8view ~* 'foo' AS c1
+  column1_utf8view ~* '^a.{3}e' AS c1
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) ILIKE Utf8("%foo%") AS c1
+01)Projection: CAST(test.column1_utf8view AS Utf8) ~* Utf8("^a.{3}e") AS c1
 02)--TableScan: test projection=[column1_utf8view]
+
+query B
+SELECT
+  column1_utf8view ~* '^a.{3}e' AS c1
+FROM test;
+----
+true
+false
+false
+NULL
 
 # `!~~` operator (not like match)
 query TT
 EXPLAIN SELECT
-  column1_utf8view !~~ 'an' AS c1
+  column1_utf8view !~~ 'xia_g%g' AS c1
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) !~~ Utf8("an") AS c1
+01)Projection: CAST(test.column1_utf8view AS Utf8) !~~ Utf8("xia_g%g") AS c1
 02)--TableScan: test projection=[column1_utf8view]
+
+query B
+SELECT
+  column1_utf8view !~~ 'xia_g%g' AS c1
+FROM test;
+----
+true
+true
+true
+NULL
 
 # `!~~*` operator (not like match case-insensitive)
 query TT
 EXPLAIN SELECT
-  column1_utf8view !~~* 'an' AS c1
+  column1_utf8view !~~* 'xia_g%g' AS c1
 FROM test;
 ----
 logical_plan
-01)Projection: CAST(test.column1_utf8view AS Utf8) !~~* Utf8("an") AS c1
+01)Projection: CAST(test.column1_utf8view AS Utf8) !~~* Utf8("xia_g%g") AS c1
 02)--TableScan: test projection=[column1_utf8view]
+
+query B
+SELECT
+  column1_utf8view !~~* 'xia_g%g' AS c1
+FROM test;
+----
+true
+false
+true
+NULL
 
 statement ok
 drop table test;
