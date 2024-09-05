@@ -26,10 +26,7 @@ pub mod prim_op;
 use arrow::{
     array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
-    datatypes::{
-        DataType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-        Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-    },
+    datatypes::UInt32Type,
 };
 use datafusion_common::{
     arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
@@ -37,8 +34,6 @@ use datafusion_common::{
 };
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
-
-use crate::aggregate::groups_accumulator::nulls::{filtered_null_mask, set_nulls};
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
