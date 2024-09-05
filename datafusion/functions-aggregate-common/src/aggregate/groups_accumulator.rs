@@ -460,7 +460,7 @@ macro_rules! filter_primitive_array {
     }};
 }
 
-// TODO:
+// TODO: introduce this quick filter method to more data type.
 fn filter_array(values: &ArrayRef, filter: &BooleanArray) -> Result<ArrayRef> {
     match values.data_type() {
         DataType::Boolean => {
