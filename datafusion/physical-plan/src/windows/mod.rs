@@ -368,9 +368,8 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        let field_args = FieldArgs::new(&self.input_types, &self.name);
-
-        self.fun.field(field_args)
+        self.fun
+            .field(FieldArgs::new(&self.input_types, &self.name))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
