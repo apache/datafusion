@@ -23,9 +23,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{
-    logical_plan::Filter, Expr, ExprSchemable, LogicalPlan,
-};
+use datafusion_expr::{logical_plan::Filter, Expr, ExprSchemable, LogicalPlan};
 use std::sync::Arc;
 
 /// The FilterNullJoinKeys rule will identify  joins with equi-join conditions
@@ -53,8 +51,8 @@ impl OptimizerRule for FilterNullJoinKeys {
         }
         match plan {
             LogicalPlan::Join(mut join) if !join.on.is_empty() => {
-
-                let (left_preserved, right_preserved) = on_lr_is_preserved(join.join_type);
+                let (left_preserved, right_preserved) =
+                    on_lr_is_preserved(join.join_type);
 
                 let left_schema = join.left.schema();
                 let right_schema = join.right.schema();
@@ -142,7 +140,8 @@ mod tests {
     fn left_nullable_left_join_reordered() -> Result<()> {
         let (t_left, t_right) = test_tables()?;
         // Note: order of tables is reversed
-        let plan = build_plan(t_right, t_left, "t2.id", "t1.optional_id", JoinType::Left)?;
+        let plan =
+            build_plan(t_right, t_left, "t2.id", "t1.optional_id", JoinType::Left)?;
         let expected = "Left Join: t2.id = t1.optional_id\
         \n  TableScan: t2\
         \n  Filter: t1.optional_id IS NOT NULL\
