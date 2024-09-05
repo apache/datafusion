@@ -157,7 +157,7 @@ pub struct PushDownFilter {}
 ///     the right is not, because there may be rows in the output that don't
 ///     directly map to a row in the right input (due to nulls filling where there
 ///     is no match on the right).
-fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
+pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
         JoinType::Left => (true, false),
@@ -181,7 +181,7 @@ fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
 /// A tuple of booleans - (left_preserved, right_preserved).
 ///
 /// See [`lr_is_preserved`] for a definition of "preserved".
-pub fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
+pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
         JoinType::Left => (false, true),
