@@ -207,7 +207,7 @@ impl ExprSchemable for Expr {
                             })?;
                         udwf.field(FieldArgs {
                             input_types: new_types.as_ref(),
-                            display_name: self.schema_name().to_string().as_ref(),
+                            schema_name: self.schema_name().to_string().as_ref(),
                         })
                         .map(|field| field.data_type().clone())
                     }

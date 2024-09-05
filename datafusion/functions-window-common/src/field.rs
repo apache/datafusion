@@ -19,7 +19,7 @@ use datafusion_common::arrow::datatypes::DataType;
 
 pub struct FieldArgs<'a> {
     pub input_types: &'a [DataType],
-    pub display_name: &'a str,
+    pub schema_name: &'a str,
 }
 
 impl FieldArgs<'_> {

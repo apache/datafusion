@@ -541,7 +541,7 @@ impl WindowUDFImpl for WindowUDFLegacyWrapper {
         let return_type = (self.return_type)(field_args.input_types)?;
 
         Ok(Field::new(
-            field_args.display_name,
+            field_args.schema_name,
             return_type.as_ref().clone(),
             true,
         ))

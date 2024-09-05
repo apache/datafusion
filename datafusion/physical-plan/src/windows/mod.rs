@@ -78,7 +78,7 @@ pub fn schema_add_window_field(
         if let WindowFunctionDefinition::WindowUDF(udwf) = window_fn {
             udwf.field(FieldArgs {
                 input_types: &data_types,
-                display_name: fn_name,
+                schema_name: fn_name,
             })
             .map(|field| field.data_type().clone())?
         } else {
@@ -371,7 +371,7 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     fn field(&self) -> Result<Field> {
         self.fun.field(FieldArgs {
             input_types: &self.input_types,
-            display_name: &self.name,
+            schema_name: &self.name,
         })
     }
 

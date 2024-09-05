@@ -84,7 +84,7 @@ impl WindowUDFImpl for SmoothItUdf {
     }
 
     fn field(&self, field_args: FieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.display_name, DataType::Float64, true))
+        Ok(Field::new(field_args.schema_name, DataType::Float64, true))
     }
 }
 
