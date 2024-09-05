@@ -248,7 +248,7 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
                 // See https://github.com/apache/arrow-rs/issues/6094 for more details.
                 let mut builder = StringViewBuilder::with_capacity(s.len());
                 if ideal_buffer_size > 0 {
-                    builder = builder.with_block_size(ideal_buffer_size as u32);
+                    builder = builder.with_fixed_block_size(ideal_buffer_size as u32);
                 }
 
                 for v in s.iter() {
@@ -580,7 +580,8 @@ mod tests {
     impl StringViewTest {
         /// Create a `StringViewArray` with the parameters specified in this struct
         fn build(self) -> StringViewArray {
-            let mut builder = StringViewBuilder::with_capacity(100).with_block_size(8192);
+            let mut builder =
+                StringViewBuilder::with_capacity(100).with_fixed_block_size(8192);
             loop {
                 for &v in self.strings.iter() {
                     builder.append_option(v);
