@@ -378,7 +378,7 @@ fn extract_possible_join_keys(expr: &Expr, join_keys: &mut JoinKeySet) {
                 extract_possible_join_keys(left, &mut left_join_keys);
                 extract_possible_join_keys(right, &mut right_join_keys);
 
-                join_keys.insert_intersection(left_join_keys, right_join_keys)
+                join_keys.insert_intersection(&left_join_keys, &right_join_keys)
             }
             _ => (),
         };

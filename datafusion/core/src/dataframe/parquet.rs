@@ -190,7 +190,7 @@ mod tests {
         // This test verifies writing a parquet file with small rg size
         // relative to datafusion.execution.batch_size does not panic
         let ctx = SessionContext::new_with_config(SessionConfig::from_string_hash_map(
-            HashMap::from_iter(
+            &HashMap::from_iter(
                 [("datafusion.execution.batch_size", "10")]
                     .iter()
                     .map(|(s1, s2)| (s1.to_string(), s2.to_string())),

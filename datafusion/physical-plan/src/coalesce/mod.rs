@@ -18,7 +18,7 @@
 use arrow::compute::concat_batches;
 use arrow_array::builder::StringViewBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_schema::SchemaRef;
 use std::sync::Arc;
 
@@ -248,7 +248,7 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
                 // See https://github.com/apache/arrow-rs/issues/6094 for more details.
                 let mut builder = StringViewBuilder::with_capacity(s.len());
                 if ideal_buffer_size > 0 {
-                    builder = builder.with_block_size(ideal_buffer_size as u32);
+                    builder = builder.with_fixed_block_size(ideal_buffer_size as u32);
                 }
 
                 for v in s.iter() {
@@ -265,7 +265,9 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
             }
         })
         .collect();
-    RecordBatch::try_new(batch.schema(), new_columns)
+    let mut options = RecordBatchOptions::new();
+    options = options.with_row_count(Some(batch.num_rows()));
+    RecordBatch::try_new_with_options(batch.schema(), new_columns, &options)
         .expect("Failed to re-create the gc'ed record batch")
 }
 
@@ -502,6 +504,15 @@ mod tests {
     }
 
     #[test]
+    fn test_gc_string_view_test_batch_empty() {
+        let schema = Schema::empty();
+        let batch = RecordBatch::new_empty(schema.into());
+        let output_batch = gc_string_view_batch(&batch);
+        assert_eq!(batch.num_columns(), output_batch.num_columns());
+        assert_eq!(batch.num_rows(), output_batch.num_rows());
+    }
+
+    #[test]
     fn test_gc_string_view_batch_large_no_compact() {
         // view with large strings (has buffers) but full --> no need to compact
         let array = StringViewTest {
@@ -569,7 +580,8 @@ mod tests {
     impl StringViewTest {
         /// Create a `StringViewArray` with the parameters specified in this struct
         fn build(self) -> StringViewArray {
-            let mut builder = StringViewBuilder::with_capacity(100).with_block_size(8192);
+            let mut builder =
+                StringViewBuilder::with_capacity(100).with_fixed_block_size(8192);
             loop {
                 for &v in self.strings.iter() {
                     builder.append_option(v);

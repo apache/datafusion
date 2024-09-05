@@ -53,6 +53,7 @@ impl CsvOptionsProto {
                 has_header: options.has_header.map_or(vec![], |v| vec![v as u8]),
                 delimiter: vec![options.delimiter],
                 quote: vec![options.quote],
+                terminator: options.terminator.map_or(vec![], |v| vec![v]),
                 escape: options.escape.map_or(vec![], |v| vec![v]),
                 double_quote: options.double_quote.map_or(vec![], |v| vec![v as u8]),
                 compression: options.compression as i32,
@@ -87,6 +88,11 @@ impl From<&CsvOptionsProto> for CsvOptions {
             },
             delimiter: proto.delimiter.first().copied().unwrap_or(b','),
             quote: proto.quote.first().copied().unwrap_or(b'"'),
+            terminator: if !proto.terminator.is_empty() {
+                Some(proto.terminator[0])
+            } else {
+                None
+            },
             escape: if !proto.escape.is_empty() {
                 Some(proto.escape[0])
             } else {

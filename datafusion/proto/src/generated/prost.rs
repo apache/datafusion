@@ -239,7 +239,7 @@ pub struct HashRepartition {
     pub partition_count: u64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct EmptyRelationNode {
     #[prost(bool, tag = "1")]
     pub produce_one_row: bool,
@@ -443,7 +443,7 @@ pub struct UnnestNode {
     pub options: ::core::option::Option<UnnestOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct UnnestOptions {
     #[prost(bool, tag = "1")]
     pub preserve_nulls: bool,
@@ -912,7 +912,7 @@ pub struct WindowFrameBound {
     pub bound_value: ::core::option::Option<super::datafusion_common::ScalarValue>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct FixedSizeBinary {
     #[prost(int32, tag = "1")]
     pub length: i32,
@@ -1474,7 +1474,7 @@ pub struct FileGroup {
     pub files: ::prost::alloc::vec::Vec<PartitionedFile>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ScanLimit {
     /// wrap into a message to make it optional
     #[prost(uint32, tag = "1")]
@@ -1721,7 +1721,7 @@ pub struct MaybePhysicalSortExprs {
     pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct AggLimit {
     /// wrap into a message to make it optional
     #[prost(uint64, tag = "1")]
@@ -1877,7 +1877,7 @@ pub struct JoinFilter {
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ColumnIndex {
     #[prost(uint32, tag = "1")]
     pub index: u32,
@@ -1903,7 +1903,7 @@ pub struct PartitionedFile {
     pub statistics: ::core::option::Option<super::datafusion_common::Statistics>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct FileRange {
     #[prost(int64, tag = "1")]
     pub start: i64,

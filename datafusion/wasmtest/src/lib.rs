@@ -98,12 +98,10 @@ mod test {
         let sql = "SELECT 2 + 2;";
 
         // Execute SQL (using datafusion)
-        let rt = Arc::new(
-            RuntimeEnvBuilder::new()
-                .with_disk_manager(DiskManagerConfig::Disabled)
-                .build()
-                .unwrap(),
-        );
+        let rt = RuntimeEnvBuilder::new()
+            .with_disk_manager(DiskManagerConfig::Disabled)
+            .build_arc()
+            .unwrap();
         let session_config = SessionConfig::new().with_target_partitions(1);
         let session_context =
             Arc::new(SessionContext::new_with_config_rt(session_config, rt));
