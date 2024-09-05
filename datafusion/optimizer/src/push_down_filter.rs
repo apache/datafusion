@@ -157,18 +157,18 @@ pub struct PushDownFilter {}
 ///     the right is not, because there may be rows in the output that don't
 ///     directly map to a row in the right input (due to nulls filling where there
 ///     is no match on the right).
-fn lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
+fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
-        JoinType::Inner => Ok((true, true)),
-        JoinType::Left => Ok((true, false)),
-        JoinType::Right => Ok((false, true)),
-        JoinType::Full => Ok((false, false)),
+        JoinType::Inner => (true, true),
+        JoinType::Left => (true, false),
+        JoinType::Right => (false, true),
+        JoinType::Full => (false, false),
         // No columns from the right side of the join can be referenced in output
         // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::LeftSemi | JoinType::LeftAnti => Ok((true, false)),
+        JoinType::LeftSemi | JoinType::LeftAnti => (true, false),
         // No columns from the left side of the join can be referenced in output
         // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::RightSemi | JoinType::RightAnti => Ok((false, true)),
+        JoinType::RightSemi | JoinType::RightAnti => (false, true),
     }
 }
 
@@ -181,15 +181,15 @@ fn lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
 /// A tuple of booleans - (left_preserved, right_preserved).
 ///
 /// See [`lr_is_preserved`] for a definition of "preserved".
-fn on_lr_is_preserved(join_type: JoinType) -> Result<(bool, bool)> {
+pub fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
-        JoinType::Inner => Ok((true, true)),
-        JoinType::Left => Ok((false, true)),
-        JoinType::Right => Ok((true, false)),
-        JoinType::Full => Ok((false, false)),
-        JoinType::LeftSemi | JoinType::RightSemi => Ok((true, true)),
-        JoinType::LeftAnti => Ok((false, true)),
-        JoinType::RightAnti => Ok((true, false)),
+        JoinType::Inner => (true, true),
+        JoinType::Left => (false, true),
+        JoinType::Right => (true, false),
+        JoinType::Full => (false, false),
+        JoinType::LeftSemi | JoinType::RightSemi => (true, true),
+        JoinType::LeftAnti => (false, true),
+        JoinType::RightAnti => (true, false),
     }
 }
 
@@ -420,7 +420,7 @@ fn push_down_all_join(
 ) -> Result<Transformed<LogicalPlan>> {
     let is_inner_join = join.join_type == JoinType::Inner;
     // Get pushable predicates from current optimizer state
-    let (left_preserved, right_preserved) = lr_is_preserved(join.join_type)?;
+    let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
 
     // The predicates can be divided to three categories:
     // 1) can push through join to its children(left or right)
@@ -457,7 +457,7 @@ fn push_down_all_join(
     }
 
     let mut on_filter_join_conditions = vec![];
-    let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type)?;
+    let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type);
 
     if !on_filter.is_empty() {
         for on in on_filter {
