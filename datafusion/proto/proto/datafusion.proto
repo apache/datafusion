@@ -693,10 +693,11 @@ message PhysicalPlanNode {
     AnalyzeExecNode analyze = 23;
     JsonSinkExecNode json_sink = 24;
     SymmetricHashJoinExecNode symmetric_hash_join = 25;
-    InterleaveExecNode  interleave = 26;
+    InterleaveExecNode interleave = 26;
     PlaceholderRowExecNode placeholder_row = 27;
     CsvSinkExecNode csv_sink = 28;
     ParquetSinkExecNode parquet_sink = 29;
+    UnnestExecNode unnest = 30;
   }
 }
 
@@ -752,6 +753,14 @@ message ParquetSinkExecNode {
   ParquetSink sink = 2;
   datafusion_common.Schema sink_schema = 3;
   PhysicalSortExprNodeCollection sort_order = 4;
+}
+
+message UnnestExecNode {
+  PhysicalPlanNode input = 1;
+  datafusion_common.Schema schema = 2;
+  repeated uint64 list_type_columns = 3;
+  repeated uint64 struct_type_columns = 4;
+  UnnestOptions options = 5;
 }
 
 message PhysicalExtensionNode {
@@ -913,6 +922,7 @@ message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
   uint32 default_filter_selectivity = 3;
+  repeated uint32 projection = 9;
 }
 
 message FileGroup {
