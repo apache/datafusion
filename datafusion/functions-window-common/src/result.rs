@@ -24,7 +24,7 @@ pub struct WindowUDFResultArgs<'a> {
     /// function.
     input_types: &'a [DataType],
     /// The display name of the user-defined window function.
-    schema_name: &'a str,
+    function_name: &'a str,
 }
 
 impl<'a> WindowUDFResultArgs<'a> {
@@ -33,17 +33,17 @@ impl<'a> WindowUDFResultArgs<'a> {
     /// # Arguments
     ///
     /// * `input_types` - The data types derived from the input
-    ///     expressions to the window function.
-    /// * `schema_name` - The formatted display name for the window
-    ///     function derived from the input schema.
+    ///     expressions to the user-defined window function.
+    /// * `function_name` - The formatted display name for the
+    ///     user-defined window function.
     ///
     /// # Returns
     ///
     /// A new [`WindowUDFResultArgs`] instance.
-    pub fn new(input_types: &'a [DataType], schema_name: &'a str) -> Self {
+    pub fn new(input_types: &'a [DataType], function_name: &'a str) -> Self {
         WindowUDFResultArgs {
             input_types,
-            schema_name,
+            function_name,
         }
     }
 
@@ -56,7 +56,7 @@ impl<'a> WindowUDFResultArgs<'a> {
     /// Returns the name for the field of the final result of evaluating
     /// the user-defined window function.
     pub fn name(&self) -> &str {
-        self.schema_name
+        self.function_name
     }
 
     /// Returns `Some(DataType)` of input expression at index, otherwise
