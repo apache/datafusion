@@ -5848,9 +5848,7 @@ Supports strings, integer and double types as input.
 Strings are parsed as YYYY-MM-DD (e.g. ‘2023-07-20’) if no <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a>s are provided.
 Integers and doubles are interpreted as days since the unix epoch (<code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00Z</span></code>).
 Returns the corresponding date.</p>
-<p>Note: <code class="docutils literal notranslate"><span class="pre">to_date</span></code> returns Date32. The supported range for integer input is between <code class="docutils literal notranslate"><span class="pre">-96465293</span></code> and <code class="docutils literal notranslate"><span class="pre">95026237</span></code>.
-Supported range for string input is between <code class="docutils literal notranslate"><span class="pre">1677-09-21</span></code> and <code class="docutils literal notranslate"><span class="pre">2262-04-11</span></code> exclusive. To parse dates outside of
-that range use a <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a>.</p>
+<p>Note: <code class="docutils literal notranslate"><span class="pre">to_date</span></code> returns Date32, which represents its values as the number of days since unix epoch(<code class="docutils literal notranslate"><span class="pre">1970-01-01</span></code>) stored as signed 32 bit value. The largest supported date value is <code class="docutils literal notranslate"><span class="pre">9999-12-31</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">to_date</span><span class="p">(</span><span class="n">expression</span><span class="p">[,</span> <span class="o">...</span><span class="p">,</span> <span class="n">format_n</span><span class="p">])</span>
 </pre></div>
 </div>
