@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::regexp_is_match;
+use crate::regexp_common::regexp_is_match_utf8;
 use crate::utils::make_scalar_function;
 
 use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, StringViewArray};
@@ -92,7 +92,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (Utf8View, Utf8View) => {
             let mod_str = args[0].as_string_view();
             let match_str = args[1].as_string_view();
-            let res = regexp_is_match::<
+            let res = regexp_is_match_utf8::<
                 StringViewArray,
                 StringViewArray,
                 GenericStringArray<i32>,
@@ -103,7 +103,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (Utf8View, Utf8) => {
             let mod_str = args[0].as_string_view();
             let match_str = args[1].as_string::<i32>();
-            let res = regexp_is_match::<
+            let res = regexp_is_match_utf8::<
                 StringViewArray,
                 GenericStringArray<i32>,
                 GenericStringArray<i32>,
@@ -114,7 +114,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (Utf8View, LargeUtf8) => {
             let mod_str = args[0].as_string_view();
             let match_str = args[1].as_string::<i64>();
-            let res = regexp_is_match::<
+            let res = regexp_is_match_utf8::<
                 StringViewArray,
                 GenericStringArray<i64>,
                 GenericStringArray<i32>,
@@ -125,7 +125,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (Utf8, Utf8View) => {
             let mod_str = args[0].as_string::<i32>();
             let match_str = args[1].as_string_view();
-            let res = regexp_is_match::<
+            let res = regexp_is_match_utf8::<
                 GenericStringArray<i32>,
                 StringViewArray,
                 GenericStringArray<i32>,
@@ -136,7 +136,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (Utf8, Utf8) => {
             let mod_str = args[0].as_string::<i32>();
             let match_str = args[1].as_string::<i32>();
-            let res = regexp_is_match::<
+            let res = regexp_is_match_utf8::<
                 GenericStringArray<i32>,
                 GenericStringArray<i32>,
                 GenericStringArray<i32>,
@@ -147,7 +147,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (Utf8, LargeUtf8) => {
             let mod_str = args[0].as_string::<i32>();
             let match_str = args[1].as_string::<i64>();
-            let res = regexp_is_match::<
+            let res = regexp_is_match_utf8::<
                 GenericStringArray<i32>,
                 GenericStringArray<i64>,
                 GenericStringArray<i32>,
@@ -158,7 +158,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (LargeUtf8, Utf8View) => {
             let mod_str = args[0].as_string::<i64>();
             let match_str = args[1].as_string_view();
-            let res = regexp_is_match::<
+            let res = regexp_is_match_utf8::<
                 GenericStringArray<i64>,
                 StringViewArray,
                 GenericStringArray<i32>,
@@ -169,7 +169,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (LargeUtf8, Utf8) => {
             let mod_str = args[0].as_string::<i64>();
             let match_str = args[1].as_string::<i32>();
-            let res = regexp_is_match::<
+            let res = regexp_is_match_utf8::<
                 GenericStringArray<i64>,
                 GenericStringArray<i32>,
                 GenericStringArray<i32>,
@@ -180,7 +180,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (LargeUtf8, LargeUtf8) => {
             let mod_str = args[0].as_string::<i64>();
             let match_str = args[1].as_string::<i64>();
-            let res = regexp_is_match::<
+            let res = regexp_is_match_utf8::<
                 GenericStringArray<i64>,
                 GenericStringArray<i64>,
                 GenericStringArray<i32>,
