@@ -18,6 +18,7 @@
 //! Merge that deals with an arbitrary size of streaming inputs.
 //! This is an order-preserving merge.
 
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
@@ -101,11 +102,11 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// number of rows produced
     produced: usize,
 
-    /// This vector contains partition indices in order. When a partition is polled and returns `Poll::Ready`,
+    /// This queue contains partition indices in order. When a partition is polled and returns `Poll::Ready`,
     /// it is removed from the vector. If a partition returns `Poll::Pending`, it is moved to the end of the
     /// vector to ensure the next iteration starts with a different partition, preventing the same partition
     /// from being continuously polled.
-    uninitiated_partitions: Vec<usize>,
+    uninitiated_partitions: VecDeque<usize>,
 }
 
 impl<C: CursorValues> SortPreservingMergeStream<C> {
@@ -179,7 +180,10 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                         // If a partition returns Poll::Pending, to avoid continuously polling it
                         // and potentially increasing upstream buffer sizes, we move it to the
                         // back of the polling queue.
-                        self.uninitiated_partitions.rotate_left(1);
+                        if let Some(front) = self.uninitiated_partitions.pop_front() {
+                            // This pop_front can never return `None`.
+                            self.uninitiated_partitions.push_back(front);
+                        }
                         // This function could remain in a pending state, so we manually wake it here.
                         // However, this approach can be investigated further to find a more natural way
                         // to avoid disrupting the runtime scheduler.
