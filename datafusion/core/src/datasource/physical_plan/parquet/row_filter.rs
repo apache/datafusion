@@ -404,8 +404,8 @@ fn pushdown_columns(
 
 /// creates a PushdownChecker for a single use to check a given column with the given schemes. Used
 /// to check preemptively if a column name would prevent pushdowning.
-/// effectively does that [`non_pushdown_columns`] does, but with a single given column (instead of
-/// traversing the entire tree to determine this)
+/// effectively does the inverse of [`pushdown_columns`] does, but with a single given column
+/// (instead of traversing the entire tree to determine this)
 fn would_column_prevent_pushdown(
     column_name: &str,
     file_schema: &Schema,
