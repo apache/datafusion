@@ -352,10 +352,7 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         hasher.finish()
     }
 
-    /// The field of the final result of evaluating this window function.
-    ///
-    /// The [`WindowUDFFieldArgs`] argument allows the window UDF to customize the
-    /// field given the types of the input expressions.
+    /// The [`Field`] of the final result of evaluating this window function.
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field>;
 
     /// Allows the window UDF to define a custom result ordering.
