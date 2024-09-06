@@ -17,13 +17,13 @@
 
 use datafusion_common::arrow::datatypes::DataType;
 
-/// Contains metadata which may be useful for a user-defined window
-/// function to specify the field of the final result of evaluating the
-/// user-defined window function.
+/// Contains metadata necessary for defining the field which represents
+/// the final result of evaluating a user-defined window function.
 pub struct WindowUDFResultArgs<'a> {
-    /// The data types of input expressions.
+    /// The data types of input expressions to the user-defined window
+    /// function.
     input_types: &'a [DataType],
-    /// The display name.
+    /// The display name of the user-defined window function.
     schema_name: &'a str,
 }
 
@@ -47,20 +47,20 @@ impl<'a> WindowUDFResultArgs<'a> {
         }
     }
 
-    /// Returns the data types of input expressions to the window
-    /// function.
+    /// Returns the data type of input expressions passed as arguments
+    /// the user-defined window function.
     pub fn input_types(&self) -> &[DataType] {
         self.input_types
     }
 
-    /// Returns the name of the output field of this window function.
+    /// Returns the name for the field of the final result of evaluating
+    /// the user-defined window function.
     pub fn name(&self) -> &str {
         self.schema_name
     }
 
-    /// Returns an `Option<DataType>` containing the data type of the
-    /// input expression at the specified index. It returns `None` when
-    /// the index is out of bounds.
+    /// Returns `Some(DataType)` of input expression at index, otherwise
+    /// returns `None` if the index is out of bounds.
     pub fn get_input_type(&self, index: usize) -> Option<DataType> {
         self.input_types.get(index).cloned()
     }
