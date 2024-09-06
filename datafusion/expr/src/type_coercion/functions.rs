@@ -729,6 +729,8 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
+        // Added this new case to handle Date32 + Int64
+        (Date32, Int64) | (Int64, Date32) => Some(Date32),
         _ => None,
     }
 }
@@ -922,6 +924,18 @@ mod tests {
         assert_eq!(
             coerced_from(&type_into, &type_from),
             Some(type_into.clone())
+        );
+    }
+
+    #[test]
+    fn test_date32_int64_coercion() {
+        assert_eq!(
+            coerced_from(&DataType::Date32, &DataType::Int64),
+            Some(DataType::Date32)
+        );
+        assert_eq!(
+            coerced_from(&DataType::Int64, &DataType::Date32),
+            Some(DataType::Date32)
         );
     }
 }
