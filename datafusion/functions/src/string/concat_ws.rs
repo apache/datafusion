@@ -21,16 +21,16 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 
+use crate::string::common::*;
+use crate::string::concat::simplify_concat;
+use crate::string::concat_ws;
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::TypeSignature::Variadic;
 use datafusion_expr::{lit, ColumnarValue, Expr, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-
-use crate::string::common::*;
-use crate::string::concat::simplify_concat;
-use crate::string::concat_ws;
 
 #[derive(Debug)]
 pub struct ConcatWsFunc {
@@ -45,8 +45,16 @@ impl Default for ConcatWsFunc {
 
 impl ConcatWsFunc {
     pub fn new() -> Self {
+        use DataType::*;
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    Variadic(vec![Utf8View]),
+                    Variadic(vec![Utf8, LargeUtf8]),
+                    Variadic(vec![Utf8View, Utf8, LargeUtf8]),
+                ],
+                Volatility::Volatile,
+            ),
         }
     }
 }
@@ -353,7 +361,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
 fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyResult> {
     match delimiter {
         Expr::Literal(
-            ScalarValue::Utf8(delimiter) | ScalarValue::LargeUtf8(delimiter),
+            ScalarValue::Utf8(delimiter) | ScalarValue::LargeUtf8(delimiter) | ScalarValue::Utf8View(delimiter),
         ) => {
             match delimiter {
                 // when the delimiter is an empty string,
@@ -366,8 +374,8 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                     for arg in args {
                         match arg {
                             // filter out null args
-                            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None)) => {}
-                            Expr::Literal(ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v))) => {
+                            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None)) => {}
+                            Expr::Literal(ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) | ScalarValue::Utf8View(Some(v))) => {
                                 match contiguous_scalar {
                                     None => contiguous_scalar = Some(v.to_string()),
                                     Some(mut pre) => {
