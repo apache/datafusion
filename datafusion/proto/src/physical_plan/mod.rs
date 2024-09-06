@@ -468,7 +468,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let physical_aggr_expr: Vec<Arc<AggregateFunctionExpr>> = hash_agg
+                let physical_aggr_expr: Vec<AggregateFunctionExpr> = hash_agg
                     .aggr_expr
                     .iter()
                     .zip(hash_agg.aggr_expr_name.iter())

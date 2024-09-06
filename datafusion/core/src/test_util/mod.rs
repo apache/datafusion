@@ -427,7 +427,7 @@ impl TestAggregate {
     }
 
     /// Return appropriate expr depending if COUNT is for col or table (*)
-    pub fn count_expr(&self, schema: &Schema) -> Arc<AggregateFunctionExpr> {
+    pub fn count_expr(&self, schema: &Schema) -> AggregateFunctionExpr {
         AggregateExprBuilder::new(count_udaf(), vec![self.column()])
             .schema(Arc::new(schema.clone()))
             .alias(self.column_name())
