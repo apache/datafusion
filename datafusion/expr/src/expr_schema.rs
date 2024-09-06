@@ -367,9 +367,8 @@ impl ExprSchemable for Expr {
                     let function_name = self.schema_name().to_string();
                     let field_args =
                         WindowUDFFieldArgs::new(&input_types, &function_name);
-                    let field = udwf.field(field_args)?;
 
-                    Ok(field.is_nullable())
+                    udwf.field(field_args).map(|field| field.is_nullable())
                 }
             },
             Expr::ScalarVariable(_, _)
