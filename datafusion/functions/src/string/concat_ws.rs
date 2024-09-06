@@ -48,7 +48,7 @@ impl ConcatWsFunc {
         Self {
             signature: Signature::variadic(
                 vec![Utf8View, Utf8, LargeUtf8],
-                Volatility::Immutable
+                Volatility::Immutable,
             ),
         }
     }
@@ -356,7 +356,9 @@ impl ScalarUDFImpl for ConcatWsFunc {
 fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyResult> {
     match delimiter {
         Expr::Literal(
-            ScalarValue::Utf8(delimiter) | ScalarValue::LargeUtf8(delimiter) | ScalarValue::Utf8View(delimiter),
+            ScalarValue::Utf8(delimiter)
+            | ScalarValue::LargeUtf8(delimiter)
+            | ScalarValue::Utf8View(delimiter),
         ) => {
             match delimiter {
                 // when the delimiter is an empty string,
