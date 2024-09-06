@@ -30,19 +30,33 @@ use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValu
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ReversedUDAF, Signature, Volatility,
+    lit, Accumulator, AggregateUDFImpl, ExprFunctionExt, ReversedUDAF, Signature,
+    SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
-make_udaf_expr_and_func!(
-    NthValueAgg,
-    nth_value,
-    "Returns the nth value in a group of values.",
-    nth_value_udaf
-);
+create_func!(NthValueAgg, nth_value_udaf);
+
+/// Returns the nth value in a group of values.
+pub fn nth_value(
+    expr: datafusion_expr::Expr,
+    n: i64,
+    order_by: Vec<SortExpr>,
+) -> datafusion_expr::Expr {
+    let args = vec![expr, lit(n)];
+    if !order_by.is_empty() {
+        nth_value_udaf()
+            .call(args)
+            .order_by(order_by)
+            .build()
+            .unwrap()
+    } else {
+        nth_value_udaf().call(args)
+    }
+}
 
 /// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
@@ -374,11 +388,8 @@ impl NthValueAccumulator {
             column_wise_ordering_values.push(array);
         }
 
-        let ordering_array = StructArray::try_new(
-            struct_field.clone(),
-            column_wise_ordering_values,
-            None,
-        )?;
+        let ordering_array =
+            StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
 
         Ok(ScalarValue::List(Arc::new(array_into_list_array_nullable(
             Arc::new(ordering_array),

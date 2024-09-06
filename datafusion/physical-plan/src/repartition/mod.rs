@@ -41,7 +41,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 use arrow::array::ArrayRef;
 use arrow::datatypes::{SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
-use arrow_array::PrimitiveArray;
+use arrow_array::{PrimitiveArray, RecordBatchOptions};
 use datafusion_common::utils::transpose;
 use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
@@ -309,8 +309,14 @@ impl BatchPartitioner {
                                 })
                                 .collect::<Result<Vec<ArrayRef>>>()?;
 
-                            let batch =
-                                RecordBatch::try_new(batch.schema(), columns).unwrap();
+                            let mut options = RecordBatchOptions::new();
+                            options = options.with_row_count(Some(indices.len()));
+                            let batch = RecordBatch::try_new_with_options(
+                                batch.schema(),
+                                columns,
+                                &options,
+                            )
+                            .unwrap();
 
                             Ok((partition, batch))
                         });
@@ -1025,7 +1031,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::{assert_batches_sorted_eq, exec_err};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
     use tokio::task::JoinSet;
 
@@ -1506,9 +1512,9 @@ mod tests {
         let partitioning = Partitioning::RoundRobinBatch(4);
 
         // setup up context
-        let runtime = Arc::new(
-            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(1, 1.0)).unwrap(),
-        );
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
 
         let task_ctx = TaskContext::default().with_runtime(runtime);
         let task_ctx = Arc::new(task_ctx);

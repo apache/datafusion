@@ -48,7 +48,6 @@ impl TreeNode for Expr {
             | Expr::Negative(expr)
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
-            | Expr::Sort(Sort { expr, .. })
             | Expr::InSubquery(InSubquery{ expr, .. }) => vec![expr.as_ref()],
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.iter().collect(),
@@ -98,7 +97,7 @@ impl TreeNode for Expr {
                     expr_vec.push(f.as_ref());
                 }
                 if let Some(order_by) = order_by {
-                    expr_vec.extend(order_by);
+                    expr_vec.extend(order_by.iter().map(|sort| &sort.expr));
                 }
                 expr_vec
             }
@@ -110,7 +109,7 @@ impl TreeNode for Expr {
             }) => {
                 let mut expr_vec = args.iter().collect::<Vec<_>>();
                 expr_vec.extend(partition_by);
-                expr_vec.extend(order_by);
+                expr_vec.extend(order_by.iter().map(|sort| &sort.expr));
                 expr_vec
             }
             Expr::InList(InList { expr, list, .. }) => {
@@ -265,12 +264,6 @@ impl TreeNode for Expr {
                 .update_data(|be| Expr::Cast(Cast::new(be, data_type))),
             Expr::TryCast(TryCast { expr, data_type }) => transform_box(expr, &mut f)?
                 .update_data(|be| Expr::TryCast(TryCast::new(be, data_type))),
-            Expr::Sort(Sort {
-                expr,
-                asc,
-                nulls_first,
-            }) => transform_box(expr, &mut f)?
-                .update_data(|be| Expr::Sort(Sort::new(be, asc, nulls_first))),
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 transform_vec(args, &mut f)?.map_data(|new_args| {
                     Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
@@ -290,7 +283,7 @@ impl TreeNode for Expr {
                 partition_by,
                 transform_vec(partition_by, &mut f),
                 order_by,
-                transform_vec(order_by, &mut f)
+                transform_sort_vec(order_by, &mut f)
             )?
             .update_data(|(new_args, new_partition_by, new_order_by)| {
                 Expr::WindowFunction(WindowFunction::new(fun, new_args))
@@ -313,7 +306,7 @@ impl TreeNode for Expr {
                 filter,
                 transform_option_box(filter, &mut f),
                 order_by,
-                transform_option_vec(order_by, &mut f)
+                transform_sort_option_vec(order_by, &mut f)
             )?
             .map_data(|(new_args, new_filter, new_order_by)| {
                 Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
@@ -385,4 +378,42 @@ fn transform_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     f: &mut F,
 ) -> Result<Transformed<Vec<Expr>>> {
     ve.into_iter().map_until_stop_and_collect(f)
+}
+
+pub fn transform_sort_option_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+    sorts_option: Option<Vec<Sort>>,
+    f: &mut F,
+) -> Result<Transformed<Option<Vec<Sort>>>> {
+    sorts_option.map_or(Ok(Transformed::no(None)), |sorts| {
+        Ok(transform_sort_vec(sorts, f)?.update_data(Some))
+    })
+}
+
+pub fn transform_sort_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+    sorts: Vec<Sort>,
+    mut f: &mut F,
+) -> Result<Transformed<Vec<Sort>>> {
+    Ok(sorts
+        .iter()
+        .map(|sort| sort.expr.clone())
+        .map_until_stop_and_collect(&mut f)?
+        .update_data(|transformed_exprs| {
+            replace_sort_expressions(sorts, transformed_exprs)
+        }))
+}
+
+pub fn replace_sort_expressions(sorts: Vec<Sort>, new_expr: Vec<Expr>) -> Vec<Sort> {
+    assert_eq!(sorts.len(), new_expr.len());
+    sorts
+        .into_iter()
+        .zip(new_expr)
+        .map(|(sort, expr)| replace_sort_expression(sort, expr))
+        .collect()
+}
+
+pub fn replace_sort_expression(sort: Sort, new_expr: Expr) -> Sort {
+    Sort {
+        expr: new_expr,
+        ..sort
+    }
 }

@@ -37,7 +37,6 @@ use datafusion_expr::{
     LogicalPlan, LogicalPlanBuilder, Operator,
 };
 
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use log::debug;
 
 /// Optimizer rule for rewriting predicate(IN/EXISTS) subquery to left semi/anti joins
@@ -55,8 +54,10 @@ impl DecorrelatePredicateSubquery {
         mut subquery: Subquery,
         config: &dyn OptimizerConfig,
     ) -> Result<Subquery> {
-        subquery.subquery =
-            Arc::new(self.rewrite(unwrap_arc(subquery.subquery), config)?.data);
+        subquery.subquery = Arc::new(
+            self.rewrite(Arc::unwrap_or_clone(subquery.subquery), config)?
+                .data,
+        );
         Ok(subquery)
     }
 
@@ -164,7 +165,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
         }
 
         // iterate through all exists clauses in predicate, turning each into a join
-        let mut cur_input = unwrap_arc(input);
+        let mut cur_input = Arc::unwrap_or_clone(input);
         for subquery in subqueries {
             if let Some(plan) =
                 build_join(&subquery, &cur_input, config.alias_generator())?
@@ -248,7 +249,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
 fn build_join(
     query_info: &SubqueryInfo,
     left: &LogicalPlan,
-    alias: Arc<AliasGenerator>,
+    alias: &Arc<AliasGenerator>,
 ) -> Result<Option<LogicalPlan>> {
     let where_in_expr_opt = &query_info.where_in_expr;
     let in_predicate_opt = where_in_expr_opt

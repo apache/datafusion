@@ -20,6 +20,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan, Projection,
+    SortExpr,
 };
 use sqlparser::ast::{self, Ident, SetExpr};
 
@@ -31,7 +32,8 @@ use super::{
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
     rewrite::{
-        normalize_union_schema, rewrite_plan_for_sort_on_non_projected_fields,
+        inject_column_aliases, normalize_union_schema,
+        rewrite_plan_for_sort_on_non_projected_fields,
         subquery_alias_inner_query_and_columns,
     },
     utils::{find_agg_node_within_select, unproject_window_exprs, AggVariant},
@@ -318,7 +320,7 @@ impl Unparser<'_> {
                     return self.derive(plan, relation);
                 }
                 if let Some(query_ref) = query {
-                    query_ref.order_by(self.sort_to_sql(sort.expr.clone())?);
+                    query_ref.order_by(self.sorts_to_sql(sort.expr.clone())?);
                 } else {
                     return internal_err!(
                         "Sort operator only valid in a statement context."
@@ -361,7 +363,7 @@ impl Unparser<'_> {
                             .collect::<Result<Vec<_>>>()?;
                         if let Some(sort_expr) = &on.sort_expr {
                             if let Some(query_ref) = query {
-                                query_ref.order_by(self.sort_to_sql(sort_expr.clone())?);
+                                query_ref.order_by(self.sorts_to_sql(sort_expr.clone())?);
                             } else {
                                 return internal_err!(
                                     "Sort operator only valid in a statement context."
@@ -451,10 +453,33 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::SubqueryAlias(plan_alias) => {
-                // Handle bottom-up to allocate relation
-                let (plan, columns) = subquery_alias_inner_query_and_columns(plan_alias);
+                let (plan, mut columns) =
+                    subquery_alias_inner_query_and_columns(plan_alias);
 
-                self.select_to_sql_recursively(plan, query, select, relation)?;
+                if !columns.is_empty()
+                    && !self.dialect.supports_column_alias_in_table_alias()
+                {
+                    // if columns are returned then the plan corresponds to a projection
+                    let LogicalPlan::Projection(inner_p) = plan else {
+                        return plan_err!(
+                            "Inner projection for subquery alias is expected"
+                        );
+                    };
+
+                    // Instead of specifying column aliases as part of the outer table, inject them directly into the inner projection
+                    let rewritten_plan = inject_column_aliases(inner_p, columns);
+                    columns = vec![];
+
+                    self.select_to_sql_recursively(
+                        &rewritten_plan,
+                        query,
+                        select,
+                        relation,
+                    )?;
+                } else {
+                    self.select_to_sql_recursively(plan, query, select, relation)?;
+                }
+
                 relation.alias(Some(
                     self.new_table_alias(plan_alias.alias.table().to_string(), columns),
                 ));
@@ -525,28 +550,10 @@ impl Unparser<'_> {
         }
     }
 
-    fn sort_to_sql(&self, sort_exprs: Vec<Expr>) -> Result<Vec<ast::OrderByExpr>> {
+    fn sorts_to_sql(&self, sort_exprs: Vec<SortExpr>) -> Result<Vec<ast::OrderByExpr>> {
         sort_exprs
             .iter()
-            .map(|expr: &Expr| match expr {
-                Expr::Sort(sort_expr) => {
-                    let col = self.expr_to_sql(&sort_expr.expr)?;
-
-                    let nulls_first = if self.dialect.supports_nulls_first_in_sort() {
-                        Some(sort_expr.nulls_first)
-                    } else {
-                        None
-                    };
-
-                    Ok(ast::OrderByExpr {
-                        asc: Some(sort_expr.asc),
-                        expr: col,
-                        nulls_first,
-                        with_fill: None,
-                    })
-                }
-                _ => plan_err!("Expecting Sort expr"),
-            })
+            .map(|sort_expr| self.sort_to_sql(sort_expr))
             .collect::<Result<Vec<_>>>()
     }
 

@@ -25,7 +25,7 @@ use datafusion_expr::{col, table_scan};
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
     DefaultDialect as UnparserDefaultDialect, Dialect as UnparserDialect,
-    MySqlDialect as UnparserMySqlDialect,
+    MySqlDialect as UnparserMySqlDialect, SqliteDialect,
 };
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 
@@ -203,7 +203,7 @@ fn roundtrip_crossjoin() -> Result<()> {
     println!("plan {}", plan.display_indent());
 
     let plan_roundtrip = sql_to_rel
-        .sql_statement_to_plan(roundtrip_statement.clone())
+        .sql_statement_to_plan(roundtrip_statement)
         .unwrap();
 
     let expected = "Projection: j1.j1_id, j2.j2_string\
@@ -406,7 +406,19 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             expected: r#"SELECT c.id FROM (SELECT (CAST(j1.j1_id AS BIGINT) + 1) FROM j1 ORDER BY j1.j1_id ASC NULLS LAST LIMIT 1) AS c (id)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        }
+        },
+        TestStatementWithDialect {
+            sql: "SELECT temp_j.id2 FROM (SELECT j1_id, j1_string FROM j1) AS temp_j(id2, string2)",
+            expected: r#"SELECT temp_j.id2 FROM (SELECT j1.j1_id, j1.j1_string FROM j1) AS temp_j (id2, string2)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT temp_j.id2 FROM (SELECT j1_id, j1_string FROM j1) AS temp_j(id2, string2)",
+            expected: r#"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2`, `j1`.`j1_string` AS `string2` FROM `j1`) AS `temp_j`"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(SqliteDialect {}),
+        },
     ];
 
     for query in tests {
@@ -611,7 +623,7 @@ fn sql_round_trip(query: &str, expect: &str) {
 fn test_interval_lhs_eq() {
     sql_round_trip(
         "select interval '2 seconds' = interval '2 seconds'",
-        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' = INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+        "SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')",
     );
 }
 
@@ -619,6 +631,6 @@ fn test_interval_lhs_eq() {
 fn test_interval_lhs_lt() {
     sql_round_trip(
         "select interval '2 seconds' < interval '2 seconds'",
-        "SELECT (INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS' < INTERVAL '0 YEARS 0 MONS 0 DAYS 0 HOURS 0 MINS 2.000000000 SECS')",
+        "SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')",
     );
 }

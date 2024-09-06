@@ -31,7 +31,7 @@ use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     expr::find_df_window_func, Aggregate, BinaryExpr, Case, EmptyRelation, Expr,
-    ExprSchemable, LogicalPlan, Operator, Projection, Values,
+    ExprSchemable, LogicalPlan, Operator, Projection, SortExpr, Values,
 };
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 use url::Url;
@@ -42,7 +42,7 @@ use crate::variation_const::{
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 #[allow(deprecated)]
 use crate::variation_const::{
@@ -900,8 +900,8 @@ pub async fn from_substrait_sorts(
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
     extensions: &Extensions,
-) -> Result<Vec<Expr>> {
-    let mut sorts: Vec<Expr> = vec![];
+) -> Result<Vec<Sort>> {
+    let mut sorts: Vec<Sort> = vec![];
     for s in substrait_sorts {
         let expr =
             from_substrait_rex(ctx, s.expr.as_ref().unwrap(), input_schema, extensions)
@@ -935,11 +935,11 @@ pub async fn from_substrait_sorts(
             None => not_impl_err!("Sort without sort kind is invalid"),
         };
         let (asc, nulls_first) = asc_nullfirst.unwrap();
-        sorts.push(Expr::Sort(Sort {
-            expr: Box::new(expr),
+        sorts.push(Sort {
+            expr,
             asc,
             nulls_first,
-        }));
+        });
     }
     Ok(sorts)
 }
@@ -986,7 +986,7 @@ pub async fn from_substrait_agg_func(
     input_schema: &DFSchema,
     extensions: &Extensions,
     filter: Option<Box<Expr>>,
-    order_by: Option<Vec<Expr>>,
+    order_by: Option<Vec<SortExpr>>,
     distinct: bool,
 ) -> Result<Arc<Expr>> {
     let args =
@@ -1432,6 +1432,7 @@ fn from_substrait_type(
             r#type::Kind::Binary(binary) => match binary.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Binary),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeBinary),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::BinaryView),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1442,6 +1443,7 @@ fn from_substrait_type(
             r#type::Kind::String(string) => match string.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeUtf8),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8View),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1759,6 +1761,7 @@ fn from_substrait_literal(
         Some(LiteralType::String(s)) => match lit.type_variation_reference {
             DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8(Some(s.clone())),
             LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeUtf8(Some(s.clone())),
+            VIEW_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8View(Some(s.clone())),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
@@ -1768,6 +1771,7 @@ fn from_substrait_literal(
             LARGE_CONTAINER_TYPE_VARIATION_REF => {
                 ScalarValue::LargeBinary(Some(b.clone()))
             }
+            VIEW_CONTAINER_TYPE_VARIATION_REF => ScalarValue::BinaryView(Some(b.clone())),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
