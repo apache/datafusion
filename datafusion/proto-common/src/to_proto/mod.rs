@@ -157,7 +157,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::FixedSizeBinary(size) => Self::FixedSizeBinary(*size),
             DataType::LargeBinary => Self::LargeBinary(EmptyMessage {}),
             DataType::Utf8 => Self::Utf8(EmptyMessage {}),
-            DataType::Utf8View => Self::Utf8(EmptyMessage {}),
+            DataType::Utf8View => Self::Utf8View(EmptyMessage {}),
             DataType::LargeUtf8 => Self::LargeUtf8(EmptyMessage {}),
             DataType::List(item_type) => Self::List(Box::new(protobuf::List {
                 field_type: Some(Box::new(item_type.as_ref().try_into()?)),
