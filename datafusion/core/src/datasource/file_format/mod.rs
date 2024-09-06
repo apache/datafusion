@@ -154,7 +154,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 
 /// An enum to distinguish between different states when determining if certain filters can be
 /// pushed down to file scanning
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum FilePushdownSupport {
     /// The file format/system being asked does not support any sort of pushdown. This should be
     /// used even if the file format theoretically supports some sort of pushdown, but it's not
