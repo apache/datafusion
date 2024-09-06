@@ -351,17 +351,28 @@ pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
     ///
     /// This iterator iterates returns `Option<&str>` for each item in the array.
     fn iter(&self) -> ArrayIter<Self>;
+
+    /// Check if the array is ASCII only.
+    fn is_ascii(&self) -> bool;
 }
 
 impl<'a, T: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<T> {
     fn iter(&self) -> ArrayIter<Self> {
         GenericStringArray::<T>::iter(self)
     }
+
+    fn is_ascii(&self) -> bool {
+        GenericStringArray::<T>::is_ascii(self)
+    }
 }
 
 impl<'a> StringArrayType<'a> for &'a StringViewArray {
     fn iter(&self) -> ArrayIter<Self> {
         StringViewArray::iter(self)
+    }
+
+    fn is_ascii(&self) -> bool {
+        StringViewArray::is_ascii(self)
     }
 }
 
