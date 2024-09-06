@@ -35,11 +35,10 @@ use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{
-    Distribution, EquivalenceProperties, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 
 use async_trait::async_trait;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::StreamExt;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
@@ -90,7 +89,7 @@ pub struct DataSinkExec {
     /// Schema describing the structure of the output data.
     count_schema: SchemaRef,
     /// Optional required sort order for output data.
-    sort_order: Option<Vec<PhysicalSortRequirement>>,
+    sort_order: Option<LexRequirement>,
     cache: PlanProperties,
 }
 
@@ -106,7 +105,7 @@ impl DataSinkExec {
         input: Arc<dyn ExecutionPlan>,
         sink: Arc<dyn DataSink>,
         sink_schema: SchemaRef,
-        sort_order: Option<Vec<PhysicalSortRequirement>>,
+        sort_order: Option<LexRequirement>,
     ) -> Self {
         let count_schema = make_count_schema();
         let cache = Self::create_schema(&input, count_schema);
@@ -131,7 +130,7 @@ impl DataSinkExec {
     }
 
     /// Optional sort order for output data
-    pub fn sort_order(&self) -> &Option<Vec<PhysicalSortRequirement>> {
+    pub fn sort_order(&self) -> &Option<LexRequirement> {
         &self.sort_order
     }
 
@@ -189,7 +188,7 @@ impl ExecutionPlan for DataSinkExec {
         vec![Distribution::SinglePartition; self.children().len()]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         // The required input ordering is set externally (e.g. by a `ListingTable`).
         // Otherwise, there is no specific requirement (i.e. `sort_expr` is `None`).
         vec![self.sort_order.as_ref().cloned()]

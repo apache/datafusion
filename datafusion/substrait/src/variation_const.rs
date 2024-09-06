@@ -38,14 +38,21 @@
 /// The "system-preferred" variation (i.e., no variation).
 pub const DEFAULT_TYPE_VARIATION_REF: u32 = 0;
 pub const UNSIGNED_INTEGER_TYPE_VARIATION_REF: u32 = 1;
+
+#[deprecated(since = "42.0.0", note = "Use `PrecisionTimestamp(Tz)` type instead")]
 pub const TIMESTAMP_SECOND_TYPE_VARIATION_REF: u32 = 0;
+#[deprecated(since = "42.0.0", note = "Use `PrecisionTimestamp(Tz)` type instead")]
 pub const TIMESTAMP_MILLI_TYPE_VARIATION_REF: u32 = 1;
+#[deprecated(since = "42.0.0", note = "Use `PrecisionTimestamp(Tz)` type instead")]
 pub const TIMESTAMP_MICRO_TYPE_VARIATION_REF: u32 = 2;
+#[deprecated(since = "42.0.0", note = "Use `PrecisionTimestamp(Tz)` type instead")]
 pub const TIMESTAMP_NANO_TYPE_VARIATION_REF: u32 = 3;
+
 pub const DATE_32_TYPE_VARIATION_REF: u32 = 0;
 pub const DATE_64_TYPE_VARIATION_REF: u32 = 1;
 pub const DEFAULT_CONTAINER_TYPE_VARIATION_REF: u32 = 0;
 pub const LARGE_CONTAINER_TYPE_VARIATION_REF: u32 = 1;
+pub const VIEW_CONTAINER_TYPE_VARIATION_REF: u32 = 2;
 pub const DECIMAL_128_TYPE_VARIATION_REF: u32 = 0;
 pub const DECIMAL_256_TYPE_VARIATION_REF: u32 = 1;
 

@@ -34,11 +34,10 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, functions, udf, AggregateExpr, Distribution, Partitioning, PhysicalExpr,
+    expressions, functions, udf, Distribution, Partitioning, PhysicalExpr,
 };
-use datafusion_physical_expr::{
-    EquivalenceProperties, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
@@ -125,7 +124,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// NOTE that checking `!is_empty()` does **not** check for a
     /// required input ordering. Instead, the correct check is that at
     /// least one entry must be `Some`
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![None; self.children().len()]
     }
 
@@ -503,24 +502,43 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
     }
 }
 
-/// Describes the execution mode of an operator's resulting stream with respect
-/// to its size and behavior. There are three possible execution modes: `Bounded`,
-/// `Unbounded` and `PipelineBreaking`.
+/// Describes the execution mode of the result of calling
+/// [`ExecutionPlan::execute`] with respect to its size and behavior.
+///
+/// The mode of the execution plan is determined by the mode of its input
+/// execution plans and the details of the operator itself. For example, a
+/// `FilterExec` operator will have the same execution mode as its input, but a
+/// `SortExec` operator may have a different execution mode than its input,
+/// depending on how the input stream is sorted.
+///
+/// There are three possible execution modes: `Bounded`, `Unbounded` and
+/// `PipelineBreaking`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ExecutionMode {
-    /// Represents the mode where generated stream is bounded, e.g. finite.
-    Bounded,
-    /// Represents the mode where generated stream is unbounded, e.g. infinite.
-    /// Even though the operator generates an unbounded stream of results, it
-    /// works with bounded memory and execution can still continue successfully.
+    /// The stream is bounded / finite.
     ///
-    /// The stream that results from calling `execute` on an `ExecutionPlan` that is `Unbounded`
-    /// will never be done (return `None`), except in case of error.
+    /// In this case the stream will eventually return `None` to indicate that
+    /// there are no more records to process.
+    Bounded,
+    /// The stream is unbounded / infinite.
+    ///
+    /// In this case, the stream will never be done (never return `None`),
+    /// except in case of error.
+    ///
+    /// This mode is often used in "Steaming" use cases where data is
+    /// incrementally processed as it arrives.
+    ///
+    /// Note that even though the operator generates an unbounded stream of
+    /// results, it can execute with bounded memory and incrementally produces
+    /// output.
     Unbounded,
-    /// Represents the mode where some of the operator's input stream(s) are
-    /// unbounded; however, the operator cannot generate streaming results from
-    /// these streaming inputs. In this case, the execution mode will be pipeline
-    /// breaking, e.g. the operator requires unbounded memory to generate results.
+    /// Some of the operator's input stream(s) are unbounded, but the operator
+    /// cannot generate streaming results from these streaming inputs.
+    ///
+    /// In this case, the execution mode will be pipeline breaking, e.g. the
+    /// operator requires unbounded memory to generate results. This
+    /// information is used by the planner when performing sanity checks
+    /// on plans processings unbounded data sources.
     PipelineBreaking,
 }
 
@@ -733,7 +751,7 @@ pub fn execute_stream(
     match plan.output_partitioning().partition_count() {
         0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))),
         1 => plan.execute(0, context),
-        _ => {
+        2.. => {
             // merge into a single partition
             let plan = CoalescePartitionsExec::new(Arc::clone(&plan));
             // CoalescePartitionsExec must produce a single partition

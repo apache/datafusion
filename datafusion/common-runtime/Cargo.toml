@@ -36,4 +36,8 @@ name = "datafusion_common_runtime"
 path = "src/lib.rs"
 
 [dependencies]
+log = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1.36", features = ["rt", "rt-multi-thread", "time"] }

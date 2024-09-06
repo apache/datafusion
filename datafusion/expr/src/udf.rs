@@ -205,6 +205,10 @@ impl ScalarUDF {
         self.inner.invoke(args)
     }
 
+    pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
+        self.inner.is_nullable(args, schema)
+    }
+
     /// Invoke the function without `args` but number of rows, returning the appropriate result.
     ///
     /// See [`ScalarUDFImpl::invoke_no_args`] for more details.
@@ -342,6 +346,9 @@ where
 /// let expr = add_one.call(vec![col("a")]);
 /// ```
 pub trait ScalarUDFImpl: Debug + Send + Sync {
+    // Note: When adding any methods (with default implementations), remember to add them also
+    // into the AliasedScalarUDFImpl below!
+
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -414,6 +421,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         arg_types: &[DataType],
     ) -> Result<DataType> {
         self.return_type(arg_types)
+    }
+
+    fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
+        true
     }
 
     /// Invoke the function on `args`, returning the appropriate result
@@ -624,6 +635,14 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.name()
     }
 
+    fn display_name(&self, args: &[Expr]) -> Result<String> {
+        self.inner.display_name(args)
+    }
+
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        self.inner.schema_name(args)
+    }
+
     fn signature(&self) -> &Signature {
         self.inner.signature()
     }
@@ -632,12 +651,57 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.return_type(arg_types)
     }
 
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
+    fn return_type_from_exprs(
+        &self,
+        args: &[Expr],
+        schema: &dyn ExprSchema,
+        arg_types: &[DataType],
+    ) -> Result<DataType> {
+        self.inner.return_type_from_exprs(args, schema, arg_types)
+    }
+
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         self.inner.invoke(args)
     }
 
-    fn aliases(&self) -> &[String] {
-        &self.aliases
+    fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
+        self.inner.invoke_no_args(number_rows)
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        self.inner.simplify(args, info)
+    }
+
+    fn short_circuits(&self) -> bool {
+        self.inner.short_circuits()
+    }
+
+    fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
+        self.inner.evaluate_bounds(input)
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        self.inner.propagate_constraints(interval, inputs)
+    }
+
+    fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
+        self.inner.output_ordering(inputs)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_types(arg_types)
     }
 
     fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {

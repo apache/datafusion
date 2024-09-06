@@ -490,7 +490,6 @@
 //! [`PhysicalOptimizerRule`]: datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule
 //! [`Schema`]: arrow::datatypes::Schema
 //! [`PhysicalExpr`]: physical_plan::PhysicalExpr
-//! [`AggregateExpr`]: physical_plan::AggregateExpr
 //! [`RecordBatch`]: arrow::record_batch::RecordBatch
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
@@ -510,7 +509,6 @@ pub mod physical_optimizer;
 pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
-pub mod variable;
 
 // re-export dependencies from arrow-rs to minimize version maintenance for crate users
 pub use arrow;
@@ -554,11 +552,6 @@ pub mod optimizer {
 /// re-export of [`datafusion_physical_expr`] crate
 pub mod physical_expr_common {
     pub use datafusion_physical_expr_common::*;
-}
-
-/// re-export of [`datafusion_physical_expr_functions_aggregate`] crate
-pub mod physical_expr_functions_aggregate {
-    pub use datafusion_physical_expr_functions_aggregate::*;
 }
 
 /// re-export of [`datafusion_physical_expr`] crate
@@ -606,6 +599,11 @@ pub mod functions_aggregate {
 /// re-export of [`datafusion_functions_window`] crate
 pub mod functions_window {
     pub use datafusion_functions_window::*;
+}
+
+/// re-export of variable provider for `@name` and `@@name` style runtime values.
+pub mod variable {
+    pub use datafusion_expr::var_provider::{VarProvider, VarType};
 }
 
 #[cfg(test)]
@@ -676,6 +674,12 @@ doc_comment::doctest!(
 doc_comment::doctest!(
     "../../../docs/source/library-user-guide/using-the-sql-api.md",
     library_user_guide_sql_api
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/building-logical-plans.md",
+    library_user_guide_logical_plans
 );
 
 #[cfg(doctest)]

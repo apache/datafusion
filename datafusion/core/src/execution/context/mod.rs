@@ -128,6 +128,9 @@ where
 /// the state of the connection between a user and an instance of the
 /// DataFusion engine.
 ///
+/// See examples below for how to use the `SessionContext` to execute queries
+/// and how to configure the session.
+///
 /// # Overview
 ///
 /// [`SessionContext`] provides the following functionality:
@@ -200,7 +203,38 @@ where
 /// # }
 /// ```
 ///
-/// # `SessionContext`, `SessionState`, and `TaskContext`
+/// # Example: Configuring `SessionContext`
+///
+/// The `SessionContext` can be configured by creating a [`SessionState`] using
+/// [`SessionStateBuilder`]:
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use datafusion::prelude::*;
+/// # use datafusion::execution::SessionStateBuilder;
+/// # use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+/// // Configure a 4k batch size
+/// let config = SessionConfig::new() .with_batch_size(4 * 1024);
+///
+/// // configure a memory limit of 1GB with 20%  slop
+///  let runtime_env = RuntimeEnvBuilder::new()
+///     .with_memory_limit(1024 * 1024 * 1024, 0.80)
+///     .build_arc()
+///     .unwrap();
+///
+/// // Create a SessionState using the config and runtime_env
+/// let state = SessionStateBuilder::new()
+///   .with_config(config)
+///   .with_runtime_env(runtime_env)
+///   // include support for built in functions and configurations
+///   .with_default_features()
+///   .build();
+///
+/// // Create a SessionContext
+/// let ctx = SessionContext::from(state);
+/// ```
+///
+/// # Relationship between `SessionContext`, `SessionState`, and `TaskContext`
 ///
 /// The state required to optimize, and evaluate queries is
 /// broken into three levels to allow tailoring
@@ -654,7 +688,7 @@ impl SessionContext {
             column_defaults,
         } = cmd;
 
-        let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
+        let input = Arc::unwrap_or_clone(input);
         let input = self.state().optimize(&input)?;
         let table = self.table(name.clone()).await;
         match (if_not_exists, or_replace, table) {
@@ -1131,7 +1165,7 @@ impl SessionContext {
         // check schema uniqueness
         let mut batches = batches.into_iter().peekable();
         let schema = if let Some(batch) = batches.peek() {
-            batch.schema().clone()
+            batch.schema()
         } else {
             Arc::new(Schema::empty())
         };
@@ -1427,6 +1461,12 @@ impl From<&SessionContext> for TaskContext {
     }
 }
 
+impl From<SessionState> for SessionContext {
+    fn from(state: SessionState) -> Self {
+        Self::new_with_state(state)
+    }
+}
+
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
 pub trait QueryPlanner {
@@ -1583,7 +1623,7 @@ mod tests {
     use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
     use crate::execution::memory_pool::MemoryConsumer;
-    use crate::execution::runtime_env::RuntimeConfig;
+    use crate::execution::runtime_env::RuntimeEnvBuilder;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
 
@@ -1718,8 +1758,7 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let rt_cfg = RuntimeConfig::new();
-        let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")

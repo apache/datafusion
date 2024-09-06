@@ -3104,6 +3104,114 @@ fn join_on_complex_condition() {
 }
 
 #[test]
+fn lateral_constant() {
+    let sql = "SELECT * FROM j1, LATERAL (SELECT 1) AS j2";
+    let expected = "Projection: *\
+            \n  CrossJoin:\
+            \n    TableScan: j1\
+            \n    SubqueryAlias: j2\
+            \n      Subquery:\
+            \n        Projection: Int64(1)\
+            \n          EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_comma_join() {
+    let sql = "SELECT j1_string, j2_string FROM
+            j1, \
+            LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2";
+    let expected = "Projection: j1.j1_string, j2.j2_string\
+            \n  CrossJoin:\
+            \n    TableScan: j1\
+            \n    SubqueryAlias: j2\
+            \n      Subquery:\
+            \n        Projection: *\
+            \n          Filter: outer_ref(j1.j1_id) < j2.j2_id\
+            \n            TableScan: j2";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_comma_join_referencing_join_rhs() {
+    let sql = "SELECT * FROM\
+            \n  j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id),\
+            \n  LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4;";
+    let expected = "Projection: *\
+            \n  CrossJoin:\
+            \n    Inner Join:  Filter: j1.j1_id = j2.j2_id\
+            \n      TableScan: j1\
+            \n      Inner Join:  Filter: j2.j2_id = j3.j3_id - Int64(2)\
+            \n        TableScan: j2\
+            \n        TableScan: j3\
+            \n    SubqueryAlias: j4\
+            \n      Subquery:\
+            \n        Projection: *\
+            \n          Filter: j3.j3_string = outer_ref(j2.j2_string)\
+            \n            TableScan: j3";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_comma_join_with_shadowing() {
+    // The j1_id on line 3 references the (closest) j1 definition from line 2.
+    let sql = "\
+            SELECT * FROM j1, LATERAL (\
+              SELECT * FROM j1, LATERAL (\
+                SELECT * FROM j2 WHERE j1_id = j2_id\
+              ) as j2\
+            ) as j2;";
+    let expected = "Projection: *\
+            \n  CrossJoin:\
+            \n    TableScan: j1\
+            \n    SubqueryAlias: j2\
+            \n      Subquery:\
+            \n        Projection: *\
+            \n          CrossJoin:\
+            \n            TableScan: j1\
+            \n            SubqueryAlias: j2\
+            \n              Subquery:\
+            \n                Projection: *\
+            \n                  Filter: outer_ref(j1.j1_id) = j2.j2_id\
+            \n                    TableScan: j2";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_left_join() {
+    let sql = "SELECT j1_string, j2_string FROM \
+            j1 \
+            LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);";
+    let expected = "Projection: j1.j1_string, j2.j2_string\
+            \n  Left Join:  Filter: Boolean(true)\
+            \n    TableScan: j1\
+            \n    SubqueryAlias: j2\
+            \n      Subquery:\
+            \n        Projection: *\
+            \n          Filter: outer_ref(j1.j1_id) < j2.j2_id\
+            \n            TableScan: j2";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_nested_left_join() {
+    let sql = "SELECT * FROM 
+            j1, \
+            (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true))";
+    let expected = "Projection: *\
+            \n  CrossJoin:\
+            \n    TableScan: j1\
+            \n    Left Join:  Filter: Boolean(true)\
+            \n      TableScan: j2\
+            \n      SubqueryAlias: j3\
+            \n        Subquery:\
+            \n          Projection: *\
+            \n            Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id\
+            \n              TableScan: j3";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn hive_aggregate_with_filter() -> Result<()> {
     let dialect = &HiveDialect {};
     let sql = "SELECT sum(age) FILTER (WHERE age > 4) FROM person";
@@ -3705,7 +3813,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan = "Projection: Int32(10)\n  EmptyRelation";
+    let expected_plan = "Projection: Int32(10) AS $1\n  EmptyRelation";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
 
@@ -3721,7 +3829,8 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan = "Projection: Int64(1) + Int32(10)\n  EmptyRelation";
+    let expected_plan =
+        "Projection: Int64(1) + Int32(10) AS Int64(1) + $1\n  EmptyRelation";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
 
@@ -3740,7 +3849,9 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         ScalarValue::Int32(Some(10)),
         ScalarValue::Float64(Some(10.0)),
     ];
-    let expected_plan = "Projection: Int64(1) + Int32(10) + Float64(10)\n  EmptyRelation";
+    let expected_plan =
+        "Projection: Int64(1) + Int32(10) + Float64(10) AS Int64(1) + $1 + $2\
+        \n  EmptyRelation";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
 }
@@ -3955,7 +4066,7 @@ fn test_prepare_statement_insert_infer() {
                         \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
                                     CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
                                     CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
-                        \n    Values: (UInt32(1), Utf8(\"Alan\"), Utf8(\"Turing\"))";
+                        \n    Values: (UInt32(1) AS $1, Utf8(\"Alan\") AS $2, Utf8(\"Turing\") AS $3)";
     let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
@@ -4036,7 +4147,7 @@ fn test_prepare_statement_to_plan_multi_params() {
         ScalarValue::from("xyz"),
     ];
     let expected_plan =
-            "Projection: person.id, person.age, Utf8(\"xyz\")\
+            "Projection: person.id, person.age, Utf8(\"xyz\") AS $6\
         \n  Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8(\"abc\")\
         \n    TableScan: person";
 
@@ -4105,7 +4216,7 @@ fn test_prepare_statement_to_plan_value_list() {
     let expected_plan = "Projection: *\
         \n  SubqueryAlias: t\
         \n    Projection: column1 AS num, column2 AS letter\
-        \n      Values: (Int64(1), Utf8(\"a\")), (Int64(2), Utf8(\"b\"))";
+        \n      Values: (Int64(1), Utf8(\"a\") AS $1), (Int64(2), Utf8(\"b\") AS $2)";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
 }

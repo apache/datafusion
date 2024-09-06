@@ -32,7 +32,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, ExprFunctionExt,
-    Signature, TypeSignature, Volatility,
+    Signature, SortExpr, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -40,7 +40,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 create_func!(FirstValue, first_value_udaf);
 
 /// Returns the first value in a group of values.
-pub fn first_value(expression: Expr, order_by: Option<Vec<Expr>>) -> Expr {
+pub fn first_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
     if let Some(order_by) = order_by {
         first_value_udaf()
             .call(vec![expression])

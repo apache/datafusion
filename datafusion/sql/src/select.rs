@@ -31,9 +31,8 @@ use datafusion_common::UnnestOptions;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
-    normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
+    normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::utils::{
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
 };
@@ -92,6 +91,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
+
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
         // See https://github.com/apache/datafusion/issues/9162
@@ -107,7 +107,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             true,
             Some(base_plan.schema().as_ref()),
         )?;
-        let order_by_rex = normalize_cols(order_by_rex, &projected_plan)?;
+        let order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
 
         // this alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
@@ -214,7 +214,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
             LogicalPlanBuilder::from(plan)
-                .filter(having_expr_post_aggr)?
+                .having(having_expr_post_aggr)?
                 .build()?
         } else {
             plan
@@ -288,9 +288,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        let plan = self.order_by(plan, order_by_rex)?;
-
-        Ok(plan)
+        self.order_by(plan, order_by_rex)
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
@@ -362,9 +360,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .build()
             }
             LogicalPlan::Filter(mut filter) => {
-                filter.input = Arc::new(
-                    self.try_process_aggregate_unnest(unwrap_arc(filter.input))?,
-                );
+                filter.input =
+                    Arc::new(self.try_process_aggregate_unnest(Arc::unwrap_or_clone(
+                        filter.input,
+                    ))?);
                 Ok(LogicalPlan::Filter(filter))
             }
             _ => Ok(input),
@@ -402,7 +401,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         //     Projection: tab.array_col AS unnest(tab.array_col)
         //       TableScan: tab
         // ```
-        let mut intermediate_plan = unwrap_arc(input);
+        let mut intermediate_plan = Arc::unwrap_or_clone(input);
         let mut intermediate_select_exprs = group_expr;
 
         loop {
@@ -496,20 +495,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match from.len() {
             0 => Ok(LogicalPlanBuilder::empty(true).build()?),
             1 => {
-                let from = from.remove(0);
-                self.plan_table_with_joins(from, planner_context)
+                let input = from.remove(0);
+                self.plan_table_with_joins(input, planner_context)
             }
             _ => {
-                let mut plans = from
-                    .into_iter()
-                    .map(|t| self.plan_table_with_joins(t, planner_context));
+                let mut from = from.into_iter();
 
-                let mut left = LogicalPlanBuilder::from(plans.next().unwrap()?);
-
-                for right in plans {
-                    left = left.cross_join(right?)?;
+                let mut left = LogicalPlanBuilder::from({
+                    let input = from.next().unwrap();
+                    self.plan_table_with_joins(input, planner_context)?
+                });
+                let old_outer_from_schema = {
+                    let left_schema = Some(Arc::clone(left.schema()));
+                    planner_context.set_outer_from_schema(left_schema)
+                };
+                for input in from {
+                    // Join `input` with the current result (`left`).
+                    let right = self.plan_table_with_joins(input, planner_context)?;
+                    left = left.cross_join(right)?;
+                    // Update the outer FROM schema.
+                    let left_schema = Some(Arc::clone(left.schema()));
+                    planner_context.set_outer_from_schema(left_schema);
                 }
-                Ok(left.build()?)
+                planner_context.set_outer_from_schema(old_outer_from_schema);
+                left.build()
             }
         }
     }

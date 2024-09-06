@@ -38,8 +38,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DFSchema, Result, ScalarValue,
-    TableReference,
+    plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
@@ -228,7 +227,7 @@ use sqlparser::ast::{
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Alias),
-    /// A named reference to a qualified filed in a schema.
+    /// A named reference to a qualified field in a schema.
     Column(Column),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
@@ -290,10 +289,6 @@ pub enum Expr {
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
     TryCast(TryCast),
-    /// A sort expression, that can be used to sort values.
-    ///
-    /// See [Expr::sort] for more details
-    Sort(Sort),
     /// Represents the call of a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
     /// Calls an aggregate function with arguments, and optional
@@ -607,7 +602,7 @@ impl TryCast {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Sort {
     /// The expression to sort on
-    pub expr: Box<Expr>,
+    pub expr: Expr,
     /// The direction of the sort
     pub asc: bool,
     /// Whether to put Nulls before all other data values
@@ -616,7 +611,7 @@ pub struct Sort {
 
 impl Sort {
     /// Create a new Sort expression
-    pub fn new(expr: Box<Expr>, asc: bool, nulls_first: bool) -> Self {
+    pub fn new(expr: Expr, asc: bool, nulls_first: bool) -> Self {
         Self {
             expr,
             asc,
@@ -631,6 +626,23 @@ impl Sort {
             asc: !self.asc,
             nulls_first: !self.nulls_first,
         }
+    }
+}
+
+impl Display for Sort {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.expr)?;
+        if self.asc {
+            write!(f, " ASC")?;
+        } else {
+            write!(f, " DESC")?;
+        }
+        if self.nulls_first {
+            write!(f, " NULLS FIRST")?;
+        } else {
+            write!(f, " NULLS LAST")?;
+        }
+        Ok(())
     }
 }
 
@@ -650,7 +662,7 @@ pub struct AggregateFunction {
     /// Optional filter
     pub filter: Option<Box<Expr>>,
     /// Optional ordering
-    pub order_by: Option<Vec<Expr>>,
+    pub order_by: Option<Vec<Sort>>,
     pub null_treatment: Option<NullTreatment>,
 }
 
@@ -661,7 +673,7 @@ impl AggregateFunction {
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
-        order_by: Option<Vec<Expr>>,
+        order_by: Option<Vec<Sort>>,
         null_treatment: Option<NullTreatment>,
     ) -> Self {
         Self {
@@ -786,7 +798,7 @@ pub struct WindowFunction {
     /// List of partition by expressions
     pub partition_by: Vec<Expr>,
     /// List of order by expressions
-    pub order_by: Vec<Expr>,
+    pub order_by: Vec<Sort>,
     /// Window frame
     pub window_frame: window_frame::WindowFrame,
     /// Specifies how NULL value is treated: ignore or respect
@@ -1082,7 +1094,7 @@ impl Expr {
     /// For example, for a projection (e.g. `SELECT <expr>`) the resulting arrow
     /// [`Schema`] will have a field with this name.
     ///
-    /// Note that the resulting string is subtlety different than the `Display`
+    /// Note that the resulting string is subtlety different from the `Display`
     /// representation for certain `Expr`. Some differences:
     ///
     /// 1. [`Expr::Alias`], which shows only the alias itself
@@ -1103,7 +1115,21 @@ impl Expr {
         SchemaDisplay(self)
     }
 
+    /// Returns the qualifier and the schema name of this expression.
+    ///
+    /// Used when the expression forms the output field of a certain plan.
+    /// The result is the field's qualifier and field name in the plan's
+    /// output schema. We can use this qualified name to reference the field.
+    pub fn qualified_name(&self) -> (Option<TableReference>, String) {
+        match self {
+            Expr::Column(Column { relation, name }) => (relation.clone(), name.clone()),
+            Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
+            _ => (None, self.schema_name().to_string()),
+        }
+    }
+
     /// Returns a full and complete string representation of this expression.
+    #[deprecated(note = "use format! instead")]
     pub fn canonical_name(&self) -> String {
         format!("{self}")
     }
@@ -1141,7 +1167,6 @@ impl Expr {
             Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
             Expr::ScalarVariable(..) => "ScalarVariable",
-            Expr::Sort { .. } => "Sort",
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard { .. } => "Wildcard",
@@ -1227,14 +1252,9 @@ impl Expr {
         Expr::Like(Like::new(true, Box::new(self), Box::new(other), None, true))
     }
 
-    /// Return the name to use for the specific Expr, recursing into
-    /// `Expr::Sort` as appropriate
+    /// Return the name to use for the specific Expr
     pub fn name_for_alias(&self) -> Result<String> {
-        match self {
-            // call Expr::display_name() on a Expr::Sort will throw an error
-            Expr::Sort(Sort { expr, .. }) => expr.name_for_alias(),
-            expr => Ok(expr.schema_name().to_string()),
-        }
+        Ok(self.schema_name().to_string())
     }
 
     /// Ensure `expr` has the name as `original_name` by adding an
@@ -1250,14 +1270,7 @@ impl Expr {
 
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        match self {
-            Expr::Sort(Sort {
-                expr,
-                asc,
-                nulls_first,
-            }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
-            _ => Expr::Alias(Alias::new(self, None::<&str>, name.into())),
-        }
+        Expr::Alias(Alias::new(self, None::<&str>, name.into()))
     }
 
     /// Return `self AS name` alias expression with a specific qualifier
@@ -1266,18 +1279,7 @@ impl Expr {
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
-        match self {
-            Expr::Sort(Sort {
-                expr,
-                asc,
-                nulls_first,
-            }) => Expr::Sort(Sort::new(
-                Box::new(expr.alias_qualified(relation, name)),
-                asc,
-                nulls_first,
-            )),
-            _ => Expr::Alias(Alias::new(self, relation, name.into())),
-        }
+        Expr::Alias(Alias::new(self, relation, name.into()))
     }
 
     /// Remove an alias from an expression if one exists.
@@ -1372,14 +1374,14 @@ impl Expr {
         Expr::IsNotNull(Box::new(self))
     }
 
-    /// Create a sort expression from an existing expression.
+    /// Create a sort configuration from an existing expression.
     ///
     /// ```
     /// # use datafusion_expr::col;
     /// let sort_expr = col("foo").sort(true, true); // SORT ASC NULLS_FIRST
     /// ```
-    pub fn sort(self, asc: bool, nulls_first: bool) -> Expr {
-        Expr::Sort(Sort::new(Box::new(self), asc, nulls_first))
+    pub fn sort(self, asc: bool, nulls_first: bool) -> Sort {
+        Sort::new(self, asc, nulls_first)
     }
 
     /// Return `IsTrue(Box(self))`
@@ -1655,7 +1657,6 @@ impl Expr {
             | Expr::Wildcard { .. }
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
-            | Expr::Sort(..)
             | Expr::Placeholder(..) => false,
         }
     }
@@ -1751,14 +1752,6 @@ impl Expr {
                 data_type,
             }) => {
                 data_type.hash(hasher);
-            }
-            Expr::Sort(Sort {
-                expr: _expr,
-                asc,
-                nulls_first,
-            }) => {
-                asc.hash(hasher);
-                nulls_first.hash(hasher);
             }
             Expr::ScalarFunction(ScalarFunction { func, args: _args }) => {
                 func.hash(hasher);
@@ -1871,7 +1864,6 @@ impl<'a> Display for SchemaDisplay<'a> {
             Expr::Column(_)
             | Expr::Literal(_)
             | Expr::ScalarVariable(..)
-            | Expr::Sort(_)
             | Expr::OuterReferenceColumn(..)
             | Expr::Placeholder(_)
             | Expr::Wildcard { .. } => write!(f, "{}", self.0),
@@ -1901,7 +1893,7 @@ impl<'a> Display for SchemaDisplay<'a> {
                 };
 
                 if let Some(order_by) = order_by {
-                    write!(f, " ORDER BY [{}]", schema_name_from_exprs(order_by)?)?;
+                    write!(f, " ORDER BY [{}]", schema_name_from_sorts(order_by)?)?;
                 };
 
                 Ok(())
@@ -2107,7 +2099,7 @@ impl<'a> Display for SchemaDisplay<'a> {
                 }
 
                 if !order_by.is_empty() {
-                    write!(f, " ORDER BY [{}]", schema_name_from_exprs(order_by)?)?;
+                    write!(f, " ORDER BY [{}]", schema_name_from_sorts(order_by)?)?;
                 };
 
                 write!(f, " {window_frame}")
@@ -2139,6 +2131,24 @@ fn schema_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt
             write!(&mut s, "{sep}")?;
         }
         write!(&mut s, "{}", SchemaDisplay(e))?;
+    }
+
+    Ok(s)
+}
+
+pub fn schema_name_from_sorts(sorts: &[Sort]) -> Result<String, fmt::Error> {
+    let mut s = String::new();
+    for (i, e) in sorts.iter().enumerate() {
+        if i > 0 {
+            write!(&mut s, ", ")?;
+        }
+        let ordering = if e.asc { "ASC" } else { "DESC" };
+        let nulls_ordering = if e.nulls_first {
+            "NULLS FIRST"
+        } else {
+            "NULLS LAST"
+        };
+        write!(&mut s, "{} {} {}", e.expr, ordering, nulls_ordering)?;
     }
 
     Ok(s)
@@ -2203,22 +2213,6 @@ impl fmt::Display for Expr {
             }) => write!(f, "{expr} IN ({subquery:?})"),
             Expr::ScalarSubquery(subquery) => write!(f, "({subquery:?})"),
             Expr::BinaryExpr(expr) => write!(f, "{expr}"),
-            Expr::Sort(Sort {
-                expr,
-                asc,
-                nulls_first,
-            }) => {
-                if *asc {
-                    write!(f, "{expr} ASC")?;
-                } else {
-                    write!(f, "{expr} DESC")?;
-                }
-                if *nulls_first {
-                    write!(f, " NULLS FIRST")
-                } else {
-                    write!(f, " NULLS LAST")
-                }
-            }
             Expr::ScalarFunction(fun) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
@@ -2386,263 +2380,13 @@ fn fmt_function(
     write!(f, "{}({}{})", fun, distinct_str, args.join(", "))
 }
 
-pub fn create_function_physical_name(
-    fun: &str,
-    distinct: bool,
-    args: &[Expr],
-    order_by: Option<&Vec<Expr>>,
-) -> Result<String> {
-    let names: Vec<String> = args
-        .iter()
-        .map(|e| create_physical_name(e, false))
-        .collect::<Result<_>>()?;
-
-    let distinct_str = match distinct {
-        true => "DISTINCT ",
-        false => "",
-    };
-
-    let phys_name = format!("{}({}{})", fun, distinct_str, names.join(","));
-
-    Ok(order_by
-        .map(|order_by| format!("{} ORDER BY [{}]", phys_name, expr_vec_fmt!(order_by)))
-        .unwrap_or(phys_name))
-}
-
-pub fn physical_name(e: &Expr) -> Result<String> {
-    create_physical_name(e, true)
-}
-
-fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
-    match e {
-        Expr::Unnest(_) => {
-            internal_err!(
-                "Expr::Unnest should have been converted to LogicalPlan::Unnest"
-            )
-        }
-        Expr::Column(c) => {
-            if is_first_expr {
-                Ok(c.name.clone())
-            } else {
-                Ok(c.flat_name())
-            }
-        }
-        Expr::Alias(Alias { name, .. }) => Ok(name.clone()),
-        Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
-        Expr::Literal(value) => Ok(format!("{value:?}")),
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-            let left = create_physical_name(left, false)?;
-            let right = create_physical_name(right, false)?;
-            Ok(format!("{left} {op} {right}"))
-        }
-        Expr::Case(case) => {
-            let mut name = "CASE ".to_string();
-            if let Some(e) = &case.expr {
-                let _ = write!(name, "{} ", create_physical_name(e, false)?);
-            }
-            for (w, t) in &case.when_then_expr {
-                let _ = write!(
-                    name,
-                    "WHEN {} THEN {} ",
-                    create_physical_name(w, false)?,
-                    create_physical_name(t, false)?
-                );
-            }
-            if let Some(e) = &case.else_expr {
-                let _ = write!(name, "ELSE {} ", create_physical_name(e, false)?);
-            }
-            name += "END";
-            Ok(name)
-        }
-        Expr::Cast(Cast { expr, .. }) => {
-            // CAST does not change the expression name
-            create_physical_name(expr, false)
-        }
-        Expr::TryCast(TryCast { expr, .. }) => {
-            // CAST does not change the expression name
-            create_physical_name(expr, false)
-        }
-        Expr::Not(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("NOT {expr}"))
-        }
-        Expr::Negative(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("(- {expr})"))
-        }
-        Expr::IsNull(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS NULL"))
-        }
-        Expr::IsNotNull(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS NOT NULL"))
-        }
-        Expr::IsTrue(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS TRUE"))
-        }
-        Expr::IsFalse(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS FALSE"))
-        }
-        Expr::IsUnknown(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS UNKNOWN"))
-        }
-        Expr::IsNotTrue(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS NOT TRUE"))
-        }
-        Expr::IsNotFalse(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS NOT FALSE"))
-        }
-        Expr::IsNotUnknown(expr) => {
-            let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr} IS NOT UNKNOWN"))
-        }
-        Expr::ScalarFunction(fun) => fun.func.schema_name(&fun.args),
-        Expr::WindowFunction(WindowFunction {
-            fun,
-            args,
-            order_by,
-            ..
-        }) => {
-            create_function_physical_name(&fun.to_string(), false, args, Some(order_by))
-        }
-        Expr::AggregateFunction(AggregateFunction {
-            func,
-            distinct,
-            args,
-            filter: _,
-            order_by,
-            null_treatment: _,
-        }) => {
-            create_function_physical_name(func.name(), *distinct, args, order_by.as_ref())
-        }
-        Expr::GroupingSet(grouping_set) => match grouping_set {
-            GroupingSet::Rollup(exprs) => Ok(format!(
-                "ROLLUP ({})",
-                exprs
-                    .iter()
-                    .map(|e| create_physical_name(e, false))
-                    .collect::<Result<Vec<_>>>()?
-                    .join(", ")
-            )),
-            GroupingSet::Cube(exprs) => Ok(format!(
-                "CUBE ({})",
-                exprs
-                    .iter()
-                    .map(|e| create_physical_name(e, false))
-                    .collect::<Result<Vec<_>>>()?
-                    .join(", ")
-            )),
-            GroupingSet::GroupingSets(lists_of_exprs) => {
-                let mut strings = vec![];
-                for exprs in lists_of_exprs {
-                    let exprs_str = exprs
-                        .iter()
-                        .map(|e| create_physical_name(e, false))
-                        .collect::<Result<Vec<_>>>()?
-                        .join(", ");
-                    strings.push(format!("({exprs_str})"));
-                }
-                Ok(format!("GROUPING SETS ({})", strings.join(", ")))
-            }
-        },
-
-        Expr::InList(InList {
-            expr,
-            list,
-            negated,
-        }) => {
-            let expr = create_physical_name(expr, false)?;
-            let list = list.iter().map(|expr| create_physical_name(expr, false));
-            if *negated {
-                Ok(format!("{expr} NOT IN ({list:?})"))
-            } else {
-                Ok(format!("{expr} IN ({list:?})"))
-            }
-        }
-        Expr::Exists { .. } => {
-            not_impl_err!("EXISTS is not yet supported in the physical plan")
-        }
-        Expr::InSubquery(_) => {
-            not_impl_err!("IN subquery is not yet supported in the physical plan")
-        }
-        Expr::ScalarSubquery(_) => {
-            not_impl_err!("Scalar subqueries are not yet supported in the physical plan")
-        }
-        Expr::Between(Between {
-            expr,
-            negated,
-            low,
-            high,
-        }) => {
-            let expr = create_physical_name(expr, false)?;
-            let low = create_physical_name(low, false)?;
-            let high = create_physical_name(high, false)?;
-            if *negated {
-                Ok(format!("{expr} NOT BETWEEN {low} AND {high}"))
-            } else {
-                Ok(format!("{expr} BETWEEN {low} AND {high}"))
-            }
-        }
-        Expr::Like(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-            case_insensitive,
-        }) => {
-            let expr = create_physical_name(expr, false)?;
-            let pattern = create_physical_name(pattern, false)?;
-            let op_name = if *case_insensitive { "ILIKE" } else { "LIKE" };
-            let escape = if let Some(char) = escape_char {
-                format!("CHAR '{char}'")
-            } else {
-                "".to_string()
-            };
-            if *negated {
-                Ok(format!("{expr} NOT {op_name} {pattern}{escape}"))
-            } else {
-                Ok(format!("{expr} {op_name} {pattern}{escape}"))
-            }
-        }
-        Expr::SimilarTo(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-            case_insensitive: _,
-        }) => {
-            let expr = create_physical_name(expr, false)?;
-            let pattern = create_physical_name(pattern, false)?;
-            let escape = if let Some(char) = escape_char {
-                format!("CHAR '{char}'")
-            } else {
-                "".to_string()
-            };
-            if *negated {
-                Ok(format!("{expr} NOT SIMILAR TO {pattern}{escape}"))
-            } else {
-                Ok(format!("{expr} SIMILAR TO {pattern}{escape}"))
-            }
-        }
-        Expr::Sort { .. } => {
-            internal_err!("Create physical name does not support sort expression")
-        }
-        Expr::Wildcard { qualifier, options } => match qualifier {
-            Some(qualifier) => Ok(format!("{}.*{}", qualifier, options)),
-            None => Ok(format!("*{}", options)),
-        },
-        Expr::Placeholder(_) => {
-            internal_err!("Create physical name does not support placeholder")
-        }
-        Expr::OuterReferenceColumn(_, _) => {
-            internal_err!("Create physical name does not support OuterReferenceColumn")
-        }
+/// The name of the column (field) that this `Expr` will produce in the physical plan.
+/// The difference from [Expr::schema_name] is that top-level columns are unqualified.
+pub fn physical_name(expr: &Expr) -> Result<String> {
+    if let Expr::Column(col) = expr {
+        Ok(col.name.clone())
+    } else {
+        Ok(expr.schema_name().to_string())
     }
 }
 
@@ -2658,6 +2402,7 @@ mod test {
     use std::any::Any;
 
     #[test]
+    #[allow(deprecated)]
     fn format_case_when() -> Result<()> {
         let expr = case(col("a"))
             .when(lit(1), lit(true))
@@ -2670,6 +2415,7 @@ mod test {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),

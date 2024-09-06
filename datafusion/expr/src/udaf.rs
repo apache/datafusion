@@ -25,7 +25,7 @@ use std::vec;
 
 use arrow::datatypes::{DataType, Field};
 
-use datafusion_common::{exec_err, not_impl_err, Result};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 
 use crate::expr::AggregateFunction;
 use crate::function::{
@@ -163,6 +163,10 @@ impl AggregateUDF {
         self.inner.name()
     }
 
+    pub fn is_nullable(&self) -> bool {
+        self.inner.is_nullable()
+    }
+
     /// Returns the aliases for this function.
     pub fn aliases(&self) -> &[String] {
         self.inner.aliases()
@@ -257,6 +261,11 @@ impl AggregateUDF {
     pub fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
     }
+
+    /// See [`AggregateUDFImpl::default_value`] for more details.
+    pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        self.inner.default_value(data_type)
+    }
 }
 
 impl<F> From<F> for AggregateUDF
@@ -328,6 +337,9 @@ where
 /// let expr = geometric_mean.call(vec![col("a")]);
 /// ```
 pub trait AggregateUDFImpl: Debug + Send + Sync {
+    // Note: When adding any methods (with default implementations), remember to add them also
+    // into the AliasedAggregateUDFImpl below!
+
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
@@ -341,6 +353,16 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// What [`DataType`] will be returned by this function, given the types of
     /// the arguments
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+    /// Whether the aggregate function is nullable.
+    ///
+    /// Nullable means that that the function could return `null` for any inputs.
+    /// For example, aggregate functions like `COUNT` always return a non null value
+    /// but others like `MIN` will return `NULL` if there is nullable input.
+    /// Note that if the function is declared as *not* nullable, make sure the [`AggregateUDFImpl::default_value`] is `non-null`
+    fn is_nullable(&self) -> bool {
+        true
+    }
 
     /// Return a new [`Accumulator`] that aggregates values for a specific
     /// group during query execution.
@@ -552,6 +574,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn is_descending(&self) -> Option<bool> {
         None
     }
+
+    /// Returns default value of the function given the input is all `null`.
+    ///
+    /// Most of the aggregate function return Null if input is Null,
+    /// while `count` returns 0 if input is Null
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        ScalarValue::try_from(data_type)
+    }
 }
 
 pub enum ReversedUDAF {
@@ -608,6 +638,60 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         &self.aliases
     }
 
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        self.inner.state_fields(args)
+    }
+
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        self.inner.groups_accumulator_supported(args)
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        self.inner.create_groups_accumulator(args)
+    }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        self.inner.accumulator(args)
+    }
+
+    fn with_beneficial_ordering(
+        self: Arc<Self>,
+        beneficial_ordering: bool,
+    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        Arc::clone(&self.inner)
+            .with_beneficial_ordering(beneficial_ordering)
+            .map(|udf| {
+                udf.map(|udf| {
+                    Arc::new(AliasedAggregateUDFImpl {
+                        inner: udf,
+                        aliases: self.aliases.clone(),
+                    }) as Arc<dyn AggregateUDFImpl>
+                })
+            })
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        self.inner.order_sensitivity()
+    }
+
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        self.inner.simplify()
+    }
+
+    fn reverse_expr(&self) -> ReversedUDAF {
+        self.inner.reverse_expr()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.inner.coerce_types(arg_types)
+    }
+
     fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
         if let Some(other) = other.as_any().downcast_ref::<AliasedAggregateUDFImpl>() {
             self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
@@ -621,6 +705,10 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.hash_value().hash(hasher);
         self.aliases.hash(hasher);
         hasher.finish()
+    }
+
+    fn is_descending(&self) -> Option<bool> {
+        self.inner.is_descending()
     }
 }
 
