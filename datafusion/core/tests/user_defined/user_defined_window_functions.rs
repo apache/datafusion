@@ -35,7 +35,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     PartitionEvaluator, Signature, Volatility, WindowUDF, WindowUDFImpl,
 };
-use datafusion_functions_window_common::result::WindowUDFResultArgs;
+use datafusion_functions_window_common::result::WindowUDFFieldArgs;
 
 /// A query with a window function evaluated over the entire partition
 const UNBOUNDED_WINDOW_QUERY: &str = "SELECT x, y, val, \
@@ -567,7 +567,7 @@ impl OddCounter {
                 &self.aliases
             }
 
-            fn field(&self, field_args: WindowUDFResultArgs) -> Result<Field> {
+            fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
                 Ok(Field::new(
                     field_args.name(),
                     self.return_type.clone(),

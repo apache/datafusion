@@ -22,7 +22,7 @@ use arrow_schema::{DataType, Field};
 use datafusion::execution::context::SessionContext;
 use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion::{error::Result, execution::options::CsvReadOptions};
-use datafusion_expr::function::{WindowFunctionSimplification, WindowUDFResultArgs};
+use datafusion_expr::function::{WindowFunctionSimplification, WindowUDFFieldArgs};
 use datafusion_expr::{
     expr::WindowFunction, simplify::SimplifyInfo, Expr, PartitionEvaluator, Signature,
     Volatility, WindowUDF, WindowUDFImpl,
@@ -85,7 +85,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
         Some(Box::new(simplify))
     }
 
-    fn field(&self, field_args: WindowUDFResultArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
         Ok(Field::new(field_args.name(), DataType::Float64, true))
     }
 }

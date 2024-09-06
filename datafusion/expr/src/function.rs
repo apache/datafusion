@@ -27,7 +27,7 @@ pub use datafusion_functions_aggregate_common::accumulator::{
     AccumulatorArgs, AccumulatorFactoryFunction, StateFieldsArgs,
 };
 
-pub use datafusion_functions_window_common::result::WindowUDFResultArgs;
+pub use datafusion_functions_window_common::result::WindowUDFFieldArgs;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Hint {

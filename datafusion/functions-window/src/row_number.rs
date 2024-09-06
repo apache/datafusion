@@ -30,7 +30,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 use datafusion_functions_window_common::result;
-use result::WindowUDFResultArgs;
+use result::WindowUDFFieldArgs;
 
 /// Create a [`WindowFunction`](Expr::WindowFunction) expression for
 /// `row_number` user-defined window function.
@@ -95,7 +95,7 @@ impl WindowUDFImpl for RowNumber {
         Ok(Box::<NumRowsEvaluator>::default())
     }
 
-    fn field(&self, field_args: WindowUDFResultArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
         Ok(Field::new(field_args.name(), DataType::UInt64, false))
     }
 

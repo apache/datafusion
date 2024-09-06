@@ -31,7 +31,7 @@ use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema, Result,
     TableReference,
 };
-use datafusion_functions_window_common::result::WindowUDFResultArgs;
+use datafusion_functions_window_common::result::WindowUDFFieldArgs;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -207,7 +207,7 @@ impl ExprSchemable for Expr {
                             })?;
                         let schema_name = self.schema_name().to_string();
                         let field_args =
-                            WindowUDFResultArgs::new(&new_types, &schema_name);
+                            WindowUDFFieldArgs::new(&new_types, &schema_name);
 
                         udwf.field(field_args)
                             .map(|field| field.data_type().clone())
@@ -365,7 +365,7 @@ impl ExprSchemable for Expr {
                         .collect::<Result<Vec<_>>>()?;
                     let input_types = data_types_with_window_udf(&data_types, udwf)?;
                     let schema_name = self.schema_name().to_string();
-                    let field_args = WindowUDFResultArgs::new(&input_types, &schema_name);
+                    let field_args = WindowUDFFieldArgs::new(&input_types, &schema_name);
                     let field = udwf.field(field_args)?;
 
                     Ok(field.is_nullable())

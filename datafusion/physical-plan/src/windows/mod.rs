@@ -51,7 +51,7 @@ mod utils;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
-use datafusion_functions_window_common::result::WindowUDFResultArgs;
+use datafusion_functions_window_common::result::WindowUDFFieldArgs;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -76,7 +76,7 @@ pub fn schema_add_window_field(
         .collect::<Result<Vec<_>>>()?;
     let window_expr_return_type =
         if let WindowFunctionDefinition::WindowUDF(udwf) = window_fn {
-            let field_args = WindowUDFResultArgs::new(&data_types, fn_name);
+            let field_args = WindowUDFFieldArgs::new(&data_types, fn_name);
 
             udwf.field(field_args)
                 .map(|field| field.data_type().clone())?
@@ -369,7 +369,7 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
 
     fn field(&self) -> Result<Field> {
         self.fun
-            .field(WindowUDFResultArgs::new(&self.input_types, &self.name))
+            .field(WindowUDFFieldArgs::new(&self.input_types, &self.name))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {

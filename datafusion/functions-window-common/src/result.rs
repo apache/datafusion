@@ -19,7 +19,7 @@ use datafusion_common::arrow::datatypes::DataType;
 
 /// Contains metadata necessary for defining the field which represents
 /// the final result of evaluating a user-defined window function.
-pub struct WindowUDFResultArgs<'a> {
+pub struct WindowUDFFieldArgs<'a> {
     /// The data types of input expressions to the user-defined window
     /// function.
     input_types: &'a [DataType],
@@ -27,8 +27,8 @@ pub struct WindowUDFResultArgs<'a> {
     function_name: &'a str,
 }
 
-impl<'a> WindowUDFResultArgs<'a> {
-    /// Create an instance of [`WindowUDFResultArgs`].
+impl<'a> WindowUDFFieldArgs<'a> {
+    /// Create an instance of [`WindowUDFFieldArgs`].
     ///
     /// # Arguments
     ///
@@ -39,9 +39,9 @@ impl<'a> WindowUDFResultArgs<'a> {
     ///
     /// # Returns
     ///
-    /// A new [`WindowUDFResultArgs`] instance.
+    /// A new [`WindowUDFFieldArgs`] instance.
     pub fn new(input_types: &'a [DataType], function_name: &'a str) -> Self {
-        WindowUDFResultArgs {
+        WindowUDFFieldArgs {
             input_types,
             function_name,
         }
