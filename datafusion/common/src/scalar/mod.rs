@@ -1321,14 +1321,6 @@ impl ScalarValue {
         }
     }
 
-    /// Getter for the `DataType` of the value.
-    ///
-    /// Suggest using  [`Self::data_type`] as a more standard API
-    #[deprecated(since = "31.0.0", note = "use data_type instead")]
-    pub fn get_datatype(&self) -> DataType {
-        self.data_type()
-    }
-
     /// Calculate arithmetic negation for a scalar value
     pub fn arithmetic_negate(&self) -> Result<Self> {
         fn neg_checked_with_ctx<T: ArrowNativeTypeOp>(
