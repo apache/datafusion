@@ -480,35 +480,12 @@ impl ExprSchemable for Expr {
         &self,
         input_schema: &dyn ExprSchema,
     ) -> Result<(Option<TableReference>, Arc<Field>)> {
-        match self {
-            Expr::Column(c) => {
-                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                Ok((
-                    c.relation.clone(),
-                    Field::new(&c.name, data_type, nullable)
-                        .with_metadata(self.metadata(input_schema)?)
-                        .into(),
-                ))
-            }
-            Expr::Alias(Alias { relation, name, .. }) => {
-                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                Ok((
-                    relation.clone(),
-                    Field::new(name, data_type, nullable)
-                        .with_metadata(self.metadata(input_schema)?)
-                        .into(),
-                ))
-            }
-            _ => {
-                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                Ok((
-                    None,
-                    Field::new(self.schema_name().to_string(), data_type, nullable)
-                        .with_metadata(self.metadata(input_schema)?)
-                        .into(),
-                ))
-            }
-        }
+        let (relation, schema_name) = self.qualified_name();
+        let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+        let field = Field::new(schema_name, data_type, nullable)
+            .with_metadata(self.metadata(input_schema)?)
+            .into();
+        Ok((relation, field))
     }
 
     /// Wraps this expression in a cast to a target [arrow::datatypes::DataType].

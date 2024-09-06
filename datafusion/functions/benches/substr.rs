@@ -106,19 +106,19 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_without_count::<i32>(size, len, true, true);
         group.bench_function(
-            &format!("substr_string_view [size={}, strlen={}]", size, len),
+            format!("substr_string_view [size={}, strlen={}]", size, len),
             |b| b.iter(|| black_box(substr.invoke(&args))),
         );
 
         let args = create_args_without_count::<i32>(size, len, false, false);
         group.bench_function(
-            &format!("substr_string [size={}, strlen={}]", size, len),
+            format!("substr_string [size={}, strlen={}]", size, len),
             |b| b.iter(|| black_box(substr.invoke(&args))),
         );
 
         let args = create_args_without_count::<i64>(size, len, true, false);
         group.bench_function(
-            &format!("substr_large_string [size={}, strlen={}]", size, len),
+            format!("substr_large_string [size={}, strlen={}]", size, len),
             |b| b.iter(|| black_box(substr.invoke(&args))),
         );
 
@@ -133,7 +133,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i32>(size, len, count, true);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_string_view [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
@@ -142,7 +142,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i32>(size, len, count, false);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
@@ -151,7 +151,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i64>(size, len, count, false);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_large_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
@@ -169,7 +169,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i32>(size, len, count, true);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_string_view [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
@@ -178,7 +178,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i32>(size, len, count, false);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
@@ -187,7 +187,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i64>(size, len, count, false);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_large_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),

@@ -37,7 +37,7 @@ use crate::variation_const::{
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::common::{
@@ -1450,6 +1450,12 @@ fn to_substrait_type(
                 nullability,
             })),
         }),
+        DataType::BinaryView => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Binary(r#type::Binary {
+                type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
         DataType::Utf8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
                 type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
@@ -1459,6 +1465,12 @@ fn to_substrait_type(
         DataType::LargeUtf8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
                 type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
+        DataType::Utf8View => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::String(r#type::String {
+                type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
@@ -1902,6 +1914,10 @@ fn to_substrait_literal(
             LiteralType::Binary(b.clone()),
             LARGE_CONTAINER_TYPE_VARIATION_REF,
         ),
+        ScalarValue::BinaryView(Some(b)) => (
+            LiteralType::Binary(b.clone()),
+            VIEW_CONTAINER_TYPE_VARIATION_REF,
+        ),
         ScalarValue::FixedSizeBinary(_, Some(b)) => (
             LiteralType::FixedBinary(b.clone()),
             DEFAULT_TYPE_VARIATION_REF,
@@ -1913,6 +1929,10 @@ fn to_substrait_literal(
         ScalarValue::LargeUtf8(Some(s)) => (
             LiteralType::String(s.clone()),
             LARGE_CONTAINER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Utf8View(Some(s)) => (
+            LiteralType::String(s.clone()),
+            VIEW_CONTAINER_TYPE_VARIATION_REF,
         ),
         ScalarValue::Decimal128(v, p, s) if v.is_some() => (
             LiteralType::Decimal(Decimal {
@@ -2335,8 +2355,10 @@ mod test {
         round_trip_type(DataType::Binary)?;
         round_trip_type(DataType::FixedSizeBinary(10))?;
         round_trip_type(DataType::LargeBinary)?;
+        round_trip_type(DataType::BinaryView)?;
         round_trip_type(DataType::Utf8)?;
         round_trip_type(DataType::LargeUtf8)?;
+        round_trip_type(DataType::Utf8View)?;
         round_trip_type(DataType::Decimal128(10, 2))?;
         round_trip_type(DataType::Decimal256(30, 2))?;
 

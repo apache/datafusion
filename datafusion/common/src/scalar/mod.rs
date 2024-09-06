@@ -2800,6 +2800,13 @@ impl ScalarValue {
                 let a = array.slice(index, 1);
                 Self::Map(Arc::new(a.as_map().to_owned()))
             }
+            DataType::Union(fields, mode) => {
+                let array = as_union_array(array);
+                let ti = array.type_id(index);
+                let index = array.value_offset(index);
+                let value = ScalarValue::try_from_array(array.child(ti), index)?;
+                ScalarValue::Union(Some((ti, Box::new(value))), fields.clone(), *mode)
+            }
             other => {
                 return _not_impl_err!(
                     "Can't create a scalar from array of type \"{other:?}\""
@@ -3035,8 +3042,15 @@ impl ScalarValue {
             ScalarValue::DurationNanosecond(val) => {
                 eq_array_primitive!(array, index, DurationNanosecondArray, val)?
             }
-            ScalarValue::Union(_, _, _) => {
-                return _not_impl_err!("Union is not supported yet")
+            ScalarValue::Union(value, _, _) => {
+                let array = as_union_array(array);
+                let ti = array.type_id(index);
+                let index = array.value_offset(index);
+                if let Some((ti_v, value)) = value {
+                    ti_v == &ti && value.eq_array(array.child(ti), index)?
+                } else {
+                    array.child(ti).is_null(index)
+                }
             }
             ScalarValue::Dictionary(key_type, v) => {
                 let (values_array, values_index) = match key_type.as_ref() {
@@ -4356,7 +4370,7 @@ mod tests {
             .strip_backtrace();
         assert_eq!(
             err,
-            "Arrow error: Compute error: Overflow happened on: 2147483647 - -2147483648"
+            "Arrow error: Arithmetic overflow: Overflow happened on: 2147483647 - -2147483648"
         )
     }
 
@@ -4377,7 +4391,7 @@ mod tests {
             .sub_checked(&int_value_2)
             .unwrap_err()
             .strip_backtrace();
-        assert_eq!(err, "Arrow error: Compute error: Overflow happened on: 9223372036854775807 - -9223372036854775808")
+        assert_eq!(err, "Arrow error: Arithmetic overflow: Overflow happened on: 9223372036854775807 - -9223372036854775808")
     }
 
     #[test]
@@ -5537,6 +5551,112 @@ mod tests {
     }
 
     #[test]
+    fn test_scalar_union_sparse() {
+        let field_a = Arc::new(Field::new("A", DataType::Int32, true));
+        let field_b = Arc::new(Field::new("B", DataType::Boolean, true));
+        let field_c = Arc::new(Field::new("C", DataType::Utf8, true));
+        let fields = UnionFields::from_iter([(0, field_a), (1, field_b), (2, field_c)]);
+
+        let mut values_a = vec![None; 6];
+        values_a[0] = Some(42);
+        let mut values_b = vec![None; 6];
+        values_b[1] = Some(true);
+        let mut values_c = vec![None; 6];
+        values_c[2] = Some("foo");
+        let children: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(values_a)),
+            Arc::new(BooleanArray::from(values_b)),
+            Arc::new(StringArray::from(values_c)),
+        ];
+
+        let type_ids = ScalarBuffer::from(vec![0, 1, 2, 0, 1, 2]);
+        let array: ArrayRef = Arc::new(
+            UnionArray::try_new(fields.clone(), type_ids, None, children)
+                .expect("UnionArray"),
+        );
+
+        let expected = [
+            (0, ScalarValue::from(42)),
+            (1, ScalarValue::from(true)),
+            (2, ScalarValue::from("foo")),
+            (0, ScalarValue::Int32(None)),
+            (1, ScalarValue::Boolean(None)),
+            (2, ScalarValue::Utf8(None)),
+        ];
+
+        for (i, (ti, value)) in expected.into_iter().enumerate() {
+            let is_null = value.is_null();
+            let value = Some((ti, Box::new(value)));
+            let expected = ScalarValue::Union(value, fields.clone(), UnionMode::Sparse);
+            let actual = ScalarValue::try_from_array(&array, i).expect("try_from_array");
+
+            assert_eq!(
+                actual, expected,
+                "[{i}] {actual} was not equal to {expected}"
+            );
+
+            assert!(
+                expected.eq_array(&array, i).expect("eq_array"),
+                "[{i}] {expected}.eq_array was false"
+            );
+
+            if is_null {
+                assert!(actual.is_null(), "[{i}] {actual} was not null")
+            }
+        }
+    }
+
+    #[test]
+    fn test_scalar_union_dense() {
+        let field_a = Arc::new(Field::new("A", DataType::Int32, true));
+        let field_b = Arc::new(Field::new("B", DataType::Boolean, true));
+        let field_c = Arc::new(Field::new("C", DataType::Utf8, true));
+        let fields = UnionFields::from_iter([(0, field_a), (1, field_b), (2, field_c)]);
+        let children: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![Some(42), None])),
+            Arc::new(BooleanArray::from(vec![Some(true), None])),
+            Arc::new(StringArray::from(vec![Some("foo"), None])),
+        ];
+
+        let type_ids = ScalarBuffer::from(vec![0, 1, 2, 0, 1, 2]);
+        let offsets = ScalarBuffer::from(vec![0, 0, 0, 1, 1, 1]);
+        let array: ArrayRef = Arc::new(
+            UnionArray::try_new(fields.clone(), type_ids, Some(offsets), children)
+                .expect("UnionArray"),
+        );
+
+        let expected = [
+            (0, ScalarValue::from(42)),
+            (1, ScalarValue::from(true)),
+            (2, ScalarValue::from("foo")),
+            (0, ScalarValue::Int32(None)),
+            (1, ScalarValue::Boolean(None)),
+            (2, ScalarValue::Utf8(None)),
+        ];
+
+        for (i, (ti, value)) in expected.into_iter().enumerate() {
+            let is_null = value.is_null();
+            let value = Some((ti, Box::new(value)));
+            let expected = ScalarValue::Union(value, fields.clone(), UnionMode::Dense);
+            let actual = ScalarValue::try_from_array(&array, i).expect("try_from_array");
+
+            assert_eq!(
+                actual, expected,
+                "[{i}] {actual} was not equal to {expected}"
+            );
+
+            assert!(
+                expected.eq_array(&array, i).expect("eq_array"),
+                "[{i}] {expected}.eq_array was false"
+            );
+
+            if is_null {
+                assert!(actual.is_null(), "[{i}] {actual} was not null")
+            }
+        }
+    }
+
+    #[test]
     fn test_lists_in_struct() {
         let field_a = Arc::new(Field::new("A", DataType::Utf8, false));
         let field_primitive_list = Arc::new(Field::new(
@@ -5893,7 +6013,7 @@ mod tests {
                     let root_err = err.find_root();
                     match  root_err{
                         DataFusionError::ArrowError(
-                            ArrowError::ComputeError(_),
+                            ArrowError::ArithmeticOverflow(_),
                             _,
                         ) => {}
                         _ => return Err(err),
