@@ -69,15 +69,12 @@ impl ScalarUDFImpl for ConcatWsFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
-        let mut dt = &Null;
+        let mut dt = &Utf8;
         arg_types.iter().for_each(|data_type| {
             if data_type == &Utf8View {
                 dt = data_type;
             }
             if data_type == &LargeUtf8 && dt != &Utf8View {
-                dt = data_type;
-            }
-            if data_type == &Utf8 {
                 dt = data_type;
             }
         });
