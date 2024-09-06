@@ -41,6 +41,7 @@ use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
+use arrow::compute::kernels::numeric::{add, add_wrapping, sub, sub_wrapping, mul, mul_wrapping, div, rem};
 
 use crate::expressions::binary::kernels::concat_elements_utf8view;
 use kernels::{
@@ -657,7 +658,7 @@ impl BinaryExpr {
             .iter()
             .zip(int_array.iter())
             .map(|(date, days)| {
-                date.and_then(|d| days.map(|days| d.checked_add_days(days as i32).unwrap_or(d)))
+                date.and_then(|d| days.map(|days| d.checked_add(days as i32).unwrap_or(d)))
             })
             .collect::<Date32Array>();
         Ok(Arc::new(result) as ArrayRef)
@@ -670,15 +671,15 @@ impl BinaryExpr {
         match (left.data_type(), right.data_type()) {
             (DataType::Date32, DataType::Int64) => {
                 let result = self.evaluate_date32_int64_addition(
-                    left.into_array(batch.num_rows())?,
-                    right.into_array(batch.num_rows())?,
+                    &left.into_array(batch.num_rows())?,
+                    &right.into_array(batch.num_rows())?,
                 )?;
                 Ok(ColumnarValue::Array(result))
             }
             (DataType::Int64, DataType::Date32) => {
                 let result = self.evaluate_date32_int64_addition(
-                    right.into_array(batch.num_rows())?,
-                    left.into_array(batch.num_rows())?,
+                    &right.into_array(batch.num_rows())?,
+                    &left.into_array(batch.num_rows())?,
                 )?;
                 Ok(ColumnarValue::Array(result))
             }
