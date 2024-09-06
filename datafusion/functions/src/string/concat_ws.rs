@@ -28,7 +28,6 @@ use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::TypeSignature::Variadic;
 use datafusion_expr::{lit, ColumnarValue, Expr, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
@@ -47,13 +46,9 @@ impl ConcatWsFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Variadic(vec![Utf8View]),
-                    Variadic(vec![Utf8, LargeUtf8]),
-                    Variadic(vec![Utf8View, Utf8, LargeUtf8]),
-                ],
-                Volatility::Volatile,
+            signature: Signature::variadic(
+                vec![Utf8View, Utf8, LargeUtf8],
+                Volatility::Immutable
             ),
         }
     }
