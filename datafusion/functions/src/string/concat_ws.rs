@@ -47,8 +47,8 @@ impl ConcatWsFunc {
         use DataType::*;
         Self {
             signature: Signature::variadic(
-                vec![Utf8View, Utf8, LargeUtf8],
-                Volatility::Immutable,
+                vec![Utf8, Utf8View, LargeUtf8, Null],
+                Volatility::Volatile,
             ),
         }
     }
@@ -69,12 +69,15 @@ impl ScalarUDFImpl for ConcatWsFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
-        let mut dt = &Utf8;
+        let mut dt = &Null;
         arg_types.iter().for_each(|data_type| {
             if data_type == &Utf8View {
                 dt = data_type;
             }
             if data_type == &LargeUtf8 && dt != &Utf8View {
+                dt = data_type;
+            }
+            if data_type == &Utf8 {
                 dt = data_type;
             }
         });
@@ -85,7 +88,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
     /// Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored.
     /// concat_ws(',', 'abcde', 2, NULL, 22) = 'abcde,2,22'
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        // do not accept 0 or 1 arguments.
+        // do not accept 0 arguments.
         if args.len() < 2 {
             return exec_err!(
                 "concat_ws was called with {} arguments. It requires at least 2.",
