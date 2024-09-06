@@ -75,7 +75,7 @@ use datafusion_functions_aggregate::expr_fn::{
 };
 use datafusion_functions_aggregate::kurtosis_pop::kurtosis_pop;
 use datafusion_functions_aggregate::string_agg::string_agg;
-use datafusion_functions_window_common::result::WindowUDFFieldArgs;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,

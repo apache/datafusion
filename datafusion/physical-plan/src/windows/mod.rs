@@ -51,7 +51,7 @@ mod utils;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
-use datafusion_functions_window_common::result::WindowUDFFieldArgs;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,

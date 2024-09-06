@@ -38,7 +38,7 @@ use arrow::compute::kernels::cast_utils::{
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, Column, Result, ScalarValue, TableReference};
-use datafusion_functions_window_common::result::WindowUDFFieldArgs;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;

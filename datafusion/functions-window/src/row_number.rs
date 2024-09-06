@@ -29,8 +29,8 @@ use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
-use datafusion_functions_window_common::result;
-use result::WindowUDFFieldArgs;
+use datafusion_functions_window_common::field;
+use field::WindowUDFFieldArgs;
 
 /// Create a [`WindowFunction`](Expr::WindowFunction) expression for
 /// `row_number` user-defined window function.

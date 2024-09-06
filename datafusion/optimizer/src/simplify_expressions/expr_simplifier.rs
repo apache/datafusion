@@ -1798,7 +1798,7 @@ mod tests {
         interval_arithmetic::Interval,
         *,
     };
-    use datafusion_functions_window_common::result::WindowUDFFieldArgs;
+    use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},

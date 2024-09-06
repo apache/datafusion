@@ -35,7 +35,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     PartitionEvaluator, Signature, Volatility, WindowUDF, WindowUDFImpl,
 };
-use datafusion_functions_window_common::result::WindowUDFFieldArgs;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
 /// A query with a window function evaluated over the entire partition
 const UNBOUNDED_WINDOW_QUERY: &str = "SELECT x, y, val, \

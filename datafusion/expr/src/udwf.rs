@@ -28,7 +28,7 @@ use std::{
 use arrow::datatypes::{DataType, Field};
 
 use datafusion_common::{not_impl_err, Result};
-use datafusion_functions_window_common::result::WindowUDFFieldArgs;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
 use crate::expr::WindowFunction;
 use crate::{
@@ -227,7 +227,7 @@ where
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
-/// use datafusion_functions_window_common::result::WindowUDFFieldArgs;
+/// use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
 ///   signature: Signature

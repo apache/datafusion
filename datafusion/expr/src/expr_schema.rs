@@ -31,7 +31,7 @@ use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema, Result,
     TableReference,
 };
-use datafusion_functions_window_common::result::WindowUDFFieldArgs;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use std::collections::HashMap;
 use std::sync::Arc;
 
