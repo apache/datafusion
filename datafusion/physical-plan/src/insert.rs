@@ -254,6 +254,21 @@ impl ExecutionPlan for DataSinkExec {
     fn metrics(&self) -> Option<MetricsSet> {
         self.sink.metrics()
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = DataSinkExec::new(
+            self.input.clone(),
+            self.sink.clone(),
+            self.sink_schema.clone(),
+            self.sort_order.clone(),
+        );
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 /// Create a output record batch with a count

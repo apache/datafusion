@@ -783,6 +783,24 @@ impl ExecutionPlan for AggregateExec {
             }
         }
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = AggregateExec::try_new_with_schema(
+            self.mode,
+            self.group_by.clone(),
+            self.aggr_expr.clone(),
+            self.filter_expr.clone(),
+            self.input().clone(),
+            Arc::clone(&self.input_schema),
+            Arc::clone(&self.schema),
+        )?;
+        let new_props: PlanProperties = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 fn create_schema(

@@ -222,6 +222,21 @@ impl ExecutionPlan for NdJsonExec {
             cache: self.cache.clone(),
         }))
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let new_cache = self.cache.clone().with_node_id(_node_id);
+
+        Ok(Some(Arc::new(Self {
+            base_config: self.base_config.clone(),
+            projected_statistics: self.projected_statistics.clone(),
+            metrics: self.metrics.clone(),
+            file_compression_type: self.file_compression_type,
+            cache: new_cache,
+        })))
+    }
 }
 
 /// A [`FileOpener`] that opens a JSON file and yields a [`FileOpenFuture`]

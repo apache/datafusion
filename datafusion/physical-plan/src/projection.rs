@@ -249,6 +249,17 @@ impl ExecutionPlan for ProjectionExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan =
+            ProjectionExec::try_new(self.expr.clone(), self.input.clone())?;
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 /// If e is a direct column reference, returns the field level

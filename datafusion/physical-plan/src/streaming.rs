@@ -281,6 +281,25 @@ impl ExecutionPlan for StreamingTableExec {
             metrics: self.metrics.clone(),
         }))
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = StreamingTableExec {
+            partitions: self.partitions.clone(),
+            projection: self.projection.clone(),
+            projected_schema: Arc::clone(&self.projected_schema),
+            projected_output_ordering: self.projected_output_ordering.clone(),
+            infinite: self.infinite,
+            limit: self.limit,
+            cache: self.cache.clone(),
+            metrics: self.metrics.clone(),
+        };
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 #[cfg(test)]

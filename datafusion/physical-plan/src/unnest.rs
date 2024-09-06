@@ -180,6 +180,22 @@ impl ExecutionPlan for UnnestExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = UnnestExec::new(
+            self.input.clone(),
+            self.list_column_indices.clone(),
+            self.struct_column_indices.clone(),
+            self.schema.clone(),
+            self.options.clone(),
+        );
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 #[derive(Clone, Debug)]
