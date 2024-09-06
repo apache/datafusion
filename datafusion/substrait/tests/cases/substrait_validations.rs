@@ -98,6 +98,31 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn ensure_schema_match_subset_with_mask() -> Result<()> {
+            let proto_plan = read_json(
+                "tests/testdata/test_plans/simple_select_with_mask.substrait.json",
+            );
+            // the DataFusion schema { b, a, c, d } contains the Substrait schema { a, b, c }
+            let df_schema = vec![
+                ("b", DataType::Int32, true),
+                ("a", DataType::Int32, false),
+                ("c", DataType::Int32, false),
+                ("d", DataType::Int32, false),
+            ];
+            let ctx = generate_context_with_table("DATA", df_schema)?;
+            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+
+            assert_eq!(
+                format!("{}", plan),
+                "Projection: DATA.a, DATA.b\
+                \n  Projection: DATA.a, DATA.b\
+                \n    Projection: DATA.a, DATA.b, DATA.c\
+                \n      TableScan: DATA projection=[b, a, c]"
+            );
+            Ok(())
+        }
+
+        #[tokio::test]
         async fn ensure_schema_match_not_subset() -> Result<()> {
             let proto_plan =
                 read_json("tests/testdata/test_plans/simple_select.substrait.json");

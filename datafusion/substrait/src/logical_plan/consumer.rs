@@ -54,6 +54,7 @@ use crate::variation_const::{
 use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::dataframe::DataFrame;
+use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -277,6 +278,20 @@ pub fn extract_projection(
                             DFSchema::new_with_metadata(fields, HashMap::new())?,
                         );
                         Ok(LogicalPlan::TableScan(scan))
+                    }
+                    LogicalPlan::Projection(projection) => {
+                        // create another Projection around the Projection to handle the field masking
+                        let fields: Vec<Expr> = column_indices
+                            .into_iter()
+                            .map(|i| {
+                                let (qualifier, field) =
+                                    projection.schema.qualified_field(i);
+                                let column =
+                                    Column::new(qualifier.cloned(), field.name());
+                                Expr::Column(column)
+                            })
+                            .collect();
+                        project(LogicalPlan::Projection(projection), fields)
                     }
                     _ => plan_err!("unexpected plan for table"),
                 }
