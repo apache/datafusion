@@ -300,6 +300,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Formatter;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+    use std::task::{Context, Poll};
+    use std::time::Duration;
 
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
@@ -310,16 +315,23 @@ mod tests {
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending, make_partition};
-    use crate::{collect, common};
+    use crate::{collect, common, ExecutionMode};
 
     use arrow::array::{ArrayRef, Int32Array, StringArray, TimestampNanosecondArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{assert_batches_eq, assert_contains};
+    use arrow_schema::SchemaRef;
+    use datafusion_common::{assert_batches_eq, assert_contains, DataFusionError};
+    use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::RecordBatchStream;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-    use futures::{FutureExt, StreamExt};
+    use futures::{FutureExt, Stream, StreamExt};
+    use tokio::time::timeout;
 
     #[tokio::test]
     async fn test_merge_interleave() {
@@ -1140,5 +1152,156 @@ mod tests {
             ],
             collected.as_slice()
         );
+    }
+
+    /// It returns pending for the 2nd partition until the 3rd partition is polled. The 1st
+    /// partition is exhausted from the start, and if it is polled more than one, it panics.
+    #[derive(Debug, Clone)]
+    struct CongestedExec {
+        schema: Schema,
+        cache: PlanProperties,
+        congestion_cleared: Arc<Mutex<bool>>,
+    }
+
+    impl CongestedExec {
+        fn compute_properties(schema: SchemaRef) -> PlanProperties {
+            let columns = schema
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>)
+                .collect::<Vec<_>>();
+            let mut eq_properties = EquivalenceProperties::new(schema);
+            eq_properties.add_new_orderings(vec![columns
+                .iter()
+                .map(|expr| PhysicalSortExpr::new(expr.clone(), SortOptions::default()))
+                .collect::<Vec<_>>()]);
+            let mode = ExecutionMode::Unbounded;
+            PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3), mode)
+        }
+    }
+
+    impl ExecutionPlan for CongestedExec {
+        fn name(&self) -> &'static str {
+            Self::static_name()
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn properties(&self) -> &PlanProperties {
+            &self.cache
+        }
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+        fn execute(
+            &self,
+            partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            Ok(Box::pin(CongestedStream {
+                schema: Arc::new(self.schema.clone()),
+                none_polled_once: false,
+                congestion_cleared: self.congestion_cleared.clone(),
+                partition,
+            }))
+        }
+    }
+
+    impl DisplayAs for CongestedExec {
+        fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(f, "CongestedExec",).unwrap()
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// It returns pending for the 2nd partition until the 3rd partition is polled. The 1st
+    /// partition is exhausted from the start, and if it is polled more than once, it panics.
+    #[derive(Debug)]
+    pub struct CongestedStream {
+        schema: SchemaRef,
+        none_polled_once: bool,
+        congestion_cleared: Arc<Mutex<bool>>,
+        partition: usize,
+    }
+
+    impl Stream for CongestedStream {
+        type Item = Result<RecordBatch>;
+        fn poll_next(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            match self.partition {
+                0 => {
+                    if self.none_polled_once {
+                        panic!("Exhausted stream is polled more than one")
+                    } else {
+                        self.none_polled_once = true;
+                        Poll::Ready(None)
+                    }
+                }
+                1 => {
+                    let cleared = self.congestion_cleared.lock().unwrap();
+                    if *cleared {
+                        Poll::Ready(None)
+                    } else {
+                        Poll::Pending
+                    }
+                }
+                2 => {
+                    let mut cleared = self.congestion_cleared.lock().unwrap();
+                    *cleared = true;
+                    Poll::Ready(None)
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    impl RecordBatchStream for CongestedStream {
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.schema)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_spm_congestion() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = Schema::new(vec![Field::new("c1", DataType::UInt64, false)]);
+        let source = CongestedExec {
+            schema: schema.clone(),
+            cache: CongestedExec::compute_properties(Arc::new(schema.clone())),
+            congestion_cleared: Arc::new(Mutex::new(false)),
+        };
+        let spm = SortPreservingMergeExec::new(
+            vec![PhysicalSortExpr::new(
+                Arc::new(Column::new("c1", 0)),
+                SortOptions::default(),
+            )],
+            Arc::new(source),
+        );
+        let spm_task = SpawnedTask::spawn(collect(Arc::new(spm), task_ctx));
+
+        let result = timeout(Duration::from_secs(3), spm_task.join()).await;
+        match result {
+            Ok(Ok(Ok(_batches))) => Ok(()),
+            Ok(Ok(Err(e))) => Err(e),
+            Ok(Err(_)) => Err(DataFusionError::Execution(
+                "SortPreservingMerge task panicked or was cancelled".to_string(),
+            )),
+            Err(_) => Err(DataFusionError::Execution(
+                "SortPreservingMerge caused a deadlock".to_string(),
+            )),
+        }
     }
 }

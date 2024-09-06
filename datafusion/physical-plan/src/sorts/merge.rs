@@ -164,9 +164,10 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         if self.aborted {
             return Poll::Ready(None);
         }
-        // try to initialize the loser tree
+        // Once all partitions have set their corresponding cursors for the loser tree,
+        // we skip the following block. Until then, this function may be called multiple
+        // times and can return Poll::Pending if any partition returns Poll::Pending.
         if self.loser_tree.is_empty() {
-            // Ensure all non-exhausted streams have a cursor from which rows can be pulled
             let remaining_partitions = self.uninitiated_partitions.clone();
             for i in remaining_partitions {
                 match self.maybe_poll_stream(cx, i) {
@@ -175,11 +176,19 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                         return Poll::Ready(Some(Err(e)));
                     }
                     Poll::Pending => {
+                        // If a partition returns Poll::Pending, to avoid continuously polling it
+                        // and potentially increasing upstream buffer sizes, we move it to the
+                        // back of the polling queue.
                         self.uninitiated_partitions.rotate_left(1);
+                        // This function could remain in a pending state, so we manually wake it here.
+                        // However, this approach can be investigated further to find a more natural way
+                        // to avoid disrupting the runtime scheduler.
                         cx.waker().wake_by_ref();
                         return Poll::Pending;
                     }
                     _ => {
+                        // If the polling result is Poll::Ready(Some(batch)) or Poll::Ready(None),
+                        // we remove this partition from the queue so it is not polled again.
                         self.uninitiated_partitions.retain(|idx| *idx != i);
                     }
                 }
