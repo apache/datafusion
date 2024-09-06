@@ -205,9 +205,9 @@ impl ExprSchemable for Expr {
                                     )
                                 )
                             })?;
-                        let schema_name = self.schema_name().to_string();
+                        let function_name = self.schema_name().to_string();
                         let field_args =
-                            WindowUDFFieldArgs::new(&new_types, &schema_name);
+                            WindowUDFFieldArgs::new(&new_types, &function_name);
 
                         udwf.field(field_args)
                             .map(|field| field.data_type().clone())
@@ -364,8 +364,9 @@ impl ExprSchemable for Expr {
                         .map(|e| e.get_type(input_schema))
                         .collect::<Result<Vec<_>>>()?;
                     let input_types = data_types_with_window_udf(&data_types, udwf)?;
-                    let schema_name = self.schema_name().to_string();
-                    let field_args = WindowUDFFieldArgs::new(&input_types, &schema_name);
+                    let function_name = self.schema_name().to_string();
+                    let field_args =
+                        WindowUDFFieldArgs::new(&input_types, &function_name);
                     let field = udwf.field(field_args)?;
 
                     Ok(field.is_nullable())
