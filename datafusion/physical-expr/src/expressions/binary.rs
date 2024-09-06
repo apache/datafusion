@@ -4369,4 +4369,47 @@ mod tests {
     
         Ok(())
     }
+    #[test]
+fn test_date32_int64_addition_edge_cases() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("date", DataType::Date32, true),
+        Field::new("days", DataType::Int64, true),
+    ]);
+    let date_array = Arc::new(Date32Array::from(vec![
+        Some(0),                 // 1970-01-01
+        Some(365),               // 1971-01-01
+        Some(i32::MAX - 1),      // Maximum representable date - 1
+        Some(i32::MIN),          // Minimum representable date
+        None,
+    ]));
+    let days_array = Arc::new(Int64Array::from(vec![
+        Some(1),
+        Some(-365),
+        Some(1),
+        Some(-1),
+        None,
+    ]));
+
+    let expr = BinaryExpr::new(
+        Arc::new(Column::new("date", 0)),
+        Operator::Plus,
+        Arc::new(Column::new("days", 1)),
+    );
+
+    let result = expr.evaluate(&RecordBatch::try_new(
+        Arc::new(schema),
+        vec![date_array, days_array],
+    )?)?;
+
+    let expected = Arc::new(Date32Array::from(vec![
+        Some(1),                 // 1970-01-02
+        Some(0),                 // 1970-01-01
+        Some(i32::MAX),          // Maximum representable date
+        Some(i32::MIN + 1),      // Minimum representable date + 1
+        None,
+    ]));
+    assert_eq!(result.as_ref(), expected.as_ref());
+
+    Ok(())
+}
 }
