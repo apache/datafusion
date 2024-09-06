@@ -117,9 +117,9 @@ impl OptimizerRule for UnwrapCastInComparison {
 
         let name_preserver = NamePreserver::new(&plan);
         plan.map_expressions(|expr| {
-            let original_name = name_preserver.save(&expr)?;
-            expr.rewrite(&mut expr_rewriter)?
-                .map_data(|expr| original_name.restore(expr))
+            let original_name = name_preserver.save(&expr);
+            expr.rewrite(&mut expr_rewriter)
+                .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
         })
     }
 }
