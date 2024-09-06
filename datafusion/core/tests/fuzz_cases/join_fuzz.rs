@@ -55,33 +55,6 @@ enum JoinTestType {
     // because if existing variants both passed that means SortMergeJoin and NestedLoopJoin also passes
     HjSmj,
 }
-#[tokio::test]
-async fn test_inner_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::Inner,
-        None,
-    )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
-    .await
-}
-
-fn less_than_100_join_filter(schema1: Arc<Schema>, _schema2: Arc<Schema>) -> JoinFilter {
-    let less_than_100 = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new("a", 0)),
-        Operator::Lt,
-        Arc::new(Literal::new(ScalarValue::from(100))),
-    )) as _;
-    let column_indices = vec![ColumnIndex {
-        index: 0,
-        side: JoinSide::Left,
-    }];
-    let intermediate_schema =
-        Schema::new(vec![schema1.field_with_name("a").unwrap().to_owned()]);
-
-    JoinFilter::new(less_than_100, column_indices, intermediate_schema)
-}
 
 fn col_lt_col_filter(schema1: Arc<Schema>, schema2: Arc<Schema>) -> JoinFilter {
     let less_filter = Arc::new(BinaryExpr::new(
@@ -121,14 +94,14 @@ async fn test_inner_join_1k_filtered() {
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::Inner,
-        Some(Box::new(less_than_100_join_filter)),
+        Some(Box::new(col_lt_col_filter)),
     )
     .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
 }
 
 #[tokio::test]
-async fn test_inner_join_1k_smjoin() {
+async fn test_inner_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
@@ -157,7 +130,7 @@ async fn test_left_join_1k_filtered() {
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::Left,
-        Some(Box::new(less_than_100_join_filter)),
+        Some(Box::new(col_lt_col_filter)),
     )
     .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
@@ -174,15 +147,14 @@ async fn test_right_join_1k() {
     .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
 }
-// Add support for Right filtered joins
-#[ignore]
+
 #[tokio::test]
 async fn test_right_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::Right,
-        Some(Box::new(less_than_100_join_filter)),
+        Some(Box::new(col_lt_col_filter)),
     )
     .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
@@ -206,7 +178,7 @@ async fn test_full_join_1k_filtered() {
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::Full,
-        Some(Box::new(less_than_100_join_filter)),
+        Some(Box::new(col_lt_col_filter)),
     )
     .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
