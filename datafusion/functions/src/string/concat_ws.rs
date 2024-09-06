@@ -247,7 +247,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                             columns.push(column);
                         },
                         other => {
-                            return plan_err!("Input was {other} which is not a supported datatype for concat function")
+                            return plan_err!("Input was {other} which is not a supported datatype for concat_ws function.")
                         }
                     };
                 }
