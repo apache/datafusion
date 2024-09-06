@@ -195,6 +195,7 @@ impl Partitioning {
         }
     }
 
+    /// Calculate the output partitioning after applying the given projection.
     pub fn project(
         &self,
         projection_mapping: &ProjectionMapping,

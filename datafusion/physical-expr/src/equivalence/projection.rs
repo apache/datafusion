@@ -82,6 +82,10 @@ impl ProjectionMapping {
             .map(|map| Self { map })
     }
 
+    /// Constructs a subset mapping using the provided indices.
+    ///
+    /// This is used when the output is a subset of the input without any
+    /// other transformations. The indices are for columns in the schema.
     pub fn from_indices(indices: &[usize], schema: &SchemaRef) -> Result<Self> {
         let projection_exprs = project_index_to_exprs(indices, schema);
         ProjectionMapping::try_new(&projection_exprs, schema)

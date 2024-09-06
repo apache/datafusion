@@ -538,17 +538,17 @@ fn try_pushdown_through_union(
     Ok(Some(Arc::new(UnionExec::new(new_children))))
 }
 
-trait EmbededProjection: ExecutionPlan + Sized {
+trait EmbeddedProjection: ExecutionPlan + Sized {
     fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self>;
 }
 
-impl EmbededProjection for HashJoinExec {
+impl EmbeddedProjection for HashJoinExec {
     fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         self.with_projection(projection)
     }
 }
 
-impl EmbededProjection for FilterExec {
+impl EmbeddedProjection for FilterExec {
     fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         self.with_projection(projection)
     }
@@ -556,7 +556,7 @@ impl EmbededProjection for FilterExec {
 
 /// Some projection can't be pushed down left input or right input of hash join because filter or on need may need some columns that won't be used in later.
 /// By embed those projection to hash join, we can reduce the cost of build_batch_from_indices in hash join (build_batch_from_indices need to can compute::take() for each column) and avoid unnecessary output creation.
-fn try_embed_projection<Exec: EmbededProjection + 'static>(
+fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
     projection: &ProjectionExec,
     execution_plan: &Exec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
