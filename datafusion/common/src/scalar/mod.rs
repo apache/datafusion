@@ -3653,18 +3653,20 @@ fn fmt_list(arr: ArrayRef, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{value_formatter}")
 }
 
+/// writes a byte array to formatter. `[1, 2, 3]` ==> `"1,2,3"`
+fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
+    let mut iter = data.iter();
+    if let Some(b) = iter.next() {
+        write!(f, "{b}")?;
+    }
+    for b in iter {
+        write!(f, ",{b}")?;
+    }
+    Ok(())
+}
+
 impl fmt::Debug for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fn fmt_binary(data: &[u8], f: &mut fmt::Formatter) -> fmt::Result {
-            write!(
-                f,
-                "{}",
-                data.iter()
-                    .map(|v| format!("{v}"))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        }
         match self {
             ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({self})"),
             ScalarValue::Decimal256(_, _, _) => write!(f, "Decimal256({self})"),
@@ -3714,7 +3716,7 @@ impl fmt::Debug for ScalarValue {
                 write!(f, "FixedSizeBinary({size}, {self})")
             }
             ScalarValue::FixedSizeBinary(size, Some(b)) => {
-                write!(f, "Binary({size}, \"")?;
+                write!(f, "FixedSizeBinary({size}, \"")?;
                 fmt_binary(b.as_slice(), f)?;
                 write!(f, "\")")
             }
@@ -6659,6 +6661,8 @@ mod tests {
     fn test_binary_display() {
         let no_binary_value = ScalarValue::Binary(None);
         assert_eq!(format!("{no_binary_value}"), "NULL");
+        let single_binary_value = ScalarValue::Binary(Some(vec![42u8]));
+        assert_eq!(format!("{single_binary_value}"), "2A");
         let small_binary_value = ScalarValue::Binary(Some(vec![1u8, 2, 3]));
         assert_eq!(format!("{small_binary_value}"), "010203");
         let large_binary_value =
@@ -6690,6 +6694,60 @@ mod tests {
             Some(vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
         );
         assert_eq!(format!("{large_binary_value}"), "0102030405060708090A...");
+    }
+
+    #[test]
+    fn test_binary_debug() {
+        let no_binary_value = ScalarValue::Binary(None);
+        assert_eq!(format!("{no_binary_value:?}"), "Binary(NULL)");
+        let single_binary_value = ScalarValue::Binary(Some(vec![42u8]));
+        assert_eq!(format!("{single_binary_value:?}"), "Binary(\"42\")");
+        let small_binary_value = ScalarValue::Binary(Some(vec![1u8, 2, 3]));
+        assert_eq!(format!("{small_binary_value:?}"), "Binary(\"1,2,3\")");
+        let large_binary_value =
+            ScalarValue::Binary(Some(vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
+        assert_eq!(
+            format!("{large_binary_value:?}"),
+            "Binary(\"1,2,3,4,5,6,7,8,9,10,11\")"
+        );
+
+        let no_binary_value = ScalarValue::BinaryView(None);
+        assert_eq!(format!("{no_binary_value:?}"), "BinaryView(NULL)");
+        let small_binary_value = ScalarValue::BinaryView(Some(vec![1u8, 2, 3]));
+        assert_eq!(format!("{small_binary_value:?}"), "BinaryView(\"1,2,3\")");
+        let large_binary_value =
+            ScalarValue::BinaryView(Some(vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
+        assert_eq!(
+            format!("{large_binary_value:?}"),
+            "BinaryView(\"1,2,3,4,5,6,7,8,9,10,11\")"
+        );
+
+        let no_binary_value = ScalarValue::LargeBinary(None);
+        assert_eq!(format!("{no_binary_value:?}"), "LargeBinary(NULL)");
+        let small_binary_value = ScalarValue::LargeBinary(Some(vec![1u8, 2, 3]));
+        assert_eq!(format!("{small_binary_value:?}"), "LargeBinary(\"1,2,3\")");
+        let large_binary_value =
+            ScalarValue::LargeBinary(Some(vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
+        assert_eq!(
+            format!("{large_binary_value:?}"),
+            "LargeBinary(\"1,2,3,4,5,6,7,8,9,10,11\")"
+        );
+
+        let no_binary_value = ScalarValue::FixedSizeBinary(3, None);
+        assert_eq!(format!("{no_binary_value:?}"), "FixedSizeBinary(3, NULL)");
+        let small_binary_value = ScalarValue::FixedSizeBinary(3, Some(vec![1u8, 2, 3]));
+        assert_eq!(
+            format!("{small_binary_value:?}"),
+            "FixedSizeBinary(3, \"1,2,3\")"
+        );
+        let large_binary_value = ScalarValue::FixedSizeBinary(
+            11,
+            Some(vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+        );
+        assert_eq!(
+            format!("{large_binary_value:?}"),
+            "FixedSizeBinary(11, \"1,2,3,4,5,6,7,8,9,10,11\")"
+        );
     }
 
     #[test]
