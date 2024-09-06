@@ -715,9 +715,9 @@ impl WindowFunctionDefinition {
                 fun.return_type(input_expr_types)
             }
             WindowFunctionDefinition::WindowUDF(_) => {
-                /// To get the return data type of the result from
-                /// evaluating the user-defined window function instead
-                /// use the `WindowUDF::field` trait method.
+                // To get the return data type of the result from
+                // evaluating the user-defined window function instead
+                // use the `WindowUDF::field` trait method.
                 unreachable!()
             }
         }
