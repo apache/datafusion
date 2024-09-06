@@ -116,9 +116,17 @@ impl ScalarUDFImpl for ConcatWsFunc {
         // Scalar
         if array_len.is_none() {
             let sep = match &args[0] {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => s,
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
+                | ColumnarValue::Scalar(ScalarValue::Utf8View(s))
+                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(s)) => s,
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {
                     return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+                }
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)));
+                }
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)));
                 }
                 _ => unreachable!(),
             };
