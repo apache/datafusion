@@ -1174,7 +1174,9 @@ mod tests {
             let mut eq_properties = EquivalenceProperties::new(schema);
             eq_properties.add_new_orderings(vec![columns
                 .iter()
-                .map(|expr| PhysicalSortExpr::new(expr.clone(), SortOptions::default()))
+                .map(|expr| {
+                    PhysicalSortExpr::new(Arc::clone(expr), SortOptions::default())
+                })
                 .collect::<Vec<_>>()]);
             let mode = ExecutionMode::Unbounded;
             PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3), mode)
@@ -1208,7 +1210,7 @@ mod tests {
             Ok(Box::pin(CongestedStream {
                 schema: Arc::new(self.schema.clone()),
                 none_polled_once: false,
-                congestion_cleared: self.congestion_cleared.clone(),
+                congestion_cleared: Arc::clone(&self.congestion_cleared),
                 partition,
             }))
         }
