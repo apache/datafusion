@@ -1939,16 +1939,19 @@ mod tests {
             .build();
 
         assert_eq!(state.optimizers().len(), 1);
-        
+
         let state = SessionStateBuilder::new()
             .with_optimizer_rule(Arc::new(DummyRule {}))
             .build();
 
-        assert_eq!(state.optimizers().len(), Optimizer::default().rules.len() + 1);
+        assert_eq!(
+            state.optimizers().len(),
+            Optimizer::default().rules.len() + 1
+        );
     }
 
     struct DummyRule {}
-    
+
     impl OptimizerRule for DummyRule {
         fn name(&self) -> &str {
             "dummy_rule"
