@@ -115,13 +115,9 @@ where
         .map(|string| {
             string.map(|string: &str| {
                 if is_array_ascii_only {
-                    T::Native::from_usize(string.len()).expect(
-                        "should not fail as string.len will always return integer",
-                    )
+                    T::Native::usize_as(string.len())
                 } else {
-                    T::Native::from_usize(string.chars().count()).expect(
-                        "should not fail as string.chars will always return integer",
-                    )
+                    T::Native::usize_as(string.chars().count())
                 }
             })
         })
