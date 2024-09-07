@@ -68,17 +68,17 @@ gather feedback from the community and is likely easier to discuss than a 1000
 line PR.
 
 If you open a ticket and it doesn't get any response, you can try `@`-mentioning
-recently active community members in the ticket to get their attention. 
+recently active community members in the ticket to get their attention.
 
 ### What Features are Good Fits for DataFusion?
 
-DataFusion is designed to highly extensible, and many features can be implemented 
-as extensions without changing the core of DataFusion. 
+DataFusion is designed to highly extensible, and many features can be implemented
+as extensions without changing the core of DataFusion.
 
 We are [working on criteria for what features are good fits for DataFusion], and
 will update this section when we have more to share.
 
-[working on criteria for what features are good fits for DataFusion]: https://github.com/apache/datafusion/issues/12357
+[working on criteria for what features are good fits for datafusion]: https://github.com/apache/datafusion/issues/12357
 
 # Developer's guide
 
@@ -149,7 +149,8 @@ To help committers evaluate the potential improvement, performance PRs should
 in general be accompanied by benchmark results that demonstrate the improvement.
 
 The best way to demonstrate a performance improvement is with the existing
-benchmarks: 
+benchmarks:
+
 - [System level SQL Benchmarks](https://github.com/apache/datafusion/tree/main/benchmarks)
 - Microbenchmarks such as those in [functions/benches](https://github.com/apache/datafusion/tree/main/datafusion/functions/benches)
 
@@ -157,7 +158,7 @@ If there is no suitable existing benchmark, you can create a new one. It helps
 to isolate the effects of your change by creating a separate PR with the
 benchmark, and then a PR with the code change that improves the benchmark.
 
-[System level SQL Benchmarks]: https://github.com/apache/datafusion/tree/main/benchmarks
+[system level sql benchmarks]: https://github.com/apache/datafusion/tree/main/benchmarks
 [functions/benches]: https://github.com/apache/datafusion/tree/main/datafusion/functions/benches
 
 ## "Major" and "Minor" PRs
