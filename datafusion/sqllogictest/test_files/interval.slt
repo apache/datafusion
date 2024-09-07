@@ -45,250 +45,250 @@ Interval(MonthDayNano) Interval(MonthDayNano)
 query ?
 select interval '5' years
 ----
-0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+5.000000000 secs
 
 
 # check all different kinds of intervals
 query ?
 select interval '5' year
 ----
-0 years 60 mons 0 days 0 hours 0 mins 0.000000000 secs
+60 mons
 
 query ?
 select interval '5' month
 ----
-0 years 5 mons 0 days 0 hours 0 mins 0.000000000 secs
+5 mons
 
 query ?
 select interval '5' months
 ----
-0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+5.000000000 secs
 
 query ?
 select interval '5' week
 ----
-0 years 0 mons 35 days 0 hours 0 mins 0.000000000 secs
+35 days
 
 
 query ?
 select interval '5' day
 ----
-0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs
+5 days
 
 query ?
 select interval '5' hour
 ----
-0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs
+5 hours
 
 ## This seems wrong (5 mons)
 query ?
 select interval '5' hours
 ----
-0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+5.000000000 secs
 
 query ?
 select interval '5' minute
 ----
-0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs
+5 mins
 
 query ?
 select interval '5' second
 ----
-0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+5.000000000 secs
 
 query ?
 select interval '5' millisecond
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.005000000 secs
+0.005000000 secs
 
 query ?
 select interval '5' milliseconds
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.005000000 secs
+0.005000000 secs
 
 query ?
 select interval '5' microsecond
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.000005000 secs
+0.000005000 secs
 
 query ?
 select interval '5' microseconds
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.000005000 secs
+0.000005000 secs
 
 query ?
 select interval '5' nanosecond
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
+0.000000005 secs
 
 query ?
 select interval '5' nanoseconds
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
+0.000000005 secs
 
 query ?
 select interval '5 YEAR'
 ----
-0 years 60 mons 0 days 0 hours 0 mins 0.000000000 secs
+60 mons
 
 query ?
 select interval '5 MONTH'
 ----
-0 years 5 mons 0 days 0 hours 0 mins 0.000000000 secs
+5 mons
 
 query ?
 select interval '5 WEEK'
 ----
-0 years 0 mons 35 days 0 hours 0 mins 0.000000000 secs
+35 days
 
 query ?
 select interval '5 DAY'
 ----
-0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs
+5 days
 
 query ?
 select interval '5 HOUR'
 ----
-0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs
+5 hours
 
 query ?
 select interval '5 HOURS'
 ----
-0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs
+5 hours
 
 query ?
 select interval '5 MINUTE'
 ----
-0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs
+5 mins
 
 query ?
 select interval '5 SECOND'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+5.000000000 secs
 
 query ?
 select interval '5 SECONDS'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+5.000000000 secs
 
 query ?
 select interval '5 MILLISECOND'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.005000000 secs
+0.005000000 secs
 
 query ?
 select interval '5 MILLISECONDS'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.005000000 secs
+0.005000000 secs
 
 query ?
 select interval '5 MICROSECOND'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.000005000 secs
+0.000005000 secs
 
 query ?
 select interval '5 MICROSECONDS'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.000005000 secs
+0.000005000 secs
 
 query ?
 select interval '5 NANOSECOND'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
+0.000000005 secs
 
 query ?
 select interval '5 NANOSECONDS'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
+0.000000005 secs
 
 query ?
 select interval '5 YEAR 5 MONTH 5 DAY 5 HOUR 5 MINUTE 5 SECOND 5 MILLISECOND 5 MICROSECOND 5 NANOSECOND'
 ----
-0 years 65 mons 5 days 5 hours 5 mins 5.005005005 secs
+65 mons 5 days 5 hours 5 mins 5.005005005 secs
 
 # Interval with string literal addition
 query ?
 select interval '1 month' + '1 month'
 ----
-0 years 2 mons 0 days 0 hours 0 mins 0.000000000 secs
+2 mons
 
 # Interval with string literal addition and leading field
 query ?
 select interval '1' + '1' month
 ----
-0 years 2 mons 0 days 0 hours 0 mins 0.000000000 secs
+2 mons
 
 # Interval with nested string literal addition
 query ?
 select interval '1 month' + '1 month' + '1 month'
 ----
-0 years 3 mons 0 days 0 hours 0 mins 0.000000000 secs
+3 mons
 
 # Interval with nested string literal addition and leading field
 query ?
 select interval '1' + '1' + '1' month
 ----
-0 years 3 mons 0 days 0 hours 0 mins 0.000000000 secs
+3 mons
 
 # Interval mega nested string literal addition
 query ?
 select interval '1 year' + '1 month' + '1 day' + '1 hour' + '1 minute' + '1 second' + '1 millisecond' + '1 microsecond' + '1 nanosecond'
 ----
-0 years 13 mons 1 days 1 hours 1 mins 1.001001001 secs
+13 mons 1 days 1 hours 1 mins 1.001001001 secs
 
 # Interval with string literal subtraction
 query ?
 select interval '1 month' - '1 day';
 ----
-0 years 1 mons -1 days 0 hours 0 mins 0.000000000 secs
+1 mons -1 days
 
 # Interval with string literal subtraction and leading field
 query ?
 select interval '5' - '1' - '2' year;
 ----
-0 years 24 mons 0 days 0 hours 0 mins 0.000000000 secs
+24 mons
 
 # Interval with nested string literal subtraction
 query ?
 select interval '1 month' - '1 day' - '1 hour';
 ----
-0 years 1 mons -1 days -1 hours 0 mins 0.000000000 secs
+1 mons -1 days -1 hours
 
 # Interval with nested string literal subtraction and leading field
 query ?
 select interval '10' - '1' - '1' month;
 ----
-0 years 8 mons 0 days 0 hours 0 mins 0.000000000 secs
+8 mons
 
 # Interval mega nested string literal subtraction
 query ?
 select interval '1 year' - '1 month' - '1 day' - '1 hour' - '1 minute' - '1 second' - '1 millisecond' - '1 microsecond' - '1 nanosecond'
 ----
-0 years 11 mons -1 days -1 hours -1 mins -1.001001001 secs
+11 mons -1 days -1 hours -1 mins -1.001001001 secs
 
 # Interval with string literal negation and leading field
 query ?
 select -interval '5' - '1' - '2' year;
 ----
-0 years -96 mons 0 days 0 hours 0 mins 0.000000000 secs
+-96 mons
 
 # Interval with nested string literal negation
 query ?
 select -interval '1 month' + '1 day' + '1 hour';
 ----
-0 years -1 mons 1 days 1 hours 0 mins 0.000000000 secs
+-1 mons 1 days 1 hours
 
 # Interval with nested string literal negation and leading field
 query ?
 select -interval '10' - '1' - '1' month;
 ----
-0 years -12 mons 0 days 0 hours 0 mins 0.000000000 secs
+-12 mons
 
 # Interval mega nested string literal negation
 query ?
 select -interval '1 year' - '1 month' - '1 day' - '1 hour' - '1 minute' - '1 second' - '1 millisecond' - '1 microsecond' - '1 nanosecond'
 ----
-0 years -13 mons -1 days -1 hours -1 mins -1.001001001 secs
+-13 mons -1 days -1 hours -1 mins -1.001001001 secs
 
 # Interval string literal + date
 query D
@@ -343,7 +343,7 @@ select
   arrow_typeof(i)
 from t;
 ----
-0 years 0 mons 5 days 0 hours 0 mins 0.000000003 secs Interval(MonthDayNano)
+5 days 0.000000003 secs Interval(MonthDayNano)
 
 
 statement ok
@@ -359,8 +359,8 @@ insert into t values ('6 days 7 nanoseconds'::interval)
 query ? rowsort
 select -i from t order by 1;
 ----
-0 years 0 mons -5 days 0 hours 0 mins -0.000000003 secs
-0 years 0 mons -6 days 0 hours 0 mins -0.000000007 secs
+-5 days -0.000000003 secs
+-6 days -0.000000007 secs
 
 query ?T rowsort
 select
@@ -368,8 +368,8 @@ select
   arrow_typeof(i)
 from t;
 ----
-0 years 0 mons 5 days 0 hours 0 mins 0.000000003 secs Interval(MonthDayNano)
-0 years 0 mons 6 days 0 hours 0 mins 0.000000007 secs Interval(MonthDayNano)
+5 days 0.000000003 secs Interval(MonthDayNano)
+6 days 0.000000007 secs Interval(MonthDayNano)
 
 statement ok
 drop table t;

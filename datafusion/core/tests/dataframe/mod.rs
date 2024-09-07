@@ -184,7 +184,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
             WindowFunctionDefinition::AggregateUDF(count_udaf()),
             vec![wildcard()],
         ))
-        .order_by(vec![Sort::new(Box::new(col("a")), false, true)])
+        .order_by(vec![Sort::new(col("a"), false, true)])
         .window_frame(WindowFrame::new_bounds(
             WindowFrameUnits::Range,
             WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
@@ -352,7 +352,7 @@ async fn sort_on_unprojected_columns() -> Result<()> {
         .unwrap()
         .select(vec![col("a")])
         .unwrap()
-        .sort(vec![Sort::new(Box::new(col("b")), false, true)])
+        .sort(vec![Sort::new(col("b"), false, true)])
         .unwrap();
     let results = df.collect().await.unwrap();
 
@@ -396,7 +396,7 @@ async fn sort_on_distinct_columns() -> Result<()> {
         .unwrap()
         .distinct()
         .unwrap()
-        .sort(vec![Sort::new(Box::new(col("a")), false, true)])
+        .sort(vec![Sort::new(col("a"), false, true)])
         .unwrap();
     let results = df.collect().await.unwrap();
 
@@ -435,7 +435,7 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
         .await?
         .select(vec![col("a")])?
         .distinct()?
-        .sort(vec![Sort::new(Box::new(col("b")), false, true)])
+        .sort(vec![Sort::new(col("b"), false, true)])
         .unwrap_err();
     assert_eq!(err.strip_backtrace(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions b must appear in select list");
     Ok(())
@@ -599,8 +599,8 @@ async fn test_grouping_sets() -> Result<()> {
         .await?
         .aggregate(vec![grouping_set_expr], vec![count(col("a"))])?
         .sort(vec![
-            Sort::new(Box::new(col("a")), false, true),
-            Sort::new(Box::new(col("b")), false, true),
+            Sort::new(col("a"), false, true),
+            Sort::new(col("b"), false, true),
         ])?;
 
     let results = df.collect().await?;
@@ -640,8 +640,8 @@ async fn test_grouping_sets_count() -> Result<()> {
         .await?
         .aggregate(vec![grouping_set_expr], vec![count(lit(1))])?
         .sort(vec![
-            Sort::new(Box::new(col("c1")), false, true),
-            Sort::new(Box::new(col("c2")), false, true),
+            Sort::new(col("c1"), false, true),
+            Sort::new(col("c2"), false, true),
         ])?;
 
     let results = df.collect().await?;
@@ -687,8 +687,8 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
             ],
         )?
         .sort(vec![
-            Sort::new(Box::new(col("c1")), false, true),
-            Sort::new(Box::new(col("c2")), false, true),
+            Sort::new(col("c1"), false, true),
+            Sort::new(col("c2"), false, true),
         ])?;
 
     let results = df.collect().await?;

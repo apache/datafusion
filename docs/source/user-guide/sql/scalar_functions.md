@@ -1735,9 +1735,7 @@ Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format]s are 
 Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
 Returns the corresponding date.
 
-Note: `to_date` returns Date32. The supported range for integer input is between `-96465293` and `95026237`.
-Supported range for string input is between `1677-09-21` and `2262-04-11` exclusive. To parse dates outside of
-that range use a [Chrono format].
+Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.
 
 ```
 to_date(expression[, ..., format_n])
@@ -3262,7 +3260,7 @@ _Alias of [array_distance](#array_distance)._
 
 ### `list_distinct`
 
-_Alias of [array_dims](#array_distinct)._
+_Alias of [array_distinct](#array_distinct)._
 
 ### `list_element`
 
@@ -3677,6 +3675,8 @@ Unwraps struct fields into columns.
 - [map](#map)
 - [make_map](#make_map)
 - [map_extract](#map_extract)
+- [map_keys](#map_keys)
+- [map_values](#map_values)
 
 ### `map`
 
@@ -3764,6 +3764,56 @@ SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
 #### Aliases
 
 - element_at
+
+### `map_keys`
+
+Return a list of all keys in the map.
+
+```
+map_keys(map)
+```
+
+#### Arguments
+
+- `map`: Map expression.
+  Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```
+SELECT map_keys(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[a, b, c]
+
+select map_keys(map([100, 5], [42,43]));
+----
+[100, 5]
+```
+
+### `map_values`
+
+Return a list of all values in the map.
+
+```
+map_values(map)
+```
+
+#### Arguments
+
+- `map`: Map expression.
+  Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```
+SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[1, , 3]
+
+select map_values(map([100, 5], [42,43]));
+----
+[42, 43]
+```
 
 ## Hashing Functions
 

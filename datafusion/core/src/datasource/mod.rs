@@ -63,7 +63,7 @@ fn create_ordering(
         // Construct PhysicalSortExpr objects from Expr objects:
         let mut sort_exprs = vec![];
         for sort in exprs {
-            match sort.expr.as_ref() {
+            match &sort.expr {
                 Expr::Column(col) => match expressions::col(&col.name, schema) {
                     Ok(expr) => {
                         sort_exprs.push(PhysicalSortExpr {

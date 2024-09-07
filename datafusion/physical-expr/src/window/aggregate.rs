@@ -79,7 +79,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        self.aggregate.field()
+        Ok(self.aggregate.field())
     }
 
     fn name(&self) -> &str {
@@ -177,7 +177,7 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
     ) -> Result<ScalarValue> {
         if cur_range.start == cur_range.end {
             self.aggregate
-                .default_value(self.aggregate.field()?.data_type())
+                .default_value(self.aggregate.field().data_type())
         } else {
             // Accumulate any new rows that have entered the window:
             let update_bound = cur_range.end - last_range.end;

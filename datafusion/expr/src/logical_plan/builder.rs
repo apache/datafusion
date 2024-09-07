@@ -1756,8 +1756,8 @@ mod tests {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
                 .sort(vec![
-                    expr::Sort::new(Box::new(col("state")), true, true),
-                    expr::Sort::new(Box::new(col("salary")), false, false),
+                    expr::Sort::new(col("state"), true, true),
+                    expr::Sort::new(col("salary"), false, false),
                 ])?
                 .build()?;
 
@@ -2183,8 +2183,8 @@ mod tests {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
                 .sort(vec![
-                    expr::Sort::new(Box::new(col("state")), true, true),
-                    expr::Sort::new(Box::new(col("salary")), false, false),
+                    expr::Sort::new(col("state"), true, true),
+                    expr::Sort::new(col("salary"), false, false),
                 ])?
                 .build()?;
 

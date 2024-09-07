@@ -253,12 +253,8 @@ impl AggregateFunctionExpr {
     }
 
     /// the field of the final result of this aggregation.
-    pub fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            self.data_type.clone(),
-            self.is_nullable,
-        ))
+    pub fn field(&self) -> Field {
+        Field::new(&self.name, self.data_type.clone(), self.is_nullable)
     }
 
     /// the accumulator used to accumulate values from the expressions.
@@ -523,9 +519,7 @@ impl AggregateFunctionExpr {
     ///
     /// Note: this is used to use special aggregate implementations in certain conditions
     pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
-        self.fun
-            .is_descending()
-            .and_then(|flag| self.field().ok().map(|f| (f, flag)))
+        self.fun.is_descending().map(|flag| (self.field(), flag))
     }
 
     /// Returns default value of the function given the input is Null

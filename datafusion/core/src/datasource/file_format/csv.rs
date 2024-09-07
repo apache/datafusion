@@ -247,6 +247,13 @@ impl CsvFormat {
         self
     }
 
+    /// The character used to indicate the end of a row.
+    /// - default to None (CRLF)
+    pub fn with_terminator(mut self, terminator: Option<u8>) -> Self {
+        self.options.terminator = terminator;
+        self
+    }
+
     /// Specifies whether newlines in (quoted) values are supported.
     ///
     /// Parsing newlines in quoted values may be affected by execution behaviour such as
@@ -359,6 +366,7 @@ impl FileFormat for CsvFormat {
             .with_has_header(has_header)
             .with_delimeter(self.options.delimiter)
             .with_quote(self.options.quote)
+            .with_terminator(self.options.terminator)
             .with_escape(self.options.escape)
             .with_comment(self.options.comment)
             .with_newlines_in_values(newlines_in_values)

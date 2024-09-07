@@ -33,6 +33,7 @@ use arrow::compute::kernels::comparison::{
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
+use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
@@ -133,12 +134,15 @@ impl std::fmt::Display for BinaryExpr {
 }
 
 /// Invoke a boolean kernel on a pair of arrays
-macro_rules! boolean_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        let ll = as_boolean_array($LEFT).expect("boolean_op failed to downcast array");
-        let rr = as_boolean_array($RIGHT).expect("boolean_op failed to downcast array");
-        Ok(Arc::new($OP(&ll, &rr)?))
-    }};
+#[inline]
+fn boolean_op(
+    left: &dyn Array,
+    right: &dyn Array,
+    op: impl FnOnce(&BooleanArray, &BooleanArray) -> Result<BooleanArray, ArrowError>,
+) -> Result<Arc<(dyn Array + 'static)>, ArrowError> {
+    let ll = as_boolean_array(left).expect("boolean_op failed to downcast left array");
+    let rr = as_boolean_array(right).expect("boolean_op failed to downcast right array");
+    op(ll, rr).map(|t| Arc::new(t) as _)
 }
 
 macro_rules! binary_string_array_flag_op {
@@ -596,7 +600,7 @@ impl BinaryExpr {
             | NotLikeMatch | NotILikeMatch => unreachable!(),
             And => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(&left, &right, and_kleene)
+                    Ok(boolean_op(&left, &right, and_kleene)?)
                 } else {
                     internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -608,7 +612,7 @@ impl BinaryExpr {
             }
             Or => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(&left, &right, or_kleene)
+                    Ok(boolean_op(&left, &right, or_kleene)?)
                 } else {
                     internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",

@@ -679,37 +679,6 @@ where
     err
 }
 
-/// Returns a new logical plan based on the original one with inputs
-/// and expressions replaced.
-///
-/// The exprs correspond to the same order of expressions returned by
-/// `LogicalPlan::expressions`. This function is used in optimizers in
-/// the following way:
-///
-/// ```text
-/// let new_inputs = optimize_children(..., plan, props);
-///
-/// // get the plans expressions to optimize
-/// let exprs = plan.expressions();
-///
-/// // potentially rewrite plan expressions
-/// let rewritten_exprs = rewrite_exprs(exprs);
-///
-/// // create new plan using rewritten_exprs in same position
-/// let new_plan = from_plan(&plan, rewritten_exprs, new_inputs);
-/// ```
-///
-/// Notice: sometimes [from_plan] will use schema of original plan, it don't change schema!
-/// Such as `Projection/Aggregate/Window`
-#[deprecated(since = "31.0.0", note = "use LogicalPlan::with_new_exprs instead")]
-pub fn from_plan(
-    plan: &LogicalPlan,
-    expr: &[Expr],
-    inputs: &[LogicalPlan],
-) -> Result<LogicalPlan> {
-    plan.with_new_exprs(expr.to_vec(), inputs.to_vec())
-}
-
 /// Create field meta-data from an expression, for use in a result set schema
 pub fn exprlist_to_fields<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
@@ -1336,7 +1305,7 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
 }
 
 /// merge inputs schema into a single schema.
-pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
+pub fn merge_schema(inputs: &[&LogicalPlan]) -> DFSchema {
     if inputs.len() == 1 {
         inputs[0].schema().as_ref().clone()
     } else {
@@ -1401,9 +1370,9 @@ mod tests {
 
     #[test]
     fn test_group_window_expr_by_sort_keys() -> Result<()> {
-        let age_asc = expr::Sort::new(Box::new(col("age")), true, true);
-        let name_desc = expr::Sort::new(Box::new(col("name")), false, true);
-        let created_at_desc = expr::Sort::new(Box::new(col("created_at")), false, true);
+        let age_asc = expr::Sort::new(col("age"), true, true);
+        let name_desc = expr::Sort::new(col("name"), false, true);
+        let created_at_desc = expr::Sort::new(col("created_at"), false, true);
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
@@ -1463,12 +1432,12 @@ mod tests {
             for nulls_first_ in nulls_first_or_last {
                 let order_by = &[
                     Sort {
-                        expr: Box::new(col("age")),
+                        expr: col("age"),
                         asc: asc_,
                         nulls_first: nulls_first_,
                     },
                     Sort {
-                        expr: Box::new(col("name")),
+                        expr: col("name"),
                         asc: asc_,
                         nulls_first: nulls_first_,
                     },
@@ -1477,7 +1446,7 @@ mod tests {
                 let expected = vec![
                     (
                         Sort {
-                            expr: Box::new(col("age")),
+                            expr: col("age"),
                             asc: asc_,
                             nulls_first: nulls_first_,
                         },
@@ -1485,7 +1454,7 @@ mod tests {
                     ),
                     (
                         Sort {
-                            expr: Box::new(col("name")),
+                            expr: col("name"),
                             asc: asc_,
                             nulls_first: nulls_first_,
                         },
@@ -1493,7 +1462,7 @@ mod tests {
                     ),
                     (
                         Sort {
-                            expr: Box::new(col("created_at")),
+                            expr: col("created_at"),
                             asc: true,
                             nulls_first: false,
                         },
