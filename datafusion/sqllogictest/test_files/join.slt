@@ -756,6 +756,8 @@ logical_plan
 05)----Filter: t1.a IS NOT NULL
 06)------TableScan: t1 projection=[a, b]
 physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------FilterExec: a@0 IS NOT NULL
 05)--------MemoryExec: partitions=1, partition_sizes=[1]
