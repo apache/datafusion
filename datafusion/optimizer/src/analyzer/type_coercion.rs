@@ -119,9 +119,9 @@ fn analyze_internal(
     let name_preserver = NamePreserver::new(&plan);
     // apply coercion rewrite all expressions in the plan individually
     plan.map_expressions(|expr| {
-        let original_name = name_preserver.save(&expr)?;
-        expr.rewrite(&mut expr_rewrite)?
-            .map_data(|expr| original_name.restore(expr))
+        let original_name = name_preserver.save(&expr);
+        expr.rewrite(&mut expr_rewrite)
+            .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     })?
     // some plans need extra coercion after their expressions are coerced
     .map_data(|plan| expr_rewrite.coerce_plan(plan))?

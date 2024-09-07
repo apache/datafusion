@@ -166,3 +166,8 @@ required-features = ["math_expressions"]
 harness = false
 name = "substr"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "character_length"
+required-features = ["unicode_expressions"]
