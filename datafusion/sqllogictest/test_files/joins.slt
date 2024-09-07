@@ -1092,12 +1092,13 @@ logical_plan
 02)--SubqueryAlias: t3
 03)----Projection: join_t1.t1_id, join_t1.t1_name, join_t1.t1_int
 04)------Inner Join: join_t1.t1_id = join_t2.t2_id
-05)--------Filter: join_t1.t1_id < UInt32(100)
+05)--------Filter: join_t1.t1_id IS NOT NULL AND join_t1.t1_id < UInt32(100)
 06)----------TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 07)--------Projection: join_t2.t2_id
-08)----------Filter: join_t2.t2_int < UInt32(3) AND join_t2.t2_id < UInt32(100)
+08)----------Filter: join_t2.t2_id IS NOT NULL AND join_t2.t2_int < UInt32(3) AND join_t2.t2_id < UInt32(100)
 09)------------TableScan: join_t2 projection=[t2_id, t2_int]
-10)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+10)--Filter: join_t2.t2_int IS NOT NULL
+11)----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 # Reduce right join 1 (to inner join)
 

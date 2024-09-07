@@ -2879,9 +2879,11 @@ logical_plan
 04)------Projection: s.zip_code, s.country, s.sn, s.ts, s.currency, e.sn, e.amount
 05)--------Inner Join: s.currency = e.currency Filter: s.ts >= e.ts
 06)----------SubqueryAlias: s
-07)------------TableScan: sales_global projection=[zip_code, country, sn, ts, currency]
-08)----------SubqueryAlias: e
-09)------------TableScan: sales_global projection=[sn, ts, currency, amount]
+07)------------Filter: sales_global.currency IS NOT NULL
+08)--------------TableScan: sales_global projection=[zip_code, country, sn, ts, currency]
+09)----------SubqueryAlias: e
+10)------------Filter: sales_global.currency IS NOT NULL
+11)--------------TableScan: sales_global projection=[sn, ts, currency, amount]
 physical_plan
 01)SortExec: expr=[sn@2 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, last_value(e.amount) ORDER BY [e.sn ASC NULLS LAST]@5 as last_rate]
@@ -2889,8 +2891,12 @@ physical_plan
 04)------ProjectionExec: expr=[zip_code@2 as zip_code, country@3 as country, sn@4 as sn, ts@5 as ts, currency@6 as currency, sn@0 as sn, amount@1 as amount]
 05)--------CoalesceBatchesExec: target_batch_size=8192
 06)----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@2, currency@4)], filter=ts@0 >= ts@1, projection=[sn@0, amount@3, zip_code@4, country@5, sn@6, ts@7, currency@8]
-07)------------MemoryExec: partitions=1, partition_sizes=[1]
-08)------------MemoryExec: partitions=1, partition_sizes=[1]
+07)------------CoalesceBatchesExec: target_batch_size=8192
+08)--------------FilterExec: currency@2 IS NOT NULL
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+10)------------CoalesceBatchesExec: target_batch_size=8192
+11)--------------FilterExec: currency@4 IS NOT NULL
+12)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query ITIPTR rowsort
 SELECT s.zip_code, s.country, s.sn, s.ts, s.currency, LAST_VALUE(e.amount ORDER BY e.sn) AS last_rate
