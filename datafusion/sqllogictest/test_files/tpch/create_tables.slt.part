@@ -30,7 +30,7 @@ CREATE EXTERNAL TABLE IF NOT EXISTS supplier (
         s_phone VARCHAR NOT NULL,
         s_acctbal DECIMAL(15, 2) NOT NULL,
         s_comment VARCHAR NOT NULL,
-        NOT NULL VARCHAR NOT NULL,
+        s_rev VARCHAR NOT NULL,
 ) STORED AS CSV LOCATION 'test_files/tpch/data/supplier.tbl' OPTIONS ('format.delimiter' '|', 'format.has_header' 'false');
 
 statement ok

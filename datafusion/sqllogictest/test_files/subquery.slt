@@ -357,17 +357,20 @@ logical_plan
 01)Sort: customer.c_custkey ASC NULLS LAST
 02)--Projection: customer.c_custkey
 03)----Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_1.sum(orders.o_totalprice)
-04)------TableScan: customer projection=[c_custkey, c_acctbal]
-05)------SubqueryAlias: __scalar_sq_1
-06)--------Projection: sum(orders.o_totalprice), orders.o_custkey
-07)----------Aggregate: groupBy=[[orders.o_custkey]], aggr=[[sum(orders.o_totalprice)]]
-08)------------Projection: orders.o_custkey, orders.o_totalprice
-09)--------------Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_2.price
-10)----------------TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
-11)----------------SubqueryAlias: __scalar_sq_2
-12)------------------Projection: sum(lineitem.l_extendedprice) AS price, lineitem.l_orderkey
-13)--------------------Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[sum(lineitem.l_extendedprice)]]
-14)----------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice]
+04)------Filter: customer.c_custkey IS NOT NULL
+05)--------TableScan: customer projection=[c_custkey, c_acctbal], partial_filters=[customer.c_custkey IS NOT NULL]
+06)------SubqueryAlias: __scalar_sq_1
+07)--------Projection: sum(orders.o_totalprice), orders.o_custkey
+08)----------Aggregate: groupBy=[[orders.o_custkey]], aggr=[[sum(orders.o_totalprice)]]
+09)------------Projection: orders.o_custkey, orders.o_totalprice
+10)--------------Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_2.price
+11)----------------Filter: orders.o_custkey IS NOT NULL AND orders.o_orderkey IS NOT NULL
+12)------------------TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice], partial_filters=[orders.o_custkey IS NOT NULL, orders.o_orderkey IS NOT NULL]
+13)----------------SubqueryAlias: __scalar_sq_2
+14)------------------Projection: sum(lineitem.l_extendedprice) AS price, lineitem.l_orderkey
+15)--------------------Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[sum(lineitem.l_extendedprice)]]
+16)----------------------Filter: lineitem.l_orderkey IS NOT NULL
+17)------------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice], partial_filters=[lineitem.l_orderkey IS NOT NULL]
 
 # correlated_where_in
 query TT
@@ -379,10 +382,12 @@ where o_orderstatus in (
 logical_plan
 01)Projection: orders.o_orderkey
 02)--LeftSemi Join: orders.o_orderstatus = __correlated_sq_1.l_linestatus, orders.o_orderkey = __correlated_sq_1.l_orderkey
-03)----TableScan: orders projection=[o_orderkey, o_orderstatus]
-04)----SubqueryAlias: __correlated_sq_1
-05)------Projection: lineitem.l_linestatus, lineitem.l_orderkey
-06)--------TableScan: lineitem projection=[l_orderkey, l_linestatus]
+03)----Filter: orders.o_orderstatus IS NOT NULL AND orders.o_orderkey IS NOT NULL
+04)------TableScan: orders projection=[o_orderkey, o_orderstatus], partial_filters=[orders.o_orderstatus IS NOT NULL, orders.o_orderkey IS NOT NULL]
+05)----SubqueryAlias: __correlated_sq_1
+06)------Projection: lineitem.l_linestatus, lineitem.l_orderkey
+07)--------Filter: lineitem.l_linestatus IS NOT NULL AND lineitem.l_orderkey IS NOT NULL
+08)----------TableScan: lineitem projection=[l_orderkey, l_linestatus], partial_filters=[lineitem.l_linestatus IS NOT NULL, lineitem.l_orderkey IS NOT NULL]
 
 query I rowsort
 select o_orderkey from orders
@@ -416,11 +421,12 @@ explain SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id IN(SELECT t1_int FROM 
 ----
 logical_plan
 01)LeftSemi Join: t1.t1_id = __correlated_sq_1.t1_int
-02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
-03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: t1.t1_int
-05)------Filter: t1.t1_int < t1.t1_id
-06)--------TableScan: t1 projection=[t1_id, t1_int]
+02)--Filter: t1.t1_id IS NOT NULL
+03)----TableScan: t1 projection=[t1_id, t1_name, t1_int]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: t1.t1_int
+06)------Filter: t1.t1_int IS NOT NULL AND t1.t1_int < t1.t1_id
+07)--------TableScan: t1 projection=[t1_id, t1_int]
 
 #in_subquery_nested_exist_subquery
 query TT
@@ -428,13 +434,15 @@ explain SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id IN(SELECT t2_id FROM t
 ----
 logical_plan
 01)LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
-02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
-03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: t2.t2_id
-05)------LeftSemi Join:  Filter: __correlated_sq_2.t1_int > t2.t2_int
-06)--------TableScan: t2 projection=[t2_id, t2_int]
-07)--------SubqueryAlias: __correlated_sq_2
-08)----------TableScan: t1 projection=[t1_int]
+02)--Filter: t1.t1_id IS NOT NULL
+03)----TableScan: t1 projection=[t1_id, t1_name, t1_int]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: t2.t2_id
+06)------LeftSemi Join:  Filter: __correlated_sq_2.t1_int > t2.t2_int
+07)--------Filter: t2.t2_id IS NOT NULL
+08)----------TableScan: t2 projection=[t2_id, t2_int]
+09)--------SubqueryAlias: __correlated_sq_2
+10)----------TableScan: t1 projection=[t1_int]
 
 #invalid_scalar_subquery
 statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: Scalar subquery should only return one column, but found 2: t2.t2_id, t2.t2_name
@@ -568,13 +576,16 @@ explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (SELECT 1 FROM t1 INNER JOIN 
 ----
 logical_plan
 01)LeftSemi Join: t0.t0_name = __correlated_sq_1.t2_name
-02)--TableScan: t0 projection=[t0_id, t0_name]
-03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: t2.t2_name
-05)------Inner Join: t1.t1_id = t2.t2_id
-06)--------TableScan: t1 projection=[t1_id]
-07)--------SubqueryAlias: t2
-08)----------TableScan: t2 projection=[t2_id, t2_name]
+02)--Filter: t0.t0_name IS NOT NULL
+03)----TableScan: t0 projection=[t0_id, t0_name]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: t2.t2_name
+06)------Inner Join: t1.t1_id = t2.t2_id
+07)--------Filter: t1.t1_id IS NOT NULL
+08)----------TableScan: t1 projection=[t1_id]
+09)--------SubqueryAlias: t2
+10)----------Filter: t2.t2_name IS NOT NULL AND t2.t2_id IS NOT NULL
+11)------------TableScan: t2 projection=[t2_id, t2_name]
 
 #subquery_contains_join_contains_sub_query_alias_correlated_columns
 query TT
@@ -582,14 +593,17 @@ explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (select 1 from (SELECT * FROM
 ----
 logical_plan
 01)LeftSemi Join: t0.t0_id = __correlated_sq_1.t1_id, t0.t0_name = __correlated_sq_1.t2_name
-02)--TableScan: t0 projection=[t0_id, t0_name]
-03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: x.t1_id, y.t2_name
-05)------Inner Join: x.t1_id = y.t2_id
-06)--------SubqueryAlias: x
-07)----------TableScan: t1 projection=[t1_id]
-08)--------SubqueryAlias: y
-09)----------TableScan: t2 projection=[t2_id, t2_name]
+02)--Filter: t0.t0_id IS NOT NULL AND t0.t0_name IS NOT NULL
+03)----TableScan: t0 projection=[t0_id, t0_name]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: x.t1_id, y.t2_name
+06)------Inner Join: x.t1_id = y.t2_id
+07)--------SubqueryAlias: x
+08)----------Filter: t1.t1_id IS NOT NULL
+09)------------TableScan: t1 projection=[t1_id]
+10)--------SubqueryAlias: y
+11)----------Filter: t2.t2_name IS NOT NULL AND t2.t2_id IS NOT NULL
+12)------------TableScan: t2 projection=[t2_id, t2_name]
 
 #support_order_by_correlated_columns
 query TT
@@ -622,9 +636,11 @@ explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id
 ----
 logical_plan
 01)LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
-02)--TableScan: t1 projection=[t1_id, t1_name]
-03)--SubqueryAlias: __correlated_sq_1
-04)----TableScan: t2 projection=[t2_id]
+02)--Filter: t1.t1_id IS NOT NULL
+03)----TableScan: t1 projection=[t1_id, t1_name]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Filter: t2.t2_id IS NOT NULL
+06)------TableScan: t2 projection=[t2_id]
 
 query IT rowsort
 SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 1)
@@ -681,10 +697,12 @@ explain SELECT t1_id, t1_name FROM t1 WHERE t1_id in (SELECT t2_id FROM t2 limit
 ----
 logical_plan
 01)LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
-02)--TableScan: t1 projection=[t1_id, t1_name]
-03)--SubqueryAlias: __correlated_sq_1
-04)----Limit: skip=0, fetch=10
-05)------TableScan: t2 projection=[t2_id], fetch=10
+02)--Filter: t1.t1_id IS NOT NULL
+03)----TableScan: t1 projection=[t1_id, t1_name]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Filter: t2.t2_id IS NOT NULL
+06)------Limit: skip=0, fetch=10
+07)--------TableScan: t2 projection=[t2_id], fetch=10
 
 
 #uncorrelated_scalar_subquery_with_limit0
@@ -787,7 +805,9 @@ logical_plan
 04)----SubqueryAlias: __scalar_sq_1
 05)------Projection: count(*), t2.t2_int, Boolean(true) AS __always_true
 06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[count(Int64(1)) AS count(*)]]
-07)----------TableScan: t2 projection=[t2_int]
+07)----------Filter: t2.t2_int IS NOT NULL
+08)------------TableScan: t2 projection=[t2_int]
+
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) from t1
@@ -809,7 +829,8 @@ logical_plan
 04)----SubqueryAlias: __scalar_sq_1
 05)------Projection: count(*), t2.t2_int, Boolean(true) AS __always_true
 06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[count(Int64(1)) AS count(*)]]
-07)----------TableScan: t2 projection=[t2_int]
+07)----------Filter: t2.t2_int IS NOT NULL
+08)------------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from t1
@@ -830,7 +851,8 @@ logical_plan
 04)----SubqueryAlias: __scalar_sq_1
 05)------Projection: count(*) AS _cnt, t2.t2_int, Boolean(true) AS __always_true
 06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[count(Int64(1)) AS count(*)]]
-07)----------TableScan: t2 projection=[t2_int]
+07)----------Filter: t2.t2_int IS NOT NULL
+08)------------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) as _cnt FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from t1
@@ -851,7 +873,8 @@ logical_plan
 04)----SubqueryAlias: __scalar_sq_1
 05)------Projection: count(*) + Int64(2) AS _cnt, t2.t2_int, Boolean(true) AS __always_true
 06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[count(Int64(1)) AS count(*)]]
-07)----------TableScan: t2 projection=[t2_int]
+07)----------Filter: t2.t2_int IS NOT NULL
+08)------------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) + 2 as _cnt FROM t2 WHERE t2.t2_int = t1.t1_int) from t1
@@ -874,7 +897,8 @@ logical_plan
 06)--------SubqueryAlias: __scalar_sq_1
 07)----------Projection: count(*), t2.t2_id, Boolean(true) AS __always_true
 08)------------Aggregate: groupBy=[[t2.t2_id]], aggr=[[count(Int64(1)) AS count(*)]]
-09)--------------TableScan: t2 projection=[t2_id]
+09)--------------Filter: t2.t2_id IS NOT NULL
+10)----------------TableScan: t2 projection=[t2_id]
 
 query I rowsort
 select t1.t1_int from t1 where (select count(*) from t2 where t1.t1_id = t2.t2_id) < t1.t1_int
@@ -896,7 +920,8 @@ logical_plan
 05)------Projection: count(*) + Int64(2) AS cnt_plus_2, t2.t2_int
 06)--------Filter: count(*) > Int64(1)
 07)----------Aggregate: groupBy=[[t2.t2_int]], aggr=[[count(Int64(1)) AS count(*)]]
-08)------------TableScan: t2 projection=[t2_int]
+08)------------Filter: t2.t2_int IS NOT NULL
+09)--------------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) >1) from t1
@@ -918,7 +943,8 @@ logical_plan
 04)----SubqueryAlias: __scalar_sq_1
 05)------Projection: count(*) + Int64(2) AS cnt_plus_2, t2.t2_int, count(*), Boolean(true) AS __always_true
 06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[count(Int64(1)) AS count(*)]]
-07)----------TableScan: t2 projection=[t2_int]
+07)----------Filter: t2.t2_int IS NOT NULL
+08)------------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) = 0) from t1
@@ -942,7 +968,8 @@ logical_plan
 07)--------SubqueryAlias: __scalar_sq_1
 08)----------Projection: count(*), t2.t2_int, Boolean(true) AS __always_true
 09)------------Aggregate: groupBy=[[t2.t2_int]], aggr=[[count(Int64(1)) AS count(*)]]
-10)--------------TableScan: t2 projection=[t2_int]
+10)--------------Filter: t2.t2_int IS NOT NULL
+11)----------------TableScan: t2 projection=[t2_int]
 
 query I rowsort
 select t1.t1_int from t1 group by t1.t1_int having (select count(*) from t2 where t1.t1_int = t2.t2_int) = 0
@@ -963,7 +990,8 @@ logical_plan
 06)--------SubqueryAlias: __scalar_sq_1
 07)----------Projection: count(*) AS cnt, t2.t2_int, Boolean(true) AS __always_true
 08)------------Aggregate: groupBy=[[t2.t2_int]], aggr=[[count(Int64(1)) AS count(*)]]
-09)--------------TableScan: t2 projection=[t2_int]
+09)--------------Filter: t2.t2_int IS NOT NULL
+10)----------------TableScan: t2 projection=[t2_int]
 
 
 query I rowsort
@@ -993,7 +1021,8 @@ logical_plan
 06)--------SubqueryAlias: __scalar_sq_1
 07)----------Projection: count(*) + Int64(1) + Int64(1) AS cnt_plus_two, t2.t2_int, count(*), Boolean(true) AS __always_true
 08)------------Aggregate: groupBy=[[t2.t2_int]], aggr=[[count(Int64(1)) AS count(*)]]
-09)--------------TableScan: t2 projection=[t2_int]
+09)--------------Filter: t2.t2_int IS NOT NULL
+10)----------------TableScan: t2 projection=[t2_int]
 
 query I rowsort
 select t1.t1_int from t1 where (
@@ -1022,7 +1051,8 @@ logical_plan
 06)--------SubqueryAlias: __scalar_sq_1
 07)----------Projection: CASE WHEN count(*) = Int64(1) THEN Int64(NULL) ELSE count(*) END AS cnt, t2.t2_int, Boolean(true) AS __always_true
 08)------------Aggregate: groupBy=[[t2.t2_int]], aggr=[[count(Int64(1)) AS count(*)]]
-09)--------------TableScan: t2 projection=[t2_int]
+09)--------------Filter: t2.t2_int IS NOT NULL
+10)----------------TableScan: t2 projection=[t2_int]
 
 
 query I rowsort

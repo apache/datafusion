@@ -55,20 +55,19 @@ logical_plan
 07)------SubqueryAlias: t2
 08)--------Filter: annotated_data.c IS NOT NULL
 09)----------TableScan: annotated_data projection=[a, c], partial_filters=[annotated_data.c IS NOT NULL]
-
+physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
 02)--CoalesceBatchesExec: target_batch_size=8192, fetch=5
 03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)], projection=[a@1]
 04)------CoalescePartitionsExec
-05)--------CoalescePartitionsExec
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------FilterExec: d@1 IS NOT NULL AND c@0 IS NOT NULL
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
-10)--------CoalesceBatchesExec: target_batch_size=8192
-11)----------FilterExec: d@3 IS NOT NULL AND c@2 IS NOT NULL AND d@3 = 3
-12)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------FilterExec: c@0 IS NOT NULL
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
+09)------CoalesceBatchesExec: target_batch_size=8192
+10)--------FilterExec: c@1 IS NOT NULL
+11)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 # preserve_inner_join
 query IIII nosort
@@ -103,16 +102,20 @@ logical_plan
 07)------SubqueryAlias: t2
 08)--------Filter: annotated_data.d IS NOT NULL AND annotated_data.c IS NOT NULL AND annotated_data.d = Int32(3)
 09)----------TableScan: annotated_data projection=[a, b, c, d], partial_filters=[annotated_data.d = Int32(3), annotated_data.d IS NOT NULL, annotated_data.c IS NOT NULL]
-
+physical_plan
 01)SortPreservingMergeExec: [a2@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10
 02)--ProjectionExec: expr=[a@0 as a2, b@1 as b]
 03)----CoalesceBatchesExec: target_batch_size=8192, fetch=10
 04)------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)], projection=[a@0, b@1]
-05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
-06)--------CoalesceBatchesExec: target_batch_size=8192
-07)----------FilterExec: d@3 = 3
-08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+05)--------CoalescePartitionsExec
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------FilterExec: d@1 IS NOT NULL AND c@0 IS NOT NULL
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
+10)--------CoalesceBatchesExec: target_batch_size=8192
+11)----------FilterExec: d@3 IS NOT NULL AND c@2 IS NOT NULL AND d@3 = 3
+12)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 # preserve_right_semi_join
 query II nosort
