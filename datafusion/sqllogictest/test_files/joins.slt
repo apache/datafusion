@@ -1127,8 +1127,10 @@ WHERE NOT (join_t1.t1_int = join_t2.t2_int)
 ----
 logical_plan
 01)Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int != join_t1.t1_int
-02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-03)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+02)--Filter: join_t1.t1_id IS NOT NULL
+03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+04)--Filter: join_t2.t2_id IS NOT NULL
+05)----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 # Reduce full join to right join
 

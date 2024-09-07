@@ -310,7 +310,8 @@ logical_plan
 05)------Projection: sum(t2.t2_int), t2.t2_id
 06)--------Filter: sum(t2.t2_int) < Int64(3)
 07)----------Aggregate: groupBy=[[t2.t2_id]], aggr=[[sum(CAST(t2.t2_int AS Int64))]]
-08)------------TableScan: t2 projection=[t2_id, t2_int]
+08)------------Filter: t2.t2_id IS NOT NULL
+09)--------------TableScan: t2 projection=[t2_id, t2_int]
 physical_plan
 01)ProjectionExec: expr=[t1_id@1 as t1_id, sum(t2.t2_int)@0 as t2_sum]
 02)--CoalesceBatchesExec: target_batch_size=2
@@ -322,10 +323,12 @@ physical_plan
 08)--------------CoalesceBatchesExec: target_batch_size=2
 09)----------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 10)------------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-11)--------------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
-12)------CoalesceBatchesExec: target_batch_size=2
-13)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-14)----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+11)--------------------CoalesceBatchesExec: target_batch_size=2
+12)----------------------FilterExec: t2_id@0 IS NOT NULL
+13)------------------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+14)------CoalesceBatchesExec: target_batch_size=2
+15)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
+16)----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id having sum(t2_int) < 3) as t2_sum from t1
