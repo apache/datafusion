@@ -33,17 +33,17 @@ use crate::execution::context::SessionState;
 #[derive(Default)]
 pub struct DynamicListTableFactory {
     /// The session store that contains the current session.
-    session_store: Arc<SessionStore>,
+    session_store: SessionStore,
 }
 
 impl DynamicListTableFactory {
     /// Create a new [DynamicListTableFactory] with the given state store.
-    pub fn new(session_store: Arc<SessionStore>) -> Self {
+    pub fn new(session_store: SessionStore) -> Self {
         Self { session_store }
     }
 
-    fn session_store(&self) -> Arc<SessionStore> {
-        Arc::clone(&self.session_store)
+    pub fn session_store(&self) -> &SessionStore {
+        &self.session_store
     }
 }
 

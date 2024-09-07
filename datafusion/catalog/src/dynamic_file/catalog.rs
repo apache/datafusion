@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! dynamic_file contains [`DynamicFileCatalog`] that creates tables from file paths
-//! if the wrapped [`CatalogProviderList`] doesn't have the table provider.
+//! [`DynamicFileCatalog`] that creates tables from file paths
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use async_trait::async_trait;

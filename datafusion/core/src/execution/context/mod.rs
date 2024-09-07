@@ -73,7 +73,7 @@ use crate::datasource::dynamic_file::DynamicListTableFactory;
 use crate::execution::session_state::SessionStateBuilder;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_catalog::{DynamicFileCatalog, SessionStore};
+use datafusion_catalog::{DynamicFileCatalog, SessionStore, UrlTableFactory};
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -357,18 +357,20 @@ impl SessionContext {
         }
     }
 
-    /// Enable the dynamic file query for the current session.
-    /// See [DynamicFileCatalog] for more details
+    /// Enable dynamic file querying for the current session.
     ///
-    /// # Example: query the url table
+    /// This allows queries to directly access arbitrary file names via SQL like
+    /// `SELECT * from 'my_file.parquet'`
+    /// so it should only be enabled for systems that such access is not a security risk
+    ///
+    /// See [DynamicFileCatalog] for more details
     ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::{error::Result, assert_batches_eq};
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
-    /// let ctx = SessionContext::new_with_config(cfg).enable_url_table();
+    /// let ctx = SessionContext::new().enable_url_table();
     /// let results = ctx
     ///   .sql("SELECT a, MIN(b) FROM 'tests/data/example.csv' as example GROUP BY a LIMIT 100")
     ///   .await?
@@ -389,17 +391,16 @@ impl SessionContext {
     /// ```
     pub fn enable_url_table(&self) -> Self {
         let state_ref = self.state();
-        let session_store = Arc::new(SessionStore::new());
-        let factory = DynamicListTableFactory::new(Arc::clone(&session_store));
+        let factory = Arc::new(DynamicListTableFactory::new(SessionStore::new()));
         let catalog_list = Arc::new(DynamicFileCatalog::new(
             Arc::clone(state_ref.catalog_list()),
-            Arc::new(factory),
+            Arc::clone(&factory) as Arc<dyn UrlTableFactory>,
         ));
         let new_state = SessionStateBuilder::new_from_existing(self.state())
             .with_catalog_list(catalog_list)
             .build();
         let ctx = SessionContext::new_with_state(new_state);
-        session_store.with_state(ctx.state_weak_ref());
+        factory.session_store().with_state(ctx.state_weak_ref());
         ctx
     }
 
@@ -1842,7 +1843,7 @@ mod tests {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let path = path.join("tests/tpch-csv/customer.csv");
         let url = format!("file://{}", path.display());
-        let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
+        let cfg = SessionConfig::new();
         let session_state = SessionStateBuilder::new()
             .with_default_features()
             .with_config(cfg)

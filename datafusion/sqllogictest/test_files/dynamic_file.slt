@@ -15,6 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
+#
+# Note: This file runs with a SessionContext that has the `enable_url_table` flag set
+#
 # dynamic select arrow file in the folder
 query ITB
 SELECT * FROM '../core/tests/data/partitioned_table_arrow/part=123' ORDER BY f0;
