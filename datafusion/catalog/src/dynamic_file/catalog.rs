@@ -113,7 +113,7 @@ impl CatalogProvider for DynamicFileCatalogProvider {
 /// Implements the [DynamicFileSchemaProvider] that can create tables provider from the file path.
 ///
 /// The provider will try to create a table provider from the file path if the table provider
-/// isn't exist in the inner schema provider. The required object store must be registered in the session context.
+/// isn't exist in the inner schema provider.
 pub struct DynamicFileSchemaProvider {
     /// The inner schema provider
     inner: Arc<dyn SchemaProvider>,
