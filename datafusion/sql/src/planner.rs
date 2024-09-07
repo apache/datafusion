@@ -270,11 +270,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .options
                 .iter()
                 .any(|x| x.option == ColumnOption::NotNull);
-            fields.push(Field::new(
+
+            let mut metadata: HashMap<String, String> = HashMap::new();
+            column.options.iter().for_each(|v| {
+                if v.name.clone().map_or(true, |ident| ident.value.is_empty()) {
+                    // Only consider empty option names here.
+                    if let ColumnOption::Options(options) = v.option.clone() {
+                        // Only consider options (as opposed to foreign keys, etc.)
+                        for option in options {
+                            if let sqlparser::ast::Expr::Value(value) = option.value {
+                                // Only consider values (as opposed to expressions etc.)
+                                metadata.insert(option.name.value, value.to_string());
+                            }
+                        }
+                    }
+                }
+            });
+
+            let field = Field::new(
                 self.ident_normalizer.normalize(column.name),
                 data_type,
                 !not_nullable,
-            ));
+            )
+            .with_metadata(metadata);
+
+            fields.push(field);
         }
 
         Ok(Schema::new(fields))
