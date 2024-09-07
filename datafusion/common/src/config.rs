@@ -514,7 +514,7 @@ config_namespace! {
         /// a nullable and non-nullable column to filter out nulls on the nullable side. This
         /// filter can add additional overhead when the file format does not fully support
         /// predicate push down.
-        pub filter_null_join_keys: bool, default = false
+        pub filter_null_join_keys: bool, default = true
 
         /// Should DataFusion repartition data using the aggregate keys to execute aggregates
         /// in parallel using the provided `target_partitions` level
