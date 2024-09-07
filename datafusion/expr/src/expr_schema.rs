@@ -205,7 +205,7 @@ impl ExprSchemable for Expr {
                                     )
                                 )
                             })?;
-                        let function_name = self.schema_name().to_string();
+                        let (_, function_name) = self.qualified_name();
                         let field_args =
                             WindowUDFFieldArgs::new(&new_types, &function_name);
 
