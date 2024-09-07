@@ -38,13 +38,18 @@ COPY  (
 STORED AS PARQUET;
 
 
-## Create table without pushdown
+## Create table without filter pushdown
+## (pushdown setting is part of the table, but is copied from the session settings)
+
+# pushdown_filters (currently) defaults to false, but we set it here to be explicit
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
 statement ok
 CREATE EXTERNAL TABLE t(a varchar, b int, c float) STORED AS PARQUET
 LOCATION 'test_files/scratch/parquet_filter_pushdown/parquet_table/';
 
-## Create table with pushdown enabled (note the pushdown setting is part of the table,
-## but is copied from the session settings, so we need to set it here)
+## Create table with pushdown enabled (pushdown setting is part of the table)
 
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
@@ -54,6 +59,7 @@ statement ok
 CREATE EXTERNAL TABLE t_pushdown(a varchar, b int, c float) STORED AS PARQUET
 LOCATION 'test_files/scratch/parquet_filter_pushdown/parquet_table/';
 
+# restore defaults
 statement ok
 set datafusion.execution.parquet.pushdown_filters = false;
 
