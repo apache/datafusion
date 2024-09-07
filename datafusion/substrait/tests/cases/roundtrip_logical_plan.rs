@@ -491,8 +491,10 @@ async fn roundtrip_exists_filter() -> Result<()> {
         "SELECT b FROM data d1 WHERE EXISTS (SELECT * FROM data2 d2 WHERE d2.a = d1.a AND d2.e != d1.e)",
         "Projection: data.b\
         \n  LeftSemi Join: data.a = data2.a Filter: data2.e != CAST(data.e AS Int64)\
-        \n    TableScan: data projection=[a, b, e]\
-        \n    TableScan: data2 projection=[a, e]",
+        \n    Filter: data.a IS NOT NULL\
+        \n      TableScan: data projection=[a, b, e], partial_filters=[data.a IS NOT NULL]\
+        \n    Filter: data2.a IS NOT NULL\
+        \n      TableScan: data2 projection=[a, e], partial_filters=[data2.a IS NOT NULL]",
         false // "d1" vs "data" field qualifier
     ).await
 }
@@ -502,9 +504,11 @@ async fn inner_join() -> Result<()> {
     assert_expected_plan(
         "SELECT data.a FROM data JOIN data2 ON data.a = data2.a",
         "Projection: data.a\
-         \n  Inner Join: data.a = data2.a\
-         \n    TableScan: data projection=[a]\
-         \n    TableScan: data2 projection=[a]",
+        \n  Inner Join: data.a = data2.a\
+        \n    Filter: data.a IS NOT NULL\
+        \n      TableScan: data projection=[a], partial_filters=[data.a IS NOT NULL]\
+        \n    Filter: data2.a IS NOT NULL\
+        \n      TableScan: data2 projection=[a], partial_filters=[data2.a IS NOT NULL]",
         true,
     )
     .await
