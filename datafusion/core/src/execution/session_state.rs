@@ -801,6 +801,11 @@ impl SessionState {
         &mut self.config
     }
 
+    /// Return the logical optimizers
+    pub fn optimizers(&self) -> &[Arc<dyn OptimizerRule + Send + Sync>] {
+        &self.optimizer.rules
+    }
+
     /// Return the physical optimizers
     pub fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
         &self.physical_optimizers.rules
@@ -1826,6 +1831,8 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
+    use datafusion_optimizer::optimizer::OptimizerRule;
+    use datafusion_optimizer::Optimizer;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1921,5 +1928,30 @@ mod tests {
             SessionStateBuilder::new_from_existing(without_default_state).build();
         assert!(new_state.catalog_list().catalog(&default_catalog).is_none());
         Ok(())
+    }
+
+    #[test]
+    fn test_session_state_with_optimizer_rules() {
+        // test building sessions with supplied rules
+
+        let state = SessionStateBuilder::new()
+            .with_optimizer_rules(vec![Arc::new(DummyRule {})])
+            .build();
+
+        assert_eq!(state.optimizers().len(), 1);
+        
+        let state = SessionStateBuilder::new()
+            .with_optimizer_rule(Arc::new(DummyRule {}))
+            .build();
+
+        assert_eq!(state.optimizers().len(), Optimizer::default().rules.len() + 1);
+    }
+
+    struct DummyRule {}
+    
+    impl OptimizerRule for DummyRule {
+        fn name(&self) -> &str {
+            "dummy_rule"
+        }
     }
 }
