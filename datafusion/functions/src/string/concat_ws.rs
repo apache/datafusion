@@ -47,7 +47,7 @@ impl ConcatWsFunc {
         use DataType::*;
         Self {
             signature: Signature::variadic(
-                vec![Utf8, Utf8View, LargeUtf8],
+                vec![Utf8View, Utf8, LargeUtf8],
                 Volatility::Immutable,
             ),
         }
