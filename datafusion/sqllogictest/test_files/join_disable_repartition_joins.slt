@@ -50,16 +50,24 @@ logical_plan
 02)--Projection: t2.a
 03)----Inner Join: t1.c = t2.c
 04)------SubqueryAlias: t1
-05)--------TableScan: annotated_data projection=[c]
-06)------SubqueryAlias: t2
-07)--------TableScan: annotated_data projection=[a, c]
+05)--------Filter: annotated_data.c IS NOT NULL
+06)----------TableScan: annotated_data projection=[c], partial_filters=[annotated_data.c IS NOT NULL]
+07)------SubqueryAlias: t2
+08)--------Filter: annotated_data.c IS NOT NULL
+09)----------TableScan: annotated_data projection=[a, c], partial_filters=[annotated_data.c IS NOT NULL]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
 02)--CoalesceBatchesExec: target_batch_size=8192, fetch=5
 03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)], projection=[a@1]
-04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
-05)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+04)------CoalescePartitionsExec
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------FilterExec: c@0 IS NOT NULL
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
+09)------CoalesceBatchesExec: target_batch_size=8192
+10)--------FilterExec: c@1 IS NOT NULL
+11)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 # preserve_inner_join
 query IIII nosort
