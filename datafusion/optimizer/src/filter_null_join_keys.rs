@@ -50,7 +50,7 @@ impl OptimizerRule for FilterNullJoinKeys {
             return Ok(Transformed::no(plan));
         }
         match plan {
-            LogicalPlan::Join(mut join) if !join.on.is_empty() => {
+            LogicalPlan::Join(mut join) if !join.on.is_empty() && !join.null_equals_null() => {
                 let (left_preserved, right_preserved) =
                     on_lr_is_preserved(join.join_type);
 
