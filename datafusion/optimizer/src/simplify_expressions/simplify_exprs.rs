@@ -123,10 +123,10 @@ impl SimplifyExpressions {
         // Preserve expression names to avoid changing the schema of the plan.
         let name_preserver = NamePreserver::new(&plan);
         plan.map_expressions(|e| {
-            let original_name = name_preserver.save(&e)?;
+            let original_name = name_preserver.save(&e);
             let new_e = simplifier
                 .simplify(e)
-                .and_then(|expr| original_name.restore(expr))?;
+                .map(|expr| original_name.restore(expr))?;
             // TODO it would be nice to have a way to know if the expression was simplified
             // or not. For now conservatively return Transformed::yes
             Ok(Transformed::yes(new_e))

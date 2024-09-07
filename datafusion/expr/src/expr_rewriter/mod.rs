@@ -318,21 +318,20 @@ impl NamePreserver {
         Self { use_alias: true }
     }
 
-    pub fn save(&self, expr: &Expr) -> Result<SavedName> {
-        let original_name = if self.use_alias {
+    pub fn save(&self, expr: &Expr) -> SavedName {
+        if self.use_alias {
             let (relation, name) = expr.qualified_name();
             SavedName::Saved { relation, name }
         } else {
             SavedName::None
-        };
-        Ok(original_name)
+        }
     }
 }
 
 impl SavedName {
     /// Ensures the qualified name of the rewritten expression is preserved
-    pub fn restore(self, expr: Expr) -> Result<Expr> {
-        let expr = match self {
+    pub fn restore(self, expr: Expr) -> Expr {
+        match self {
             SavedName::Saved { relation, name } => {
                 let (new_relation, new_name) = expr.qualified_name();
                 if new_relation != relation || new_name != name {
@@ -342,8 +341,7 @@ impl SavedName {
                 }
             }
             SavedName::None => expr,
-        };
-        Ok(expr)
+        }
     }
 }
 
@@ -543,9 +541,9 @@ mod test {
         let mut rewriter = TestRewriter {
             rewrite_to: rewrite_to.clone(),
         };
-        let saved_name = NamePreserver { use_alias: true }.save(&expr_from).unwrap();
+        let saved_name = NamePreserver { use_alias: true }.save(&expr_from);
         let new_expr = expr_from.clone().rewrite(&mut rewriter).unwrap().data;
-        let new_expr = saved_name.restore(new_expr).unwrap();
+        let new_expr = saved_name.restore(new_expr);
 
         let original_name = expr_from.qualified_name();
         let new_name = new_expr.qualified_name();
