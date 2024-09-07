@@ -4044,21 +4044,27 @@ logical_plan
 03)----SubqueryAlias: lhs
 04)------Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
 05)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-06)----------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
-07)----SubqueryAlias: rhs
-08)------Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
-09)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
-10)----------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
+06)----------Filter: multiple_ordered_table_with_pk.b IS NOT NULL
+07)------------TableScan: multiple_ordered_table_with_pk projection=[b, c, d], partial_filters=[multiple_ordered_table_with_pk.b IS NOT NULL]
+08)----SubqueryAlias: rhs
+09)------Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
+10)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
+11)----------Filter: multiple_ordered_table_with_pk.b IS NOT NULL
+12)------------TableScan: multiple_ordered_table_with_pk projection=[b, c, d], partial_filters=[multiple_ordered_table_with_pk.b IS NOT NULL]
 physical_plan
 01)ProjectionExec: expr=[c@0 as c, c@2 as c, sum1@1 as sum1, sum1@3 as sum1]
 02)--CoalesceBatchesExec: target_batch_size=2
 03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b@1, b@1)], projection=[c@0, sum1@2, c@3, sum1@5]
 04)------ProjectionExec: expr=[c@0 as c, b@1 as b, sum(multiple_ordered_table_with_pk.d)@2 as sum1]
 05)--------AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
-07)------ProjectionExec: expr=[c@0 as c, b@1 as b, sum(multiple_ordered_table_with_pk.d)@2 as sum1]
-08)--------AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
-09)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
+06)----------CoalesceBatchesExec: target_batch_size=2
+07)------------FilterExec: b@0 IS NOT NULL
+08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
+09)------ProjectionExec: expr=[c@0 as c, b@1 as b, sum(multiple_ordered_table_with_pk.d)@2 as sum1]
+10)--------AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[sum(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
+11)----------CoalesceBatchesExec: target_batch_size=2
+12)------------FilterExec: b@0 IS NOT NULL
+13)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
 
 query TT
 EXPLAIN SELECT lhs.c, rhs.c, lhs.sum1, rhs.sum1
