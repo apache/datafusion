@@ -532,6 +532,7 @@ fn cast_between_timestamp(from: &DataType, to: &DataType, value: i128) -> Option
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use std::collections::HashMap;
 
     use super::*;

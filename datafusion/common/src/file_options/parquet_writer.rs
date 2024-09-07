@@ -447,22 +447,22 @@ mod tests {
 
     fn extract_column_options(
         props: &WriterProperties,
-        col: ColumnPath,
+        col: &ColumnPath,
     ) -> ParquetColumnOptions {
-        let bloom_filter_default_props = props.bloom_filter_properties(&col);
+        let bloom_filter_default_props = props.bloom_filter_properties(col);
 
         ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
-            encoding: props.encoding(&col).map(|s| s.to_string()),
-            dictionary_enabled: Some(props.dictionary_enabled(&col)),
-            compression: match props.compression(&col) {
+            encoding: props.encoding(col).map(|s| s.to_string()),
+            dictionary_enabled: Some(props.dictionary_enabled(col)),
+            compression: match props.compression(col) {
                 Compression::ZSTD(lvl) => {
                     Some(format!("zstd({})", lvl.compression_level()))
                 }
                 _ => None,
             },
             statistics_enabled: Some(
-                match props.statistics_enabled(&col) {
+                match props.statistics_enabled(col) {
                     EnabledStatistics::None => "none",
                     EnabledStatistics::Chunk => "chunk",
                     EnabledStatistics::Page => "page",
@@ -471,7 +471,7 @@ mod tests {
             ),
             bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp),
             bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv),
-            max_statistics_size: Some(props.max_statistics_size(&col)),
+            max_statistics_size: Some(props.max_statistics_size(col)),
         }
     }
 
@@ -479,10 +479,10 @@ mod tests {
     /// (use identity to confirm correct.)
     fn session_config_from_writer_props(props: &WriterProperties) -> TableParquetOptions {
         let default_col = ColumnPath::from("col doesn't have specific config");
-        let default_col_props = extract_column_options(props, default_col);
+        let default_col_props = extract_column_options(props, &default_col);
 
         let configured_col = ColumnPath::from(COL_NAME);
-        let configured_col_props = extract_column_options(props, configured_col);
+        let configured_col_props = extract_column_options(props, &configured_col);
 
         let key_value_metadata = props
             .key_value_metadata()

@@ -388,6 +388,7 @@ impl Ord for ToRepartition {
 
 #[cfg(test)]
 mod test {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
 
     /// Empty file won't get partitioned

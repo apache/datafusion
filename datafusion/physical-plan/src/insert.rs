@@ -229,7 +229,7 @@ impl ExecutionPlan for DataSinkExec {
             return internal_err!("DataSinkExec can only be called on partition 0!");
         }
         let data = execute_input_stream(
-            Arc::clone(&self.input),
+            &self.input,
             Arc::clone(&self.sink_schema),
             0,
             Arc::clone(&context),

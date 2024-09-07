@@ -322,6 +322,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_expr::interval_arithmetic::Interval;

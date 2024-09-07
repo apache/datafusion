@@ -33,7 +33,7 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 /// ltrim('zzzytest', 'xyz') = 'test'
 fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let use_string_view = args[0].data_type() == &DataType::Utf8View;
-    general_trim::<T>(args, TrimType::Left, use_string_view)
+    general_trim::<T>(args, &TrimType::Left, use_string_view)
 }
 
 #[derive(Debug)]

@@ -121,7 +121,11 @@ impl CustomDataSource {
         projections: Option<&Vec<usize>>,
         schema: SchemaRef,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CustomExec::new(projections, schema, self.clone())))
+        Ok(Arc::new(CustomExec::new(
+            projections,
+            &schema,
+            self.clone(),
+        )))
     }
 
     pub(crate) fn populate_users(&self) {
@@ -196,10 +200,10 @@ struct CustomExec {
 impl CustomExec {
     fn new(
         projections: Option<&Vec<usize>>,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         db: CustomDataSource,
     ) -> Self {
-        let projected_schema = project_schema(&schema, projections).unwrap();
+        let projected_schema = project_schema(schema, projections).unwrap();
         let cache = Self::compute_properties(projected_schema.clone());
         Self {
             db,

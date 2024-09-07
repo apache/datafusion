@@ -1874,10 +1874,13 @@ fn from_substrait_literal(
                         &mut entry_name_idx,
                     )?;
                     ScalarStructBuilder::new()
-                        .with_scalar(Field::new("key", key_sv.data_type(), false), key_sv)
+                        .with_scalar(
+                            Field::new("key", key_sv.data_type(), false),
+                            &key_sv,
+                        )
                         .with_scalar(
                             Field::new("value", value_sv.data_type(), true),
-                            value_sv,
+                            &value_sv,
                         )
                         .build()
                 })
@@ -1937,7 +1940,8 @@ fn from_substrait_literal(
                 let sv = from_substrait_literal(field, extensions, dfs_names, name_idx)?;
                 // We assume everything to be nullable, since Arrow's strict about things matching
                 // and it's hard to match otherwise.
-                builder = builder.with_scalar(Field::new(name, sv.data_type(), true), sv);
+                builder =
+                    builder.with_scalar(Field::new(name, sv.data_type(), true), &sv);
             }
             builder.build()?
         }

@@ -49,7 +49,7 @@ pub trait FieldAccessor {
 
 impl FieldAccessor for Expr {
     fn field(self, name: impl Literal) -> Expr {
-        get_field(self, name)
+        get_field(self, &name)
     }
 }
 
@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn test_field() {
         let expr1 = col("a").field("b");
-        let expr2 = get_field(col("a"), "b");
+        let expr2 = get_field(col("a"), &"b");
         assert_eq!(expr1, expr2);
     }
 }

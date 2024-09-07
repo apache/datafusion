@@ -336,9 +336,9 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn statistics(&self) -> Result<Statistics> {
         estimate_join_statistics(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
-            vec![],
+            &self.left,
+            &self.right,
+            &vec![],
             &self.join_type,
             &self.schema,
         )

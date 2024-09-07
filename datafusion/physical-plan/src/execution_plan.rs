@@ -644,7 +644,7 @@ impl PlanProperties {
 ///     1. RepartitionExec for changing the partition number between two `ExecutionPlan`s
 ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
 ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
-pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
+pub fn need_data_exchange(plan: &Arc<dyn ExecutionPlan>) -> bool {
     if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
         !matches!(
             repartition.properties().output_partitioning(),
@@ -720,7 +720,7 @@ pub fn execute_stream(
         1 => plan.execute(0, context),
         2.. => {
             // merge into a single partition
-            let plan = CoalescePartitionsExec::new(Arc::clone(&plan));
+            let plan = CoalescePartitionsExec::new(plan);
             // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.properties().output_partitioning().partition_count());
             plan.execute(0, context)
@@ -733,7 +733,7 @@ pub async fn collect_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
-    let streams = execute_stream_partitioned(plan, context)?;
+    let streams = execute_stream_partitioned(&plan, &context)?;
 
     let mut join_set = JoinSet::new();
     // Execute the plan and collect the results into batches.
@@ -776,13 +776,13 @@ pub async fn collect_partitioned(
 /// Dropping the stream will abort the execution of the query, and free up
 /// any allocated resources
 pub fn execute_stream_partitioned(
-    plan: Arc<dyn ExecutionPlan>,
-    context: Arc<TaskContext>,
+    plan: &Arc<dyn ExecutionPlan>,
+    context: &Arc<TaskContext>,
 ) -> Result<Vec<SendableRecordBatchStream>> {
     let num_partitions = plan.output_partitioning().partition_count();
     let mut streams = Vec::with_capacity(num_partitions);
     for i in 0..num_partitions {
-        streams.push(plan.execute(i, Arc::clone(&context))?);
+        streams.push(plan.execute(i, Arc::clone(context))?);
     }
     Ok(streams)
 }
@@ -807,7 +807,7 @@ pub fn execute_stream_partitioned(
 /// such columns, it wraps the resulting stream to enforce the `not null` constraints
 /// by invoking the `check_not_null_contraits` function on each batch of the stream.
 pub fn execute_input_stream(
-    input: Arc<dyn ExecutionPlan>,
+    input: &Arc<dyn ExecutionPlan>,
     sink_schema: SchemaRef,
     partition: usize,
     context: Arc<TaskContext>,
@@ -887,6 +887,7 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use std::any::Any;
     use std::sync::Arc;

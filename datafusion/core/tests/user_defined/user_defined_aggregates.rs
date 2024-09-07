@@ -18,6 +18,8 @@
 //! This module contains end to end demonstrations of creating
 //! user defined aggregate functions
 
+#![allow(clippy::needless_pass_by_value)] // OK in tests
+
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{
     atomic::{AtomicBool, Ordering},

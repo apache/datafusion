@@ -407,7 +407,7 @@ impl PartitionColumnProjector {
     // - `partition_values`: the list of partition values, one for each partition column
     pub fn project(
         &mut self,
-        file_batch: RecordBatch,
+        file_batch: &RecordBatch,
         partition_values: &[ScalarValue],
     ) -> Result<RecordBatch> {
         let expected_cols =
@@ -610,6 +610,7 @@ fn create_output_array(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use arrow_array::Int32Array;
 
     use super::*;
@@ -768,7 +769,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                file_batch,
+                &file_batch,
                 &[
                     wrap_partition_value_in_dict(ScalarValue::from("2021")),
                     wrap_partition_value_in_dict(ScalarValue::from("10")),
@@ -796,7 +797,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                file_batch,
+                &file_batch,
                 &[
                     wrap_partition_value_in_dict(ScalarValue::from("2021")),
                     wrap_partition_value_in_dict(ScalarValue::from("10")),
@@ -826,7 +827,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                file_batch,
+                &file_batch,
                 &[
                     wrap_partition_value_in_dict(ScalarValue::from("2021")),
                     wrap_partition_value_in_dict(ScalarValue::from("10")),
@@ -854,7 +855,7 @@ mod tests {
         let projected_batch = proj
             .project(
                 // file_batch is ok here because we kept all the file cols in the projection
-                file_batch,
+                &file_batch,
                 &[
                     ScalarValue::from("2021"),
                     ScalarValue::from("10"),

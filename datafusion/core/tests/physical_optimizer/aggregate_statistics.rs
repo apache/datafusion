@@ -17,6 +17,8 @@
 
 //! Tests for the physical optimizer
 
+#![allow(clippy::needless_pass_by_value)] // OK in tests
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;

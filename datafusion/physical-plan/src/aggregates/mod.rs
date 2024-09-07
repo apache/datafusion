@@ -327,7 +327,7 @@ impl AggregateExec {
             &input.schema(),
             &group_by.expr,
             &aggr_expr,
-            group_by.exprs_nullable(),
+            &group_by.exprs_nullable(),
             mode,
         )?;
 
@@ -495,7 +495,7 @@ impl AggregateExec {
         // no group by at all
         if self.group_by.expr.is_empty() {
             return Ok(StreamType::AggregateStream(AggregateStream::new(
-                self, context, partition,
+                self, &context, partition,
             )?));
         }
 
@@ -510,7 +510,7 @@ impl AggregateExec {
 
         // grouping by something else and we need to just materialize all results
         Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
-            self, context, partition,
+            self, &context, partition,
         )?))
     }
 
@@ -791,7 +791,7 @@ fn create_schema(
     input_schema: &Schema,
     group_expr: &[(Arc<dyn PhysicalExpr>, String)],
     aggr_expr: &[Arc<AggregateFunctionExpr>],
-    group_expr_nullable: Vec<bool>,
+    group_expr_nullable: &[bool],
     mode: AggregateMode,
 ) -> Result<Schema> {
     let mut fields = Vec::with_capacity(group_expr.len() + aggr_expr.len());
@@ -2519,7 +2519,7 @@ mod tests {
             &input_schema,
             &grouping_set.expr,
             &aggr_expr,
-            grouping_set.exprs_nullable(),
+            &grouping_set.exprs_nullable(),
             AggregateMode::Final,
         )?;
         let expected_schema = Schema::new(vec![

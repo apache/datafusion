@@ -150,7 +150,7 @@ impl InformationSchemaConfig {
                                     &catalog_name,
                                     &schema_name,
                                     &table_name,
-                                    table.get_table_definition(),
+                                    &table.get_table_definition(),
                                 )
                             }
                         }
@@ -401,7 +401,7 @@ impl InformationSchemaViewBuilder {
         catalog_name: impl AsRef<str>,
         schema_name: impl AsRef<str>,
         table_name: impl AsRef<str>,
-        definition: Option<impl AsRef<str>>,
+        definition: &Option<impl AsRef<str>>,
     ) {
         // Note: append_value is actually infallible.
         self.catalog_names.append_value(catalog_name.as_ref());

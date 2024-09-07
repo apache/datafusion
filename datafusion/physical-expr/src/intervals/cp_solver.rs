@@ -718,6 +718,7 @@ fn reverse_tuple<T, U>((first, second): (T, U)) -> (U, T) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use crate::expressions::{BinaryExpr, Column};
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;

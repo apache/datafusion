@@ -50,7 +50,7 @@ impl Display for TrimType {
 
 pub(crate) fn general_trim<T: OffsetSizeTrait>(
     args: &[ArrayRef],
-    trim_type: TrimType,
+    trim_type: &TrimType,
     use_string_view: bool,
 ) -> Result<ArrayRef> {
     let func = match trim_type {

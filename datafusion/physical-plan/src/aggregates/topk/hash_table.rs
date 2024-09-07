@@ -369,7 +369,7 @@ hash_float!(f16, f32, f64);
 
 pub fn new_hash_table(
     limit: usize,
-    kt: DataType,
+    kt: &DataType,
 ) -> Result<Box<dyn ArrowHashTable + Send>> {
     macro_rules! downcast_helper {
         ($kt:ty, $d:ident) => {

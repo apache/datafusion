@@ -72,6 +72,7 @@ pub fn add_offset_to_expr(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use crate::expressions::col;
     use crate::PhysicalSortExpr;
@@ -296,12 +297,12 @@ mod tests {
 
     // Apply projection to the input_data, return projected equivalence properties and record batch
     pub fn apply_projection(
-        proj_exprs: Vec<(Arc<dyn PhysicalExpr>, String)>,
+        proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
         input_data: &RecordBatch,
         input_eq_properties: &EquivalenceProperties,
     ) -> Result<(RecordBatch, EquivalenceProperties)> {
         let input_schema = input_data.schema();
-        let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
+        let projection_mapping = ProjectionMapping::try_new(proj_exprs, &input_schema)?;
 
         let output_schema = output_schema(&projection_mapping, &input_schema)?;
         let num_rows = input_data.num_rows();
@@ -450,7 +451,7 @@ mod tests {
     fn get_representative_arr(
         eq_group: &EquivalenceClass,
         existing_vec: &[Option<ArrayRef>],
-        schema: SchemaRef,
+        schema: &Schema,
     ) -> Option<ArrayRef> {
         for expr in eq_group.iter() {
             let col = expr.as_any().downcast_ref::<Column>().unwrap();
@@ -518,7 +519,7 @@ mod tests {
         // Fill columns based on equivalence groups
         for eq_group in eq_properties.eq_group.iter() {
             let representative_array =
-                get_representative_arr(eq_group, &schema_vec, Arc::clone(schema))
+                get_representative_arr(eq_group, &schema_vec, schema.as_ref())
                     .unwrap_or_else(|| generate_random_array(n_elem, n_distinct));
 
             for expr in eq_group.iter() {

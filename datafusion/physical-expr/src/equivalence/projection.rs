@@ -1033,7 +1033,7 @@ mod tests {
                         .map(|(expr, name)| (Arc::clone(expr), name.to_string()))
                         .collect::<Vec<_>>();
                     let (projected_batch, projected_eq) = apply_projection(
-                        proj_exprs.clone(),
+                        &proj_exprs,
                         &table_data_with_properties,
                         &eq_properties,
                     )?;
@@ -1111,7 +1111,7 @@ mod tests {
                         .map(|(expr, name)| (Arc::clone(expr), name.to_string()))
                         .collect::<Vec<_>>();
                     let (projected_batch, projected_eq) = apply_projection(
-                        proj_exprs.clone(),
+                        &proj_exprs,
                         &table_data_with_properties,
                         &eq_properties,
                     )?;

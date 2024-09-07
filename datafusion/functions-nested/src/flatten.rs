@@ -134,7 +134,7 @@ fn flatten_internal<O: OffsetSizeTrait>(
         List(_) | LargeList(_) => {
             let sub_list = as_generic_list_array::<O>(&values)?;
             if let Some(indexes) = indexes {
-                let offsets = get_offsets_for_flatten(offsets, indexes);
+                let offsets = get_offsets_for_flatten(offsets, &indexes);
                 flatten_internal::<O>(sub_list.clone(), Some(offsets))
             } else {
                 flatten_internal::<O>(sub_list.clone(), Some(offsets))
@@ -143,7 +143,7 @@ fn flatten_internal<O: OffsetSizeTrait>(
         // Reach the base level, create a new list array
         _ => {
             if let Some(indexes) = indexes {
-                let offsets = get_offsets_for_flatten(offsets, indexes);
+                let offsets = get_offsets_for_flatten(offsets, &indexes);
                 let list_arr = GenericListArray::<O>::new(field, offsets, values, None);
                 Ok(list_arr)
             } else {
@@ -156,7 +156,7 @@ fn flatten_internal<O: OffsetSizeTrait>(
 // Create new offsets that are equivalent to `flatten` the array.
 fn get_offsets_for_flatten<O: OffsetSizeTrait>(
     offsets: OffsetBuffer<O>,
-    indexes: OffsetBuffer<O>,
+    indexes: &OffsetBuffer<O>,
 ) -> OffsetBuffer<O> {
     let buffer = offsets.into_inner();
     let offsets: Vec<O> = indexes

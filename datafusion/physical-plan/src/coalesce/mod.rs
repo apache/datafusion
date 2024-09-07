@@ -113,8 +113,8 @@ impl BatchCoalescer {
 
     /// Push next batch, and returns [`CoalescerState`] indicating the current
     /// state of the buffer.
-    pub fn push_batch(&mut self, batch: RecordBatch) -> CoalescerState {
-        let batch = gc_string_view_batch(&batch);
+    pub fn push_batch(&mut self, batch: &RecordBatch) -> CoalescerState {
+        let batch = gc_string_view_batch(batch);
         if self.limit_reached(&batch) {
             CoalescerState::LimitReached
         } else if self.target_reached(batch) {
@@ -429,7 +429,7 @@ mod tests {
 
             let mut output_batches = vec![];
             for batch in input_batches {
-                match coalescer.push_batch(batch) {
+                match coalescer.push_batch(&batch) {
                     CoalescerState::Continue => {}
                     CoalescerState::LimitReached => {
                         output_batches.push(coalescer.finish_batch().unwrap());

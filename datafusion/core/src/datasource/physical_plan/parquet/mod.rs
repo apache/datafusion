@@ -399,7 +399,7 @@ impl ParquetExecBuilder {
         let page_pruning_predicate = predicate
             .as_ref()
             .map(|predicate_expr| {
-                PagePruningAccessPlanFilter::new(predicate_expr, file_schema.clone())
+                PagePruningAccessPlanFilter::new(predicate_expr, file_schema)
             })
             .map(Arc::new);
 

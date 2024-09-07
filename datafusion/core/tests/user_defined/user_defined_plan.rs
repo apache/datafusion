@@ -437,7 +437,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         Ok(Self {
             k: self.k,
             input: inputs.swap_remove(0),
-            expr: replace_sort_expression(self.expr.clone(), exprs.swap_remove(0)),
+            expr: replace_sort_expression(&self.expr, exprs.swap_remove(0)),
         })
     }
 }

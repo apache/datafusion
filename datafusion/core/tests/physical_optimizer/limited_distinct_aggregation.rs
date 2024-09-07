@@ -17,6 +17,8 @@
 
 //! Tests for the limited distinct aggregation optimizer rule
 
+#![allow(clippy::needless_pass_by_value)] // OK in tests
+
 use super::test_util::{parquet_exec_with_sort, schema, trim_plan_display};
 
 use std::sync::Arc;

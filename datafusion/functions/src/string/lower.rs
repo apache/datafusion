@@ -74,6 +74,7 @@ impl ScalarUDFImpl for LowerFunc {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use arrow::array::{ArrayRef, StringArray};
     use std::sync::Arc;

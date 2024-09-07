@@ -78,7 +78,7 @@ impl WindowAggExec {
 
         let ordered_partition_by_indices =
             get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
-        let cache = Self::compute_properties(Arc::clone(&schema), &input, &window_expr);
+        let cache = Self::compute_properties(&schema, &input, &window_expr);
         Ok(Self {
             input,
             window_expr,
@@ -116,12 +116,12 @@ impl WindowAggExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
-        schema: SchemaRef,
+        schema: &SchemaRef,
         input: &Arc<dyn ExecutionPlan>,
         window_expr: &[Arc<dyn WindowExpr>],
     ) -> PlanProperties {
         // Calculate equivalence properties:
-        let eq_properties = window_equivalence_properties(&schema, input, window_expr);
+        let eq_properties = window_equivalence_properties(schema, input, window_expr);
 
         // Get output partitioning:
         // Because we can have repartitioning using the partition keys this

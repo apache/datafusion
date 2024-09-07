@@ -186,7 +186,7 @@ fn add_row_stats(
 #[cfg(feature = "parquet")]
 pub(crate) fn get_col_stats(
     schema: &Schema,
-    null_counts: Vec<Precision<usize>>,
+    null_counts: &[Precision<usize>],
     max_values: &mut [Option<MaxAccumulator>],
     min_values: &mut [Option<MinAccumulator>],
 ) -> Vec<ColumnStatistics> {

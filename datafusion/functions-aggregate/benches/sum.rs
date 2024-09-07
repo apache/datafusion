@@ -45,7 +45,7 @@ fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
 fn convert_to_state_bench(
     c: &mut Criterion,
     name: &str,
-    values: ArrayRef,
+    values: &ArrayRef,
     opt_filter: Option<&BooleanArray>,
 ) {
     let accumulator = prepare_accumulator(values.data_type());
@@ -62,13 +62,18 @@ fn convert_to_state_bench(
 
 fn count_benchmark(c: &mut Criterion) {
     let values = Arc::new(create_primitive_array::<Int64Type>(8192, 0.0)) as ArrayRef;
-    convert_to_state_bench(c, "sum i64 convert state no nulls, no filter", values, None);
+    convert_to_state_bench(
+        c,
+        "sum i64 convert state no nulls, no filter",
+        &values,
+        None,
+    );
 
     let values = Arc::new(create_primitive_array::<Int64Type>(8192, 0.3)) as ArrayRef;
     convert_to_state_bench(
         c,
         "sum i64 convert state 30% nulls, no filter",
-        values,
+        &values,
         None,
     );
 
@@ -76,7 +81,7 @@ fn count_benchmark(c: &mut Criterion) {
     convert_to_state_bench(
         c,
         "sum i64 convert state 70% nulls, no filter",
-        values,
+        &values,
         None,
     );
 
@@ -85,7 +90,7 @@ fn count_benchmark(c: &mut Criterion) {
     convert_to_state_bench(
         c,
         "sum i64 convert state no nulls, filter",
-        values,
+        &values,
         Some(&filter),
     );
 
@@ -94,7 +99,7 @@ fn count_benchmark(c: &mut Criterion) {
     convert_to_state_bench(
         c,
         "sum i64 convert state nulls, filter",
-        values,
+        &values,
         Some(&filter),
     );
 }

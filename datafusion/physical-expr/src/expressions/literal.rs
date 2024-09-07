@@ -109,6 +109,8 @@ impl PartialEq<dyn Any> for Literal {
 }
 
 /// Create a literal expression
+// TODO address needless_pass_by_value & remove the suppression. Maybe change datafusion_expr::Literal::lit to move self?
+#[allow(clippy::needless_pass_by_value)]
 pub fn lit<T: datafusion_expr::Literal>(value: T) -> Arc<dyn PhysicalExpr> {
     match value.lit() {
         Expr::Literal(v) => Arc::new(Literal::new(v)),

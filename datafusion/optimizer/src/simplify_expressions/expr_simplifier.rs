@@ -1789,6 +1789,7 @@ fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
         function::{

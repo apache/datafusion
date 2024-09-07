@@ -186,6 +186,7 @@ impl FlightService for FlightServiceImpl {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)] // moved value better aligns with .map_err() usages
 fn to_tonic_err(e: datafusion::error::DataFusionError) -> Status {
     Status::internal(format!("{e:?}"))
 }

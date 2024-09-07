@@ -353,7 +353,7 @@ fn get_excluded_columns(
 /// Returns all `Expr`s in the schema, except the `Column`s in the `columns_to_skip`
 fn get_exprs_except_skipped(
     schema: &DFSchema,
-    columns_to_skip: HashSet<Column>,
+    columns_to_skip: &HashSet<Column>,
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
         schema.iter().map(Expr::from).collect::<Vec<Expr>>()
@@ -412,7 +412,7 @@ pub fn expand_wildcard(
     };
     // Add each excluded `Column` to columns_to_skip
     columns_to_skip.extend(excluded_columns);
-    Ok(get_exprs_except_skipped(schema, columns_to_skip))
+    Ok(get_exprs_except_skipped(schema, &columns_to_skip))
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
@@ -454,7 +454,7 @@ pub fn expand_qualified_wildcard(
     columns_to_skip.extend(excluded_columns);
     Ok(get_exprs_except_skipped(
         &qualified_dfschema,
-        columns_to_skip,
+        &columns_to_skip,
     ))
 }
 
@@ -793,8 +793,11 @@ pub fn exprlist_len(
                 .into_iter()
                 .collect::<HashSet<Column>>();
                 Ok(
-                    get_exprs_except_skipped(wildcard_schema.unwrap_or(schema), excluded)
-                        .len(),
+                    get_exprs_except_skipped(
+                        wildcard_schema.unwrap_or(schema),
+                        &excluded,
+                    )
+                    .len(),
                 )
             }
             Expr::Wildcard {
@@ -832,7 +835,7 @@ pub fn exprlist_len(
                 .into_iter()
                 .collect::<HashSet<Column>>();
                 Ok(
-                    get_exprs_except_skipped(related_wildcard_schema.as_ref(), excluded)
+                    get_exprs_except_skipped(related_wildcard_schema.as_ref(), &excluded)
                         .len(),
                 )
             }
@@ -1040,7 +1043,7 @@ pub fn find_valid_equijoin_key_pair(
 /// ```
 pub fn generate_signature_error_msg(
     func_name: &str,
-    func_signature: Signature,
+    func_signature: &Signature,
     input_expr_types: &[DataType],
 ) -> String {
     let candidate_signatures = func_signature

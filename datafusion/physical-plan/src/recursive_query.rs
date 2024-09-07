@@ -82,7 +82,7 @@ impl RecursiveQueryExec {
         // Each recursive query needs its own work table
         let work_table = Arc::new(WorkTable::new());
         // Use the same work table for both the WorkTableExec and the recursive term
-        let recursive_term = assign_work_table(recursive_term, Arc::clone(&work_table))?;
+        let recursive_term = assign_work_table(recursive_term, &work_table)?;
         let cache = Self::compute_properties(static_term.schema());
         Ok(RecursiveQueryExec {
             name,
@@ -322,7 +322,7 @@ impl RecursiveQueryStream {
 
 fn assign_work_table(
     plan: Arc<dyn ExecutionPlan>,
-    work_table: Arc<WorkTable>,
+    work_table: &Arc<WorkTable>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut work_table_refs = 0;
     plan.transform_down(|plan| {
@@ -334,7 +334,7 @@ fn assign_work_table(
             } else {
                 work_table_refs += 1;
                 Ok(Transformed::yes(Arc::new(
-                    exec.with_work_table(Arc::clone(&work_table)),
+                    exec.with_work_table(Arc::clone(work_table)),
                 )))
             }
         } else if plan.as_any().is::<RecursiveQueryExec>() {

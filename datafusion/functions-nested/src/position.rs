@@ -130,13 +130,13 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
         }
     }
 
-    generic_position::<O>(list_array, element_array, arr_from)
+    generic_position::<O>(list_array, element_array, &arr_from)
 }
 
 fn generic_position<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
-    arr_from: Vec<i64>, // 0-indexed
+    arr_from: &[i64], // 0-indexed
 ) -> Result<ArrayRef> {
     let mut data = Vec::with_capacity(list_array.len());
 

@@ -626,7 +626,7 @@ impl CommonSubexprEliminate {
                                     new_input,
                                     new_group_expr,
                                     rewritten_aggr_expr,
-                                    schema,
+                                    schema.as_ref().clone(),
                                 )
                                 .map(LogicalPlan::Aggregate)
                             }

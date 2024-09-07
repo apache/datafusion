@@ -162,8 +162,12 @@ panic = 'unwind'
 rpath = false
 
 [workspace.lints.clippy]
+# Note: we run clippy with `-D warnings`, warnings are not allowed.
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"
+# Detects functions that do not need to move their parameters and thus potentially require clones.
+# Performance-related, OK to suppress in test code.
+needless_pass_by_value = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }

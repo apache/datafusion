@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![allow(clippy::needless_pass_by_value)] // OK in tests
+
 use crate::analyzer::{Analyzer, AnalyzerRule};
 use crate::optimizer::Optimizer;
 use crate::{OptimizerContext, OptimizerRule};

@@ -1391,6 +1391,7 @@ type PlanWithKeyRequirements = PlanContext<Vec<Arc<dyn PhysicalExpr>>>;
 #[cfg(feature = "parquet")]
 #[cfg(test)]
 pub(crate) mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use std::ops::Deref;
 
     use super::*;

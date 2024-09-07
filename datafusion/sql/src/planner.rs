@@ -104,8 +104,8 @@ impl ValueNormalizer {
         Self { normalize }
     }
 
-    pub fn normalize(&self, value: Value) -> Option<String> {
-        match (value_to_string(&value), self.normalize) {
+    pub fn normalize(&self, value: &Value) -> Option<String> {
+        match (value_to_string(value), self.normalize) {
             (Some(s), true) => Some(s.to_ascii_lowercase()),
             (Some(s), false) => Some(s),
             (None, _) => None,

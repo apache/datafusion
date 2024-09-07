@@ -159,6 +159,7 @@ pub fn check_plan_sanity(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
 
     use crate::physical_optimizer::test_utils::{

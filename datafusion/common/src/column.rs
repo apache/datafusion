@@ -309,7 +309,7 @@ mod tests {
     use arrow_schema::SchemaBuilder;
     use std::sync::Arc;
 
-    fn create_qualified_schema(qualifier: &str, names: Vec<&str>) -> Result<DFSchema> {
+    fn create_qualified_schema(qualifier: &str, names: &[&str]) -> Result<DFSchema> {
         let mut schema_builder = SchemaBuilder::new();
         schema_builder.extend(
             names
@@ -322,9 +322,9 @@ mod tests {
 
     #[test]
     fn test_normalize_with_schemas_and_ambiguity_check() -> Result<()> {
-        let schema1 = create_qualified_schema("t1", vec!["a", "b"])?;
-        let schema2 = create_qualified_schema("t2", vec!["c", "d"])?;
-        let schema3 = create_qualified_schema("t3", vec!["a", "b", "c", "d", "e"])?;
+        let schema1 = create_qualified_schema("t1", &["a", "b"])?;
+        let schema2 = create_qualified_schema("t2", &["c", "d"])?;
+        let schema3 = create_qualified_schema("t3", &["a", "b", "c", "d", "e"])?;
 
         // already normalized
         let col = Column::new(Some("t1"), "a");

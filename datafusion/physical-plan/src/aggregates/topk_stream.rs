@@ -56,7 +56,7 @@ impl GroupedTopKAggregateStream {
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&aggr.schema);
         let group_by = aggr.group_by.clone();
-        let input = aggr.input.execute(partition, Arc::clone(&context))?;
+        let input = aggr.input.execute(partition, context)?;
         let aggregate_arguments =
             aggregate_expressions(&aggr.aggr_expr, &aggr.mode, group_by.expr.len())?;
         let (val_field, desc) = aggr
@@ -67,7 +67,7 @@ impl GroupedTopKAggregateStream {
         let kt = expr.data_type(&aggr.input().schema())?;
         let vt = val_field.data_type().clone();
 
-        let priority_map = PriorityMap::new(kt, vt, limit, desc)?;
+        let priority_map = PriorityMap::new(&kt, vt, limit, desc)?;
 
         Ok(GroupedTopKAggregateStream {
             partition,
@@ -89,9 +89,9 @@ impl RecordBatchStream for GroupedTopKAggregateStream {
 }
 
 impl GroupedTopKAggregateStream {
-    fn intern(&mut self, ids: ArrayRef, vals: ArrayRef) -> Result<()> {
+    fn intern(&mut self, ids: ArrayRef, vals: &ArrayRef) -> Result<()> {
         let len = ids.len();
-        self.priority_map.set_batch(ids, Arc::clone(&vals));
+        self.priority_map.set_batch(ids, Arc::clone(vals));
 
         let has_nulls = vals.null_count() > 0;
         for row_idx in 0..len {
@@ -146,7 +146,7 @@ impl Stream for GroupedTopKAggregateStream {
                     )?;
                     assert_eq!(input_values.len(), 1, "Exactly 1 input required");
                     assert_eq!(input_values[0].len(), 1, "Exactly 1 input required");
-                    let input_values = Arc::clone(&input_values[0][0]);
+                    let input_values = &input_values[0][0];
 
                     // iterate over each column of group_by values
                     (*self).intern(group_by_values, input_values)?;

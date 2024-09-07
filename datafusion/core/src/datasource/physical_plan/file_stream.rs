@@ -394,7 +394,7 @@ impl<F: FileOpener> FileStream<F> {
                             self.file_stream_metrics.time_scanning_total.stop();
                             let result = self
                                 .pc_projector
-                                .project(batch, partition_values)
+                                .project(&batch, partition_values)
                                 .map_err(|e| ArrowError::ExternalError(e.into()))
                                 .map(|batch| match &mut self.remain {
                                     Some(remain) => {

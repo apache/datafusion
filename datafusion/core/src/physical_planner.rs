@@ -466,7 +466,8 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let value_exec = ValuesExec::try_new(SchemaRef::new(exec_schema), exprs)?;
+                let value_exec =
+                    ValuesExec::try_new(SchemaRef::new(exec_schema), &exprs)?;
                 Arc::new(value_exec)
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
@@ -486,7 +487,7 @@ impl DefaultPhysicalPlanner {
                 output_schema,
             }) => {
                 let output_schema: Schema = output_schema.as_ref().into();
-                self.plan_describe(schema.clone(), Arc::new(output_schema))?
+                self.plan_describe(schema, Arc::new(output_schema))?
             }
 
             // 1 Child
@@ -1875,7 +1876,7 @@ impl DefaultPhysicalPlanner {
     // return an record_batch which describes a table's schema.
     fn plan_describe(
         &self,
-        table_schema: Arc<Schema>,
+        table_schema: &Arc<Schema>,
         output_schema: Arc<Schema>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut column_names = StringBuilder::new();

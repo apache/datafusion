@@ -171,13 +171,16 @@ impl TDigest {
     }
 
     pub fn new_with_centroid(max_size: usize, centroid: Centroid) -> Self {
+        let sum = centroid.mean * centroid.weight;
+        let max = centroid.mean;
+        let min = centroid.mean;
         TDigest {
-            centroids: vec![centroid.clone()],
+            centroids: vec![centroid],
             max_size,
-            sum: centroid.mean * centroid.weight,
+            sum,
             count: 1,
-            max: centroid.mean,
-            min: centroid.mean,
+            max,
+            min,
         }
     }
 

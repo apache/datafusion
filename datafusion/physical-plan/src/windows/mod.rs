@@ -182,7 +182,7 @@ fn get_scalar_value_from_args(
     })
 }
 
-fn get_signed_integer(value: ScalarValue) -> Result<i64> {
+fn get_signed_integer(value: &ScalarValue) -> Result<i64> {
     if !value.data_type().is_integer() {
         return Err(DataFusionError::Execution(
             "Expected an integer value".to_string(),
@@ -191,7 +191,7 @@ fn get_signed_integer(value: ScalarValue) -> Result<i64> {
     value.cast_to(&DataType::Int64)?.try_into()
 }
 
-fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
+fn get_unsigned_integer(value: &ScalarValue) -> Result<u64> {
     if !value.data_type().is_integer() {
         return Err(DataFusionError::Execution(
             "Expected an integer value".to_string(),
@@ -238,10 +238,10 @@ fn create_built_in_window_expr(
             }
 
             if n.is_unsigned() {
-                let n = get_unsigned_integer(n)?;
+                let n = get_unsigned_integer(&n)?;
                 Arc::new(Ntile::new(name, n, out_data_type))
             } else {
-                let n: i64 = get_signed_integer(n)?;
+                let n: i64 = get_signed_integer(&n)?;
                 if n <= 0 {
                     return exec_err!("NTILE requires a positive integer");
                 }
@@ -251,7 +251,7 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::Lag => {
             let arg = Arc::clone(&args[0]);
             let shift_offset = get_scalar_value_from_args(args, 1)?
-                .map(get_signed_integer)
+                .map(|scalar| get_signed_integer(&scalar))
                 .map_or(Ok(None), |v| v.map(Some))?;
             let default_value =
                 get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
@@ -267,7 +267,7 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::Lead => {
             let arg = Arc::clone(&args[0]);
             let shift_offset = get_scalar_value_from_args(args, 1)?
-                .map(get_signed_integer)
+                .map(|scalar| get_signed_integer(&scalar))
                 .map_or(Ok(None), |v| v.map(Some))?;
             let default_value =
                 get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
@@ -289,8 +289,7 @@ fn create_built_in_window_expr(
                     .ok_or_else(|| {
                         exec_datafusion_err!("Expected a signed integer literal for the second argument of nth_value, got {}", args[1])
                     })?
-                    .value()
-                    .clone(),
+                    .value(),
             )?;
             Arc::new(NthValue::nth(
                 name,

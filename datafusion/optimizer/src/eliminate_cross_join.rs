@@ -435,6 +435,7 @@ fn remove_join_expressions(expr: Expr, join_keys: &JoinKeySet) -> Option<Expr> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use crate::optimizer::OptimizerContext;
     use crate::test::*;

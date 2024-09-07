@@ -295,6 +295,7 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
     since = "34.0.0",
     note = "use `datafusion_expr::utils::merge_schema` instead"
 )]
+#[allow(clippy::needless_pass_by_value)] // this function is deprecated and will be removed
 pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     expr_utils::merge_schema(&inputs)
 }

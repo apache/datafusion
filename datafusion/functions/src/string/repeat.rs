@@ -92,15 +92,15 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Utf8View => {
             let string_view_array = args[0].as_string_view();
-            repeat_impl::<i32, &StringViewArray>(string_view_array, number_array)
+            repeat_impl::<i32, &StringViewArray>(&string_view_array, number_array)
         }
         Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            repeat_impl::<i32, &GenericStringArray<i32>>(string_array, number_array)
+            repeat_impl::<i32, &GenericStringArray<i32>>(&string_array, number_array)
         }
         LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            repeat_impl::<i64, &GenericStringArray<i64>>(string_array, number_array)
+            repeat_impl::<i64, &GenericStringArray<i64>>(&string_array, number_array)
         }
         other => exec_err!(
             "Unsupported data type {other:?} for function repeat. \
@@ -109,7 +109,7 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn repeat_impl<'a, T, S>(string_array: S, number_array: &Int64Array) -> Result<ArrayRef>
+fn repeat_impl<'a, T, S>(string_array: &S, number_array: &Int64Array) -> Result<ArrayRef>
 where
     T: OffsetSizeTrait,
     S: StringArrayType<'a>,

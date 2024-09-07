@@ -365,7 +365,7 @@ impl HashJoinExec {
         let cache = Self::compute_properties(
             &left,
             &right,
-            Arc::clone(&join_schema),
+            &join_schema,
             *join_type,
             &on,
             partition_mode,
@@ -477,7 +477,7 @@ impl HashJoinExec {
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         join_type: JoinType,
         on: JoinOnRef,
         mode: PartitionMode,
@@ -488,7 +488,7 @@ impl HashJoinExec {
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
-            Arc::clone(&schema),
+            Arc::clone(schema),
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side()),
             on,
@@ -528,9 +528,8 @@ impl HashJoinExec {
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
             // construct a map from the input expressions to the output expression of the Projection
-            let projection_mapping =
-                ProjectionMapping::from_indices(projection, &schema)?;
-            let out_schema = project_schema(&schema, Some(projection))?;
+            let projection_mapping = ProjectionMapping::from_indices(projection, schema)?;
+            let out_schema = project_schema(schema, Some(projection))?;
             output_partitioning =
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
@@ -773,9 +772,9 @@ impl ExecutionPlan for HashJoinExec {
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         let mut stats = estimate_join_statistics(
-            Arc::clone(&self.left),
-            Arc::clone(&self.right),
-            self.on.clone(),
+            &self.left,
+            &self.right,
+            &self.on,
             &self.join_type,
             &self.join_schema,
         )?;

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![allow(clippy::needless_pass_by_value)] // OK in benchmark helper functions
+
 mod data_utils;
 use arrow::util::pretty::pretty_format_batches;
 use criterion::{criterion_group, criterion_main, Criterion};

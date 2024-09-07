@@ -408,6 +408,7 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use std::ops::Rem;
     use std::sync::Arc;
 

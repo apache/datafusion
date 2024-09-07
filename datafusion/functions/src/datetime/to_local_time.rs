@@ -352,6 +352,7 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use std::sync::Arc;
 
     use arrow::array::{types::TimestampNanosecondType, TimestampNanosecondArray};

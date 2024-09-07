@@ -186,7 +186,7 @@ impl ExecutionPlan for GlobalLimitExec {
     fn statistics(&self) -> Result<Statistics> {
         Statistics::with_fetch(
             self.input.statistics()?,
-            self.schema(),
+            &self.schema(),
             self.fetch,
             self.skip,
             1,
@@ -322,7 +322,7 @@ impl ExecutionPlan for LocalLimitExec {
     fn statistics(&self) -> Result<Statistics> {
         Statistics::with_fetch(
             self.input.statistics()?,
-            self.schema(),
+            &self.schema(),
             Some(self.fetch),
             0,
             1,
@@ -465,6 +465,7 @@ impl RecordBatchStream for LimitStream {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::needless_pass_by_value)] // OK in tests
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common::collect;

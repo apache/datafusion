@@ -382,8 +382,8 @@ fn array_has_all_and_any_string_internal<O: OffsetSizeTrait>(
                 let haystack_array = string_array_to_vec(&arr);
                 let needle_array = string_array_to_vec(&sub_arr);
                 boolean_builder.append_value(array_has_string_kernel(
-                    haystack_array,
-                    needle_array,
+                    &haystack_array,
+                    &needle_array,
                     comparison_type,
                 ));
             }
@@ -397,8 +397,8 @@ fn array_has_all_and_any_string_internal<O: OffsetSizeTrait>(
 }
 
 fn array_has_string_kernel(
-    haystack: Vec<Option<&str>>,
-    needle: Vec<Option<&str>>,
+    haystack: &[Option<&str>],
+    needle: &[Option<&str>],
     comparison_type: ComparisonType,
 ) -> bool {
     match comparison_type {
@@ -427,8 +427,8 @@ fn general_array_has_for_all_and_any<O: OffsetSizeTrait>(
             let arr_values = converter.convert_columns(&[arr])?;
             let sub_arr_values = converter.convert_columns(&[sub_arr])?;
             boolean_builder.append_value(general_array_has_all_and_any_kernel(
-                arr_values,
-                sub_arr_values,
+                &arr_values,
+                &sub_arr_values,
                 comparison_type,
             ));
         } else {
@@ -440,8 +440,8 @@ fn general_array_has_for_all_and_any<O: OffsetSizeTrait>(
 }
 
 fn general_array_has_all_and_any_kernel(
-    haystack_rows: Rows,
-    needle_rows: Rows,
+    haystack_rows: &Rows,
+    needle_rows: &Rows,
     comparison_type: ComparisonType,
 ) -> bool {
     match comparison_type {
