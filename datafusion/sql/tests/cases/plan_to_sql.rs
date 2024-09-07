@@ -699,7 +699,8 @@ fn test_table_scan_pushdown() -> Result<()> {
         "SELECT * FROM t1 WHERE ((t1.id > 1) AND (t1.age < 2))"
     );
 
-    // TODO: support filters for table scan with alias
+    // TODO: support filters for table scan with alias. Enable this test after #12368 issue is fixed
+    // see the issue: https://github.com/apache/datafusion/issues/12368
     // let table_scan_with_filter_alias = table_scan_with_filters(
     //     Some("t1"),
     //     &schema,

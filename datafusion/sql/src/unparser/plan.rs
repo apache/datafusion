@@ -554,7 +554,8 @@ impl Unparser<'_> {
     ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::TableScan(table_scan) => {
-                // TODO: support filters for table scan with alias
+                // TODO: support filters for table scan with alias.Remove this check after #12368 issue.
+                // see the issue: https://github.com/apache/datafusion/issues/12368
                 if alias.is_some() && !table_scan.filters.is_empty() {
                     return not_impl_err!(
                         "Subquery alias is not supported for table scan with pushdown filters"
