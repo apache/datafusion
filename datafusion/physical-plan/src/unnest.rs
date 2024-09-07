@@ -43,7 +43,6 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, Result, UnnestOptions,
 };
 use datafusion_execution::TaskContext;
-use datafusion_expr::Unnest;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
@@ -412,37 +411,42 @@ pub struct ListUnnest {
 /// - temp_P1(1-dimension) unnest into P1
 /// - temp_P2(2-dimension) unnest into P2
 /// - B(1-dimension) unnest into P3
+///
+/// The returned array will has the same size as the input batch
+/// and only contains original columns that are not being unnested
 fn unnest_at_level(
     batch: &[ArrayRef],
     list_type_unnests: &[ListUnnest],
-    temp_batch: &mut HashMap<ListUnnest, ArrayRef>,
+    temp_unnested_arrs: &mut HashMap<ListUnnest, ArrayRef>,
     level_to_unnest: usize,
     options: &UnnestOptions,
 ) -> Result<(Vec<ArrayRef>, usize)> {
-    let (temp_unnest_cols, unnestings): (Vec<Arc<dyn Array>>, Vec<_>) = list_type_unnests
-        .iter()
-        .filter_map(|unnesting| {
-            if level_to_unnest == unnesting.depth {
-                return Some((
-                    Arc::clone(&batch[unnesting.index_in_input_schema]),
-                    *unnesting,
-                ));
-            }
-            // this means the unnesting on this item has started at higher level
-            // and need to continue until depth reaches 1
-            if level_to_unnest < unnesting.depth {
-                return Some((
-                    Arc::clone(temp_batch.get(unnesting).unwrap()),
-                    *unnesting,
-                ));
-            }
-            None
-        })
-        .unzip();
+    // extract unnestable columns at this level
+    let (arrs_to_unnest, list_unnest_specs): (Vec<Arc<dyn Array>>, Vec<_>) =
+        list_type_unnests
+            .iter()
+            .filter_map(|unnesting| {
+                if level_to_unnest == unnesting.depth {
+                    return Some((
+                        Arc::clone(&batch[unnesting.index_in_input_schema]),
+                        *unnesting,
+                    ));
+                }
+                // this means the unnesting on this item has started at higher level
+                // and need to continue until depth reaches 1
+                if level_to_unnest < unnesting.depth {
+                    return Some((
+                        Arc::clone(temp_unnested_arrs.get(unnesting).unwrap()),
+                        *unnesting,
+                    ));
+                }
+                None
+            })
+            .unzip();
 
     // filter out so that list_arrays only contain column with the highest depth
     // at the same time, during iteration remove this depth so next time we don't have to unnest them again
-    let longest_length = find_longest_length(&temp_unnest_cols, options)?;
+    let longest_length = find_longest_length(&arrs_to_unnest, options)?;
     let unnested_length = longest_length.as_primitive::<Int64Type>();
     let total_length = if unnested_length.is_empty() {
         0
@@ -457,18 +461,18 @@ fn unnest_at_level(
 
     // Unnest all the list arrays
     let unnested_temp_arrays =
-        unnest_list_arrays(temp_unnest_cols.as_ref(), unnested_length, total_length)?;
+        unnest_list_arrays(arrs_to_unnest.as_ref(), unnested_length, total_length)?;
 
     // Create the take indices array for other columns
     let take_indices = create_take_indicies(unnested_length, total_length);
 
     // vertical expansion because of list unnest
-    let ret = flatten_batch_from_indices(batch, &take_indices)?;
+    let ret = flatten_arrs_from_indices(batch, &take_indices)?;
     unnested_temp_arrays
         .into_iter()
-        .zip(unnestings.iter())
+        .zip(list_unnest_specs.iter())
         .for_each(|(flatten_arr, unnesting)| {
-            temp_batch.insert(*unnesting, flatten_arr);
+            temp_unnested_arrs.insert(*unnesting, flatten_arr);
         });
     Ok((ret, total_length))
 }
@@ -493,35 +497,37 @@ fn build_batch(
     let transformed = match list_type_columns.len() {
         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
         _ => {
-            let mut temp_batch = HashMap::new();
+            let mut temp_unnested_result = HashMap::new();
             let max_recursion = list_type_columns
                 .iter()
                 .fold(0, |highest_depth, ListUnnest { depth, .. }| {
                     cmp::max(highest_depth, *depth)
                 });
-            let mut unnested_original_columns = vec![];
+
+            // This arr always has the same column count with the input batch
+            let mut flatten_arrs = vec![];
 
             // original batch has the same columns
             // all unnesting results are written to temp_batch
             for depth in (1..=max_recursion).rev() {
                 let input = match depth == max_recursion {
                     true => batch.columns(),
-                    false => &unnested_original_columns,
+                    false => &flatten_arrs,
                 };
-                let (temp, num_rows) = unnest_at_level(
+                let (temp_result, num_rows) = unnest_at_level(
                     input,
                     list_type_columns,
-                    &mut temp_batch,
+                    &mut temp_unnested_result,
                     depth,
                     options,
                 )?;
                 if num_rows == 0 {
                     return Ok(RecordBatch::new_empty(Arc::clone(schema)));
                 }
-                unnested_original_columns = temp;
+                flatten_arrs = temp_result;
             }
             let unnested_array_map: HashMap<usize, Vec<UnnestingResult>> =
-                temp_batch.into_iter().fold(
+                temp_unnested_result.into_iter().fold(
                     HashMap::new(),
                     |mut acc,
                      (
@@ -585,11 +591,13 @@ fn build_batch(
                 )
                 .collect::<HashMap<_, _>>();
 
-            let ret = unnested_original_columns
+            let ret = flatten_arrs
                 .into_iter()
                 .enumerate()
                 .flat_map(|(col_idx, arr)| {
-                    // this column has some unnested output(s)
+                    // convert original column into its unnested version(s)
+                    // Plural because one column can be unnested with different recursion level
+                    // and into separate output columns
                     match multi_unnested_per_original_index.remove(&col_idx) {
                         Some(unnested_arrays) => unnested_arrays,
                         None => vec![arr],
@@ -820,17 +828,7 @@ fn create_take_indicies(
     builder.finish()
 }
 
-fn flatten_batch_from_indices(
-    batch: &[ArrayRef],
-    indices: &PrimitiveArray<Int64Type>,
-) -> Result<Vec<Arc<dyn Array>>> {
-    batch
-        .into_iter()
-        .map(|arr| Ok(kernels::take::take(arr, indices, None)?))
-        .collect::<Result<_>>()
-}
-
-/// Create the final batch given the unnested column arrays and a `indices` array
+/// Create the batch given the unnested column arrays and a `indices` array
 /// that is used by the take kernel to copy values.
 ///
 /// For example if we have the following `RecordBatch`:
@@ -861,26 +859,14 @@ fn flatten_batch_from_indices(
 /// c2: 'a', 'b', 'c', 'c', 'c', null, 'd', 'd'
 /// ```
 ///
-fn flatten_list_cols_from_indices(
-    batch: &RecordBatch,
-    mut unnested_list_arrays: HashMap<usize, Vec<ArrayRef>>,
+fn flatten_arrs_from_indices(
+    batch: &[ArrayRef],
     indices: &PrimitiveArray<Int64Type>,
 ) -> Result<Vec<Arc<dyn Array>>> {
-    let arrays = batch
-        .columns()
+    batch
         .iter()
-        .enumerate()
-        .map(
-            |(col_idx, arr)| match unnested_list_arrays.remove(&col_idx) {
-                Some(unnested_arrays) => Ok(unnested_arrays),
-                None => Ok(vec![kernels::take::take(arr, indices, None)?]),
-            },
-        )
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    Ok(arrays)
+        .map(|arr| Ok(kernels::take::take(arr, indices, None)?))
+        .collect::<Result<_>>()
 }
 
 #[cfg(test)]
