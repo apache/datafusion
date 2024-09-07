@@ -42,6 +42,7 @@ impl DynamicListTableFactory {
         Self { session_store }
     }
 
+    /// Get the session store.
     pub fn session_store(&self) -> &SessionStore {
         &self.session_store
     }
