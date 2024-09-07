@@ -750,14 +750,18 @@ WHERE t1.a=t2.a;
 ----
 logical_plan
 01)Inner Join: t1.a = t2.a
-02)--TableScan: t1 projection=[a, b]
-03)--SubqueryAlias: t2
-04)----TableScan: t1 projection=[a, b]
+02)--Filter: t1.a IS NOT NULL
+03)----TableScan: t1 projection=[a, b]
+04)--SubqueryAlias: t2
+05)----Filter: t1.a IS NOT NULL
+06)------TableScan: t1 projection=[a, b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------FilterExec: a@0 IS NOT NULL
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
+06)----CoalesceBatchesExec: target_batch_size=8192
+07)------FilterExec: a@0 IS NOT NULL
+08)--------MemoryExec: partitions=1, partition_sizes=[1]
 
 # Reset the configs to old values
 statement ok
