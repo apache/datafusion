@@ -5772,15 +5772,14 @@ logical_plan
 03)----Aggregate: groupBy=[[having_test.v1, having_test.v2]], aggr=[[max(having_test.v1)]]
 04)------TableScan: having_test projection=[v1, v2]
 physical_plan
-01)ProjectionExec: expr=[v1@0 as v1, v2@1 as v2]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: max(having_test.v1)@2 = 3
-04)------AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
+03)----AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 query error

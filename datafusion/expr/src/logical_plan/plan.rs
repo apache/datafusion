@@ -1441,7 +1441,7 @@ impl LogicalPlan {
             let schema = Arc::clone(plan.schema());
             let name_preserver = NamePreserver::new(&plan);
             plan.map_expressions(|e| {
-                let original_name = name_preserver.save(&e)?;
+                let original_name = name_preserver.save(&e);
                 let transformed_expr =
                     e.infer_placeholder_types(&schema)?.transform_up(|e| {
                         if let Expr::Placeholder(Placeholder { id, .. }) = e {
@@ -1452,7 +1452,7 @@ impl LogicalPlan {
                         }
                     })?;
                 // Preserve name to avoid breaking column references to this expression
-                transformed_expr.map_data(|expr| original_name.restore(expr))
+                Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
             })
         })
         .map(|res| res.data)
