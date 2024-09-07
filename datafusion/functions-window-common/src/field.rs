@@ -48,7 +48,7 @@ impl<'a> WindowUDFFieldArgs<'a> {
     }
 
     /// Returns the data type of input expressions passed as arguments
-    /// the user-defined window function.
+    /// to the user-defined window function.
     pub fn input_types(&self) -> &[DataType] {
         self.input_types
     }
