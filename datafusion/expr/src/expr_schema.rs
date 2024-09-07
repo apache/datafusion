@@ -364,7 +364,7 @@ impl ExprSchemable for Expr {
                         .map(|e| e.get_type(input_schema))
                         .collect::<Result<Vec<_>>>()?;
                     let input_types = data_types_with_window_udf(&data_types, udwf)?;
-                    let function_name = self.schema_name().to_string();
+                    let (_, function_name) = self.qualified_name();
                     let field_args =
                         WindowUDFFieldArgs::new(&input_types, &function_name);
 
