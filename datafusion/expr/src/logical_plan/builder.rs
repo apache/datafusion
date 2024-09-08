@@ -1136,21 +1136,24 @@ impl LogicalPlanBuilder {
     /// Unnest the given columns with the given [`UnnestOptions`]
     pub fn unnest_columns_with_options(
         self,
-        // columns: Vec<(Column, ColumnUnnestType)>,
         columns: Vec<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
         Ok(Self::from(unnest_with_options(
             self.plan,
             columns
-            .into_iter()
-            .map(|c| (c, ColumnUnnestType::Inferred)).collect(),
+                .into_iter()
+                .map(|c| (c, ColumnUnnestType::Inferred))
+                .collect(),
             options,
         )?))
     }
 
-    /// TODO: rename
-    pub fn unnest_columns_with_options_v2(
+    /// Unnest the given columns with the given [`UnnestOptions`]
+    /// if one column is an list type, it can be recursively and simultaneously 
+    /// unnested into the desired recursion levels  
+    /// e.g select unnest(list_col,depth=1), unnest(list_col,depth=2)
+    pub fn unnest_columns_recursive_with_options(
         self,
         columns: Vec<(Column, ColumnUnnestType)>,
         options: UnnestOptions,

@@ -51,7 +51,7 @@ use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
-use datafusion_expr::{case, is_null, lit, ColumnUnnestType};
+use datafusion_expr::{case, is_null, lit};
 use datafusion_expr::{
     utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
