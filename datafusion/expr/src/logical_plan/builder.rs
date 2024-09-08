@@ -1150,7 +1150,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Unnest the given columns with the given [`UnnestOptions`]
-    /// if one column is an list type, it can be recursively and simultaneously 
+    /// if one column is a list type, it can be recursively and simultaneously
     /// unnested into the desired recursion levels  
     /// e.g select unnest(list_col,depth=1), unnest(list_col,depth=2)
     pub fn unnest_columns_recursive_with_options(
@@ -1731,7 +1731,6 @@ pub fn unnest_with_options(
                                             )
                                         },
                                     )
-                                    // TODO: i'm messy
                                     .collect::<Result<Vec<Vec<(Column, Arc<Field>)>>>>()?
                                     .into_iter()
                                     .flatten()
@@ -1782,7 +1781,6 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
-    use std::string;
 
     use super::*;
     use crate::logical_plan::StringifiedPlan;
@@ -2194,20 +2192,56 @@ mod tests {
         let plan = nested_table_scan("test_table")?.unnest_column("missing");
         assert!(plan.is_err());
 
-        // Recursive unnest at different recursion levels
+        // Simultaneously unnesting a list (with different depth) and a struct column
         let plan = nested_table_scan("test_table")?
-            .unnest_column("strings")?
-            .unnest_column_with_options(column)
+            .unnest_columns_recursive_with_options(
+                vec![
+                    (
+                        "stringss".into(),
+                        ColumnUnnestType::List(vec![
+                            ColumnUnnestList {
+                                output_column: Column::from_name("stringss_depth_1"),
+                                depth: 1,
+                            },
+                            ColumnUnnestList {
+                                output_column: Column::from_name("stringss_depth_2"),
+                                depth: 2,
+                            },
+                        ]),
+                    ),
+                    ("struct_singular".into(), ColumnUnnestType::Inferred),
+                ],
+                UnnestOptions::default(),
+            )?
             .build()?;
 
         let expected = "\
-        Unnest: lists[test_table.strings|depth=1] structs[]\
+        Unnest: lists[test_table.stringss|depth=1, test_table.stringss|depth=2] structs[test_table.struct_singular]\
         \n  TableScan: test_table";
         assert_eq!(expected, format!("{plan}"));
 
-        // Check unnested field is a scalar
-        let field = plan.schema().field_with_name(None, "strings").unwrap();
+        // Check output columns has correct type
+        let field = plan
+            .schema()
+            .field_with_name(None, "stringss_depth_1")
+            .unwrap();
+        assert_eq!(
+            &DataType::new_list(DataType::Utf8, false),
+            field.data_type()
+        );
+        let field = plan
+            .schema()
+            .field_with_name(None, "stringss_depth_2")
+            .unwrap();
         assert_eq!(&DataType::Utf8, field.data_type());
+        // unnesting struct is still correct
+        for field_name in &["a", "b"] {
+            let field = plan
+                .schema()
+                .field_with_name(None, &format!("struct_singular.{}", field_name))
+                .unwrap();
+            assert_eq!(&DataType::UInt32, field.data_type());
+        }
 
         Ok(())
     }
@@ -2224,7 +2258,7 @@ mod tests {
             false,
         );
         let string_field = Field::new("item", DataType::Utf8, false);
-        let strings_field = Field::new_list("item", string, false);
+        let strings_field = Field::new_list("item", string_field.clone(), false);
         let schema = Schema::new(vec![
             Field::new("scalar", DataType::UInt32, false),
             Field::new_list("strings", string_field, false),
@@ -2237,7 +2271,7 @@ mod tests {
                 ])),
                 false,
             ),
-            Field::new("stringss", strings_field, false),
+            Field::new_list("stringss", strings_field, false),
         ]);
 
         table_scan(Some(table_name), &schema, None)
