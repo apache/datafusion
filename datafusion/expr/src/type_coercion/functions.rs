@@ -43,6 +43,7 @@ pub fn data_types_with_scalar_udf(
     func: &ScalarUDF,
 ) -> Result<Vec<DataType>> {
     let signature = func.signature();
+
     if current_types.is_empty() {
         if signature.type_signature.supports_zero_argument() {
             return Ok(vec![]);

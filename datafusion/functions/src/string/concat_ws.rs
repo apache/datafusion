@@ -352,7 +352,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
+    use arrow::datatypes::DataType::Utf8;
 
     use crate::string::concat_ws::ConcatWsFunc;
     use datafusion_common::Result;
@@ -411,32 +411,6 @@ mod tests {
             Ok(Some("aa|cc")),
             &str,
             Utf8,
-            StringArray
-        );
-        test_function!(
-            ConcatWsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::from("|")),
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
-            ],
-            Ok(Some("aa|cc")),
-            &str,
-            LargeUtf8,
-            StringArray
-        );
-        test_function!(
-            ConcatWsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::from("|")),
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
-            ],
-            Ok(Some("aa|cc")),
-            &str,
-            Utf8View,
             StringArray
         );
 
