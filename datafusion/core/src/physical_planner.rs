@@ -1541,7 +1541,7 @@ pub fn create_window_expr(
 }
 
 type AggregateExprWithOptionalArgs = (
-    Arc<AggregateFunctionExpr>,
+    AggregateFunctionExpr,
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
     // Ordering requirements, if any
