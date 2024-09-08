@@ -2375,6 +2375,7 @@ async fn boolean_dictionary_as_filter() {
         keys_array,
         Arc::new(values_array) as Arc<dyn Array>,
     );
+    let array = Arc::new(array);
 
     let field = Field::new(
         "my_dict",
@@ -2383,7 +2384,7 @@ async fn boolean_dictionary_as_filter() {
     );
     let schema = Arc::new(Schema::new(vec![field]));
 
-    let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+    let batch = RecordBatch::try_new(schema, vec![array.clone()]).unwrap();
 
     let ctx = SessionContext::new();
 
@@ -2407,7 +2408,6 @@ async fn boolean_dictionary_as_filter() {
     ];
     assert_batches_eq!(expected, &df.clone().collect().await.unwrap());
 
-    // filter where is null
     let result_df = df.clone().filter(col("my_dict")).unwrap();
     let expected = [
         "+---------+",
@@ -2418,5 +2418,51 @@ async fn boolean_dictionary_as_filter() {
         "| true    |",
         "+---------+",
     ];
-    assert_batches_eq!(expected, &result_df.collect().await.unwrap());    
+    assert_batches_eq!(expected, &result_df.collect().await.unwrap());
+
+    // test nested dictionary
+    let keys = vec![0, 2]; // 0 -> true, 2 -> false
+    let keys_array = Int8Array::from(keys);
+    let nested_array = DictionaryArray::new(
+        keys_array,
+        array,
+    );
+
+    let field = Field::new(
+        "my_nested_dict",
+        DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Boolean)))),
+        true,
+    );
+
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(nested_array)]).unwrap();
+
+    ctx.register_batch("nested_dict_batch", batch).unwrap();
+
+    let df = ctx.table("nested_dict_batch").await.unwrap();
+
+    // view_all
+    let expected = [
+        "+----------------+",
+        "| my_nested_dict |",
+        "+----------------+",
+        "| true           |",
+        "| false          |",
+        "+----------------+",
+    ];
+
+    assert_batches_eq!(expected, &df.clone().collect().await.unwrap());
+
+    let result_df = df.clone().filter(col("my_nested_dict")).unwrap();
+    let expected = [
+        "+----------------+",
+        "| my_nested_dict |",
+        "+----------------+",
+        "| true           |",
+        "+----------------+",
+    ];
+
+    assert_batches_eq!(expected, &result_df.collect().await.unwrap());
+
 }

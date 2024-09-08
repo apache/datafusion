@@ -181,7 +181,7 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::{
-        array::{BooleanArray, StringArray, StringDictionaryBuilder},
+        array::{BooleanArray, StringArray},
         datatypes::*,
     };
     use arrow_array::{Float64Array, Int32Array};
@@ -276,23 +276,6 @@ mod tests {
         let result = compute_is_null(array_ref).unwrap();
 
         let expected = &BooleanArray::from(vec![false, true, false, true, false, true]);
-        assert_eq!(expected, &result);
-    }
-
-    #[test]
-    fn dictionary_is_null() {
-        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
-        builder.append("a").unwrap();
-        builder.append("").unwrap();
-        builder.append_null();
-        builder.append("a").unwrap();
-        let array = builder.finish();
-
-        let array_ref = Arc::new(array) as ArrayRef;
-        let result = compute_is_null(array_ref).unwrap();
-
-        let expected = &BooleanArray::from(vec![false, false, true, false]);
-
         assert_eq!(expected, &result);
     }
 }

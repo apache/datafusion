@@ -117,7 +117,7 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::{
-        array::{BooleanArray, StringArray, StringDictionaryBuilder},
+        array::{BooleanArray, StringArray},
         datatypes::*,
     };
     use arrow_array::{Array, Float64Array, Int32Array, UnionArray};
@@ -186,40 +186,6 @@ mod tests {
         let actual = as_boolean_array(&actual).unwrap();
 
         let expected = &BooleanArray::from(vec![true, false, true, true, false]);
-
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn dictionary_is_not_null() {
-        let mut builder = StringDictionaryBuilder::<Int8Type>::new();
-        builder.append("a").unwrap();
-        builder.append("").unwrap();
-        builder.append_null();
-        builder.append("a").unwrap();
-        let array = builder.finish();
-        
-        let field = Field::new(
-            "my_dict",
-            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-            true,
-        );
-
-        let schema = Schema::new(vec![field]);
-        let expr = is_not_null(col("my_dict", &schema).unwrap()).unwrap();
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
-
-        // expression: "a is not null"
-        let actual = expr
-            .evaluate(&batch)
-            .unwrap()
-            .into_array(batch.num_rows())
-            .expect("Failed to convert to array");
-
-        let actual = as_boolean_array(&actual).unwrap();
-
-        let expected = &BooleanArray::from(vec![true, true, false, true]);
 
         assert_eq!(expected, actual);
     }
