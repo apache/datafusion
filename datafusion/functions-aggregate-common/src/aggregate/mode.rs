@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod count_distinct;
-pub mod groups_accumulator;
-pub mod mode;
+mod bytes;
+mod native;
+
+pub use bytes::BytesModeAccumulator;
+pub use bytes::BytesViewModeAccumulator;
+pub use native::FloatModeAccumulator;
+pub use native::PrimitiveModeAccumulator;

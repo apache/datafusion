@@ -5921,5 +5921,80 @@ SELECT kurtosis_pop(c1) FROM t1;
 ----
 0.194323231917
 
+query I
+SELECT mode(col) FROM VALUES (1), (2), (3), (2), (3), (3) as tab(col);
+----
+3
+
+query R
+SELECT mode(col) FROM VALUES (1.0), (2.115), (3.225), (2.115), (3.225), (3.225) as tab(col);
+----
+3.225
+
+query D
+SELECT mode(col) 
+FROM VALUES 
+  (TO_DATE('2022-01-01')),
+  (TO_DATE('2022-01-02')),
+  (TO_DATE('2022-01-03')),
+  (TO_DATE('2022-01-02')),
+  (TO_DATE('2022-01-03')),
+  (TO_DATE('2022-01-03')) as tab(col);
+----
+2022-01-03
+
+query T
+SELECT mode(col) 
+FROM VALUES 
+  (NULL),
+  (NULL),
+  (NULL),
+  (NULL) as tab(col);
+----
+NULL
+
+query T
+SELECT mode(col) FROM VALUES 
+    ('apple'), 
+    ('banana'), 
+    ('apple'), 
+    ('orange'), 
+    ('banana'), 
+    ('apple') as tab(col);
+----
+apple
+
+query T
+SELECT mode(col) FROM VALUES 
+    ('long_text_data_1'),
+    ('long_text_data_2'),
+    ('long_text_data_1'),
+    ('long_text_data_2'),
+    ('long_text_data_1') as tab(col);
+----
+long_text_data_1
+
+query T
+SELECT mode(col) FROM VALUES
+  (arrow_cast('Andrew', 'Utf8View')),
+  (arrow_cast('Andrew', 'Utf8View')),
+  (arrow_cast('Xiangpeng', 'Utf8View')),
+  (arrow_cast('Andrew', 'Utf8View')),
+  (arrow_cast('Xiangpeng', 'Utf8View')),
+  (arrow_cast('Xiangpeng', 'Utf8View')),
+  (arrow_cast('Xiangpeng', 'Utf8View')) as tab(col);
+----
+Xiangpeng
+
+query T
+SELECT mode(col) FROM VALUES
+  (arrow_cast('apple', 'Utf8View')),
+  (arrow_cast('banana', 'Utf8View')),
+  (arrow_cast('apple', 'Utf8View')),
+  (NULL),
+  (arrow_cast('banana', 'Utf8View')) as tab(col);
+----
+apple
+
 statement ok
 DROP TABLE t1;

@@ -475,6 +475,304 @@ where
         }
     }
 
+    /// Inserts each value from `values` into the map, invoking `make_payload_fn` for
+    /// each value if not already present, or `update_payload_fn` if the value already exists.
+    ///
+    /// This function handles both the insert and update cases.
+    ///
+    /// # Arguments:
+    ///
+    /// `values`: The array whose values are inserted or updated in the map.
+    ///
+    /// `make_payload_fn`: Invoked for each value that is not already present
+    /// to create the payload, in the order of the values in `values`.
+    ///
+    /// `update_payload_fn`: Invoked for each value that is already present,
+    /// allowing the payload to be updated in-place.
+    ///
+    /// # Safety:
+    ///
+    /// Note that `make_payload_fn` and `update_payload_fn` are only invoked
+    /// with valid values from `values`, not for the `NULL` value.
+    pub fn insert_or_update<MP, UP>(
+        &mut self,
+        values: &ArrayRef,
+        make_payload_fn: MP,
+        update_payload_fn: UP,
+    ) where
+        MP: FnMut(Option<&[u8]>) -> V,
+        UP: FnMut(&mut V),
+    {
+        // Check the output type and dispatch to the appropriate internal function
+        match self.output_type {
+            OutputType::Binary => {
+                assert!(matches!(
+                    values.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.insert_or_update_inner::<MP, UP, GenericBinaryType<O>>(
+                    values,
+                    make_payload_fn,
+                    update_payload_fn,
+                )
+            }
+            OutputType::Utf8 => {
+                assert!(matches!(
+                    values.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.insert_or_update_inner::<MP, UP, GenericStringType<O>>(
+                    values,
+                    make_payload_fn,
+                    update_payload_fn,
+                )
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        };
+    }
+
+    /// Generic version of [`Self::insert_or_update`] that handles `ByteArrayType`
+    /// (both String and Binary).
+    ///
+    /// This is the only function that is generic on [`ByteArrayType`], which avoids having
+    /// to template the entire structure, simplifying the code and reducing code bloat due
+    /// to duplication.
+    ///
+    /// See comments on `insert_or_update` for more details.
+    fn insert_or_update_inner<MP, UP, B>(
+        &mut self,
+        values: &ArrayRef,
+        mut make_payload_fn: MP,
+        mut update_payload_fn: UP,
+    ) where
+        MP: FnMut(Option<&[u8]>) -> V, // Function to create a new entry
+        UP: FnMut(&mut V),             // Function to update an existing entry
+        B: ByteArrayType,
+    {
+        // Step 1: Compute hashes
+        let batch_hashes = &mut self.hashes_buffer;
+        batch_hashes.clear();
+        batch_hashes.resize(values.len(), 0);
+        create_hashes(&[values.clone()], &self.random_state, batch_hashes).unwrap(); // Compute the hashes for the values
+
+        // Step 2: Insert or update each value
+        let values = values.as_bytes::<B>();
+
+        assert_eq!(values.len(), batch_hashes.len()); // Ensure hash count matches value count
+
+        for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
+            // Handle null value
+            let Some(value) = value else {
+                let _payload = if let Some(&(payload, _)) = self.null.as_ref() {
+                    payload
+                } else {
+                    let payload = make_payload_fn(None);
+                    let null_index = self.offsets.len() - 1;
+                    let offset = self.buffer.len();
+                    self.offsets.push(O::usize_as(offset));
+                    self.null = Some((payload, null_index));
+                    payload
+                };
+                continue;
+            };
+
+            let value: &[u8] = value.as_ref();
+            let value_len = O::usize_as(value.len());
+
+            // Small value optimization
+            if value.len() <= SHORT_VALUE_LEN {
+                let inline = value.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
+
+                // Check if the value is already present in the set
+                let entry = self.map.get_mut(hash, |header| {
+                    if header.len != value_len {
+                        return false;
+                    }
+                    inline == header.offset_or_inline
+                });
+
+                if let Some(entry) = entry {
+                    update_payload_fn(&mut entry.payload);
+                } else {
+                    // Insert a new value if not found
+                    self.buffer.append_slice(value);
+                    self.offsets.push(O::usize_as(self.buffer.len()));
+                    let payload = make_payload_fn(Some(value));
+                    let new_entry = Entry {
+                        hash,
+                        len: value_len,
+                        offset_or_inline: inline,
+                        payload,
+                    };
+                    self.map.insert_accounted(
+                        new_entry,
+                        |header| header.hash,
+                        &mut self.map_size,
+                    );
+                }
+            } else {
+                // Handle larger values
+                let entry = self.map.get_mut(hash, |header| {
+                    if header.len != value_len {
+                        return false;
+                    }
+                    let existing_value =
+                        unsafe { self.buffer.as_slice().get_unchecked(header.range()) };
+                    value == existing_value
+                });
+
+                if let Some(entry) = entry {
+                    update_payload_fn(&mut entry.payload);
+                } else {
+                    // Insert a new large value if not found
+                    let offset = self.buffer.len();
+                    self.buffer.append_slice(value);
+                    self.offsets.push(O::usize_as(self.buffer.len()));
+                    let payload = make_payload_fn(Some(value));
+                    let new_entry = Entry {
+                        hash,
+                        len: value_len,
+                        offset_or_inline: offset,
+                        payload,
+                    };
+                    self.map.insert_accounted(
+                        new_entry,
+                        |header| header.hash,
+                        &mut self.map_size,
+                    );
+                }
+            };
+        }
+
+        // Ensure no overflow in offsets
+        if O::from_usize(self.buffer.len()).is_none() {
+            panic!(
+                "Put {} bytes in buffer, more than can be represented by a {}",
+                self.buffer.len(),
+                type_name::<O>()
+            );
+        }
+    }
+
+    /// Generic version of [`Self::get_payloads`] that handles `ByteArrayType`
+    /// (both String and Binary).
+    ///
+    /// This function computes the hashes for each value and retrieves the payloads
+    /// stored in the map, leveraging small value optimizations when possible.
+    ///
+    /// # Arguments:
+    ///
+    /// `values`: The array whose payloads are being retrieved.
+    ///
+    /// # Returns
+    ///
+    /// A vector of payloads for each value, or `None` if the value is not found.
+    ///
+    /// # Safety:
+    ///
+    /// This function ensures that small values are handled using inline optimization
+    /// and larger values are safely retrieved from the buffer.
+    fn get_payloads_inner<B>(self, values: &ArrayRef) -> Vec<Option<V>>
+    where
+        B: ByteArrayType,
+    {
+        // Step 1: Compute hashes
+        let mut batch_hashes = vec![0u64; values.len()];
+        batch_hashes.clear();
+        batch_hashes.resize(values.len(), 0);
+        create_hashes(&[values.clone()], &self.random_state, &mut batch_hashes).unwrap(); // Compute the hashes for the values
+
+        // Step 2: Get payloads for each value
+        let values = values.as_bytes::<B>();
+        assert_eq!(values.len(), batch_hashes.len()); // Ensure hash count matches value count
+
+        let mut payloads = Vec::with_capacity(values.len());
+
+        for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
+            // Handle null value
+            let Some(value) = value else {
+                if let Some(&(payload, _)) = self.null.as_ref() {
+                    payloads.push(Some(payload));
+                } else {
+                    payloads.push(None);
+                }
+                continue;
+            };
+
+            let value: &[u8] = value.as_ref();
+            let value_len = O::usize_as(value.len());
+
+            // Small value optimization
+            let payload = if value.len() <= SHORT_VALUE_LEN {
+                let inline = value.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
+
+                // Check if the value is already present in the set
+                let entry = self.map.get(hash, |header| {
+                    if header.len != value_len {
+                        return false;
+                    }
+                    inline == header.offset_or_inline
+                });
+
+                entry.map(|entry| entry.payload)
+            } else {
+                // Handle larger values
+                let entry = self.map.get(hash, |header| {
+                    if header.len != value_len {
+                        return false;
+                    }
+                    let existing_value =
+                        unsafe { self.buffer.as_slice().get_unchecked(header.range()) };
+                    value == existing_value
+                });
+
+                entry.map(|entry| entry.payload)
+            };
+
+            payloads.push(payload);
+        }
+
+        payloads
+    }
+
+    /// Retrieves the payloads for each value from `values`, either by using
+    /// small value optimizations or larger value handling.
+    ///
+    /// This function will compute hashes for each value and attempt to retrieve
+    /// the corresponding payload from the map. If the value is not found, it will return `None`.
+    ///
+    /// # Arguments:
+    ///
+    /// `values`: The array whose payloads need to be retrieved.
+    ///
+    /// # Returns
+    ///
+    /// A vector of payloads for each value, or `None` if the value is not found.
+    ///
+    /// # Safety:
+    ///
+    /// This function handles both small and large values in a safe manner, though `unsafe` code is
+    /// used internally for performance optimization.
+    pub fn get_payloads(self, values: &ArrayRef) -> Vec<Option<V>> {
+        match self.output_type {
+            OutputType::Binary => {
+                assert!(matches!(
+                    values.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.get_payloads_inner::<GenericBinaryType<O>>(values)
+            }
+            OutputType::Utf8 => {
+                assert!(matches!(
+                    values.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.get_payloads_inner::<GenericStringType<O>>(values)
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        }
+    }
+
     /// Converts this set into a `StringArray`, `LargeStringArray`,
     /// `BinaryArray`, or `LargeBinaryArray` containing each distinct value
     /// that was inserted. This is done without copying the values.
@@ -869,6 +1167,124 @@ mod tests {
         let size_after_values2 = set.size();
         assert!(size_after_values2 > size_after_values1);
         assert!(size_after_values2 > total_strings1_len + total_strings2_len);
+    }
+
+    #[test]
+    fn test_insert_or_update_count_u8() {
+        let input = vec![
+            Some("A"),
+            Some("bcdefghijklmnop"),
+            Some("X"),
+            Some("Y"),
+            None,
+            Some("qrstuvqxyzhjwya"),
+            Some("✨🔥"),
+            Some("🔥"),
+            Some("🔥🔥🔥🔥🔥🔥"),
+            Some("A"), // Duplicate to test the count increment
+            Some("Y"), // Another duplicate to test the count increment
+        ];
+
+        let mut map: ArrowBytesMap<i32, u8> = ArrowBytesMap::new(OutputType::Utf8);
+
+        let string_array = StringArray::from(input.clone());
+        let arr: ArrayRef = Arc::new(string_array);
+
+        map.insert_or_update(
+            &arr,
+            |_| 1u8,
+            |count| {
+                *count += 1;
+            },
+        );
+
+        let expected_counts = [
+            ("A", 2),
+            ("bcdefghijklmnop", 1),
+            ("X", 1),
+            ("Y", 2),
+            ("qrstuvqxyzhjwya", 1),
+            ("✨🔥", 1),
+            ("🔥", 1),
+            ("🔥🔥🔥🔥🔥🔥", 1),
+        ];
+
+        for &value in input.iter() {
+            if let Some(value) = value {
+                let string_array = StringArray::from(vec![Some(value)]);
+                let arr: ArrayRef = Arc::new(string_array);
+
+                let mut result_payload: Option<u8> = None;
+
+                map.insert_or_update(
+                    &arr,
+                    |_| {
+                        panic!("Unexpected new entry during verification");
+                    },
+                    |count| {
+                        result_payload = Some(*count);
+                    },
+                );
+
+                if let Some(expected_count) =
+                    expected_counts.iter().find(|&&(s, _)| s == value)
+                {
+                    assert_eq!(result_payload.unwrap(), expected_count.1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_payloads_u8() {
+        let input = vec![
+            Some("A"),
+            Some("bcdefghijklmnop"),
+            Some("X"),
+            Some("Y"),
+            None,
+            Some("qrstuvqxyzhjwya"),
+            Some("✨🔥"),
+            Some("🔥"),
+            Some("🔥🔥🔥🔥🔥🔥"),
+            Some("A"), // Duplicate to test the count increment
+            Some("Y"), // Another duplicate to test the count increment
+        ];
+
+        let mut map: ArrowBytesMap<i32, u8> = ArrowBytesMap::new(OutputType::Utf8);
+
+        let string_array = StringArray::from(input.clone());
+        let arr: ArrayRef = Arc::new(string_array);
+
+        map.insert_or_update(
+            &arr,
+            |_| 1u8,
+            |count| {
+                *count += 1;
+            },
+        );
+
+        let expected_payloads = [
+            Some(2u8),
+            Some(1u8),
+            Some(1u8),
+            Some(2u8),
+            Some(1u8),
+            Some(1u8),
+            Some(1u8),
+            Some(1u8),
+            Some(1u8),
+            Some(2u8),
+            Some(2u8),
+        ];
+
+        let payloads = map.get_payloads(&arr);
+
+        assert_eq!(payloads.len(), expected_payloads.len());
+
+        for (i, payload) in payloads.iter().enumerate() {
+            assert_eq!(*payload, expected_payloads[i]);
+        }
     }
 
     #[test]
