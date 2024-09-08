@@ -177,9 +177,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // NOTE: This function is called recusively, so each match arm body should be as
         //       small as possible to avoid stack overflows in debug builds. Follow the
         //       common pattern of extracting into a separate function for non-trivial
-        //       arms.
-        //
-        // See https://github.com/apache/datafusion/pull/12384 for more context
+        //       arms. See https://github.com/apache/datafusion/pull/12384 for more context.
         match sql {
             SQLExpr::Value(value) => {
                 self.parse_value(value, planner_context.prepare_param_data_types())
