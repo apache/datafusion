@@ -44,13 +44,6 @@ AS VALUES
     (struct([2], 'b'), [[[3,4],[5]],[[null,6],null,[7,8]]], [struct([2],[[3],[4]])])
 ;
 
-query I
-select unnest([1,2,3]);
-----
-1
-2
-3
-
 ## Basic unnest expression in select list
 query I
 select unnest([1,2,3]);
@@ -173,6 +166,7 @@ select unnest(column1), column1 from unnest_table;
 12 [12]
 
 
+# binary expr linking different unnest exprs
 query II
 select unnest([1,2,3]) + unnest([1,2,3]), unnest([1,2,3]) + unnest([4,5]);
 ----
@@ -181,6 +175,7 @@ select unnest([1,2,3]) + unnest([1,2,3]), unnest([1,2,3]) + unnest([4,5]);
 6 NULL
 
 
+# binary expr linking different recursive unnest exprs
 query III
 select unnest(unnest([[1,2,3]])) + unnest(unnest([[1,2,3]])), unnest(unnest([[1,2,3]])) + unnest([4,5]), unnest([4,5]);
 ----
@@ -552,7 +547,7 @@ NULL [7, 8] NULL NULL
 [[3, 4], [5]] NULL 7 8
 [[, 6], , [7, 8]] NULL 8 9
 
-## the same unnest expr is referened multiple times (unnest is not the bottom-most expr)
+## the same composite expr (unnest(field_access(unnest(col)))) which containing unnest is referened multiple times
 query ??II
 select unnest(column3), unnest(column3)['c0'], unnest(unnest(column3)['c0']), unnest(unnest(column3)['c0']) + unnest(unnest(column3)['c0'])  from recursive_unnest_table;
 ----
@@ -605,7 +600,8 @@ NULL [4] [{c0: [2], c1: [[3], [4]]}]
 4 [3] [{c0: [2], c1: [[3], [4]]}]
 NULL [4] [{c0: [2], c1: [[3], [4]]}]
 
-## demonstrate where multiple unnest plan is needed
+## demonstrate where recursive unnest is impossible 
+## and need multiple unnesting logical plans
 ## e.g unnest -> field_access -> unnest
 query TT
 explain select unnest(unnest(unnest(column3)['c1'])), unnest(unnest(column3)['c1']), column3 from recursive_unnest_table;

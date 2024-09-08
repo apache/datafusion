@@ -329,7 +329,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if unnest_columns.is_empty() {
                 // The original expr does not contain any unnest
                 if i == 0 {
-                    // return Ok(intermediate_plan);
                     return LogicalPlanBuilder::from(intermediate_plan)
                         .project(intermediate_select_exprs)?
                         .build();
@@ -362,16 +361,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match input {
             LogicalPlan::Aggregate(agg) => {
                 let agg_expr = agg.aggr_expr.clone();
-                // we somehow need to un_rebase column exprs appeared in select/group by exprs
-                // e.g unnest(col("somecole")) expr may be rewritten as col("unnest(some_col)")
                 let (new_input, new_group_by_exprs) =
                     self.try_process_group_by_unnest(agg)?;
-                Ok(LogicalPlanBuilder::from(new_input)
+                LogicalPlanBuilder::from(new_input)
                     .aggregate(new_group_by_exprs, agg_expr)?
-                    .build()?)
+                    .build()
             }
             LogicalPlan::Filter(mut filter) => {
-                filter.input = 
+                filter.input =
                     Arc::new(self.try_process_aggregate_unnest(Arc::unwrap_or_clone(
                         filter.input,
                     ))?);
@@ -461,15 +458,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .build()?;
 
                 intermediate_select_exprs = outer_projection_exprs;
-                // intermediate_group_by_exprs = temp_new_group_exprs;
             }
         }
 
-        Ok((
-            intermediate_plan,
-            intermediate_select_exprs,
-            // intermediate_group_by_exprs,
-        ))
+        Ok((intermediate_plan, intermediate_select_exprs))
     }
 
     fn plan_selection(
