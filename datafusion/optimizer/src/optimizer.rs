@@ -365,8 +365,8 @@ impl Optimizer {
         let start_time = Instant::now();
         let options = config.options();
         let mut new_plan = plan;
+        
         let mut previous_plans = HashSet::with_capacity(16);
-
         previous_plans.insert(LogicalPlanSignature::new(&new_plan));
 
         let mut i = 0;
