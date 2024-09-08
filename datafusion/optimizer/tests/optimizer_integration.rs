@@ -177,15 +177,12 @@ fn intersect() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected =
         "LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n  Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
-    \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n      Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
-    \n        Filter: test.col_int32 IS NOT NULL AND test.col_utf8 IS NOT NULL\
-    \n          TableScan: test projection=[col_int32, col_utf8]\
-    \n      Filter: test.col_int32 IS NOT NULL AND test.col_utf8 IS NOT NULL\
-    \n        TableScan: test projection=[col_int32, col_utf8]\
-    \n  Filter: test.col_int32 IS NOT NULL AND test.col_utf8 IS NOT NULL\
-    \n    TableScan: test projection=[col_int32, col_utf8]";
+        \n  Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
+        \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
+        \n      Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
+        \n        TableScan: test projection=[col_int32, col_utf8]\
+        \n      TableScan: test projection=[col_int32, col_utf8]\
+        \n  TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
@@ -281,11 +278,9 @@ fn test_same_name_but_not_ambiguous() {
     let expected = "LeftSemi Join: t1.col_int32 = t2.col_int32\
     \n  Aggregate: groupBy=[[t1.col_int32]], aggr=[[]]\
     \n    SubqueryAlias: t1\
-    \n      Filter: test.col_int32 IS NOT NULL\
-    \n        TableScan: test projection=[col_int32]\
+    \n      TableScan: test projection=[col_int32]\
     \n  SubqueryAlias: t2\
-    \n    Filter: test.col_int32 IS NOT NULL\
-    \n      TableScan: test projection=[col_int32]";
+    \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan}"));
 }
 

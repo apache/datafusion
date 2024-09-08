@@ -138,7 +138,7 @@ Show configuration options
 | datafusion.execution.time_zone                  | UTC     |
 | datafusion.explain.logical_plan_only            | false   |
 | datafusion.explain.physical_plan_only           | false   |
-| datafusion.optimizer.filter_null_join_keys      | false   |
+| datafusion.optimizer.filter_null_join_keys      | true    |
 | datafusion.optimizer.skip_failed_rules          | true    |
 +-------------------------------------------------+---------+
 
@@ -191,7 +191,7 @@ DataFusion CLI v12.0.0
 | datafusion.execution.time_zone                  | UTC     |
 | datafusion.explain.logical_plan_only            | false   |
 | datafusion.explain.physical_plan_only           | false   |
-| datafusion.optimizer.filter_null_join_keys      | false   |
+| datafusion.optimizer.filter_null_join_keys      | true    |
 | datafusion.optimizer.skip_failed_rules          | true    |
 +-------------------------------------------------+---------+
 8 rows in set. Query took 0.002 seconds.
