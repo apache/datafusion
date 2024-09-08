@@ -40,42 +40,39 @@ order by
 limit 10;
 ----
 logical_plan
-01)Limit: skip=0, fetch=10
-02)--Sort: custdist DESC NULLS FIRST, c_orders.c_count DESC NULLS FIRST, fetch=10
-03)----Projection: c_orders.c_count, count(*) AS custdist
-04)------Aggregate: groupBy=[[c_orders.c_count]], aggr=[[count(Int64(1)) AS count(*)]]
-05)--------SubqueryAlias: c_orders
-06)----------Projection: count(orders.o_orderkey) AS c_count
-07)------------Aggregate: groupBy=[[customer.c_custkey]], aggr=[[count(orders.o_orderkey)]]
-08)--------------Projection: customer.c_custkey, orders.o_orderkey
-09)----------------Left Join: customer.c_custkey = orders.o_custkey
-10)------------------TableScan: customer projection=[c_custkey]
-11)------------------Projection: orders.o_orderkey, orders.o_custkey
-12)--------------------Filter: orders.o_comment NOT LIKE Utf8("%special%requests%")
-13)----------------------TableScan: orders projection=[o_orderkey, o_custkey, o_comment], partial_filters=[orders.o_comment NOT LIKE Utf8("%special%requests%")]
+01)Sort: custdist DESC NULLS FIRST, c_orders.c_count DESC NULLS FIRST, fetch=10
+02)--Projection: c_orders.c_count, count(*) AS custdist
+03)----Aggregate: groupBy=[[c_orders.c_count]], aggr=[[count(Int64(1)) AS count(*)]]
+04)------SubqueryAlias: c_orders
+05)--------Projection: count(orders.o_orderkey) AS c_count
+06)----------Aggregate: groupBy=[[customer.c_custkey]], aggr=[[count(orders.o_orderkey)]]
+07)------------Projection: customer.c_custkey, orders.o_orderkey
+08)--------------Left Join: customer.c_custkey = orders.o_custkey
+09)----------------TableScan: customer projection=[c_custkey]
+10)----------------Projection: orders.o_orderkey, orders.o_custkey
+11)------------------Filter: orders.o_comment NOT LIKE Utf8("%special%requests%")
+12)--------------------TableScan: orders projection=[o_orderkey, o_custkey, o_comment], partial_filters=[orders.o_comment NOT LIKE Utf8("%special%requests%")]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=10
-02)--SortPreservingMergeExec: [custdist@1 DESC,c_count@0 DESC], fetch=10
-03)----SortExec: TopK(fetch=10), expr=[custdist@1 DESC,c_count@0 DESC], preserve_partitioning=[true]
-04)------ProjectionExec: expr=[c_count@0 as c_count, count(*)@1 as custdist]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[count(*)]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([c_count@0], 4), input_partitions=4
-08)--------------AggregateExec: mode=Partial, gby=[c_count@0 as c_count], aggr=[count(*)]
-09)----------------ProjectionExec: expr=[count(orders.o_orderkey)@1 as c_count]
-10)------------------AggregateExec: mode=SinglePartitioned, gby=[c_custkey@0 as c_custkey], aggr=[count(orders.o_orderkey)]
-11)--------------------CoalesceBatchesExec: target_batch_size=8192
-12)----------------------HashJoinExec: mode=Partitioned, join_type=Left, on=[(c_custkey@0, o_custkey@1)], projection=[c_custkey@0, o_orderkey@1]
-13)------------------------CoalesceBatchesExec: target_batch_size=8192
-14)--------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4
-15)----------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-16)------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey], has_header=false
-17)------------------------CoalesceBatchesExec: target_batch_size=8192
-18)--------------------------RepartitionExec: partitioning=Hash([o_custkey@1], 4), input_partitions=4
-19)----------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey, o_custkey@1 as o_custkey]
-20)------------------------------CoalesceBatchesExec: target_batch_size=8192
-21)--------------------------------FilterExec: o_comment@2 NOT LIKE %special%requests%
-22)----------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_custkey, o_comment], has_header=false
+01)SortPreservingMergeExec: [custdist@1 DESC,c_count@0 DESC], fetch=10
+02)--SortExec: TopK(fetch=10), expr=[custdist@1 DESC,c_count@0 DESC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[c_count@0 as c_count, count(*)@1 as custdist]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[count(*)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([c_count@0], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[c_count@0 as c_count], aggr=[count(*)]
+08)--------------ProjectionExec: expr=[count(orders.o_orderkey)@1 as c_count]
+09)----------------AggregateExec: mode=SinglePartitioned, gby=[c_custkey@0 as c_custkey], aggr=[count(orders.o_orderkey)]
+10)------------------CoalesceBatchesExec: target_batch_size=8192
+11)--------------------HashJoinExec: mode=Partitioned, join_type=Left, on=[(c_custkey@0, o_custkey@1)], projection=[c_custkey@0, o_orderkey@1]
+12)----------------------CoalesceBatchesExec: target_batch_size=8192
+13)------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 4), input_partitions=4
+14)--------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+15)----------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey], has_header=false
+16)----------------------CoalesceBatchesExec: target_batch_size=8192
+17)------------------------RepartitionExec: partitioning=Hash([o_custkey@1], 4), input_partitions=4
+18)--------------------------CoalesceBatchesExec: target_batch_size=8192
+19)----------------------------FilterExec: o_comment@2 NOT LIKE %special%requests%, projection=[o_orderkey@0, o_custkey@1]
+20)------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_custkey, o_comment], has_header=false
 
 
 

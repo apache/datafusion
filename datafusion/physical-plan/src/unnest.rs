@@ -109,6 +109,25 @@ impl UnnestExec {
             input.execution_mode(),
         )
     }
+
+    /// Input execution plan
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    /// indices of the list-typed columns in the input schema
+    pub fn list_column_indices(&self) -> &[ListUnnest] {
+        &self.list_column_indices
+    }
+
+    /// indices of the struct-typed columns in the input schema
+    pub fn struct_column_indices(&self) -> &[usize] {
+        &self.struct_column_indices
+    }
+
+    pub fn options(&self) -> &UnnestOptions {
+        &self.options
+    }
 }
 
 impl DisplayAs for UnnestExec {

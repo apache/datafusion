@@ -34,21 +34,24 @@
 
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-    IntervalYearMonthArray, LargeBinaryArray, LargeStringArray, StringArray,
-    StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
+    LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::compute;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    DataType, Decimal128Type, Decimal256Type, Float16Type, Float32Type, Float64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
 };
 use arrow_schema::IntervalUnit;
-use datafusion_common::{downcast_value, internal_err, DataFusionError, Result};
+use datafusion_common::{
+    downcast_value, exec_err, internal_err, DataFusionError, Result,
+};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use std::fmt::Debug;
 
@@ -64,11 +67,17 @@ use datafusion_expr::GroupsAccumulator;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Signature, Volatility,
 };
+use half::f16;
 use std::ops::Deref;
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
-    assert_eq!(input_types.len(), 1);
+    if input_types.len() != 1 {
+        return exec_err!(
+            "min/max was called with {} arguments. It requires only 1.",
+            input_types.len()
+        );
+    }
     // min and max support the dictionary data type
     // unpack the dictionary to get the value
     match &input_types[0] {
@@ -174,6 +183,7 @@ impl AggregateUDFImpl for Max {
                 | UInt16
                 | UInt32
                 | UInt64
+                | Float16
                 | Float32
                 | Float64
                 | Decimal128(_, _)
@@ -202,6 +212,9 @@ impl AggregateUDFImpl for Max {
             UInt16 => instantiate_max_accumulator!(data_type, u16, UInt16Type),
             UInt32 => instantiate_max_accumulator!(data_type, u32, UInt32Type),
             UInt64 => instantiate_max_accumulator!(data_type, u64, UInt64Type),
+            Float16 => {
+                instantiate_max_accumulator!(data_type, f16, Float16Type)
+            }
             Float32 => {
                 instantiate_max_accumulator!(data_type, f32, Float32Type)
             }
@@ -331,6 +344,9 @@ macro_rules! min_max_batch {
             }
             DataType::Float32 => {
                 typed_min_max_batch!($VALUES, Float32Array, Float32, $OP)
+            }
+            DataType::Float16 => {
+                typed_min_max_batch!($VALUES, Float16Array, Float16, $OP)
             }
             DataType::Int64 => typed_min_max_batch!($VALUES, Int64Array, Int64, $OP),
             DataType::Int32 => typed_min_max_batch!($VALUES, Int32Array, Int32, $OP),
@@ -615,6 +631,9 @@ macro_rules! min_max {
             }
             (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
                 typed_min_max_float!(lhs, rhs, Float32, $OP)
+            }
+            (ScalarValue::Float16(lhs), ScalarValue::Float16(rhs)) => {
+                typed_min_max_float!(lhs, rhs, Float16, $OP)
             }
             (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
                 typed_min_max!(lhs, rhs, UInt64, $OP)
@@ -943,6 +962,7 @@ impl AggregateUDFImpl for Min {
                 | UInt16
                 | UInt32
                 | UInt64
+                | Float16
                 | Float32
                 | Float64
                 | Decimal128(_, _)
@@ -971,6 +991,9 @@ impl AggregateUDFImpl for Min {
             UInt16 => instantiate_min_accumulator!(data_type, u16, UInt16Type),
             UInt32 => instantiate_min_accumulator!(data_type, u32, UInt32Type),
             UInt64 => instantiate_min_accumulator!(data_type, u64, UInt64Type),
+            Float16 => {
+                instantiate_min_accumulator!(data_type, f16, Float16Type)
+            }
             Float32 => {
                 instantiate_min_accumulator!(data_type, f32, Float32Type)
             }

@@ -26,7 +26,6 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::combine_limit;
 use datafusion_common::Result;
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
 
 /// Optimization rule that tries to push down `LIMIT`.
@@ -83,7 +82,7 @@ impl OptimizerRule for PushDownLimit {
             })));
         };
 
-        match unwrap_arc(input) {
+        match Arc::unwrap_or_clone(input) {
             LogicalPlan::TableScan(mut scan) => {
                 let rows_needed = if fetch != 0 { fetch + skip } else { 0 };
                 let new_fetch = scan
@@ -129,7 +128,11 @@ impl OptimizerRule for PushDownLimit {
                     Some(sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
                 };
                 if new_fetch == sort.fetch {
-                    original_limit(skip, fetch, LogicalPlan::Sort(sort))
+                    if skip > 0 {
+                        original_limit(skip, fetch, LogicalPlan::Sort(sort))
+                    } else {
+                        Ok(Transformed::yes(LogicalPlan::Sort(sort)))
+                    }
                 } else {
                     sort.fetch = new_fetch;
                     limit.input = Arc::new(LogicalPlan::Sort(sort));
@@ -344,13 +347,13 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![col("a")])?
+            .sort_by(vec![col("a")])?
             .limit(0, Some(10))?
             .build()?;
 
         // Should push down limit to sort
         let expected = "Limit: skip=0, fetch=10\
-        \n  Sort: test.a, fetch=10\
+        \n  Sort: test.a ASC NULLS LAST, fetch=10\
         \n    TableScan: test";
 
         assert_optimized_plan_equal(plan, expected)
@@ -361,13 +364,13 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![col("a")])?
+            .sort_by(vec![col("a")])?
             .limit(5, Some(10))?
             .build()?;
 
         // Should push down limit to sort
         let expected = "Limit: skip=5, fetch=10\
-        \n  Sort: test.a, fetch=15\
+        \n  Sort: test.a ASC NULLS LAST, fetch=15\
         \n    TableScan: test";
 
         assert_optimized_plan_equal(plan, expected)

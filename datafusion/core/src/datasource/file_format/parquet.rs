@@ -51,7 +51,7 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
@@ -76,6 +76,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 
 use crate::datasource::physical_plan::parquet::ParquetExecBuilder;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
@@ -376,7 +377,7 @@ impl FileFormat for ParquetFormat {
         input: Arc<dyn ExecutionPlan>,
         _state: &SessionState,
         conf: FileSinkConfig,
-        order_requirements: Option<Vec<PhysicalSortRequirement>>,
+        order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
             return not_impl_err!("Overwrites are not implemented yet for Parquet");
@@ -836,7 +837,10 @@ impl DataSink for ParquetSink {
             }
         }
 
-        demux_task.join_unwind().await?;
+        demux_task
+            .join_unwind()
+            .await
+            .map_err(DataFusionError::ExecutionJoin)??;
 
         Ok(row_count as u64)
     }
@@ -942,7 +946,10 @@ fn spawn_rg_join_and_finalize_task(
         let num_cols = column_writer_tasks.len();
         let mut finalized_rg = Vec::with_capacity(num_cols);
         for task in column_writer_tasks.into_iter() {
-            let (writer, _col_reservation) = task.join_unwind().await?;
+            let (writer, _col_reservation) = task
+                .join_unwind()
+                .await
+                .map_err(DataFusionError::ExecutionJoin)??;
             let encoded_size = writer.get_estimated_total_bytes();
             rg_reservation.grow(encoded_size);
             finalized_rg.push(writer.close()?);
@@ -1070,7 +1077,8 @@ async fn concatenate_parallel_row_groups(
     while let Some(task) = serialize_rx.recv().await {
         let result = task.join_unwind().await;
         let mut rg_out = parquet_writer.next_row_group()?;
-        let (serialized_columns, mut rg_reservation, _cnt) = result?;
+        let (serialized_columns, mut rg_reservation, _cnt) =
+            result.map_err(DataFusionError::ExecutionJoin)??;
         for chunk in serialized_columns {
             chunk.append_to_row_group(&mut rg_out)?;
             rg_reservation.free();
@@ -1134,7 +1142,10 @@ async fn output_single_parquet_file_parallelized(
     )
     .await?;
 
-    launch_serialization_task.join_unwind().await?;
+    launch_serialization_task
+        .join_unwind()
+        .await
+        .map_err(DataFusionError::ExecutionJoin)??;
     Ok(file_metadata)
 }
 
@@ -1999,7 +2010,7 @@ mod tests {
 
         // test result in int_col
         let int_col_index = page_index.get(4).unwrap();
-        let int_col_offset = offset_index.get(4).unwrap();
+        let int_col_offset = offset_index.get(4).unwrap().page_locations();
 
         // 325 pages in int_col
         assert_eq!(int_col_offset.len(), 325);

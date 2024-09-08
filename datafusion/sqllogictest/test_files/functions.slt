@@ -235,6 +235,16 @@ SELECT reverse('abcde')
 edcba
 
 query T
+SELECT reverse(arrow_cast('abcde', 'LargeUtf8'))
+----
+edcba
+
+query T
+SELECT reverse(arrow_cast('abcde', 'Utf8View'))
+----
+edcba
+
+query T
 SELECT reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'))
 ----
 edcba
@@ -245,7 +255,27 @@ SELECT reverse('loẅks')
 sk̈wol
 
 query T
+SELECT reverse(arrow_cast('loẅks', 'LargeUtf8'))
+----
+sk̈wol
+
+query T
+SELECT reverse(arrow_cast('loẅks', 'Utf8View'))
+----
+sk̈wol
+
+query T
 SELECT reverse(NULL)
+----
+NULL
+
+query T
+SELECT reverse(arrow_cast(NULL, 'LargeUtf8'))
+----
+NULL
+
+query T
+SELECT reverse(arrow_cast(NULL, 'Utf8View'))
 ----
 NULL
 
@@ -557,7 +587,7 @@ statement error
 SELECT v1, v2, SUMM(v2) OVER(ORDER BY v1) from test;
 
 # Window function
-statement error Did you mean 'ROW_NUMBER'?
+statement error Did you mean 'row_number'?
 SELECT v1, v2, ROWNUMBER() OVER(ORDER BY v1) from test;
 
 statement ok
@@ -797,6 +827,16 @@ SELECT replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'hello')
 foohello
 
 query T
+SELECT replace(arrow_cast('foobar', 'Utf8View'), arrow_cast('bar', 'Utf8View'), arrow_cast('hello', 'Utf8View'))
+----
+foohello
+
+query T
+SELECT replace(arrow_cast('foobar', 'LargeUtf8'), arrow_cast('bar', 'LargeUtf8'), arrow_cast('hello', 'LargeUtf8'))
+----
+foohello
+
+query T
 SELECT rtrim(' foo  ')
 ----
  foo
@@ -815,6 +855,38 @@ query T
 SELECT split_part(arrow_cast('foo_bar', 'Dictionary(Int32, Utf8)'), '_', 2)
 ----
 bar
+
+# test largeutf8, utf8view for split_part
+query T
+SELECT split_part(arrow_cast('large_apple_large_orange_large_banana', 'LargeUtf8'), '_', 3)
+----
+large
+
+query T
+SELECT split_part(arrow_cast('view_apple_view_orange_view_banana', 'Utf8View'), '_', 3);
+----
+view
+
+query T
+SELECT split_part('test_large_split_large_case', arrow_cast('_large', 'LargeUtf8'), 2)
+----
+_split
+
+query T
+SELECT split_part(arrow_cast('huge_large_apple_large_orange_large_banana', 'LargeUtf8'), arrow_cast('_', 'Utf8View'), 2)
+----
+large
+
+query T
+SELECT split_part(arrow_cast('view_apple_view_large_banana', 'Utf8View'), arrow_cast('_large', 'LargeUtf8'), 2)
+----
+_banana
+
+query T
+SELECT split_part(NULL, '_', 2)
+----
+NULL
+
 
 query B
 SELECT starts_with('foobar', 'foo')

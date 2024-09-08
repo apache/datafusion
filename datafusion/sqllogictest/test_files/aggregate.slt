@@ -98,6 +98,17 @@ SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
 
+statement error DataFusion error: This feature is not implemented: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
+SELECT approx_percentile_cont(c12, c12) FROM aggregate_test_100
+
+statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal
+SELECT approx_percentile_cont(c12, 0.95, c5) FROM aggregate_test_100
+
+# Not supported over sliding windows
+query error This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented
+SELECT approx_percentile_cont(c3, 0.5) OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) 
+FROM aggregate_test_100
+
 # array agg can use order by
 query ?
 SELECT array_agg(c13 ORDER BY c13)
@@ -499,6 +510,85 @@ query R
 select stddev(sq.column1) from (values (1.1), (2.0), (3.0)) as sq
 ----
 0.950438495292
+
+# csv_query_stddev_7
+query IR
+SELECT c2, stddev_samp(c12) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.303641032262
+2 0.284581967411
+3 0.296002660506
+4 0.284324609109
+5 0.331034486752
+
+# csv_query_stddev_8
+query IR
+SELECT c2, stddev_pop(c12) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.296659845456
+2 0.278038978602
+3 0.288107833475
+4 0.278074953424
+5 0.318992813225
+
+# csv_query_stddev_9
+query IR
+SELECT c2, var_pop(c12) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.088007063906
+2 0.077305673622
+3 0.083006123709
+4 0.077325679722
+5 0.101756414889
+
+# csv_query_stddev_10
+query IR
+SELECT c2, var_samp(c12) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.092197876473
+2 0.080986896176
+3 0.087617575027
+4 0.080840483345
+5 0.109583831419
+
+# csv_query_stddev_11
+query IR
+SELECT c2, var_samp(c12) FROM aggregate_test_100 WHERE c12 > 0.90 GROUP BY c2 ORDER BY c2
+----
+1 0.000889240174
+2 0.000785878272
+3 NULL
+4 NULL
+5 0.000269544643
+
+# Use PostgresSQL dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+# csv_query_stddev_12
+query IR
+SELECT c2, var_samp(c12) FILTER (WHERE c12 > 0.90) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.000889240174
+2 0.000785878272
+3 NULL
+4 NULL
+5 0.000269544643
+
+# Restore the default dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
+
+# csv_query_stddev_13
+query IR
+SELECT c2, var_samp(CASE WHEN c12 > 0.90 THEN c12 ELSE null END) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+----
+1 0.000889240174
+2 0.000785878272
+3 NULL
+4 NULL
+5 0.000269544643
+
 
 # csv_query_approx_median_1
 query I
@@ -1826,7 +1916,7 @@ from values
   (interval '2 month 15 days'),
   (interval '-2 month')
 ----
-Interval(MonthDayNano) 0 years -2 mons 0 days 0 hours 0 mins 0.000000000 secs 0 years 2 mons 15 days 0 hours 0 mins 0.000000000 secs
+Interval(MonthDayNano) -2 mons 2 mons 15 days
 
 # aggregate Interval(DayTime) min/max
 query T??
@@ -1837,7 +1927,7 @@ from values
   (arrow_cast('-3 minutes', 'Interval(DayTime)')),
   (arrow_cast('30 minutes', 'Interval(DayTime)'));
 ----
-Interval(DayTime) 0 years 0 mons 0 days 0 hours -3 mins 0.000 secs 0 years 0 mons 0 days 1 hours 0 mins 0.000 secs
+Interval(DayTime) -3 mins 1 hours
 
 # aggregate Interval(YearMonth) min/max
 query T??
@@ -1848,7 +1938,7 @@ from values
   (arrow_cast('13 months', 'Interval(YearMonth)')),
   (arrow_cast('1 year', 'Interval(YearMonth)'));
 ----
-Interval(YearMonth) -1 years 0 mons 0 days 0 hours 0 mins 0.00 secs 1 years 1 mons 0 days 0 hours 0 mins 0.00 secs
+Interval(YearMonth) -1 years 0 mons 1 years 1 mons
 
 # aggregate
 query II
@@ -1880,6 +1970,12 @@ query II
 SELECT MIN(c1), MIN(c2) FROM test
 ----
 0 1
+
+query error min/max was called with 2 arguments. It requires only 1.
+SELECT MIN(c1, c2) FROM test
+
+query error min/max was called with 2 arguments. It requires only 1.
+SELECT MAX(c1, c2) FROM test
 
 # aggregate_grouped
 query II
@@ -3724,6 +3820,51 @@ SELECT bool_or(distinct c1), bool_or(distinct c2), bool_or(distinct c3), bool_or
 ----
 true true true false true true false NULL
 
+# Test issue: https://github.com/apache/datafusion/issues/11846
+statement ok
+create table t1(v1 int, v2 boolean);
+
+statement ok
+insert into t1 values (1, true), (1, true);
+
+statement ok
+insert into t1 values (3, null), (3, true);
+
+statement ok
+insert into t1 values (2, false), (2, true);
+
+statement ok
+insert into t1 values (6, false), (6, false);
+
+statement ok
+insert into t1 values (4, null), (4, null);
+
+statement ok
+insert into t1 values (5, false), (5, null);
+
+query IB
+select v1, bool_and(v2) from t1 group by v1 order by v1;
+----
+1 true
+2 false
+3 true
+4 NULL
+5 false
+6 false
+
+query IB
+select v1, bool_or(v2) from t1 group by v1 order by v1;
+----
+1 true
+2 true
+3 true
+4 NULL
+5 false
+6 false
+
+statement ok
+drop table t1;
+
 # All supported timestamp types
 
 # "nanos" --> TimestampNanosecondArray
@@ -4574,17 +4715,16 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=5
 02)--CoalescePartitionsExec
-03)----LocalLimitExec: fetch=5
-04)------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([c3@0, min(aggregate_test_100.c1)@1], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
-08)--------------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
-09)----------------CoalesceBatchesExec: target_batch_size=8192
-10)------------------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
-11)--------------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
-12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
+03)----AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([c3@0, min(aggregate_test_100.c1)@1], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
+07)------------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
+08)--------------CoalesceBatchesExec: target_batch_size=8192
+09)----------------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
+10)------------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
 
 
 #
@@ -5337,6 +5477,18 @@ physical_plan
 statement ok
 DROP TABLE empty;
 
+# verify count aggregate function should not be nullable
+statement ok
+create table empty;
+
+query I
+select distinct count() from empty;
+----
+0
+
+statement ok
+DROP TABLE empty;
+
 statement ok
 CREATE TABLE t(col0 INTEGER) as VALUES(2);
 
@@ -5592,3 +5744,182 @@ query I??III?T
 select count(null), min(null), max(null), bit_and(NULL), bit_or(NULL), bit_xor(NULL), nth_value(NULL, 1), string_agg(NULL, ',');
 ----
 0 NULL NULL NULL NULL NULL NULL NULL
+
+statement ok
+create table having_test(v1 int, v2 int)
+
+statement ok
+create table join_table(v1 int, v2 int)
+
+statement ok
+insert into having_test values (1, 2), (2, 3), (3, 4)
+
+statement ok
+insert into join_table values (1, 2), (2, 3), (3, 4)
+
+
+query II
+select * from having_test group by v1, v2 having max(v1) = 3
+----
+3 4
+
+query TT
+EXPLAIN select * from having_test group by v1, v2 having max(v1) = 3
+----
+logical_plan
+01)Projection: having_test.v1, having_test.v2
+02)--Filter: max(having_test.v1) = Int32(3)
+03)----Aggregate: groupBy=[[having_test.v1, having_test.v2]], aggr=[[max(having_test.v1)]]
+04)------TableScan: having_test projection=[v1, v2]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
+03)----AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+
+
+query error
+select * from having_test having max(v1) = 3
+
+query I
+select max(v1) from having_test having max(v1) = 3
+----
+3
+
+query I
+select max(v1), * exclude (v1, v2) from having_test having max(v1) = 3
+----
+3
+
+# because v1, v2 is not in the group by clause, the sql is invalid
+query III
+select max(v1), * replace ('v1' as v3) from having_test group by v1, v2 having max(v1) = 3
+----
+3 3 4
+
+query III
+select max(v1), t.* from having_test t group by v1, v2 having max(v1) = 3
+----
+3 3 4
+
+# j.* should also be included in the group-by clause
+query error
+select max(t.v1), j.* from having_test t join join_table j on t.v1 = j.v1 group by t.v1, t.v2 having max(t.v1) = 3
+
+query III
+select max(t.v1), j.* from having_test t join join_table j on t.v1 = j.v1 group by j.v1, j.v2 having max(t.v1) = 3
+----
+3 3 4
+
+# If the select items only contain scalar expressions, the having clause is valid.
+query P
+select now() from having_test having max(v1) = 4
+----
+
+# If the select items only contain scalar expressions, the having clause is valid.
+query I
+select 0 from having_test having max(v1) = 4
+----
+
+# v2 should also be included in group-by clause
+query error
+select * from having_test group by v1 having max(v1) = 3
+
+statement ok
+drop table having_test
+
+statement ok
+drop table join_table
+
+# test min/max Float16 without group expression
+query RRTT
+WITH data AS (
+  SELECT arrow_cast(1, 'Float16') AS f
+  UNION ALL
+  SELECT arrow_cast(6, 'Float16') AS f
+)
+SELECT MIN(f), MAX(f), arrow_typeof(MIN(f)), arrow_typeof(MAX(f)) FROM data;
+----
+1 6 Float16 Float16
+
+# test min/max Float16 with group expression
+query IRRTT
+WITH data AS (
+  SELECT 1 as k, arrow_cast(1.8125, 'Float16') AS f
+  UNION ALL
+  SELECT 1 as k, arrow_cast(6.8007813, 'Float16') AS f
+  UNION ALL
+  SELECT 2 AS k, arrow_cast(8.5, 'Float16') AS f
+)
+SELECT k, MIN(f), MAX(f), arrow_typeof(MIN(f)), arrow_typeof(MAX(f))
+FROM data
+GROUP BY k
+ORDER BY k;
+----
+1 1.8125 6.8007813 Float16 Float16
+2 8.5 8.5 Float16 Float16
+
+# The result is 0.19432323191699075 actually
+query R
+SELECT kurtosis_pop(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col);
+----
+0.194323231917
+
+# The result is -1.153061224489787 actually
+query R
+SELECT kurtosis_pop(col) FROM VALUES (1), (2), (3), (2), (1) as tab(col);
+----
+-1.15306122449
+
+query R
+SELECT kurtosis_pop(col) FROM VALUES (1.0), (10.0), (100.0), (10.0), (1.0) as tab(col);
+----
+0.194323231917
+
+query R
+SELECT kurtosis_pop(col) FROM VALUES ('1'), ('10'), ('100'), ('10'), ('1') as tab(col);
+----
+0.194323231917
+
+query R
+SELECT kurtosis_pop(col) FROM VALUES (1.0) as tab(col);
+----
+NULL
+
+query R
+SELECT kurtosis_pop(1)
+----
+NULL
+
+query R
+SELECT kurtosis_pop(1.0)
+----
+NULL
+
+query R
+SELECT kurtosis_pop(null)
+----
+NULL
+
+statement ok
+CREATE TABLE t1(c1 int);
+
+query R
+SELECT kurtosis_pop(c1) FROM t1;
+----
+NULL
+
+statement ok
+INSERT INTO t1 VALUES (1), (10), (100), (10), (1);
+
+query R
+SELECT kurtosis_pop(c1) FROM t1;
+----
+0.194323231917
+
+statement ok
+DROP TABLE t1;

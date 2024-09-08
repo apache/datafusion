@@ -15,16 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Common utilities for implementing string functions
+
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, Array, ArrayDataBuilder, ArrayRef, GenericStringArray,
-    GenericStringBuilder, OffsetSizeTrait, StringArray,
+    new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef,
+    GenericStringArray, GenericStringBuilder, LargeStringArray, OffsetSizeTrait,
+    StringArray, StringBuilder, StringViewArray, StringViewBuilder,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
-
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
@@ -70,15 +72,14 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
     };
 
     if use_string_view {
-        string_view_trim::<T>(trim_type, func, args)
+        string_view_trim::<T>(func, args)
     } else {
-        string_trim::<T>(trim_type, func, args)
+        string_trim::<T>(func, args)
     }
 }
 
 // removing 'a will cause compiler complaining lifetime of `func`
 fn string_view_trim<'a, T: OffsetSizeTrait>(
-    trim_type: TrimType,
     func: fn(&'a str, &'a str) -> &'a str,
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
@@ -126,14 +127,13 @@ fn string_view_trim<'a, T: OffsetSizeTrait>(
         }
         other => {
             exec_err!(
-            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
+            "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
             )
         }
     }
 }
 
 fn string_trim<'a, T: OffsetSizeTrait>(
-    trim_type: TrimType,
     func: fn(&'a str, &'a str) -> &'a str,
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
@@ -180,7 +180,7 @@ fn string_trim<'a, T: OffsetSizeTrait>(
         }
         other => {
             exec_err!(
-            "{trim_type} was called with {other} arguments. It requires at least 1 and at most 2."
+            "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
             )
         }
     }
@@ -211,6 +211,23 @@ where
                 i64,
                 _,
             >(array, op)?)),
+            DataType::Utf8View => {
+                let string_array = as_string_view_array(array)?;
+                let mut string_builder = StringBuilder::with_capacity(
+                    string_array.len(),
+                    string_array.get_array_memory_size(),
+                );
+
+                for str in string_array.iter() {
+                    if let Some(str) = str {
+                        string_builder.append_value(op(str));
+                    } else {
+                        string_builder.append_null();
+                    }
+                }
+
+                Ok(ColumnarValue::Array(Arc::new(string_builder.finish())))
+            }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -222,32 +239,140 @@ where
                 let result = a.as_ref().map(|x| op(x));
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
             }
+            ScalarValue::Utf8View(a) => {
+                let result = a.as_ref().map(|x| op(x));
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
+            }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
     }
 }
 
+#[derive(Debug)]
 pub(crate) enum ColumnarValueRef<'a> {
     Scalar(&'a [u8]),
     NullableArray(&'a StringArray),
     NonNullableArray(&'a StringArray),
+    NullableLargeStringArray(&'a LargeStringArray),
+    NonNullableLargeStringArray(&'a LargeStringArray),
+    NullableStringViewArray(&'a StringViewArray),
+    NonNullableStringViewArray(&'a StringViewArray),
 }
 
 impl<'a> ColumnarValueRef<'a> {
     #[inline]
     pub fn is_valid(&self, i: usize) -> bool {
         match &self {
-            Self::Scalar(_) | Self::NonNullableArray(_) => true,
+            Self::Scalar(_)
+            | Self::NonNullableArray(_)
+            | Self::NonNullableLargeStringArray(_)
+            | Self::NonNullableStringViewArray(_) => true,
             Self::NullableArray(array) => array.is_valid(i),
+            Self::NullableStringViewArray(array) => array.is_valid(i),
+            Self::NullableLargeStringArray(array) => array.is_valid(i),
         }
     }
 
     #[inline]
     pub fn nulls(&self) -> Option<NullBuffer> {
         match &self {
-            Self::Scalar(_) | Self::NonNullableArray(_) => None,
+            Self::Scalar(_)
+            | Self::NonNullableArray(_)
+            | Self::NonNullableStringViewArray(_)
+            | Self::NonNullableLargeStringArray(_) => None,
             Self::NullableArray(array) => array.nulls().cloned(),
+            Self::NullableStringViewArray(array) => array.nulls().cloned(),
+            Self::NullableLargeStringArray(array) => array.nulls().cloned(),
         }
+    }
+}
+
+/// Abstracts iteration over different types of string arrays.
+///
+/// The [`StringArrayType`] trait helps write generic code for string functions that can work with
+/// different types of string arrays.
+///
+/// Currently three types are supported:
+/// - [`StringArray`]
+/// - [`LargeStringArray`]
+/// - [`StringViewArray`]
+///
+/// It is inspired / copied from [arrow-rs].
+///
+/// [arrow-rs]: https://github.com/apache/arrow-rs/blob/bf0ea9129e617e4a3cf915a900b747cc5485315f/arrow-string/src/like.rs#L151-L157
+///
+/// # Examples
+/// Generic function that works for [`StringArray`], [`LargeStringArray`]
+/// and [`StringViewArray`]:
+/// ```
+/// # use arrow::array::{StringArray, LargeStringArray, StringViewArray};
+/// # use datafusion_functions::string::common::StringArrayType;
+///
+/// /// Combines string values for any StringArrayType type. It can be invoked on
+/// /// and combination of `StringArray`, `LargeStringArray` or `StringViewArray`
+/// fn combine_values<'a, S1, S2>(array1: S1, array2: S2) -> Vec<String>
+///   where S1: StringArrayType<'a>, S2: StringArrayType<'a>
+/// {
+///   // iterate over the elements of the 2 arrays in parallel
+///   array1
+///   .iter()
+///   .zip(array2.iter())
+///   .map(|(s1, s2)| {
+///      // if both values are non null, combine them
+///      if let (Some(s1), Some(s2)) = (s1, s2) {
+///        format!("{s1}{s2}")
+///      } else {
+///        "None".to_string()
+///     }
+///    })
+///   .collect()
+/// }
+///
+/// let string_array = StringArray::from(vec!["foo", "bar"]);
+/// let large_string_array = LargeStringArray::from(vec!["foo2", "bar2"]);
+/// let string_view_array = StringViewArray::from(vec!["foo3", "bar3"]);
+///
+/// // can invoke this function a string array and large string array
+/// assert_eq!(
+///   combine_values(&string_array, &large_string_array),
+///   vec![String::from("foofoo2"), String::from("barbar2")]
+/// );
+///
+/// // Can call the same function with string array and string view array
+/// assert_eq!(
+///   combine_values(&string_array, &string_view_array),
+///   vec![String::from("foofoo3"), String::from("barbar3")]
+/// );
+/// ```
+///
+/// [`LargeStringArray`]: arrow::array::LargeStringArray
+pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+    /// Return an [`ArrayIter`]  over the values of the array.
+    ///
+    /// This iterator iterates returns `Option<&str>` for each item in the array.
+    fn iter(&self) -> ArrayIter<Self>;
+
+    /// Check if the array is ASCII only.
+    fn is_ascii(&self) -> bool;
+}
+
+impl<'a, T: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<T> {
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericStringArray::<T>::iter(self)
+    }
+
+    fn is_ascii(&self) -> bool {
+        GenericStringArray::<T>::is_ascii(self)
+    }
+}
+
+impl<'a> StringArrayType<'a> for &'a StringViewArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        StringViewArray::iter(self)
+    }
+
+    fn is_ascii(&self) -> bool {
+        StringViewArray::is_ascii(self)
     }
 }
 
@@ -287,7 +412,27 @@ impl StringArrayBuilder {
                         .extend_from_slice(array.value(i).as_bytes());
                 }
             }
+            ColumnarValueRef::NullableLargeStringArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer
+                        .extend_from_slice(array.value(i).as_bytes());
+                }
+            }
+            ColumnarValueRef::NullableStringViewArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer
+                        .extend_from_slice(array.value(i).as_bytes());
+                }
+            }
             ColumnarValueRef::NonNullableArray(array) => {
+                self.value_buffer
+                    .extend_from_slice(array.value(i).as_bytes());
+            }
+            ColumnarValueRef::NonNullableLargeStringArray(array) => {
+                self.value_buffer
+                    .extend_from_slice(array.value(i).as_bytes());
+            }
+            ColumnarValueRef::NonNullableStringViewArray(array) => {
                 self.value_buffer
                     .extend_from_slice(array.value(i).as_bytes());
             }
@@ -313,6 +458,157 @@ impl StringArrayBuilder {
         // and offsets were created correctly
         let array_data = unsafe { array_builder.build_unchecked() };
         StringArray::from(array_data)
+    }
+}
+
+pub(crate) struct StringViewArrayBuilder {
+    builder: StringViewBuilder,
+    block: String,
+}
+
+impl StringViewArrayBuilder {
+    pub fn with_capacity(_item_capacity: usize, data_capacity: usize) -> Self {
+        let builder = StringViewBuilder::with_capacity(data_capacity);
+        Self {
+            builder,
+            block: String::new(),
+        }
+    }
+
+    pub fn write<const CHECK_VALID: bool>(
+        &mut self,
+        column: &ColumnarValueRef,
+        i: usize,
+    ) {
+        match column {
+            ColumnarValueRef::Scalar(s) => {
+                self.block.push_str(std::str::from_utf8(s).unwrap());
+            }
+            ColumnarValueRef::NullableArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.block.push_str(
+                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
+                    );
+                }
+            }
+            ColumnarValueRef::NullableLargeStringArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.block.push_str(
+                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
+                    );
+                }
+            }
+            ColumnarValueRef::NullableStringViewArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.block.push_str(
+                        std::str::from_utf8(array.value(i).as_bytes()).unwrap(),
+                    );
+                }
+            }
+            ColumnarValueRef::NonNullableArray(array) => {
+                self.block
+                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+            }
+            ColumnarValueRef::NonNullableLargeStringArray(array) => {
+                self.block
+                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+            }
+            ColumnarValueRef::NonNullableStringViewArray(array) => {
+                self.block
+                    .push_str(std::str::from_utf8(array.value(i).as_bytes()).unwrap());
+            }
+        }
+    }
+
+    pub fn append_offset(&mut self) {
+        self.builder.append_value(&self.block);
+        self.block = String::new();
+    }
+
+    pub fn finish(mut self) -> StringViewArray {
+        self.builder.finish()
+    }
+}
+
+pub(crate) struct LargeStringArrayBuilder {
+    offsets_buffer: MutableBuffer,
+    value_buffer: MutableBuffer,
+}
+
+impl LargeStringArrayBuilder {
+    pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
+        let mut offsets_buffer = MutableBuffer::with_capacity(
+            (item_capacity + 1) * std::mem::size_of::<i64>(),
+        );
+        // SAFETY: the first offset value is definitely not going to exceed the bounds.
+        unsafe { offsets_buffer.push_unchecked(0_i64) };
+        Self {
+            offsets_buffer,
+            value_buffer: MutableBuffer::with_capacity(data_capacity),
+        }
+    }
+
+    pub fn write<const CHECK_VALID: bool>(
+        &mut self,
+        column: &ColumnarValueRef,
+        i: usize,
+    ) {
+        match column {
+            ColumnarValueRef::Scalar(s) => {
+                self.value_buffer.extend_from_slice(s);
+            }
+            ColumnarValueRef::NullableArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer
+                        .extend_from_slice(array.value(i).as_bytes());
+                }
+            }
+            ColumnarValueRef::NullableLargeStringArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer
+                        .extend_from_slice(array.value(i).as_bytes());
+                }
+            }
+            ColumnarValueRef::NullableStringViewArray(array) => {
+                if !CHECK_VALID || array.is_valid(i) {
+                    self.value_buffer
+                        .extend_from_slice(array.value(i).as_bytes());
+                }
+            }
+            ColumnarValueRef::NonNullableArray(array) => {
+                self.value_buffer
+                    .extend_from_slice(array.value(i).as_bytes());
+            }
+            ColumnarValueRef::NonNullableLargeStringArray(array) => {
+                self.value_buffer
+                    .extend_from_slice(array.value(i).as_bytes());
+            }
+            ColumnarValueRef::NonNullableStringViewArray(array) => {
+                self.value_buffer
+                    .extend_from_slice(array.value(i).as_bytes());
+            }
+        }
+    }
+
+    pub fn append_offset(&mut self) {
+        let next_offset: i64 = self
+            .value_buffer
+            .len()
+            .try_into()
+            .expect("byte array offset overflow");
+        unsafe { self.offsets_buffer.push_unchecked(next_offset) };
+    }
+
+    pub fn finish(self, null_buffer: Option<NullBuffer>) -> LargeStringArray {
+        let array_builder = ArrayDataBuilder::new(DataType::LargeUtf8)
+            .len(self.offsets_buffer.len() / std::mem::size_of::<i64>() - 1)
+            .add_buffer(self.offsets_buffer.into())
+            .add_buffer(self.value_buffer.into())
+            .nulls(null_buffer);
+        // SAFETY: all data that was appended was valid Large UTF8 and the values
+        // and offsets were created correctly
+        let array_data = unsafe { array_builder.build_unchecked() };
+        LargeStringArray::from(array_data)
     }
 }
 

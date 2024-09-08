@@ -48,7 +48,7 @@ use datafusion_common::{
 /// use datafusion_common::ScalarValue;
 ///
 /// let config = SessionConfig::new()
-///    .set("datafusion.execution.batch_size", ScalarValue::UInt64(Some(1234)))
+///    .set("datafusion.execution.batch_size", &ScalarValue::UInt64(Some(1234)))
 ///    .set_bool("datafusion.execution.parquet.pushdown_filters", true);
 ///
 /// assert_eq!(config.batch_size(), 1234);
@@ -78,7 +78,6 @@ use datafusion_common::{
 /// | --------- | ------------- |
 /// | `datafusion.catalog` | [CatalogOptions][datafusion_common::config::CatalogOptions] |
 /// | `datafusion.execution` | [ExecutionOptions][datafusion_common::config::ExecutionOptions] |
-/// | `datafusion.execution.aggregate` | [AggregateOptions][datafusion_common::config::AggregateOptions] |
 /// | `datafusion.execution.parquet` | [ParquetOptions][datafusion_common::config::ParquetOptions] |
 /// | `datafusion.optimizer` | [OptimizerOptions][datafusion_common::config::OptimizerOptions] |
 /// | `datafusion.sql_parser` | [SqlParserOptions][datafusion_common::config::SqlParserOptions] |
@@ -123,7 +122,7 @@ impl SessionConfig {
     }
 
     /// Create new ConfigOptions struct, taking values from a string hash map.
-    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+    pub fn from_string_hash_map(settings: &HashMap<String, String>) -> Result<Self> {
         Ok(ConfigOptions::from_string_hash_map(settings)?.into())
     }
 
@@ -157,7 +156,7 @@ impl SessionConfig {
     }
 
     /// Set a configuration option
-    pub fn set(self, key: &str, value: ScalarValue) -> Self {
+    pub fn set(self, key: &str, value: &ScalarValue) -> Self {
         self.set_str(key, &value.to_string())
     }
 
@@ -381,19 +380,6 @@ impl SessionConfig {
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
         self.options.execution.batch_size
-    }
-
-    /// Get the currently configured scalar_update_factor for aggregate
-    pub fn agg_scalar_update_factor(&self) -> usize {
-        self.options.execution.aggregate.scalar_update_factor
-    }
-
-    /// Customize scalar_update_factor for aggregate
-    pub fn with_agg_scalar_update_factor(mut self, n: usize) -> Self {
-        // scalar update factor must be greater than zero
-        assert!(n > 0);
-        self.options.execution.aggregate.scalar_update_factor = n;
-        self
     }
 
     /// Enables or disables the coalescence of small batches into larger batches

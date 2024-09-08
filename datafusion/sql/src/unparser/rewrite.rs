@@ -21,10 +21,11 @@ use std::{
 };
 
 use datafusion_common::{
-    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeIterator},
+    tree_node::{Transformed, TransformedResult, TreeNode},
     Result,
 };
-use datafusion_expr::{Expr, LogicalPlan, Projection, Sort};
+use datafusion_expr::{expr::Alias, tree_node::transform_sort_vec};
+use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
 use sqlparser::ast::Ident;
 
 /// Normalize the schema of a union plan to remove qualifiers from the schema fields and sort expressions.
@@ -59,10 +60,7 @@ pub(super) fn normalize_union_schema(plan: &LogicalPlan) -> Result<LogicalPlan> 
 
     let transformed_plan = plan.transform_up(|plan| match plan {
         LogicalPlan::Union(mut union) => {
-            let schema = match Arc::try_unwrap(union.schema) {
-                Ok(inner) => inner,
-                Err(schema) => (*schema).clone(),
-            };
+            let schema = Arc::unwrap_or_clone(union.schema);
             let schema = schema.strip_qualifiers();
 
             union.schema = Arc::new(schema);
@@ -86,20 +84,18 @@ pub(super) fn normalize_union_schema(plan: &LogicalPlan) -> Result<LogicalPlan> 
 }
 
 /// Rewrite sort expressions that have a UNION plan as their input to remove the table reference.
-fn rewrite_sort_expr_for_union(exprs: Vec<Expr>) -> Result<Vec<Expr>> {
-    let sort_exprs: Vec<Expr> = exprs
-        .into_iter()
-        .map_until_stop_and_collect(|expr| {
-            expr.transform_up(|expr| {
-                if let Expr::Column(mut col) = expr {
-                    col.relation = None;
-                    Ok(Transformed::yes(Expr::Column(col)))
-                } else {
-                    Ok(Transformed::no(expr))
-                }
-            })
+fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
+    let sort_exprs = transform_sort_vec(exprs, &mut |expr| {
+        expr.transform_up(|expr| {
+            if let Expr::Column(mut col) = expr {
+                col.relation = None;
+                Ok(Transformed::yes(Expr::Column(col)))
+            } else {
+                Ok(Transformed::no(expr))
+            }
         })
-        .data()?;
+    })
+    .data()?;
 
     Ok(sort_exprs)
 }
@@ -161,10 +157,8 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         .collect::<Vec<_>>();
 
     let mut collects = p.expr.clone();
-    for expr in &sort.expr {
-        if let Expr::Sort(s) = expr {
-            collects.push(s.expr.as_ref().clone());
-        }
+    for sort in &sort.expr {
+        collects.push(sort.expr.clone());
     }
 
     // Compare outer collects Expr::to_string with inner collected transformed values
@@ -261,6 +255,40 @@ pub(super) fn subquery_alias_inner_query_and_columns(
     }
 
     (outer_projections.input.as_ref(), columns)
+}
+
+/// Injects column aliases into the projection of a logical plan by wrapping `Expr::Column` expressions
+/// with `Expr::Alias` using the provided list of aliases. Non-column expressions are left unchanged.
+///
+/// Example:
+/// - `SELECT col1, col2 FROM table` with aliases `["alias_1", "some_alias_2"]` will be transformed to
+/// - `SELECT col1 AS alias_1, col2 AS some_alias_2 FROM table`
+pub(super) fn inject_column_aliases(
+    projection: &datafusion_expr::Projection,
+    aliases: impl IntoIterator<Item = Ident>,
+) -> LogicalPlan {
+    let mut updated_projection = projection.clone();
+
+    let new_exprs = updated_projection
+        .expr
+        .into_iter()
+        .zip(aliases)
+        .map(|(expr, col_alias)| match expr {
+            Expr::Column(col) => {
+                let relation = col.relation.clone();
+                Expr::Alias(Alias {
+                    expr: Box::new(Expr::Column(col)),
+                    relation,
+                    name: col_alias.value,
+                })
+            }
+            _ => expr,
+        })
+        .collect::<Vec<_>>();
+
+    updated_projection.expr = new_exprs;
+
+    LogicalPlan::Projection(updated_projection)
 }
 
 fn find_projection(logical_plan: &LogicalPlan) -> Option<&Projection> {

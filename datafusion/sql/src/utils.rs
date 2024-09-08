@@ -33,10 +33,16 @@ use datafusion_common::{
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
+<<<<<<< HEAD
 use datafusion_expr::{col, expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
 use datafusion_expr::{ColumnUnnestList, ColumnUnnestType};
 use sqlparser::ast::Ident;
 use sqlparser::ast::Value;
+=======
+use datafusion_expr::{expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
+use sqlparser::ast::{Ident, Value};
+use std::collections::HashMap;
+>>>>>>> origin/main
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -272,8 +278,9 @@ pub(crate) fn value_to_string(value: &Value) -> Option<String> {
         Value::SingleQuotedString(s) => Some(s.to_string()),
         Value::DollarQuotedString(s) => Some(s.to_string()),
         Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
+        Value::UnicodeStringLiteral(s) => Some(s.to_string()),
+        Value::EscapedStringLiteral(s) => Some(s.to_string()),
         Value::DoubleQuotedString(_)
-        | Value::EscapedStringLiteral(_)
         | Value::NationalStringLiteral(_)
         | Value::SingleQuotedByteStringLiteral(_)
         | Value::DoubleQuotedByteStringLiteral(_)

@@ -18,11 +18,11 @@
 use super::{Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, Alias, BinaryExpr, Cast, InList, InSubquery, Placeholder,
-    ScalarFunction, Sort, TryCast, Unnest, WindowFunction,
+    ScalarFunction, TryCast, Unnest, WindowFunction,
 };
 use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::{
-    data_types_with_aggregate_udf, data_types_with_scalar_udf,
+    data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
 };
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
@@ -107,7 +107,7 @@ impl ExprSchemable for Expr {
                 },
                 _ => expr.get_type(schema),
             },
-            Expr::Sort(Sort { expr, .. }) | Expr::Negative(expr) => expr.get_type(schema),
+            Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
@@ -184,11 +184,26 @@ impl ExprSchemable for Expr {
                                 err,
                                 utils::generate_signature_error_msg(
                                     fun.name(),
-                                    fun.signature().clone(),
+                                    fun.signature(),
                                     &data_types
                                 )
                             )
                         })?;
+                        Ok(fun.return_type(&new_types, &nullability)?)
+                    }
+                    WindowFunctionDefinition::WindowUDF(udwf) => {
+                        let new_types = data_types_with_window_udf(&data_types, udwf)
+                            .map_err(|err| {
+                                plan_datafusion_err!(
+                                    "{} {}",
+                                    err,
+                                    utils::generate_signature_error_msg(
+                                        fun.name(),
+                                        fun.signature(),
+                                        &data_types
+                                    )
+                                )
+                            })?;
                         Ok(fun.return_type(&new_types, &nullability)?)
                     }
                     _ => fun.return_type(&data_types, &nullability),
@@ -265,10 +280,9 @@ impl ExprSchemable for Expr {
     /// column that does not exist in the schema.
     fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool> {
         match self {
-            Expr::Alias(Alias { expr, .. })
-            | Expr::Not(expr)
-            | Expr::Negative(expr)
-            | Expr::Sort(Sort { expr, .. }) => expr.nullable(input_schema),
+            Expr::Alias(Alias { expr, .. }) | Expr::Not(expr) | Expr::Negative(expr) => {
+                expr.nullable(input_schema)
+            }
 
             Expr::InList(InList { expr, list, .. }) => {
                 // Avoid inspecting too many expressions.
@@ -320,18 +334,28 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
-            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
-                // TODO: UDF should be able to customize nullability
-                if func.name() == "count" {
-                    Ok(false)
-                } else {
-                    Ok(true)
-                }
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                Ok(func.is_nullable(args, input_schema))
             }
+            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
+                Ok(func.is_nullable())
+            }
+            Expr::WindowFunction(WindowFunction { fun, .. }) => match fun {
+                WindowFunctionDefinition::BuiltInWindowFunction(func) => {
+                    if func.name() == "RANK"
+                        || func.name() == "NTILE"
+                        || func.name() == "CUME_DIST"
+                    {
+                        Ok(false)
+                    } else {
+                        Ok(true)
+                    }
+                }
+                WindowFunctionDefinition::AggregateUDF(func) => Ok(func.is_nullable()),
+                WindowFunctionDefinition::WindowUDF(udwf) => Ok(udwf.nullable()),
+            },
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
-            | Expr::ScalarFunction(..)
-            | Expr::WindowFunction { .. }
             | Expr::Unnest(_)
             | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
@@ -397,9 +421,7 @@ impl ExprSchemable for Expr {
                 },
                 _ => expr.data_type_and_nullable(schema),
             },
-            Expr::Sort(Sort { expr, .. }) | Expr::Negative(expr) => {
-                expr.data_type_and_nullable(schema)
-            }
+            Expr::Negative(expr) => expr.data_type_and_nullable(schema),
             Expr::Column(c) => schema
                 .data_type_and_nullable(c)
                 .map(|(d, n)| (d.clone(), n)),
@@ -440,35 +462,12 @@ impl ExprSchemable for Expr {
         &self,
         input_schema: &dyn ExprSchema,
     ) -> Result<(Option<TableReference>, Arc<Field>)> {
-        match self {
-            Expr::Column(c) => {
-                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                Ok((
-                    c.relation.clone(),
-                    Field::new(&c.name, data_type, nullable)
-                        .with_metadata(self.metadata(input_schema)?)
-                        .into(),
-                ))
-            }
-            Expr::Alias(Alias { relation, name, .. }) => {
-                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                Ok((
-                    relation.clone(),
-                    Field::new(name, data_type, nullable)
-                        .with_metadata(self.metadata(input_schema)?)
-                        .into(),
-                ))
-            }
-            _ => {
-                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                Ok((
-                    None,
-                    Field::new(self.schema_name().to_string(), data_type, nullable)
-                        .with_metadata(self.metadata(input_schema)?)
-                        .into(),
-                ))
-            }
-        }
+        let (relation, schema_name) = self.qualified_name();
+        let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+        let field = Field::new(schema_name, data_type, nullable)
+            .with_metadata(self.metadata(input_schema)?)
+            .into();
+        Ok((relation, field))
     }
 
     /// Wraps this expression in a cast to a target [arrow::datatypes::DataType].

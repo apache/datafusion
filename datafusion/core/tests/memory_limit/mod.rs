@@ -40,7 +40,7 @@ use tokio::fs::File;
 use datafusion::datasource::streaming::StreamingTable;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -238,18 +238,15 @@ async fn sort_preserving_merge() {
             // SortPreservingMergeExec (not a Sort which would compete
             // with the SortPreservingMergeExec for memory)
             &[
-                "+---------------+---------------------------------------------------------------------------------------------------------------+",
-                "| plan_type     | plan                                                                                                          |",
-                "+---------------+---------------------------------------------------------------------------------------------------------------+",
-                "| logical_plan  | Limit: skip=0, fetch=10                                                                                       |",
-                "|               |   Sort: t.a ASC NULLS LAST, t.b ASC NULLS LAST, fetch=10                                                      |",
-                "|               |     TableScan: t projection=[a, b]                                                                            |",
-                "| physical_plan | GlobalLimitExec: skip=0, fetch=10                                                                             |",
-                "|               |   SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10                                  |",
-                "|               |     LocalLimitExec: fetch=10                                                                                  |",
-                "|               |       MemoryExec: partitions=2, partition_sizes=[5, 5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
-                "|               |                                                                                                               |",
-                "+---------------+---------------------------------------------------------------------------------------------------------------+",
+                "+---------------+-----------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                      |",
+                "+---------------+-----------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b ASC NULLS LAST, fetch=10                                                    |",
+                "|               |   TableScan: t projection=[a, b]                                                                          |",
+                "| physical_plan | SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10                                |",
+                "|               |   MemoryExec: partitions=2, partition_sizes=[5, 5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
+                "|               |                                                                                                           |",
+                "+---------------+-----------------------------------------------------------------------------------------------------------+",
             ]
         )
         .run()
@@ -512,21 +509,20 @@ impl TestCase {
 
         let table = scenario.table();
 
-        let mut rt_config = RuntimeConfig::new()
+        let mut builder = RuntimeEnvBuilder::new()
             // disk manager setting controls the spilling
             .with_disk_manager(disk_manager_config)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);
 
         if let Some(pool) = memory_pool {
-            rt_config = rt_config.with_memory_pool(pool);
+            builder = builder.with_memory_pool(pool);
         };
-
-        let runtime = RuntimeEnv::new(rt_config).unwrap();
+        let runtime = builder.build_arc().unwrap();
 
         // Configure execution
         let builder = SessionStateBuilder::new()
             .with_config(config)
-            .with_runtime_env(Arc::new(runtime))
+            .with_runtime_env(runtime)
             .with_default_features();
         let builder = match scenario.rules() {
             Some(rules) => builder.with_physical_optimizer_rules(rules),

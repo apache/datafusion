@@ -148,7 +148,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     }
 
     fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        let subquery_schema = Arc::clone(plan.schema());
+        let subquery_schema = plan.schema();
         match &plan {
             LogicalPlan::Filter(plan_filter) => {
                 let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
@@ -231,7 +231,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 {
                     proj_exprs_evaluation_result_on_empty_batch(
                         &projection.expr,
-                        Arc::clone(projection.input.schema()),
+                        projection.input.schema(),
                         expr_result_map,
                         &mut expr_result_map_for_count_bug,
                     )?;
@@ -277,7 +277,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 {
                     agg_exprs_evaluation_result_on_empty_batch(
                         &aggregate.aggr_expr,
-                        Arc::clone(aggregate.input.schema()),
+                        aggregate.input.schema(),
                         &mut expr_result_map_for_count_bug,
                     )?;
                     if !expr_result_map_for_count_bug.is_empty() {
@@ -423,7 +423,7 @@ fn remove_duplicated_filter(filters: Vec<Expr>, in_predicate: &Expr) -> Vec<Expr
 
 fn agg_exprs_evaluation_result_on_empty_batch(
     agg_expr: &[Expr],
-    schema: DFSchemaRef,
+    schema: &DFSchemaRef,
     expr_result_map_for_count_bug: &mut ExprResultMap,
 ) -> Result<()> {
     for e in agg_expr.iter() {
@@ -446,7 +446,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
 
         let result_expr = result_expr.unalias();
         let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(Arc::clone(&schema));
+        let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_))) {
@@ -459,7 +459,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
 
 fn proj_exprs_evaluation_result_on_empty_batch(
     proj_expr: &[Expr],
-    schema: DFSchemaRef,
+    schema: &DFSchemaRef,
     input_expr_result_map_for_count_bug: &ExprResultMap,
     expr_result_map_for_count_bug: &mut ExprResultMap,
 ) -> Result<()> {
@@ -483,7 +483,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
 
         if result_expr.ne(expr) {
             let props = ExecutionProps::new();
-            let info = SimplifyContext::new(&props).with_schema(Arc::clone(&schema));
+            let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {

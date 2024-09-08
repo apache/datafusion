@@ -23,7 +23,6 @@ use std::sync::Arc;
 use ahash::RandomState;
 use arrow::array::*;
 use arrow::datatypes::*;
-use arrow::row::Rows;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use arrow_buffer::IntervalDayTime;
@@ -246,6 +245,8 @@ fn hash_struct_array(
     Ok(())
 }
 
+// only adding this `cfg` b/c this function is only used with this `cfg`
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_map_array(
     array: &MapArray,
     random_state: &RandomState,
@@ -363,38 +364,6 @@ pub fn create_hashes<'a>(
     Ok(hashes_buffer)
 }
 
-/// Test version of `create_row_hashes` that produces the same value for
-/// all hashes (to test collisions)
-///
-/// See comments on `hashes_buffer` for more details
-#[cfg(feature = "force_hash_collisions")]
-pub fn create_row_hashes<'a>(
-    _rows: &[Vec<u8>],
-    _random_state: &RandomState,
-    hashes_buffer: &'a mut Vec<u64>,
-) -> Result<&'a mut Vec<u64>> {
-    for hash in hashes_buffer.iter_mut() {
-        *hash = 0
-    }
-    Ok(hashes_buffer)
-}
-
-/// Creates hash values for every row, based on their raw bytes.
-#[cfg(not(feature = "force_hash_collisions"))]
-pub fn create_row_hashes<'a>(
-    rows: &[Vec<u8>],
-    random_state: &RandomState,
-    hashes_buffer: &'a mut Vec<u64>,
-) -> Result<&'a mut Vec<u64>> {
-    for hash in hashes_buffer.iter_mut() {
-        *hash = 0
-    }
-    for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-        *hash = random_state.hash_one(&rows[i]);
-    }
-    Ok(hashes_buffer)
-}
-
 /// Creates hash values for every row, based on the values in the
 /// columns.
 ///
@@ -464,38 +433,6 @@ pub fn create_hashes<'a>(
                 );
             }
         }
-    }
-    Ok(hashes_buffer)
-}
-
-/// Test version of `create_row_hashes_v2` that produces the same value for
-/// all hashes (to test collisions)
-///
-/// See comments on `hashes_buffer` for more details
-#[cfg(feature = "force_hash_collisions")]
-pub fn create_row_hashes_v2<'a>(
-    _rows: &Rows,
-    _random_state: &RandomState,
-    hashes_buffer: &'a mut Vec<u64>,
-) -> Result<&'a mut Vec<u64>> {
-    for hash in hashes_buffer.iter_mut() {
-        *hash = 0
-    }
-    Ok(hashes_buffer)
-}
-
-/// Creates hash values for every row, based on their raw bytes.
-#[cfg(not(feature = "force_hash_collisions"))]
-pub fn create_row_hashes_v2<'a>(
-    rows: &Rows,
-    random_state: &RandomState,
-    hashes_buffer: &'a mut Vec<u64>,
-) -> Result<&'a mut Vec<u64>> {
-    for hash in hashes_buffer.iter_mut() {
-        *hash = 0
-    }
-    for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-        *hash = random_state.hash_one(rows.row(i));
     }
     Ok(hashes_buffer)
 }
