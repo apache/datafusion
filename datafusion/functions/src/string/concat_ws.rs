@@ -47,7 +47,7 @@ impl ConcatWsFunc {
         use DataType::*;
         Self {
             signature: Signature::variadic(
-                vec![Utf8View, Utf8, LargeUtf8],
+                vec![Utf8View, LargeUtf8, Utf8],
                 Volatility::Immutable,
             ),
         }
@@ -67,19 +67,9 @@ impl ScalarUDFImpl for ConcatWsFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
-        let mut dt = &Utf8;
-        arg_types.iter().for_each(|data_type| {
-            if data_type == &Utf8View {
-                dt = data_type;
-            }
-            if data_type == &LargeUtf8 && dt != &Utf8View {
-                dt = data_type;
-            }
-        });
-
-        Ok(dt.to_owned())
+        Ok(Utf8)
     }
 
     /// Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored.
@@ -101,32 +91,16 @@ impl ScalarUDFImpl for ConcatWsFunc {
             })
             .next();
 
-        let mut return_datatype = DataType::Utf8;
-        args.iter().for_each(|col| {
-            if col.data_type() == DataType::Utf8View {
-                return_datatype = col.data_type();
-            }
-            if col.data_type() == DataType::LargeUtf8
-                && return_datatype != DataType::Utf8View
-            {
-                return_datatype = col.data_type();
-            }
-        });
-
         // Scalar
         if array_len.is_none() {
             let sep = match &args[0] {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
                 | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s)))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => s,
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {
+                ColumnarValue::Scalar(ScalarValue::Utf8(None))
+                | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
+                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {
                     return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
-                }
-                ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)));
-                }
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)));
                 }
                 _ => unreachable!(),
             };
@@ -164,15 +138,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 }
             }
 
-            return match return_datatype {
-                DataType::Utf8View => {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
-                }
-                DataType::LargeUtf8 => {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
-                }
-                _ => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result)))),
-            };
+            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))));
         }
 
         // Array
@@ -255,93 +221,32 @@ impl ScalarUDFImpl for ConcatWsFunc {
             }
         }
 
-        match return_datatype {
-            DataType::Utf8 => {
-                let mut builder = StringArrayBuilder::with_capacity(len, data_size);
-                for i in 0..len {
-                    if !sep.is_valid(i) {
-                        builder.append_offset();
-                        continue;
-                    }
-
-                    let mut iter = columns.iter();
-                    for column in iter.by_ref() {
-                        if column.is_valid(i) {
-                            builder.write::<false>(column, i);
-                            break;
-                        }
-                    }
-
-                    for column in iter {
-                        if column.is_valid(i) {
-                            builder.write::<false>(&sep, i);
-                            builder.write::<false>(column, i);
-                        }
-                    }
-
-                    builder.append_offset();
-                }
-
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
+        let mut builder = StringArrayBuilder::with_capacity(len, data_size);
+        for i in 0..len {
+            if !sep.is_valid(i) {
+                builder.append_offset();
+                continue;
             }
-            DataType::Utf8View => {
-                let mut builder = StringViewArrayBuilder::with_capacity(len, data_size);
-                for i in 0..len {
-                    if !sep.is_valid(i) {
-                        builder.append_offset();
-                        continue;
-                    }
 
-                    let mut iter = columns.iter();
-                    for column in iter.by_ref() {
-                        if column.is_valid(i) {
-                            builder.write::<false>(column, i);
-                            break;
-                        }
-                    }
-
-                    for column in iter {
-                        if column.is_valid(i) {
-                            builder.write::<false>(&sep, i);
-                            builder.write::<false>(column, i);
-                        }
-                    }
-
-                    builder.append_offset();
+            let mut iter = columns.iter();
+            for column in iter.by_ref() {
+                if column.is_valid(i) {
+                    builder.write::<false>(column, i);
+                    break;
                 }
-
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
             }
-            DataType::LargeUtf8 => {
-                let mut builder = LargeStringArrayBuilder::with_capacity(len, data_size);
-                for i in 0..len {
-                    if !sep.is_valid(i) {
-                        builder.append_offset();
-                        continue;
-                    }
 
-                    let mut iter = columns.iter();
-                    for column in iter.by_ref() {
-                        if column.is_valid(i) {
-                            builder.write::<false>(column, i);
-                            break;
-                        }
-                    }
-
-                    for column in iter {
-                        if column.is_valid(i) {
-                            builder.write::<false>(&sep, i);
-                            builder.write::<false>(column, i);
-                        }
-                    }
-
-                    builder.append_offset();
+            for column in iter {
+                if column.is_valid(i) {
+                    builder.write::<false>(&sep, i);
+                    builder.write::<false>(column, i);
                 }
-
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
             }
-            _ => unreachable!(),
+
+            builder.append_offset();
         }
+
+        Ok(ColumnarValue::Array(Arc::new(builder.finish(sep.nulls()))))
     }
 
     /// Simply the `concat_ws` function by
