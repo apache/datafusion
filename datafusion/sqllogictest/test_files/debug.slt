@@ -1,6 +1,0 @@
-
-statement ok 
-CREATE TABLE unnest_table
-AS VALUES
-    ([1,2,3], [7], 1, [13, 14], struct(1,2))
-;
