@@ -1932,14 +1932,21 @@ mod tests {
 
     #[test]
     fn test_session_state_with_optimizer_rules() {
-        // test building sessions with supplied rules
+        struct DummyRule {}
 
+        impl OptimizerRule for DummyRule {
+            fn name(&self) -> &str {
+                "dummy_rule"
+            }
+        }
+        // test building sessions with fresh set of rules
         let state = SessionStateBuilder::new()
             .with_optimizer_rules(vec![Arc::new(DummyRule {})])
             .build();
 
         assert_eq!(state.optimizers().len(), 1);
 
+        // test adding rules to default recommendations
         let state = SessionStateBuilder::new()
             .with_optimizer_rule(Arc::new(DummyRule {}))
             .build();
@@ -1948,13 +1955,5 @@ mod tests {
             state.optimizers().len(),
             Optimizer::default().rules.len() + 1
         );
-    }
-
-    struct DummyRule {}
-
-    impl OptimizerRule for DummyRule {
-        fn name(&self) -> &str {
-            "dummy_rule"
-        }
     }
 }
