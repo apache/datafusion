@@ -338,28 +338,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 break;
             } else {
-                let columns = unnest_columns.into_iter().map(|col| col).collect();
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-                // let mut check_list: HashSet<Expr> = inner_projection_exprs
-                //     .iter()
-                //     .map(|expr| expr.clone())
-                //     .collect();
-                // let deduplicated: Vec<Expr> = inner_projection_exprs
-                //     .into_iter()
-                //     .filter(|expr| -> bool {
-                //         return true;
-                //         if check_list.remove(expr) {
-                //             true
-                //         } else {
-                //             false
-                //         }
-                //     })
-                //     .collect();
 
                 let plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(inner_projection_exprs)?
-                    .unnest_columns_with_options(columns, unnest_options)?
+                    .unnest_columns_with_options_v2(unnest_columns, unnest_options)?
                     .build()?;
                 intermediate_plan = plan;
                 intermediate_select_exprs = outer_projection_exprs;
@@ -471,7 +455,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(projection_exprs)?
-                    .unnest_columns_with_options(columns, unnest_options)?
+                    .unnest_columns_with_options_v2(columns, unnest_options)?
                     .build()?;
 
                 intermediate_select_exprs = outer_projection_exprs;
