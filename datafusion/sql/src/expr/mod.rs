@@ -240,7 +240,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 data_type,
                 format,
-            } => self.sql_cast_to_expr(expr, data_type, format, schema, planner_context),
+            } => self.sql_cast_to_expr(*expr, data_type, format, schema, planner_context),
 
             SQLExpr::Cast {
                 kind: CastKind::TryCast | CastKind::SafeCast,
@@ -915,7 +915,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn sql_cast_to_expr(
         &self,
-        expr: Box<SQLExpr>,
+        expr: SQLExpr,
         data_type: SQLDataType,
         format: Option<CastFormat>,
         schema: &DFSchema,
@@ -926,7 +926,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let dt = self.convert_data_type(&data_type)?;
-        let expr = self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
+        let expr = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
 
         // numeric constants are treated as seconds (rather as nanoseconds)
         // to align with postgres / duckdb semantics
