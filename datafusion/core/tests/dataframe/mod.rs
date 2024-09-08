@@ -29,7 +29,7 @@ use arrow::{
     },
     record_batch::RecordBatch,
 };
-use arrow_array::{Array, Float32Array, Float64Array, UnionArray};
+use arrow_array::{Array, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int8Array, UnionArray};
 use arrow_buffer::ScalarBuffer;
 use arrow_schema::{ArrowError, UnionFields, UnionMode};
 use datafusion_functions_aggregate::count::count_udaf;
@@ -2362,4 +2362,61 @@ async fn dense_union_is_null() {
         "+----------+",
     ];
     assert_batches_sorted_eq!(expected, &result_df.collect().await.unwrap());
+}
+
+
+#[tokio::test]
+async fn boolean_dictionary_as_filter() {
+    let values = vec![Some(true), Some(false), None, Some(true)];
+    let keys = vec![0, 0, 1, 2, 1, 3, 1];
+    let values_array = BooleanArray::from(values);
+    let keys_array = Int8Array::from(keys);
+    let array = DictionaryArray::new(
+        keys_array,
+        Arc::new(values_array) as Arc<dyn Array>,
+    );
+
+    let field = Field::new(
+        "my_dict",
+        DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Boolean)),
+        true,
+    );
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("dict_batch", batch).unwrap();
+
+    let df = ctx.table("dict_batch").await.unwrap();
+
+    // view_all
+    let expected = [
+        "+---------+",
+        "| my_dict |",
+        "+---------+",
+        "| true    |",
+        "| true    |",
+        "| false   |",
+        "|         |",
+        "| false   |",
+        "| true    |",
+        "| false   |",
+        "+---------+",
+    ];
+    assert_batches_eq!(expected, &df.clone().collect().await.unwrap());
+
+    // filter where is null
+    let result_df = df.clone().filter(col("my_dict")).unwrap();
+    let expected = [
+        "+---------+",
+        "| my_dict |",
+        "+---------+",
+        "| true    |",
+        "| true    |",
+        "| true    |",
+        "+---------+",
+    ];
+    assert_batches_eq!(expected, &result_df.collect().await.unwrap());    
 }
