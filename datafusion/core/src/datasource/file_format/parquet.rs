@@ -236,8 +236,8 @@ impl ParquetFormat {
         self.options.global.schema_force_view_types
     }
 
-    #[cfg(test)]
-    fn with_view_types(mut self, use_views: bool) -> Self {
+    /// If true, will use view types (StringView and BinaryView).
+    pub fn with_force_view_types(mut self, use_views: bool) -> Self {
         self.options.global.schema_force_view_types = use_views;
         self
     }
@@ -1297,7 +1297,7 @@ mod tests {
 
         let session = SessionContext::new();
         let ctx = session.state();
-        let format = ParquetFormat::default().with_view_types(use_views);
+        let format = ParquetFormat::default().with_force_view_types(use_views);
         let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
 
         let stats =
@@ -1491,7 +1491,7 @@ mod tests {
         let ctx = session.state();
         let format = ParquetFormat::default()
             .with_metadata_size_hint(Some(9))
-            .with_view_types(use_views);
+            .with_force_view_types(use_views);
         let schema = format
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
@@ -1523,7 +1523,7 @@ mod tests {
 
         let format = ParquetFormat::default()
             .with_metadata_size_hint(Some(size_hint))
-            .with_view_types(use_views);
+            .with_force_view_types(use_views);
         let schema = format
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
@@ -1628,7 +1628,7 @@ mod tests {
 
         let mut state = SessionContext::new().state();
         state = set_view_state(state, use_views);
-        let format = ParquetFormat::default().with_view_types(use_views);
+        let format = ParquetFormat::default().with_force_view_types(use_views);
         let schema = format.infer_schema(&state, &store, &files).await.unwrap();
 
         let null_i64 = ScalarValue::Int64(None);
