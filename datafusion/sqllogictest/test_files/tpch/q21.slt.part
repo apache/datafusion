@@ -119,32 +119,28 @@ physical_plan
 27)----------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_nationkey], has_header=false
 28)----------------------------------------------CoalesceBatchesExec: target_batch_size=8192
 29)------------------------------------------------RepartitionExec: partitioning=Hash([l_suppkey@1], 4), input_partitions=4
-30)--------------------------------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_suppkey@1 as l_suppkey]
-31)----------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
-32)------------------------------------------------------FilterExec: l_receiptdate@3 > l_commitdate@2
-33)--------------------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=false
-34)--------------------------------------CoalesceBatchesExec: target_batch_size=8192
-35)----------------------------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
-36)------------------------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey]
-37)--------------------------------------------CoalesceBatchesExec: target_batch_size=8192
-38)----------------------------------------------FilterExec: o_orderstatus@1 = F
-39)------------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_orderstatus], has_header=false
-40)------------------------------CoalesceBatchesExec: target_batch_size=8192
-41)--------------------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
-42)----------------------------------ProjectionExec: expr=[n_nationkey@0 as n_nationkey]
-43)------------------------------------CoalesceBatchesExec: target_batch_size=8192
-44)--------------------------------------FilterExec: n_name@1 = SAUDI ARABIA
-45)----------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-46)------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
-47)----------------------CoalesceBatchesExec: target_batch_size=8192
-48)------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
-49)--------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey], has_header=false
-50)------------------CoalesceBatchesExec: target_batch_size=8192
-51)--------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
-52)----------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_suppkey@1 as l_suppkey]
-53)------------------------CoalesceBatchesExec: target_batch_size=8192
-54)--------------------------FilterExec: l_receiptdate@3 > l_commitdate@2
-55)----------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=false
+30)--------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
+31)----------------------------------------------------FilterExec: l_receiptdate@3 > l_commitdate@2, projection=[l_orderkey@0, l_suppkey@1]
+32)------------------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=false
+33)--------------------------------------CoalesceBatchesExec: target_batch_size=8192
+34)----------------------------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
+35)------------------------------------------CoalesceBatchesExec: target_batch_size=8192
+36)--------------------------------------------FilterExec: o_orderstatus@1 = F, projection=[o_orderkey@0]
+37)----------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_orderstatus], has_header=false
+38)------------------------------CoalesceBatchesExec: target_batch_size=8192
+39)--------------------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
+40)----------------------------------CoalesceBatchesExec: target_batch_size=8192
+41)------------------------------------FilterExec: n_name@1 = SAUDI ARABIA, projection=[n_nationkey@0]
+42)--------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+43)----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
+44)----------------------CoalesceBatchesExec: target_batch_size=8192
+45)------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+46)--------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey], has_header=false
+47)------------------CoalesceBatchesExec: target_batch_size=8192
+48)--------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+49)----------------------CoalesceBatchesExec: target_batch_size=8192
+50)------------------------FilterExec: l_receiptdate@3 > l_commitdate@2, projection=[l_orderkey@0, l_suppkey@1]
+51)--------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=false
 
 
 

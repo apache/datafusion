@@ -30,9 +30,16 @@ rust-version = "1.76"
 readme = "README.md"
 
 [dependencies]
-arrow = { version = "52.2.0" }
+arrow = { version = "53.0.0" }
 async-trait = "0.1.73"
 aws-config = "1.5.5"
+# begin pin aws-sdk crates otherwise CI MSRV check fails
+# We can't update these libraries yet as it requires Rust 1.78, which is not available until Nov 2024
+# per https://github.com/apache/datafusion?tab=readme-ov-file#rust-version-compatibility-policy
+aws-sdk-sso = "=1.39.0"
+aws-sdk-ssooidc = "=1.40.0"
+aws-sdk-sts = "=1.39.0"
+# end pin aws-sdk crates
 aws-credential-types = "1.2.0"
 clap = { version = "4.5.16", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "41.0.0", features = [
@@ -49,9 +56,9 @@ dirs = "4.0.0"
 env_logger = "0.9"
 futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
-object_store = { version = "0.10.1", features = ["aws", "gcp", "http"] }
+object_store = { version = "0.11.0", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
-parquet = { version = "52.2.0", default-features = false }
+parquet = { version = "53.0.0", default-features = false }
 regex = "1.8"
 rustyline = "11.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }

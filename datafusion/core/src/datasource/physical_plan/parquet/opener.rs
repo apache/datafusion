@@ -76,8 +76,9 @@ impl FileOpener for ParquetOpener {
             )?;
 
         let batch_size = self.batch_size;
-        let projection = self.projection.clone();
-        let projected_schema = SchemaRef::from(self.table_schema.project(&projection)?);
+
+        let projected_schema =
+            SchemaRef::from(self.table_schema.project(&self.projection)?);
         let schema_adapter = self.schema_adapter_factory.create(projected_schema);
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
