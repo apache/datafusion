@@ -109,8 +109,7 @@ impl ScalarUDFImpl for RtrimFunc {
 #[cfg(test)]
 mod tests {
     use arrow::array::{Array, StringArray, StringViewArray};
-    use arrow::datatypes::DataType::{Utf8View, Utf8};
-
+    use arrow::datatypes::DataType::{Utf8, Utf8View};
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
