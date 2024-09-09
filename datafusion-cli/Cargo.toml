@@ -36,7 +36,7 @@ aws-config = "1.5.5"
 # begin pin aws-sdk crates otherwise CI MSRV check fails
 # We can't update these libraries yet as it requires Rust 1.78, which is not available until Nov 2024
 # per https://github.com/apache/datafusion?tab=readme-ov-file#rust-version-compatibility-policy
-aws-sdk-sso = "=1.39.0"
+aws-sdk-sso = "=1.41.0"
 aws-sdk-ssooidc = "=1.40.0"
 aws-sdk-sts = "=1.39.0"
 # end pin aws-sdk crates
