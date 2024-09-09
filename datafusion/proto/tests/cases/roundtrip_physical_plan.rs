@@ -364,7 +364,7 @@ fn rountrip_aggregate() -> Result<()> {
             .alias("NTH_VALUE(b, 1)")
             .build()?;
 
-    let test_cases: Vec<Vec<Arc<AggregateFunctionExpr>>> = vec![
+    let test_cases: Vec<Vec<AggregateFunctionExpr>> = vec![
         // AVG
         vec![avg_expr],
         // NTH_VALUE
@@ -397,7 +397,7 @@ fn rountrip_aggregate_with_limit() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<AggregateFunctionExpr>> =
+    let aggregates: Vec<AggregateFunctionExpr> =
         vec![
             AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
@@ -426,7 +426,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![AggregateExprBuilder::new(
+    let aggregates: Vec<AggregateFunctionExpr> = vec![AggregateExprBuilder::new(
         approx_percentile_cont_udaf(),
         vec![col("b", &schema)?, lit(0.5)],
     )
@@ -461,7 +461,7 @@ fn rountrip_aggregate_with_sort() -> Result<()> {
         },
     }];
 
-    let aggregates: Vec<Arc<AggregateFunctionExpr>> =
+    let aggregates: Vec<AggregateFunctionExpr> =
         vec![
             AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
@@ -528,7 +528,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates: Vec<Arc<AggregateFunctionExpr>> =
+    let aggregates: Vec<AggregateFunctionExpr> =
         vec![
             AggregateExprBuilder::new(Arc::new(udaf), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
