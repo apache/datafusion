@@ -826,7 +826,7 @@ impl TableProvider for ListingTable {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        let support: Vec<_> = filters
+        Ok(filters
             .iter()
             .map(|filter| {
                 if expr_applicable_for_cols(
@@ -834,7 +834,7 @@ impl TableProvider for ListingTable {
                         .options
                         .table_partition_cols
                         .iter()
-                        .map(|x| x.0.clone())
+                        .map(|x| x.0.as_str())
                         .collect::<Vec<_>>(),
                     filter,
                 ) {
@@ -846,8 +846,7 @@ impl TableProvider for ListingTable {
                     TableProviderFilterPushDown::Inexact
                 }
             })
-            .collect();
-        Ok(support)
+            .collect())
     }
 
     fn get_table_definition(&self) -> Option<&str> {
@@ -1781,7 +1780,7 @@ mod tests {
         // Create the initial context, schema, and batch.
         let session_ctx = match session_config_map {
             Some(cfg) => {
-                let config = SessionConfig::from_string_hash_map(cfg)?;
+                let config = SessionConfig::from_string_hash_map(&cfg)?;
                 SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),
@@ -1979,7 +1978,7 @@ mod tests {
         // Create the initial context
         let session_ctx = match session_config_map {
             Some(cfg) => {
-                let config = SessionConfig::from_string_hash_map(cfg)?;
+                let config = SessionConfig::from_string_hash_map(&cfg)?;
                 SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),

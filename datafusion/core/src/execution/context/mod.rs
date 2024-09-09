@@ -69,17 +69,18 @@ use datafusion_expr::{
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
 
+use crate::datasource::dynamic_file::DynamicListTableFactory;
+use crate::execution::session_state::SessionStateBuilder;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use object_store::ObjectStore;
-use parking_lot::RwLock;
-use url::Url;
-
-use crate::execution::session_state::SessionStateBuilder;
+use datafusion_catalog::{DynamicFileCatalog, SessionStore, UrlTableFactory};
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
+use object_store::ObjectStore;
+use parking_lot::RwLock;
+use url::Url;
 
 mod avro;
 mod csv;
@@ -219,13 +220,13 @@ where
 /// // configure a memory limit of 1GB with 20%  slop
 ///  let runtime_env = RuntimeEnvBuilder::new()
 ///     .with_memory_limit(1024 * 1024 * 1024, 0.80)
-///     .build()
+///     .build_arc()
 ///     .unwrap();
 ///
 /// // Create a SessionState using the config and runtime_env
 /// let state = SessionStateBuilder::new()
 ///   .with_config(config)
-///   .with_runtime_env(Arc::new(runtime_env))
+///   .with_runtime_env(runtime_env)
 ///   // include support for built in functions and configurations
 ///   .with_default_features()
 ///   .build();
@@ -354,6 +355,53 @@ impl SessionContext {
             session_start_time: Utc::now(),
             state: Arc::new(RwLock::new(state)),
         }
+    }
+
+    /// Enable dynamic file querying for the current session.
+    ///
+    /// This allows queries to directly access arbitrary file names via SQL like
+    /// `SELECT * from 'my_file.parquet'`
+    /// so it should only be enabled for systems that such access is not a security risk
+    ///
+    /// See [DynamicFileCatalog] for more details
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::{error::Result, assert_batches_eq};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new().enable_url_table();
+    /// let results = ctx
+    ///   .sql("SELECT a, MIN(b) FROM 'tests/data/example.csv' as example GROUP BY a LIMIT 100")
+    ///   .await?
+    ///   .collect()
+    ///   .await?;
+    /// assert_batches_eq!(
+    ///  &[
+    ///    "+---+----------------+",
+    ///    "| a | min(example.b) |",
+    ///    "+---+----------------+",
+    ///    "| 1 | 2              |",
+    ///    "+---+----------------+",
+    ///  ],
+    ///  &results
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn enable_url_table(&self) -> Self {
+        let state_ref = self.state();
+        let factory = Arc::new(DynamicListTableFactory::new(SessionStore::new()));
+        let catalog_list = Arc::new(DynamicFileCatalog::new(
+            Arc::clone(state_ref.catalog_list()),
+            Arc::clone(&factory) as Arc<dyn UrlTableFactory>,
+        ));
+        let new_state = SessionStateBuilder::new_from_existing(self.state())
+            .with_catalog_list(catalog_list)
+            .build();
+        let ctx = SessionContext::new_with_state(new_state);
+        factory.session_store().with_state(ctx.state_weak_ref());
+        ctx
     }
 
     /// Creates a new `SessionContext` using the provided [`SessionState`]
@@ -1758,7 +1806,7 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")
@@ -1774,6 +1822,38 @@ mod tests {
         let result =
             plan_and_collect(&ctx, "select c_name from default.customer limit 3;")
                 .await?;
+
+        let actual = arrow::util::pretty::pretty_format_batches(&result)
+            .unwrap()
+            .to_string();
+        let expected = r#"+--------------------+
+| c_name             |
++--------------------+
+| Customer#000000002 |
+| Customer#000000003 |
+| Customer#000000004 |
++--------------------+"#;
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dynamic_file_query() -> Result<()> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = path.join("tests/tpch-csv/customer.csv");
+        let url = format!("file://{}", path.display());
+        let cfg = SessionConfig::new();
+        let session_state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_config(cfg)
+            .build();
+        let ctx = SessionContext::new_with_state(session_state).enable_url_table();
+        let result = plan_and_collect(
+            &ctx,
+            format!("select c_name from '{}' limit 3;", &url).as_str(),
+        )
+        .await?;
 
         let actual = arrow::util::pretty::pretty_format_batches(&result)
             .unwrap()

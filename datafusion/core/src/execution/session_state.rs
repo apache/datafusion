@@ -801,6 +801,11 @@ impl SessionState {
         &mut self.config
     }
 
+    /// Return the logical optimizers
+    pub fn optimizers(&self) -> &[Arc<dyn OptimizerRule + Send + Sync>] {
+        &self.optimizer.rules
+    }
+
     /// Return the physical optimizers
     pub fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
         &self.physical_optimizers.rules
@@ -1035,17 +1040,15 @@ impl SessionStateBuilder {
         }
     }
 
-    /// Set defaults for table_factories, file formats, expr_planners and builtin
-    /// scalar and aggregate functions.
-    pub fn with_default_features(mut self) -> Self {
-        self.table_factories = Some(SessionStateDefaults::default_table_factories());
-        self.file_formats = Some(SessionStateDefaults::default_file_formats());
-        self.expr_planners = Some(SessionStateDefaults::default_expr_planners());
-        self.scalar_functions = Some(SessionStateDefaults::default_scalar_functions());
-        self.aggregate_functions =
-            Some(SessionStateDefaults::default_aggregate_functions());
-        self.window_functions = Some(SessionStateDefaults::default_window_functions());
-        self
+    /// Create default builder with defaults for table_factories, file formats, expr_planners and builtin
+    /// scalar, aggregate and windows functions.
+    pub fn with_default_features(self) -> Self {
+        self.with_table_factories(SessionStateDefaults::default_table_factories())
+            .with_file_formats(SessionStateDefaults::default_file_formats())
+            .with_expr_planners(SessionStateDefaults::default_expr_planners())
+            .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
+            .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
+            .with_window_functions(SessionStateDefaults::default_window_functions())
     }
 
     /// Set the session id.
@@ -1740,8 +1743,8 @@ impl OptimizerConfig for SessionState {
         self.execution_props.query_execution_start_time
     }
 
-    fn alias_generator(&self) -> Arc<AliasGenerator> {
-        self.execution_props.alias_generator.clone()
+    fn alias_generator(&self) -> &Arc<AliasGenerator> {
+        &self.execution_props.alias_generator
     }
 
     fn options(&self) -> &ConfigOptions {
@@ -1828,6 +1831,8 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
+    use datafusion_optimizer::optimizer::OptimizerRule;
+    use datafusion_optimizer::Optimizer;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1923,5 +1928,32 @@ mod tests {
             SessionStateBuilder::new_from_existing(without_default_state).build();
         assert!(new_state.catalog_list().catalog(&default_catalog).is_none());
         Ok(())
+    }
+
+    #[test]
+    fn test_session_state_with_optimizer_rules() {
+        struct DummyRule {}
+
+        impl OptimizerRule for DummyRule {
+            fn name(&self) -> &str {
+                "dummy_rule"
+            }
+        }
+        // test building sessions with fresh set of rules
+        let state = SessionStateBuilder::new()
+            .with_optimizer_rules(vec![Arc::new(DummyRule {})])
+            .build();
+
+        assert_eq!(state.optimizers().len(), 1);
+
+        // test adding rules to default recommendations
+        let state = SessionStateBuilder::new()
+            .with_optimizer_rule(Arc::new(DummyRule {}))
+            .build();
+
+        assert_eq!(
+            state.optimizers().len(),
+            Optimizer::default().rules.len() + 1
+        );
     }
 }

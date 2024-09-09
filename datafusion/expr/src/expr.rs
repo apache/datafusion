@@ -227,7 +227,7 @@ use sqlparser::ast::{
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Alias),
-    /// A named reference to a qualified filed in a schema.
+    /// A named reference to a qualified field in a schema.
     Column(Column),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
@@ -1113,6 +1113,19 @@ impl Expr {
     /// [`Schema`]: arrow::datatypes::Schema
     pub fn schema_name(&self) -> impl Display + '_ {
         SchemaDisplay(self)
+    }
+
+    /// Returns the qualifier and the schema name of this expression.
+    ///
+    /// Used when the expression forms the output field of a certain plan.
+    /// The result is the field's qualifier and field name in the plan's
+    /// output schema. We can use this qualified name to reference the field.
+    pub fn qualified_name(&self) -> (Option<TableReference>, String) {
+        match self {
+            Expr::Column(Column { relation, name }) => (relation.clone(), name.clone()),
+            Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
+            _ => (None, self.schema_name().to_string()),
+        }
     }
 
     /// Returns a full and complete string representation of this expression.

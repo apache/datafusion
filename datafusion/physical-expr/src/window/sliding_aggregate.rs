@@ -41,7 +41,7 @@ use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
 /// See comments on [`WindowExpr`] for more details.
 #[derive(Debug)]
 pub struct SlidingAggregateWindowExpr {
-    aggregate: Arc<AggregateFunctionExpr>,
+    aggregate: AggregateFunctionExpr,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
@@ -50,7 +50,7 @@ pub struct SlidingAggregateWindowExpr {
 impl SlidingAggregateWindowExpr {
     /// Create a new (sliding) aggregate window function expression.
     pub fn new(
-        aggregate: Arc<AggregateFunctionExpr>,
+        aggregate: AggregateFunctionExpr,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
         window_frame: Arc<WindowFrame>,
@@ -64,7 +64,7 @@ impl SlidingAggregateWindowExpr {
     }
 
     /// Get the [AggregateFunctionExpr] of this object.
-    pub fn get_aggregate_expr(&self) -> &Arc<AggregateFunctionExpr> {
+    pub fn get_aggregate_expr(&self) -> &AggregateFunctionExpr {
         &self.aggregate
     }
 }

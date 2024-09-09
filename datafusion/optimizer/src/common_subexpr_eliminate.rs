@@ -229,7 +229,7 @@ impl CommonSubexprEliminate {
     fn rewrite_exprs_list<'n>(
         &self,
         exprs_list: Vec<Vec<Expr>>,
-        arrays_list: Vec<Vec<IdArray<'n>>>,
+        arrays_list: &[Vec<IdArray<'n>>],
         expr_stats: &ExprStats<'n>,
         common_exprs: &mut CommonExprs<'n>,
         alias_generator: &AliasGenerator,
@@ -284,10 +284,10 @@ impl CommonSubexprEliminate {
                 // Must clone as Identifiers use references to original expressions so we have
                 // to keep the original expressions intact.
                 exprs_list.clone(),
-                id_arrays_list,
+                &id_arrays_list,
                 &expr_stats,
                 &mut common_exprs,
-                &config.alias_generator(),
+                config.alias_generator().as_ref(),
             )?;
             assert!(!common_exprs.is_empty());
 
@@ -414,9 +414,9 @@ impl CommonSubexprEliminate {
                             exprs
                                 .iter()
                                 .map(|expr| name_preserver.save(expr))
-                                .collect::<Result<Vec<_>>>()
+                                .collect::<Vec<_>>()
                         })
-                        .collect::<Result<Vec<_>>>()?;
+                        .collect::<Vec<_>>();
                     new_window_expr_list.into_iter().zip(saved_names).try_rfold(
                         new_input,
                         |plan, (new_window_expr, saved_names)| {
@@ -426,7 +426,7 @@ impl CommonSubexprEliminate {
                                 .map(|(new_window_expr, saved_name)| {
                                     saved_name.restore(new_window_expr)
                                 })
-                                .collect::<Result<Vec<_>>>()?;
+                                .collect::<Vec<_>>();
                             Window::try_new(new_window_expr, Arc::new(plan))
                                 .map(LogicalPlan::Window)
                         },
@@ -604,14 +604,14 @@ impl CommonSubexprEliminate {
                                 let saved_names = aggr_expr
                                     .iter()
                                     .map(|expr| name_perserver.save(expr))
-                                    .collect::<Result<Vec<_>>>()?;
+                                    .collect::<Vec<_>>();
                                 let new_aggr_expr = rewritten_aggr_expr
                                     .into_iter()
-                                    .zip(saved_names.into_iter())
+                                    .zip(saved_names)
                                     .map(|(new_expr, saved_name)| {
                                         saved_name.restore(new_expr)
                                     })
-                                    .collect::<Result<Vec<Expr>>>()?;
+                                    .collect::<Vec<Expr>>();
 
                                 // Since `group_expr` may have changed, schema may also.
                                 // Use `try_new()` method.

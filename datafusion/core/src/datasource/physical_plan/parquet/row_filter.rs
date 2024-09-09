@@ -59,6 +59,7 @@
 //!    the unsorted predicates. Within each partition, predicates are
 //!    still be sorted by size.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -129,7 +130,7 @@ impl DatafusionArrowPredicate {
         // on the order they appear in the file
         let projection = match candidate.projection.len() {
             0 | 1 => vec![],
-            _ => remap_projection(&candidate.projection),
+            2.. => remap_projection(&candidate.projection),
         };
 
         Ok(Self {
@@ -151,32 +152,31 @@ impl ArrowPredicate for DatafusionArrowPredicate {
         &self.projection_mask
     }
 
-    fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
-        let batch = match self.projection.is_empty() {
-            true => batch,
-            false => batch.project(&self.projection)?,
+    fn evaluate(&mut self, mut batch: RecordBatch) -> ArrowResult<BooleanArray> {
+        if !self.projection.is_empty() {
+            batch = batch.project(&self.projection)?;
         };
 
         let batch = self.schema_mapping.map_partial_batch(batch)?;
 
         // scoped timer updates on drop
         let mut timer = self.time.timer();
-        match self
-            .physical_expr
+
+        self.physical_expr
             .evaluate(&batch)
             .and_then(|v| v.into_array(batch.num_rows()))
-        {
-            Ok(array) => {
+            .and_then(|array| {
                 let bool_arr = as_boolean_array(&array)?.clone();
                 let num_filtered = bool_arr.len() - bool_arr.true_count();
                 self.rows_filtered.add(num_filtered);
                 timer.stop();
                 Ok(bool_arr)
-            }
-            Err(e) => Err(ArrowError::ComputeError(format!(
-                "Error evaluating filter predicate: {e:?}"
-            ))),
-        }
+            })
+            .map_err(|e| {
+                ArrowError::ComputeError(format!(
+                    "Error evaluating filter predicate: {e:?}"
+                ))
+            })
     }
 }
 
@@ -453,62 +453,33 @@ pub fn build_row_filter(
 
     // no candidates
     if candidates.is_empty() {
-        Ok(None)
-    } else if reorder_predicates {
-        // attempt to reorder the predicates by size and whether they are sorted
-        candidates.sort_by_key(|c| c.required_bytes);
-
-        let (indexed_candidates, other_candidates): (Vec<_>, Vec<_>) =
-            candidates.into_iter().partition(|c| c.can_use_index);
-
-        let mut filters: Vec<Box<dyn ArrowPredicate>> = vec![];
-
-        for candidate in indexed_candidates {
-            let filter = DatafusionArrowPredicate::try_new(
-                candidate,
-                file_schema,
-                metadata,
-                rows_filtered.clone(),
-                time.clone(),
-                Arc::clone(&schema_mapping),
-            )?;
-
-            filters.push(Box::new(filter));
-        }
-
-        for candidate in other_candidates {
-            let filter = DatafusionArrowPredicate::try_new(
-                candidate,
-                file_schema,
-                metadata,
-                rows_filtered.clone(),
-                time.clone(),
-                Arc::clone(&schema_mapping),
-            )?;
-
-            filters.push(Box::new(filter));
-        }
-
-        Ok(Some(RowFilter::new(filters)))
-    } else {
-        // otherwise evaluate the predicates in the order the appeared in the
-        // original expressions
-        let mut filters: Vec<Box<dyn ArrowPredicate>> = vec![];
-        for candidate in candidates {
-            let filter = DatafusionArrowPredicate::try_new(
-                candidate,
-                file_schema,
-                metadata,
-                rows_filtered.clone(),
-                time.clone(),
-                Arc::clone(&schema_mapping),
-            )?;
-
-            filters.push(Box::new(filter));
-        }
-
-        Ok(Some(RowFilter::new(filters)))
+        return Ok(None);
     }
+
+    if reorder_predicates {
+        candidates.sort_unstable_by(|c1, c2| {
+            match c1.can_use_index.cmp(&c2.can_use_index) {
+                Ordering::Equal => c1.required_bytes.cmp(&c2.required_bytes),
+                ord => ord,
+            }
+        });
+    }
+
+    candidates
+        .into_iter()
+        .map(|candidate| {
+            DatafusionArrowPredicate::try_new(
+                candidate,
+                file_schema,
+                metadata,
+                rows_filtered.clone(),
+                time.clone(),
+                Arc::clone(&schema_mapping),
+            )
+            .map(|pred| Box::new(pred) as _)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|filters| Some(RowFilter::new(filters)))
 }
 
 #[cfg(test)]

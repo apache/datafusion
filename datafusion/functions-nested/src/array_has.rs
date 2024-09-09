@@ -24,9 +24,8 @@ use arrow_array::{Datum, GenericListArray, Scalar};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Operator, ScalarUDFImpl, Signature, Volatility};
-
-use datafusion_physical_expr_common::datum::compare_op_for_nested;
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
 use crate::utils::make_scalar_function;
@@ -180,8 +179,9 @@ fn array_has_dispatch_for_array<O: OffsetSizeTrait>(
             continue;
         }
         let arr = arr.unwrap();
+        let is_nested = arr.data_type().is_nested();
         let needle_row = Scalar::new(needle.slice(i, 1));
-        let eq_array = compare_op_for_nested(Operator::Eq, &arr, &needle_row)?;
+        let eq_array = compare_with_eq(&arr, &needle_row, is_nested)?;
         let is_contained = eq_array.true_count() > 0;
         boolean_builder.append_value(is_contained)
     }
@@ -195,13 +195,14 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let haystack = as_generic_list_array::<O>(haystack)?;
     let values = haystack.values();
+    let is_nested = values.data_type().is_nested();
     let offsets = haystack.value_offsets();
     // If first argument is empty list (second argument is non-null), return false
     // i.e. array_has([], non-null element) -> false
     if values.len() == 0 {
         return Ok(Arc::new(BooleanArray::from(vec![Some(false)])));
     }
-    let eq_array = compare_op_for_nested(Operator::Eq, values, needle)?;
+    let eq_array = compare_with_eq(values, needle, is_nested)?;
     let mut final_contained = vec![None; haystack.len()];
     for (i, offset) in offsets.windows(2).enumerate() {
         let start = offset[0].to_usize().unwrap();

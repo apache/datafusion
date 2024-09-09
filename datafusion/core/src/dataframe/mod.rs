@@ -2428,7 +2428,8 @@ mod tests {
         let df: Vec<RecordBatch> = df.select(aggr_expr)?.collect().await?;
 
         assert_batches_sorted_eq!(
-            ["+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
+            [
+                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
                 "| first_value | last_val | approx_distinct | approx_median | median | max | min  | c2 | c3   |",
                 "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
                 "|             |          |                 |               |        |     |      | 1  | -85  |",
@@ -2452,7 +2453,8 @@ mod tests {
                 "| -85         | 45       | 8               | -34           | 45     | 83  | -85  | 3  | -72  |",
                 "| -85         | 65       | 17              | -17           | 65     | 83  | -101 | 5  | -101 |",
                 "| -85         | 83       | 5               | -25           | 83     | 83  | -85  | 2  | -48  |",
-                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+"],
+                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
+            ],
             &df
         );
 
@@ -3277,7 +3279,7 @@ mod tests {
     #[tokio::test]
     async fn with_column_renamed_case_sensitive() -> Result<()> {
         let config =
-            SessionConfig::from_string_hash_map(std::collections::HashMap::from([(
+            SessionConfig::from_string_hash_map(&std::collections::HashMap::from([(
                 "datafusion.sql_parser.enable_ident_normalization".to_owned(),
                 "false".to_owned(),
             )]))?;
@@ -3713,8 +3715,10 @@ mod tests {
     // Test issue: https://github.com/apache/datafusion/issues/12065
     #[tokio::test]
     async fn filtered_aggr_with_param_values() -> Result<()> {
-        let cfg = SessionConfig::new()
-            .set("datafusion.sql_parser.dialect", "PostgreSQL".into());
+        let cfg = SessionConfig::new().set(
+            "datafusion.sql_parser.dialect",
+            &ScalarValue::from("PostgreSQL"),
+        );
         let ctx = SessionContext::new_with_config(cfg);
         register_aggregate_csv(&ctx, "table1").await?;
 

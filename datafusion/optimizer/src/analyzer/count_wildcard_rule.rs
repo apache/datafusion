@@ -76,7 +76,7 @@ fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     let name_preserver = NamePreserver::new(&plan);
     plan.map_expressions(|expr| {
-        let original_name = name_preserver.save(&expr)?;
+        let original_name = name_preserver.save(&expr);
         let transformed_expr = expr.transform_up(|expr| match expr {
             Expr::WindowFunction(mut window_function)
                 if is_count_star_window_aggregate(&window_function) =>
@@ -94,7 +94,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             }
             _ => Ok(Transformed::no(expr)),
         })?;
-        transformed_expr.map_data(|data| original_name.restore(data))
+        Ok(transformed_expr.update_data(|data| original_name.restore(data)))
     })
 }
 
