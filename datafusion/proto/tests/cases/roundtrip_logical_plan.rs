@@ -73,6 +73,7 @@ use datafusion_functions_aggregate::expr_fn::{
     approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
     nth_value,
 };
+use datafusion_functions_aggregate::kurtosis_pop::kurtosis_pop;
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
@@ -904,6 +905,7 @@ async fn roundtrip_expr_api() -> Result<()> {
             vec![lit(10), lit(20), lit(30)],
         ),
         row_number(),
+        kurtosis_pop(lit(1)),
         nth_value(col("b"), 1, vec![]),
         nth_value(
             col("b"),
@@ -1189,7 +1191,7 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
 }
 
 #[test]
-fn round_trip_scalar_values() {
+fn round_trip_scalar_values_and_data_types() {
     let should_pass: Vec<ScalarValue> = vec![
         ScalarValue::Boolean(None),
         ScalarValue::Float32(None),
@@ -1243,6 +1245,8 @@ fn round_trip_scalar_values() {
         ScalarValue::UInt64(Some(0)),
         ScalarValue::Utf8(Some(String::from("Test string   "))),
         ScalarValue::LargeUtf8(Some(String::from("Test Large utf8"))),
+        ScalarValue::Utf8View(Some(String::from("Test stringview"))),
+        ScalarValue::BinaryView(Some(b"binaryview".to_vec())),
         ScalarValue::Date32(Some(0)),
         ScalarValue::Date32(Some(i32::MAX)),
         ScalarValue::Date32(None),
@@ -1469,19 +1473,36 @@ fn round_trip_scalar_values() {
         ScalarValue::FixedSizeBinary(5, None),
     ];
 
-    for test_case in should_pass.into_iter() {
-        let proto: protobuf::ScalarValue = (&test_case)
-            .try_into()
-            .expect("failed conversion to protobuf");
-
+    // ScalarValue directly
+    for test_case in should_pass.iter() {
+        let proto: protobuf::ScalarValue =
+            test_case.try_into().expect("failed conversion to protobuf");
         let roundtrip: ScalarValue = (&proto)
             .try_into()
             .expect("failed conversion from protobuf");
 
         assert_eq!(
-            test_case, roundtrip,
+            test_case, &roundtrip,
             "ScalarValue was not the same after round trip!\n\n\
                         Input: {test_case:?}\n\nRoundtrip: {roundtrip:?}"
+        );
+    }
+
+    //  DataType conversion
+    for test_case in should_pass.iter() {
+        let dt = test_case.data_type();
+
+        let proto: protobuf::ArrowType = (&dt)
+            .try_into()
+            .expect("datatype failed conversion to protobuf");
+        let roundtrip: DataType = (&proto)
+            .try_into()
+            .expect("datatype failed conversion from protobuf");
+
+        assert_eq!(
+            dt, roundtrip,
+            "DataType was not the same after round trip!\n\n\
+                        Input: {dt:?}\n\nRoundtrip: {roundtrip:?}"
         );
     }
 }

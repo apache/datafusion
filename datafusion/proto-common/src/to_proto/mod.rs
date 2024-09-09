@@ -153,9 +153,11 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 Self::Interval(protobuf::IntervalUnit::from(interval_unit) as i32)
             }
             DataType::Binary => Self::Binary(EmptyMessage {}),
+            DataType::BinaryView => Self::BinaryView(EmptyMessage {}),
             DataType::FixedSizeBinary(size) => Self::FixedSizeBinary(*size),
             DataType::LargeBinary => Self::LargeBinary(EmptyMessage {}),
             DataType::Utf8 => Self::Utf8(EmptyMessage {}),
+            DataType::Utf8View => Self::Utf8View(EmptyMessage {}),
             DataType::LargeUtf8 => Self::LargeUtf8(EmptyMessage {}),
             DataType::List(item_type) => Self::List(Box::new(protobuf::List {
                 field_type: Some(Box::new(item_type.as_ref().try_into()?)),
@@ -210,7 +212,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
                 ))
             }
-            DataType::Utf8View | DataType::BinaryView | DataType::ListView(_) | DataType::LargeListView(_) => {
+            DataType::ListView(_) | DataType::LargeListView(_) => {
                 return Err(Error::General(format!("Proto serialization error: {val} not yet supported")))
             }
         };
@@ -910,6 +912,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             has_header: opts.has_header.map_or_else(Vec::new, |h| vec![h as u8]),
             delimiter: vec![opts.delimiter],
             quote: vec![opts.quote],
+            terminator: opts.terminator.map_or_else(Vec::new, |e| vec![e]),
             escape: opts.escape.map_or_else(Vec::new, |e| vec![e]),
             double_quote: opts.double_quote.map_or_else(Vec::new, |h| vec![h as u8]),
             newlines_in_values: opts

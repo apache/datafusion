@@ -239,7 +239,7 @@ pub struct HashRepartition {
     pub partition_count: u64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct EmptyRelationNode {
     #[prost(bool, tag = "1")]
     pub produce_one_row: bool,
@@ -443,7 +443,7 @@ pub struct UnnestNode {
     pub options: ::core::option::Option<UnnestOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct UnnestOptions {
     #[prost(bool, tag = "1")]
     pub preserve_nulls: bool,
@@ -912,7 +912,7 @@ pub struct WindowFrameBound {
     pub bound_value: ::core::option::Option<super::datafusion_common::ScalarValue>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct FixedSizeBinary {
     #[prost(int32, tag = "1")]
     pub length: i32,
@@ -1034,7 +1034,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1101,6 +1101,8 @@ pub mod physical_plan_node {
         CsvSink(::prost::alloc::boxed::Box<super::CsvSinkExecNode>),
         #[prost(message, tag = "29")]
         ParquetSink(::prost::alloc::boxed::Box<super::ParquetSinkExecNode>),
+        #[prost(message, tag = "30")]
+        Unnest(::prost::alloc::boxed::Box<super::UnnestExecNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1194,6 +1196,20 @@ pub struct ParquetSinkExecNode {
     pub sink_schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, optional, tag = "4")]
     pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnnestExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(uint64, repeated, tag = "3")]
+    pub list_type_columns: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, repeated, tag = "4")]
+    pub struct_type_columns: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, optional, tag = "5")]
+    pub options: ::core::option::Option<UnnestOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1466,6 +1482,8 @@ pub struct FilterExecNode {
     pub expr: ::core::option::Option<PhysicalExprNode>,
     #[prost(uint32, tag = "3")]
     pub default_filter_selectivity: u32,
+    #[prost(uint32, repeated, tag = "9")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1474,7 +1492,7 @@ pub struct FileGroup {
     pub files: ::prost::alloc::vec::Vec<PartitionedFile>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ScanLimit {
     /// wrap into a message to make it optional
     #[prost(uint32, tag = "1")]
@@ -1721,7 +1739,7 @@ pub struct MaybePhysicalSortExprs {
     pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct AggLimit {
     /// wrap into a message to make it optional
     #[prost(uint64, tag = "1")]
@@ -1877,7 +1895,7 @@ pub struct JoinFilter {
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ColumnIndex {
     #[prost(uint32, tag = "1")]
     pub index: u32,
@@ -1903,7 +1921,7 @@ pub struct PartitionedFile {
     pub statistics: ::core::option::Option<super::datafusion_common::Statistics>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct FileRange {
     #[prost(int64, tag = "1")]
     pub start: i64,

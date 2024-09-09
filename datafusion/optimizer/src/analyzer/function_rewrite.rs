@@ -61,7 +61,7 @@ impl ApplyFunctionRewrites {
         let name_preserver = NamePreserver::new(&plan);
 
         plan.map_expressions(|expr| {
-            let original_name = name_preserver.save(&expr)?;
+            let original_name = name_preserver.save(&expr);
 
             // recursively transform the expression, applying the rewrites at each step
             let transformed_expr = expr.transform_up(|expr| {
@@ -74,7 +74,7 @@ impl ApplyFunctionRewrites {
                 Ok(result)
             })?;
 
-            transformed_expr.map_data(|expr| original_name.restore(expr))
+            Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
         })
     }
 }

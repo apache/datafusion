@@ -619,6 +619,11 @@ config_namespace! {
 
         /// When set to true, the optimizer will not attempt to convert Union to Interleave
         pub prefer_existing_union: bool, default = false
+
+        /// When set to true, if the returned type is a view type
+        /// then the output will be coerced to a non-view.
+        /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
+        pub expand_views_at_output: bool, default = false
     }
 }
 
@@ -1617,6 +1622,7 @@ config_namespace! {
         pub has_header: Option<bool>, default = None
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
+        pub terminator: Option<u8>, default = None
         pub escape: Option<u8>, default = None
         pub double_quote: Option<bool>, default = None
         /// Specifies whether newlines in (quoted) values are supported.
@@ -1685,6 +1691,13 @@ impl CsvOptions {
         self
     }
 
+    /// The character that terminates a row.
+    /// - default to None (CRLF)
+    pub fn with_terminator(mut self, terminator: Option<u8>) -> Self {
+        self.terminator = terminator;
+        self
+    }
+
     /// The escape character in a row.
     /// - default is None
     pub fn with_escape(mut self, escape: Option<u8>) -> Self {
@@ -1729,6 +1742,11 @@ impl CsvOptions {
     /// The quote character.
     pub fn quote(&self) -> u8 {
         self.quote
+    }
+
+    /// The terminator character.
+    pub fn terminator(&self) -> Option<u8> {
+        self.terminator
     }
 
     /// The escape character.

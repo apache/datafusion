@@ -67,7 +67,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, repeat_times, true);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_string_view [size={}, repeat_times={}]",
                 size, repeat_times
             ),
@@ -76,7 +76,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, repeat_times, false);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
@@ -85,7 +85,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i64>(size, 32, repeat_times, false);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_large_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
@@ -103,7 +103,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, repeat_times, true);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_string_view [size={}, repeat_times={}]",
                 size, repeat_times
             ),
@@ -112,7 +112,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, repeat_times, false);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
@@ -121,7 +121,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i64>(size, 32, repeat_times, false);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_large_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
