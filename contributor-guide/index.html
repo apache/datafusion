@@ -492,6 +492,23 @@
     <a class="reference internal nav-link" href="#finding-and-creating-issues-to-work-on">
      Finding and Creating Issues to Work On
     </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h3 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#open-contribution-and-assigning-tickets">
+       Open Contribution and Assigning tickets
+      </a>
+     </li>
+     <li class="toc-h3 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#file-tickets-to-discuss-new-features">
+       File Tickets to Discuss New Features
+      </a>
+     </li>
+     <li class="toc-h3 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#what-features-are-good-fits-for-datafusion">
+       What Features are Good Fits for DataFusion?
+      </a>
+     </li>
+    </ul>
    </li>
   </ul>
  </li>
@@ -517,6 +534,11 @@
    Reviewing Pull Requests
   </a>
   <ul class="visible nav section-nav flex-column">
+   <li class="toc-h2 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#performance-improvements">
+     Performance Improvements
+    </a>
+   </li>
    <li class="toc-h2 nav-item toc-entry">
     <a class="reference internal nav-link" href="#major-and-minor-prs">
      “Major” and “Minor” PRs
@@ -590,6 +612,8 @@ community as well as get more familiar with Rust and the relevant codebases.</p>
 <section id="finding-and-creating-issues-to-work-on">
 <h2>Finding and Creating Issues to Work On<a class="headerlink" href="#finding-and-creating-issues-to-work-on" title="Link to this heading">¶</a></h2>
 <p>You can find a curated <a class="reference external" href="https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22">good-first-issue</a> list to help you get started.</p>
+<section id="open-contribution-and-assigning-tickets">
+<h3>Open Contribution and Assigning tickets<a class="headerlink" href="#open-contribution-and-assigning-tickets" title="Link to this heading">¶</a></h3>
 <p>DataFusion is an open contribution project, and thus there is no particular
 project imposed deadline for completing any issue or any restriction on who can
 work on an issue, nor how many people can work on an issue at the same time.</p>
@@ -606,11 +630,25 @@ comment <code class="docutils literal notranslate"><span class="pre">take</span>
 unable to make progress you should unassign the issue by using the <code class="docutils literal notranslate"><span class="pre">unassign</span> <span class="pre">me</span></code>
 link at the top of the issue page (and ask for help if are stuck) so that
 someone else can get involved in the work.</p>
+</section>
+<section id="file-tickets-to-discuss-new-features">
+<h3>File Tickets to Discuss New Features<a class="headerlink" href="#file-tickets-to-discuss-new-features" title="Link to this heading">¶</a></h3>
 <p>If you plan to work on a new feature that doesn’t have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
 helps avoid wasted effort by determining early if the feature is a good fit for
-DataFusion before too much time is invested. It also often helps to discuss your
-ideas with the community to get feedback on implementation.</p>
+DataFusion before too much time is invested. Discussion on a ticket can help
+gather feedback from the community and is likely easier to discuss than a 1000
+line PR.</p>
+<p>If you open a ticket and it doesn’t get any response, you can try <code class="docutils literal notranslate"><span class="pre">&#64;</span></code>-mentioning
+recently active community members in the ticket to get their attention.</p>
+</section>
+<section id="what-features-are-good-fits-for-datafusion">
+<h3>What Features are Good Fits for DataFusion?<a class="headerlink" href="#what-features-are-good-fits-for-datafusion" title="Link to this heading">¶</a></h3>
+<p>DataFusion is designed to highly extensible, and many features can be implemented
+as extensions without changing the core of DataFusion.</p>
+<p>We are <a class="reference external" href="https://github.com/apache/datafusion/issues/12357">working on criteria for what features are good fits for DataFusion</a>, and
+will update this section when we have more to share.</p>
+</section>
 </section>
 </section>
 <section id="developer-s-guide">
@@ -634,30 +672,50 @@ committer who approved your PR to help remind them to merge it.</p>
 </section>
 <section id="creating-pull-requests">
 <h2>Creating Pull Requests<a class="headerlink" href="#creating-pull-requests" title="Link to this heading">¶</a></h2>
-<p>We recommend splitting your contributions into multiple smaller focused PRs rather than large PRs (500+ lines) because:</p>
+<p>When possible, we recommend splitting your contributions into multiple smaller focused PRs rather than large PRs (500+ lines) because:</p>
 <ol class="arabic simple">
 <li><p>The PR is more likely to be reviewed quickly – our reviewers struggle to find the contiguous time needed to review large PRs.</p></li>
 <li><p>The PR discussions tend to be more focused and less likely to get lost among several different threads.</p></li>
 <li><p>It is often easier to accept and act on feedback when it comes early on in a small change, before a particular approach has been polished too much.</p></li>
 </ol>
 <p>If you are concerned that a larger design will be lost in a string of small PRs, creating a large draft PR that shows how they all work together can help.</p>
-<p>Note all commits in a PR are squashed when merged to the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch so there is one commit per PR.</p>
+<p>Note all commits in a PR are squashed when merged to the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch so there is one commit per PR after merge.</p>
 </section>
 </section>
 <section id="reviewing-pull-requests">
 <h1>Reviewing Pull Requests<a class="headerlink" href="#reviewing-pull-requests" title="Link to this heading">¶</a></h1>
 <p>Some helpful links:</p>
 <ul class="simple">
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+-review%3Aapproved+-is%3Adraft+">PRs Waiting for Review</a></p></li>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+review%3Aapproved+-is%3Adraft">Approved PRs Waiting for Merge</a></p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+-review%3Aapproved+-is%3Adraft+">PRs Waiting for Review</a> on GitHub</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+review%3Aapproved+-is%3Adraft">Approved PRs Waiting for Merge</a> on GitHub</p></li>
 </ul>
-<p>When reviewing PRs, please remember our primary goal is to improve DataFusion and its community together. PR feedback should be constructive with the aim to help improve the code as well as the understanding of the contributor.</p>
+<p>When reviewing PRs, our primary goal is to improve DataFusion and its community together. PR feedback should be constructive with the aim to help improve the code as well as the understanding of the contributor.</p>
 <p>Please ensure any issues you raise contains a rationale and suggested alternative – it is frustrating to be told “don’t do it this way” without any clear reason or alternate provided.</p>
 <p>Some things to specifically check:</p>
 <ol class="arabic simple">
-<li><p>Is the feature or fix covered sufficiently with tests (see <code class="docutils literal notranslate"><span class="pre">Test</span> <span class="pre">Organization</span></code> below)?</p></li>
+<li><p>Is the feature or fix covered sufficiently with tests (see the <a class="reference internal" href="testing.html"><span class="std std-doc">Testing</span></a> section)?</p></li>
 <li><p>Is the code clear, and fits the style of the existing codebase?</p></li>
 </ol>
+<section id="performance-improvements">
+<h2>Performance Improvements<a class="headerlink" href="#performance-improvements" title="Link to this heading">¶</a></h2>
+<p>Performance improvements are always welcome: performance is a key DataFusion
+feature.</p>
+<p>In general, the performance improvement from a change should be “enough” to
+justify any added code complexity. How much is “enough” is a judgement made by
+the committers, but generally means that the improvement should be noticeable in
+a real-world scenario and is greater than the noise of the benchmarking system.</p>
+<p>To help committers evaluate the potential improvement, performance PRs should
+in general be accompanied by benchmark results that demonstrate the improvement.</p>
+<p>The best way to demonstrate a performance improvement is with the existing
+benchmarks:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/tree/main/benchmarks">System level SQL Benchmarks</a></p></li>
+<li><p>Microbenchmarks such as those in <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/functions/benches">functions/benches</a></p></li>
+</ul>
+<p>If there is no suitable existing benchmark, you can create a new one. It helps
+to isolate the effects of your change by creating a separate PR with the
+benchmark, and then a PR with the code change that improves the benchmark.</p>
+</section>
 <section id="major-and-minor-prs">
 <h2>“Major” and “Minor” PRs<a class="headerlink" href="#major-and-minor-prs" title="Link to this heading">¶</a></h2>
 <p>Since we are a worldwide community, we have contributors in many timezones who review and comment. To ensure anyone who wishes has an opportunity to review a PR, our committers try to ensure that at least 24 hours passes between when a “major” PR is approved and when it is merged.</p>
