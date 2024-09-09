@@ -21,9 +21,9 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef,
-    GenericStringArray, GenericStringBuilder, LargeStringArray, OffsetSizeTrait,
-    StringArray, StringBuilder, StringViewArray, StringViewBuilder,
+    make_view, new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter,
+    ArrayRef, ByteView, GenericStringArray, GenericStringBuilder, LargeStringArray,
+    OffsetSizeTrait, StringArray, StringBuilder, StringViewArray, StringViewBuilder,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
@@ -33,7 +33,27 @@ use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-use crate::unicode::substr::make_and_append_view;
+/// Make a `u128` based on the given substr, start(offset to view.offset), and
+/// push into to the given buffers
+// TODO: tmp copy, remove after #12383 is merged
+fn make_and_append_view(
+    views_buffer: &mut Vec<u128>,
+    null_builder: &mut NullBufferBuilder,
+    raw: &u128,
+    substr: &str,
+    start: u32,
+) {
+    let substr_len = substr.len();
+    let sub_view = if substr_len > 12 {
+        let view = ByteView::from(*raw);
+        make_view(substr.as_bytes(), view.buffer_index, view.offset + start)
+    } else {
+        // inline value does not need block id or offset
+        make_view(substr.as_bytes(), 0, 0)
+    };
+    views_buffer.push(sub_view);
+    null_builder.append_non_null();
+}
 
 pub(crate) enum TrimType {
     Left,
