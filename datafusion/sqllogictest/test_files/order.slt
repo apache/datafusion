@@ -1227,16 +1227,13 @@ SELECT b, sum(a) FROM ordered_table GROUP BY b order by b desc OFFSET 1;
 1 0
 0 0
 
-# TODO: fix this to properly apply offset
 # offset + limit
 query II
 SELECT b, sum(a) FROM ordered_table GROUP BY b order by b desc OFFSET 1 LIMIT 2;
 ----
-3 25
 2 25
 1 0
 
-# TODO: fix this to not remove the skip=1 during the limit pushdown
 # Applying offset & limit when multiple streams from groupby
 query TT
 EXPLAIN SELECT b, sum(a) FROM ordered_table GROUP BY b order by b desc OFFSET 1 LIMIT 2;
@@ -1247,16 +1244,16 @@ logical_plan
 03)----Aggregate: groupBy=[[ordered_table.b]], aggr=[[sum(CAST(ordered_table.a AS Int64))]]
 04)------TableScan: ordered_table projection=[a, b]
 physical_plan
-01)SortPreservingMergeExec: [b@0 DESC], fetch=3
-02)--SortExec: TopK(fetch=3), expr=[b@0 DESC], preserve_partitioning=[true]
-03)----AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[sum(ordered_table.a)]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([b@0], 2), input_partitions=2
-06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(ordered_table.a)]
-07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
+01)GlobalLimitExec: skip=1, fetch=2
+02)--SortPreservingMergeExec: [b@0 DESC], fetch=3
+03)----SortExec: TopK(fetch=3), expr=[b@0 DESC], preserve_partitioning=[true]
+04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[sum(ordered_table.a)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([b@0], 2), input_partitions=2
+07)------------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(ordered_table.a)]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
 
-# TODO: fix this to not remove the skip=4 during the limit pushdown
 # Applying offset & limit when multiple streams from union
 query TT
 explain select * FROM (
@@ -1274,16 +1271,17 @@ logical_plan
 06)------Projection: CAST(ordered_table.d AS Int64) AS c
 07)--------TableScan: ordered_table projection=[d]
 physical_plan
-01)SortPreservingMergeExec: [c@0 DESC], fetch=14
-02)--UnionExec
-03)----SortExec: TopK(fetch=14), expr=[c@0 DESC], preserve_partitioning=[true]
-04)------ProjectionExec: expr=[CAST(c@0 AS Int64) as c]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
-07)----SortExec: TopK(fetch=14), expr=[c@0 DESC], preserve_partitioning=[true]
-08)------ProjectionExec: expr=[CAST(d@0 AS Int64) as c]
-09)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-10)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[d], has_header=true
+01)GlobalLimitExec: skip=4, fetch=10
+02)--SortPreservingMergeExec: [c@0 DESC], fetch=14
+03)----UnionExec
+04)------SortExec: TopK(fetch=14), expr=[c@0 DESC], preserve_partitioning=[true]
+05)--------ProjectionExec: expr=[CAST(c@0 AS Int64) as c]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+08)------SortExec: TopK(fetch=14), expr=[c@0 DESC], preserve_partitioning=[true]
+09)--------ProjectionExec: expr=[CAST(d@0 AS Int64) as c]
+10)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+11)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[d], has_header=true
 
 # ApplyingmLIMIT & OFFSET to subquery.
 query III
@@ -1312,7 +1310,6 @@ ORDER BY t1.b desc, c desc, c2 desc;
 3 95 82
 3 95 79
 
-# TODO: fix this does not correctly work.
 # Apply OFFSET & LIMIT to both parent and child (subquery).
 query III
 select t1.b, c, c2 FROM (
@@ -1324,8 +1321,5 @@ ON t1.b = t2.b
 ORDER BY t1.b desc, c desc, c2 desc
 OFFSET 3 LIMIT 2;
 ----
-3 99 96
-3 99 89
-3 99 87
 3 99 82
 3 99 79
