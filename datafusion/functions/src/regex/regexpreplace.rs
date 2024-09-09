@@ -401,8 +401,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         DataType::Utf8View => {
             let string_view_array = as_string_view_array(&args[0])?;
 
-            let mut builder = StringViewBuilder::with_capacity(string_view_array.len())
-                .with_block_size(1024 * 1024 * 2);
+            let mut builder = StringViewBuilder::with_capacity(string_view_array.len());
 
             for val in string_view_array.iter() {
                 if let Some(val) = val {

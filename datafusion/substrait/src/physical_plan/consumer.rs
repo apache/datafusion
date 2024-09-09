@@ -37,6 +37,11 @@ use substrait::proto::{
     expression::MaskExpression, read_rel::ReadType, rel::RelType, Rel,
 };
 
+use crate::variation_const::{
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
+    VIEW_CONTAINER_TYPE_VARIATION_REF,
+};
+
 /// Convert Substrait Rel to DataFusion ExecutionPlan
 #[async_recursion]
 pub async fn from_substrait_rel(
@@ -177,7 +182,27 @@ fn to_field(name: &String, r#type: &Type) -> Result<Field> {
         }
         Kind::String(string) => {
             nullable = is_nullable(string.nullability);
-            Ok(DataType::Utf8)
+            match string.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8),
+                LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeUtf8),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8View),
+                _ => substrait_err!(
+                    "Invalid type variation found for substrait string type class: {}",
+                    string.type_variation_reference
+                ),
+            }
+        }
+        Kind::Binary(binary) => {
+            nullable = is_nullable(binary.nullability);
+            match binary.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Binary),
+                LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeBinary),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::BinaryView),
+                _ => substrait_err!(
+                    "Invalid type variation found for substrait binary type class: {}",
+                    binary.type_variation_reference
+                ),
+            }
         }
         _ => substrait_err!(
             "Unsupported kind: {:?} in the type with name {}",

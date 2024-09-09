@@ -88,7 +88,7 @@ impl AggregateExprBuilder {
         }
     }
 
-    pub fn build(self) -> Result<Arc<AggregateFunctionExpr>> {
+    pub fn build(self) -> Result<AggregateFunctionExpr> {
         let Self {
             fun,
             args,
@@ -132,7 +132,7 @@ impl AggregateExprBuilder {
             Some(alias) => alias,
         };
 
-        Ok(Arc::new(AggregateFunctionExpr {
+        Ok(AggregateFunctionExpr {
             fun: Arc::unwrap_or_clone(fun),
             args,
             data_type,
@@ -145,7 +145,7 @@ impl AggregateExprBuilder {
             input_types: input_exprs_types,
             is_reversed,
             is_nullable,
-        }))
+        })
     }
 
     pub fn alias(mut self, alias: impl Into<String>) -> Self {
@@ -328,9 +328,9 @@ impl AggregateFunctionExpr {
     /// not implement the method, returns an error. Order insensitive and hard
     /// requirement aggregators return `Ok(None)`.
     pub fn with_beneficial_ordering(
-        self: Arc<Self>,
+        self,
         beneficial_ordering: bool,
-    ) -> Result<Option<Arc<AggregateFunctionExpr>>> {
+    ) -> Result<Option<AggregateFunctionExpr>> {
         let Some(updated_fn) = self
             .fun
             .clone()
@@ -457,10 +457,10 @@ impl AggregateFunctionExpr {
     /// Typically the "reverse" expression is itself (e.g. SUM, COUNT).
     /// For aggregates that do not support calculation in reverse,
     /// returns None (which is the default value).
-    pub fn reverse_expr(&self) -> Option<Arc<AggregateFunctionExpr>> {
+    pub fn reverse_expr(&self) -> Option<AggregateFunctionExpr> {
         match self.fun.reverse_udf() {
             ReversedUDAF::NotSupported => None,
-            ReversedUDAF::Identical => Some(Arc::new(self.clone())),
+            ReversedUDAF::Identical => Some(self.clone()),
             ReversedUDAF::Reversed(reverse_udf) => {
                 let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
                 let mut name = self.name().to_string();
@@ -507,7 +507,7 @@ impl AggregateFunctionExpr {
         &self,
         _args: Vec<Arc<dyn PhysicalExpr>>,
         _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
-    ) -> Option<Arc<AggregateFunctionExpr>> {
+    ) -> Option<AggregateFunctionExpr> {
         None
     }
 

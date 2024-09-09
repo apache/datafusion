@@ -42,7 +42,7 @@ use crate::variation_const::{
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 #[allow(deprecated)]
 use crate::variation_const::{
@@ -1432,6 +1432,7 @@ fn from_substrait_type(
             r#type::Kind::Binary(binary) => match binary.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Binary),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeBinary),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::BinaryView),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1442,6 +1443,7 @@ fn from_substrait_type(
             r#type::Kind::String(string) => match string.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeUtf8),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8View),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1759,6 +1761,7 @@ fn from_substrait_literal(
         Some(LiteralType::String(s)) => match lit.type_variation_reference {
             DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8(Some(s.clone())),
             LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeUtf8(Some(s.clone())),
+            VIEW_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8View(Some(s.clone())),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
@@ -1768,6 +1771,7 @@ fn from_substrait_literal(
             LARGE_CONTAINER_TYPE_VARIATION_REF => {
                 ScalarValue::LargeBinary(Some(b.clone()))
             }
+            VIEW_CONTAINER_TYPE_VARIATION_REF => ScalarValue::BinaryView(Some(b.clone())),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }

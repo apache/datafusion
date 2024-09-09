@@ -58,6 +58,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
+use datafusion::physical_plan::unnest::UnnestExec;
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
@@ -66,7 +67,6 @@ use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
 
 use crate::common::{byte_to_string, str_to_byte};
-use crate::convert_required;
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
     parse_physical_window_expr, parse_protobuf_file_scan_config,
@@ -79,6 +79,7 @@ use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{self, proto_error, window_agg_exec_node};
+use crate::{convert_required, into_required};
 
 use self::from_proto::parse_protobuf_partitioning;
 use self::to_proto::{serialize_partitioning, serialize_physical_expr};
@@ -178,7 +179,19 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         )
                     })?;
                 let filter_selectivity = filter.default_filter_selectivity.try_into();
-                let filter = FilterExec::try_new(predicate, input)?;
+                let projection = if !filter.projection.is_empty() {
+                    Some(
+                        filter
+                            .projection
+                            .iter()
+                            .map(|i| *i as usize)
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
+                let filter =
+                    FilterExec::try_new(predicate, input)?.with_projection(projection)?;
                 match filter_selectivity {
                     Ok(filter_selectivity) => Ok(Arc::new(
                         filter.with_default_selectivity(filter_selectivity)?,
@@ -468,7 +481,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let physical_aggr_expr: Vec<Arc<AggregateFunctionExpr>> = hash_agg
+                let physical_aggr_expr: Vec<AggregateFunctionExpr> = hash_agg
                     .aggr_expr
                     .iter()
                     .zip(hash_agg.aggr_expr_name.iter())
@@ -1085,6 +1098,22 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     sort_order,
                 )))
             }
+            PhysicalPlanType::Unnest(unnest) => {
+                let input = into_physical_plan(
+                    &unnest.input,
+                    registry,
+                    runtime,
+                    extension_codec,
+                )?;
+
+                Ok(Arc::new(UnnestExec::new(
+                    input,
+                    unnest.list_type_columns.iter().map(|c| *c as _).collect(),
+                    unnest.struct_type_columns.iter().map(|c| *c as _).collect(),
+                    Arc::new(convert_required!(unnest.schema)?),
+                    into_required!(unnest.options)?,
+                )))
+            }
         }
     }
 
@@ -1167,6 +1196,12 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             extension_codec,
                         )?),
                         default_filter_selectivity: exec.default_selectivity() as u32,
+                        projection: exec
+                            .projection()
+                            .as_ref()
+                            .map_or_else(Vec::new, |v| {
+                                v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
+                            }),
                     },
                 ))),
             });
@@ -1933,6 +1968,33 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             }
 
             // If unknown DataSink then let extension handle it
+        }
+
+        if let Some(exec) = plan.downcast_ref::<UnnestExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+
+            return Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Unnest(Box::new(
+                    protobuf::UnnestExecNode {
+                        input: Some(Box::new(input)),
+                        schema: Some(exec.schema().try_into()?),
+                        list_type_columns: exec
+                            .list_column_indices()
+                            .iter()
+                            .map(|c| *c as _)
+                            .collect(),
+                        struct_type_columns: exec
+                            .struct_column_indices()
+                            .iter()
+                            .map(|c| *c as _)
+                            .collect(),
+                        options: Some(exec.options().into()),
+                    },
+                ))),
+            });
         }
 
         let mut buf: Vec<u8> = vec![];

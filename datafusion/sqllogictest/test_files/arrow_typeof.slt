@@ -290,22 +290,22 @@ query ?
 ---
 select arrow_cast(interval '30 minutes', 'Interval(MonthDayNano)');
 ----
-0 years 0 mons 0 days 0 hours 30 mins 0.000000000 secs
+30 mins
 
 query ?
 select arrow_cast('30 minutes', 'Interval(DayTime)');
 ----
-0 years 0 mons 0 days 0 hours 30 mins 0.000 secs
+30 mins
 
 query ?
 select arrow_cast('1 year 5 months', 'Interval(YearMonth)');
 ----
-1 years 5 mons 0 days 0 hours 0 mins 0.00 secs
+1 years 5 mons
 
 query ?
 select arrow_cast('30 minutes', 'Interval(MonthDayNano)');
 ----
-0 years 0 mons 0 days 0 hours 30 mins 0.000000000 secs
+30 mins
 
 
 ## Duration
@@ -432,5 +432,7 @@ MyAwesomeString Utf8View
 
 # Fails until we update to use the arrow-cast release with support for casting utf8 types to BinaryView
 # refer to merge commit https://github.com/apache/arrow-rs/commit/4bd737dab2aa17aca200259347909d48ed793ba1
-query error DataFusion error: This feature is not implemented: Unsupported CAST from Utf8 to BinaryView
+query ?T
 select arrow_cast('MyAwesomeString', 'BinaryView'), arrow_typeof(arrow_cast('MyAwesomeString', 'BinaryView'))
+----
+4d79417765736f6d65537472696e67 BinaryView
