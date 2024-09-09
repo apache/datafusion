@@ -372,7 +372,9 @@ fn compute_partition_keys_by_row<'a>(
                     let date = NaiveDate::from_num_days_from_ce_opt(
                         EPOCH_DAYS_FROM_CE + array.value(i),
                     )
-                    .unwrap().format(format).to_string();
+                    .unwrap()
+                    .format(format)
+                    .to_string();
                     partition_values.push(Cow::from(date));
                 }
             }
@@ -384,7 +386,9 @@ fn compute_partition_keys_by_row<'a>(
                     let date = NaiveDate::from_num_days_from_ce_opt(
                         EPOCH_DAYS_FROM_CE + (array.value(i) / 86_400_000) as i32,
                     )
-                    .unwrap().format(format).to_string();
+                    .unwrap()
+                    .format(format)
+                    .to_string();
                     partition_values.push(Cow::from(date));
                 }
             }
