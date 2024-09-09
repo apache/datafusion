@@ -2103,7 +2103,7 @@ mod tests {
         let ctx = SessionContext::new();
 
         let mut options = TableParquetOptions::default();
-        options.global.schema_force_string_view = true;
+        options.global.schema_force_view_types = true;
         let opt =
             ListingOptions::new(Arc::new(ParquetFormat::default().with_options(options)));
 

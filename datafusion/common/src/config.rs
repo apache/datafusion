@@ -382,7 +382,7 @@ config_namespace! {
 
         /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
         /// and `Binary/BinaryLarge` with `BinaryView`.
-        pub schema_force_string_view: bool, default = false
+        pub schema_force_view_types: bool, default = false
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties

@@ -233,12 +233,12 @@ impl ParquetFormat {
 
     /// Return `true` if should use view types.
     pub fn should_use_view_types(&self) -> bool {
-        self.options.global.schema_force_string_view
+        self.options.global.schema_force_view_types
     }
 
     #[cfg(test)]
     fn with_view_types(mut self, use_views: bool) -> Self {
-        self.options.global.schema_force_string_view = use_views;
+        self.options.global.schema_force_view_types = use_views;
         self
     }
 }
@@ -1769,7 +1769,7 @@ mod tests {
 
     fn set_view_state(mut state: SessionState, use_views: bool) -> SessionState {
         let mut options = TableParquetOptions::default();
-        options.global.schema_force_string_view = use_views;
+        options.global.schema_force_view_types = use_views;
         state
             .register_file_format(
                 Arc::new(ParquetFormatFactory::new_with_options(options)),
