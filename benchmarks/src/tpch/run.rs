@@ -344,7 +344,7 @@ mod tests {
             partitions: Some(2),
             batch_size: 8192,
             debug: false,
-            string_view: false,
+            force_view_types: false,
         };
         let opt = RunOpt {
             query: Some(query),
@@ -378,7 +378,7 @@ mod tests {
             partitions: Some(2),
             batch_size: 8192,
             debug: false,
-            string_view: false,
+            force_view_types: false,
         };
         let opt = RunOpt {
             query: Some(query),
