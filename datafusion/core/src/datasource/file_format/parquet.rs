@@ -232,11 +232,23 @@ impl ParquetFormat {
     }
 
     /// Return `true` if should use view types.
-    pub fn should_use_view_types(&self) -> bool {
+    ///
+    /// If this returns true, DataFusion will instruct the parquet reader
+    /// to read string / binary columns using view `StringView` or `BinaryView`
+    /// if the table schema specifies those types, regardless of any embedded metadata
+    /// that may specify an alternate Arrow type. The parquet reader is optimized
+    /// for reading `StringView` and `BinaryView` and such queries are significantly faster.
+    ///
+    /// If this returns false, the parquet reader will read the columns according to the
+    /// defaults or any embedded Arrow type information. This may result in reading
+    /// `StringArrays` and then casting to `StringViewArray` which is less efficient.
+    pub fn force_view_types(&self) -> bool {
         self.options.global.schema_force_view_types
     }
 
     /// If true, will use view types (StringView and BinaryView).
+    ///
+    /// Refer to [`Self::force_view_types`].
     pub fn with_force_view_types(mut self, use_views: bool) -> Self {
         self.options.global.schema_force_view_types = use_views;
         self
@@ -331,7 +343,7 @@ impl FileFormat for ParquetFormat {
             Schema::try_merge(schemas)
         }?;
 
-        let schema = if self.should_use_view_types() {
+        let schema = if self.force_view_types() {
             transform_schema_to_view(&schema)
         } else {
             schema
