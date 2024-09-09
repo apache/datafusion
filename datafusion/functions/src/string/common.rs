@@ -27,10 +27,13 @@ use arrow::array::{
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
+use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
+
+use crate::unicode::substr::make_and_append_view;
 
 pub(crate) enum TrimType {
     Left,
@@ -83,16 +86,33 @@ fn string_view_trim<'a, T: OffsetSizeTrait>(
     func: fn(&'a str, &'a str) -> &'a str,
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
-    let string_array = as_string_view_array(&args[0])?;
+    let string_view_array = as_string_view_array(&args[0])?;
+    let mut views_buf = Vec::with_capacity(string_view_array.len());
+    let mut null_builder = NullBufferBuilder::new(string_view_array.len());
 
     match args.len() {
         1 => {
-            let result = string_array
-                .iter()
-                .map(|string| string.map(|string: &str| func(string, " ")))
-                .collect::<GenericStringArray<T>>();
+            for (idx, raw) in string_view_array.views().iter().enumerate() {
+                unsafe {
+                    // Safety:
+                    // idx is always smaller or equal to string_view_array.views.len()
+                    let origin_str = string_view_array.value_unchecked(idx);
+                    let trim_str = func(origin_str, " ");
 
-            Ok(Arc::new(result) as ArrayRef)
+                    // Safety:
+                    // `trim_str` is computed from `str::trim_xxx_matches`,
+                    // and its addr is ensured to be >= `origin_str`'s
+                    let start = trim_str.as_ptr().offset_from(origin_str.as_ptr()) as u32;
+
+                    make_and_append_view(
+                        &mut views_buf,
+                        &mut null_builder,
+                        raw,
+                        trim_str,
+                        start,
+                    );
+                }
+            }
         }
         2 => {
             let characters_array = as_string_view_array(&args[1])?;
@@ -102,34 +122,90 @@ fn string_view_trim<'a, T: OffsetSizeTrait>(
                     return Ok(new_null_array(
                         // The schema is expecting utf8 as null
                         &DataType::Utf8,
-                        string_array.len(),
+                        string_view_array.len(),
                     ));
                 }
 
                 let characters = characters_array.value(0);
-                let result = string_array
-                    .iter()
-                    .map(|item| item.map(|string| func(string, characters)))
-                    .collect::<GenericStringArray<T>>();
-                return Ok(Arc::new(result) as ArrayRef);
+
+                for (idx, raw) in string_view_array.views().iter().enumerate() {
+                    unsafe {
+                        // Safety:
+                        // idx is always smaller or equal to string_view_array.views.len()
+                        let origin_str = string_view_array.value_unchecked(idx);
+                        let trim_str = func(origin_str, characters);
+
+                        // Safety:
+                        // `trim_str` is computed from `str::trim_xxx_matches`,
+                        // and its addr is ensured to be >= `origin_str`'s
+                        let start =
+                            trim_str.as_ptr().offset_from(origin_str.as_ptr()) as u32;
+
+                        make_and_append_view(
+                            &mut views_buf,
+                            &mut null_builder,
+                            raw,
+                            trim_str,
+                            start,
+                        );
+                    }
+                }
             }
 
-            let result = string_array
+            for (idx, (raw, characters_opt)) in string_view_array
+                .views()
                 .iter()
                 .zip(characters_array.iter())
-                .map(|(string, characters)| match (string, characters) {
-                    (Some(string), Some(characters)) => Some(func(string, characters)),
-                    _ => None,
-                })
-                .collect::<GenericStringArray<T>>();
+                .enumerate()
+            {
+                if let Some(characters) = characters_opt {
+                    unsafe {
+                        // Safety:
+                        // idx is always smaller or equal to string_view_array.views.len()
+                        let origin_str = string_view_array.value_unchecked(idx);
+                        let trim_str = func(origin_str, characters);
 
-            Ok(Arc::new(result) as ArrayRef)
+                        // Safety:
+                        // `trim_str` is computed from `str::trim_xxx_matches`,
+                        // and its addr is ensured to be >= `origin_str`'s
+                        let start =
+                            trim_str.as_ptr().offset_from(origin_str.as_ptr()) as u32;
+
+                        make_and_append_view(
+                            &mut views_buf,
+                            &mut null_builder,
+                            raw,
+                            trim_str,
+                            start,
+                        );
+                    }
+                } else {
+                    null_builder.append_null();
+                    views_buf.push(0);
+                }
+            }
         }
         other => {
-            exec_err!(
+            return exec_err!(
             "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
-            )
+            );
         }
+    }
+
+    let views_buf = ScalarBuffer::from(views_buf);
+    let nulls_buf = null_builder.finish();
+
+    // Safety:
+    // (1) The blocks of the given views are all provided
+    // (2) Each of the range `view.offset+start..end` of view in views_buf is within
+    // the bounds of each of the blocks
+    unsafe {
+        let array = StringViewArray::new_unchecked(
+            views_buf,
+            string_view_array.data_buffers().to_vec(),
+            nulls_buf,
+        );
+        Ok(Arc::new(array) as ArrayRef)
     }
 }
 

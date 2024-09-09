@@ -167,7 +167,7 @@ fn get_true_start_end(input: &str, start: i64, count: Option<u64>) -> (usize, us
 
 /// Make a `u128` based on the given substr, start(offset to view.offset), and
 /// push into to the given buffers
-fn make_and_append_view(
+pub fn make_and_append_view(
     views_buffer: &mut Vec<u128>,
     null_builder: &mut NullBufferBuilder,
     raw: &u128,

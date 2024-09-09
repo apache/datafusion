@@ -101,3 +101,43 @@ impl ScalarUDFImpl for RtrimFunc {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Array, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{Utf8, Utf8View};
+
+    use datafusion_common::{exec_err, Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    use crate::unicode::substr::SubstrFunc;
+    use crate::utils::test::test_function;
+
+    #[test]
+    fn test_functions() {
+        test_function!(
+            SubstrFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+            ],
+            Ok(None),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            SubstrFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::from(0i64)),
+            ],
+            Ok(Some("alphabet")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+    }
+}
