@@ -154,7 +154,7 @@ where
                 if ascii_only {
                     // If the substring is empty, the result is 1.
                     if substring.as_bytes().is_empty() {
-                        return T::Native::from_usize(1);
+                        T::Native::from_usize(1)
                     } else {
                         T::Native::from_usize(
                             string
