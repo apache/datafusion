@@ -121,7 +121,7 @@ fn string_view_trim<'a, T: OffsetSizeTrait>(
                 if characters_array.is_null(0) {
                     return Ok(new_null_array(
                         // The schema is expecting utf8 as null
-                        &DataType::Utf8,
+                        &DataType::Utf8View,
                         string_view_array.len(),
                     ));
                 }

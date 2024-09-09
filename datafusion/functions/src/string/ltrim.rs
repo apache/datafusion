@@ -81,7 +81,11 @@ impl ScalarUDFImpl for LtrimFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "ltrim")
+        if arg_types[0] == DataType::Utf8View {
+            Ok(DataType::Utf8View)
+        } else {
+            utf8_to_str_type(&arg_types[0], "ltrim")
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -99,5 +103,136 @@ impl ScalarUDFImpl for LtrimFunc {
                 expected Utf8, LargeUtf8 or Utf8View."
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Array, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{Utf8View, Utf8};
+
+
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    use crate::string::ltrim::LtrimFunc;
+    use crate::utils::test::test_function;
+
+    #[test]
+    fn test_functions() {
+        test_function!(
+            LtrimFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                String::from("alphabet  ")
+            ))),],
+            Ok(Some("alphabet  ")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                String::from("  alphabet  ")
+            ))),],
+            Ok(Some("alphabet  ")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("t")))),
+            ],
+            Ok(Some("alphabet")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabe"
+                )))),
+            ],
+            Ok(Some("t")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+            ],
+            Ok(None),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                String::from("alphabet  ")
+            ))),],
+            Ok(Some("alphabet  ")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                String::from("alphabet  ")
+            ))),],
+            Ok(Some("alphabet  ")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("t")))),
+            ],
+            Ok(Some("alphabet")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabe")))),
+            ],
+            Ok(Some("t")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+            ],
+            Ok(None),
+            &str,
+            Utf8,
+            StringArray
+        );
     }
 }
