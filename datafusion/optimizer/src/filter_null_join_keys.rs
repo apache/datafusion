@@ -26,7 +26,7 @@ use datafusion_expr::utils::conjunction;
 use datafusion_expr::{logical_plan::Filter, Expr, ExprSchemable, LogicalPlan};
 use std::sync::Arc;
 
-/// The FilterNullJoinKeys rule will identify  joins with equi-join conditions
+/// The FilterNullJoinKeys rule will identify joins with equi-join conditions
 /// where the join key is nullable and then insert an `IsNotNull` filter on the nullable side since null values
 /// can never match.
 #[derive(Default)]
@@ -50,7 +50,9 @@ impl OptimizerRule for FilterNullJoinKeys {
             return Ok(Transformed::no(plan));
         }
         match plan {
-            LogicalPlan::Join(mut join) if !join.on.is_empty() => {
+            LogicalPlan::Join(mut join)
+                if !join.on.is_empty() && !join.null_equals_null =>
+            {
                 let (left_preserved, right_preserved) =
                     on_lr_is_preserved(join.join_type);
 
