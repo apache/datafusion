@@ -229,10 +229,8 @@ pub fn transform_schema_to_view(schema: &Schema) -> Schema {
     Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
 }
 
-/// Merge table schema into the parquet file schema.
-///
-/// This coerces the file schema if the table schema uses a view type.
-pub(crate) fn merge_file_schema_on_view_type(
+/// Coerces the file schema if the table schema uses a view type.
+pub(crate) fn coerce_file_schema_to_view_type(
     table_schema: &Schema,
     file_schema: &Schema,
 ) -> Option<Schema> {

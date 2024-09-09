@@ -25,7 +25,7 @@ use std::sync::Arc;
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
 use super::{
-    merge_file_schema_on_view_type, transform_schema_to_view, FileFormat,
+    coerce_file_schema_to_view_type, transform_schema_to_view, FileFormat,
     FileFormatFactory, FileScanConfig,
 };
 use crate::arrow::array::RecordBatch;
@@ -528,7 +528,7 @@ pub fn statistics_from_parquet_meta_calc(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
-    if let Some(merged) = merge_file_schema_on_view_type(&table_schema, &file_schema) {
+    if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &file_schema) {
         file_schema = merged;
     }
 
