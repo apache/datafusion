@@ -41,6 +41,8 @@ use arrow::array::{LargeStringArray, StringArray, StringViewArray};
 ///
 /// It is inspired / copied from `regexp_is_match_utf8` [arrow-rs].
 ///
+/// Can remove when <https://github.com/apache/arrow-rs/issues/6370> is implemented upstream
+///
 /// [arrow-rs]: https://github.com/apache/arrow-rs/blob/8c956a9f9ab26c14072740cce64c2b99cb039b13/arrow-string/src/regexp.rs#L31-L37
 pub fn regexp_is_match_utf8<'a, S1, S2, S3>(
     array: &'a S1,
