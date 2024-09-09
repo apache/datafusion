@@ -260,7 +260,8 @@ pub(crate) fn pushdown_limits(
     pushdown_plan: Arc<dyn ExecutionPlan>,
     global_state: GlobalRequirements,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // Apply limit push down
+    // Call pushdown_limit_helper.
+    // This will either extract the limit node (returning the child), or apply the limit pushdown.
     let (mut new_node, mut global_state) =
         pushdown_limit_helper(pushdown_plan, global_state)?;
 
@@ -269,7 +270,7 @@ pub(crate) fn pushdown_limits(
         (new_node, global_state) = pushdown_limit_helper(new_node.data, global_state)?;
     }
 
-    // Pushdown limits in children
+    // Apply pushdown limits in children
     let children = new_node.data.children();
     let new_children = children
         .into_iter()
