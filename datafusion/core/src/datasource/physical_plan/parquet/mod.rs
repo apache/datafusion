@@ -2091,11 +2091,8 @@ mod tests {
         Ok(())
     }
 
-    /// parquet's get_data_page_statistics is not yet implemented
-    /// for view types.
-    #[should_panic(expected = "not implemented")]
     #[tokio::test]
-    async fn test_struct_filter_parquet_with_view_types() {
+    async fn test_struct_filter_parquet_with_view_types() -> Result<()> {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().to_str().unwrap().to_string() + "/test.parquet";
         write_file(&path);
@@ -2111,7 +2108,17 @@ mod tests {
             .await
             .unwrap();
         let sql = "select * from base_table where name='test02'";
-        let _ = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+        let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+        assert_eq!(batch.len(), 1);
+        let expected = [
+            "+---------------------+----+--------+",
+            "| struct              | id | name   |",
+            "+---------------------+----+--------+",
+            "| {id: 4, name: aaa2} | 2  | test02 |",
+            "+---------------------+----+--------+",
+        ];
+        crate::assert_batches_eq!(expected, &batch);
+        Ok(())
     }
 
     fn write_file(file: &String) {

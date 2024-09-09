@@ -1718,9 +1718,7 @@ mod tests {
     async fn test_statistics_from_parquet_metadata() -> Result<()> {
         _run_test_statistics_from_parquet_metadata(ForceViews::No).await?;
 
-        // Proved that this test will pass once the next arrow release occurs.
-        // Refer to https://github.com/influxdata/arrow-datafusion/pull/37
-        // _run_test_statistics_from_parquet_metadata(true).await?;
+        _run_test_statistics_from_parquet_metadata(ForceViews::Yes).await?;
 
         Ok(())
     }
