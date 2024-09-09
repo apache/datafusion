@@ -42,7 +42,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use tokio::runtime::Runtime;
 use url::Url;
 
-const THREADS: usize = 4;
+const THREADS: usize = 10;
 const TABLES: usize = 3;
 const TABLE_PARTITIONS: usize = 10;
 const PARTITION_FILES: usize = 2;
@@ -58,6 +58,7 @@ fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::UInt64, false),
         Field::new("payload", DataType::Int64, false),
+        Field::new("optional_id", DataType::UInt64, true),
     ]))
 }
 
@@ -65,15 +66,23 @@ fn create_parquet_file(rng: &mut StdRng, id_offset: usize) -> Bytes {
     let schema = schema();
     let mut id_builder = UInt64Builder::new();
     let mut payload_builder = Int64Builder::new();
+    let mut optional_id_builder = UInt64Builder::new();
+
     for row in 0..FILE_ROWS {
         id_builder.append_value((row + id_offset) as u64);
         payload_builder.append_value(rng.gen());
+        if row % 2 == 0 {
+            optional_id_builder.append_null();
+        } else {
+            optional_id_builder.append_value((row + id_offset) as u64);
+        }
     }
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(id_builder.finish()),
             Arc::new(payload_builder.finish()),
+            Arc::new(optional_id_builder.finish()),
         ],
     )
     .unwrap();
@@ -255,6 +264,35 @@ fn criterion_benchmark(c: &mut Criterion) {
         "IO: INNER JOIN, all tables, single partition",
         &format!("{join_query} WHERE {table0_name}.partition = 0"),
         PARTITION_FILES * FILE_ROWS,
+    );
+
+    let mut join_query = "SELECT * FROM".to_owned();
+    for table_id in 0..TABLES {
+        let table_name = table_name(table_id);
+        if table_id == 0 {
+            write!(join_query, " {table_name}").unwrap();
+        } else {
+            write!(
+                join_query,
+                " INNER JOIN {table_name} on {table_name}.optional_id = {table0_name}.id AND {table_name}.partition = {table0_name}.partition",
+            ).unwrap();
+        }
+    }
+    bench_query(
+        c,
+        &ctx,
+        &rt,
+        "IO: INNER JOIN (nullable), all tables, all partitions",
+        &join_query,
+        TABLE_PARTITIONS * PARTITION_FILES * FILE_ROWS / 2,
+    );
+    bench_query(
+        c,
+        &ctx,
+        &rt,
+        "IO: INNER JOIN (nullable), all tables, single partition",
+        &format!("{join_query} WHERE {table0_name}.partition = 0"),
+        PARTITION_FILES * FILE_ROWS / 2,
     );
 }
 
