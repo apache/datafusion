@@ -1295,7 +1295,12 @@ mod tests {
     use parquet::file::page_index::index::Index;
     use tokio::fs::File;
 
-    async fn _run_read_merged_batches(use_views: bool) -> Result<()> {
+    enum ForceViews {
+        Yes,
+        No,
+    }
+
+    async fn _run_read_merged_batches(force_views: ForceViews) -> Result<()> {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
 
@@ -1309,7 +1314,11 @@ mod tests {
 
         let session = SessionContext::new();
         let ctx = session.state();
-        let format = ParquetFormat::default().with_force_view_types(use_views);
+        let force_views = match force_views {
+            ForceViews::Yes => true,
+            ForceViews::No => false,
+        };
+        let format = ParquetFormat::default().with_force_view_types(force_views);
         let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
 
         let stats =
@@ -1341,8 +1350,8 @@ mod tests {
 
     #[tokio::test]
     async fn read_merged_batches() -> Result<()> {
-        _run_read_merged_batches(false).await?;
-        _run_read_merged_batches(true).await?;
+        _run_read_merged_batches(ForceViews::No).await?;
+        _run_read_merged_batches(ForceViews::Yes).await?;
 
         Ok(())
     }
@@ -1477,7 +1486,7 @@ mod tests {
         }
     }
 
-    async fn _run_fetch_metadata_with_size_hint(use_views: bool) -> Result<()> {
+    async fn _run_fetch_metadata_with_size_hint(force_views: ForceViews) -> Result<()> {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
 
@@ -1501,9 +1510,13 @@ mod tests {
 
         let session = SessionContext::new();
         let ctx = session.state();
+        let force_views = match force_views {
+            ForceViews::Yes => true,
+            ForceViews::No => false,
+        };
         let format = ParquetFormat::default()
             .with_metadata_size_hint(Some(9))
-            .with_force_view_types(use_views);
+            .with_force_view_types(force_views);
         let schema = format
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
@@ -1535,7 +1548,7 @@ mod tests {
 
         let format = ParquetFormat::default()
             .with_metadata_size_hint(Some(size_hint))
-            .with_force_view_types(use_views);
+            .with_force_view_types(force_views);
         let schema = format
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
@@ -1572,8 +1585,8 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_metadata_with_size_hint() -> Result<()> {
-        _run_fetch_metadata_with_size_hint(false).await?;
-        _run_fetch_metadata_with_size_hint(true).await?;
+        _run_fetch_metadata_with_size_hint(ForceViews::No).await?;
+        _run_fetch_metadata_with_size_hint(ForceViews::Yes).await?;
 
         Ok(())
     }
@@ -1620,7 +1633,9 @@ mod tests {
         Ok(())
     }
 
-    async fn _run_test_statistics_from_parquet_metadata(use_views: bool) -> Result<()> {
+    async fn _run_test_statistics_from_parquet_metadata(
+        force_views: ForceViews,
+    ) -> Result<()> {
         // Data for column c1: ["Foo", null, "bar"]
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
@@ -1638,13 +1653,18 @@ mod tests {
         let store = Arc::new(LocalFileSystem::new()) as _;
         let (files, _file_names) = store_parquet(vec![batch1, batch2], false).await?;
 
+        let force_views = match force_views {
+            ForceViews::Yes => true,
+            ForceViews::No => false,
+        };
+
         let mut state = SessionContext::new().state();
-        state = set_view_state(state, use_views);
-        let format = ParquetFormat::default().with_force_view_types(use_views);
+        state = set_view_state(state, force_views);
+        let format = ParquetFormat::default().with_force_view_types(force_views);
         let schema = format.infer_schema(&state, &store, &files).await.unwrap();
 
         let null_i64 = ScalarValue::Int64(None);
-        let null_utf8 = if use_views {
+        let null_utf8 = if force_views {
             ScalarValue::Utf8View(None)
         } else {
             ScalarValue::Utf8(None)
@@ -1657,7 +1677,7 @@ mod tests {
         // column c1
         let c1_stats = &stats.column_statistics[0];
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
-        let expected_type = if use_views {
+        let expected_type = if force_views {
             ScalarValue::Utf8View
         } else {
             ScalarValue::Utf8
@@ -1696,7 +1716,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_statistics_from_parquet_metadata() -> Result<()> {
-        _run_test_statistics_from_parquet_metadata(false).await?;
+        _run_test_statistics_from_parquet_metadata(ForceViews::No).await?;
 
         // Proved that this test will pass once the next arrow release occurs.
         // Refer to https://github.com/influxdata/arrow-datafusion/pull/37
@@ -1792,12 +1812,17 @@ mod tests {
     }
 
     async fn _run_read_alltypes_plain_parquet(
-        use_views: bool,
+        force_views: ForceViews,
         expected: &str,
     ) -> Result<()> {
+        let force_views = match force_views {
+            ForceViews::Yes => true,
+            ForceViews::No => false,
+        };
+
         let session_ctx = SessionContext::new();
         let mut state = session_ctx.state();
-        state = set_view_state(state, use_views);
+        state = set_view_state(state, force_views);
 
         let task_ctx = state.task_ctx();
         let projection = None;
@@ -1834,7 +1859,7 @@ mod tests {
              date_string_col: Binary\n\
              string_col: Binary\n\
              timestamp_col: Timestamp(Nanosecond, None)";
-        _run_read_alltypes_plain_parquet(false, no_views).await?;
+        _run_read_alltypes_plain_parquet(ForceViews::No, no_views).await?;
 
         let with_views = "id: Int32\n\
              bool_col: Boolean\n\
@@ -1847,7 +1872,7 @@ mod tests {
              date_string_col: BinaryView\n\
              string_col: BinaryView\n\
              timestamp_col: Timestamp(Nanosecond, None)";
-        _run_read_alltypes_plain_parquet(true, with_views).await?;
+        _run_read_alltypes_plain_parquet(ForceViews::Yes, with_views).await?;
 
         Ok(())
     }
