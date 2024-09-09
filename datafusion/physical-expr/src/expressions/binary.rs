@@ -681,6 +681,22 @@ pub fn binary(
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
 }
 
+/// Create a similar to expression
+pub fn similar_to(
+    negated: bool,
+    case_insensitive: bool,
+    expr: Arc<dyn PhysicalExpr>,
+    pattern: Arc<dyn PhysicalExpr>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let binary_op = match (negated, case_insensitive) {
+        (false, false) => Operator::RegexMatch,
+        (false, true) => Operator::RegexIMatch,
+        (true, false) => Operator::RegexNotMatch,
+        (true, true) => Operator::RegexNotIMatch,
+    };
+    Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4273,5 +4289,63 @@ mod tests {
             .to_string()
             .contains("Overflow happened on: 2147483647 * 2"));
         Ok(())
+    }
+
+    /// Test helper for SIMILAR TO binary operation
+    fn apply_similar_to(
+        schema: &SchemaRef,
+        va: Vec<&str>,
+        vb: Vec<&str>,
+        negated: bool,
+        case_insensitive: bool,
+        expected: &BooleanArray,
+    ) -> Result<()> {
+        let a = StringArray::from(va);
+        let b = StringArray::from(vb);
+        let op = similar_to(
+            negated,
+            case_insensitive,
+            col("a", schema)?,
+            col("b", schema)?,
+        )?;
+        let batch =
+            RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a), Arc::new(b)])?;
+        let result = op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        assert_eq!(result.as_ref(), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_similar_to() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+
+        let expected = [Some(true), Some(false)].iter().collect();
+        // case-sensitive
+        apply_similar_to(
+            &schema,
+            vec!["hello world", "Hello World"],
+            vec!["hello.*", "hello.*"],
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+        // case-insensitive
+        apply_similar_to(
+            &schema,
+            vec!["hello world", "bye"],
+            vec!["hello.*", "hello.*"],
+            false,
+            true,
+            &expected,
+        )
+        .unwrap();
     }
 }
