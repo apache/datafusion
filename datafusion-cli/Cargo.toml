@@ -38,7 +38,7 @@ aws-config = "1.5.5"
 # per https://github.com/apache/datafusion?tab=readme-ov-file#rust-version-compatibility-policy
 aws-sdk-sso = "=1.39.0"
 aws-sdk-ssooidc = "=1.40.0"
-aws-sdk-sts = "=1.39.0"
+aws-sdk-sts = "=1.41.0"
 # end pin aws-sdk crates
 aws-credential-types = "1.2.0"
 clap = { version = "4.5.16", features = ["derive", "cargo"] }
