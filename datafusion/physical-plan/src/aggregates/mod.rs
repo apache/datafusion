@@ -1136,12 +1136,12 @@ fn evaluate_optional(
 /// Evaluate a group by expression against a `RecordBatch`
 ///
 /// Arguments:
-/// `group_by`: the expression to evaluate
-/// `batch`: the `RecordBatch` to evaluate against
+/// - `group_by`: the expression to evaluate
+/// - `batch`: the `RecordBatch` to evaluate against
 ///
 /// Returns: A Vec of Vecs of Array of results
-/// The outer Vect appears to be for grouping sets
-/// The inner Vect contains the results per expression
+/// The outer Vec appears to be for grouping sets
+/// The inner Vec contains the results per expression
 /// The inner-inner Array contains the results per row
 pub(crate) fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
