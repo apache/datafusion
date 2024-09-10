@@ -35,7 +35,7 @@ use datafusion_common::cast::{
     as_date32_array, as_int64_array, as_interval_mdn_array, as_timestamp_nanosecond_array,
 };
 use datafusion_common::{
-    exec_err, internal_err, not_impl_datafusion_err, DataFusionError, Result,
+    exec_datafusion_err, exec_err, internal_err, not_impl_datafusion_err, Result,
 };
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use itertools::Itertools;
@@ -125,7 +125,7 @@ impl ScalarUDFImpl for Range {
                 make_scalar_function(|args| gen_range_timestamp(args, false))(args)
             }
             dt => {
-                exec_err!("unsupported type for range. Expected Int64, Date32 or Timestamp, got: {dt}")
+                exec_err!("unsupported type for RANGE. Expected Int64, Date32 or Timestamp, got: {dt}")
             }
         }
     }
@@ -167,8 +167,8 @@ impl ScalarUDFImpl for GenSeries {
         &self.signature
     }
 
-    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        _arg_types
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        arg_types
             .iter()
             .map(|arg_type| match arg_type {
                 Null => Ok(Null),
@@ -216,7 +216,7 @@ impl ScalarUDFImpl for GenSeries {
             }
             dt => {
                 exec_err!(
-                    "unsupported type for gen_series. Expected Int64, Date32 or Timestamp, got: {}",
+                    "unsupported type for GENERATE_SERIES. Expected Int64, Date32 or Timestamp, got: {}",
                     dt
                 )
             }
@@ -352,7 +352,7 @@ fn gen_range_iter(
     }
 }
 
-fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
+fn gen_range_date(args: &[ArrayRef], include_upper_bound: bool) -> Result<ArrayRef> {
     if args.len() != 3 {
         return exec_err!("arguments length does not match");
     }
@@ -390,7 +390,7 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
         }
 
         let neg = months < 0 || days < 0;
-        if !include_upper {
+        if !include_upper_bound {
             stop = Date32Type::subtract_month_day_nano(stop, step);
         }
         let mut new_date = start;
@@ -413,31 +413,31 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
     Ok(arr)
 }
 
-fn gen_range_timestamp(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
+fn gen_range_timestamp(args: &[ArrayRef], include_upper_bound: bool) -> Result<ArrayRef> {
     if args.len() != 3 {
         return exec_err!(
-            "arguments length must be 3 for {}",
-            if include_upper {
-                "generate_series"
+            "Arguments length must be 3 for {}",
+            if include_upper_bound {
+                "GENERATE_SERIES"
             } else {
-                "range"
+                "RANGE"
             }
         );
     }
 
     // coerce_types fn should coerce all types to Timestamp(Nanosecond, tz)
-    let (start_arr, start_tz_opt) = cast_timestamp_arg(&args[0], include_upper)?;
-    let (stop_arr, stop_tz_opt) = cast_timestamp_arg(&args[1], include_upper)?;
+    let (start_arr, start_tz_opt) = cast_timestamp_arg(&args[0], include_upper_bound)?;
+    let (stop_arr, stop_tz_opt) = cast_timestamp_arg(&args[1], include_upper_bound)?;
     let step_arr = as_interval_mdn_array(&args[2])?;
     let start_tz = parse_tz(start_tz_opt)?;
     let stop_tz = parse_tz(stop_tz_opt)?;
 
     // values are timestamps
-    let values_builder = if let Some(start_tz_str) = start_tz_opt {
-        TimestampNanosecondBuilder::new().with_timezone(&**start_tz_str)
-    } else {
-        TimestampNanosecondBuilder::new()
-    };
+    let values_builder = start_tz_opt
+        .clone()
+        .map_or_else(TimestampNanosecondBuilder::new, |start_tz_str| {
+            TimestampNanosecondBuilder::new().with_timezone(start_tz_str)
+        });
     let mut list_builder = ListBuilder::new(values_builder);
 
     for idx in 0..start_arr.len() {
@@ -454,41 +454,42 @@ fn gen_range_timestamp(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRe
         if months == 0 && days == 0 && ns == 0 {
             return exec_err!(
                 "Interval argument to {} must not be 0",
-                if include_upper {
-                    "generate_series"
+                if include_upper_bound {
+                    "GENERATE_SERIES"
                 } else {
-                    "range"
+                    "RANGE"
                 }
             );
         }
 
         let neg = TSNT::add_month_day_nano(start, step, start_tz)
-            .ok_or(DataFusionError::Execution(
+            .ok_or(exec_datafusion_err!(
                 "Cannot generate timestamp range where start + step overflows"
-                    .to_string(),
             ))?
             .cmp(&start)
             == Ordering::Less;
 
         let stop_dt = as_datetime_with_timezone::<TSNT>(stop, stop_tz).ok_or(
-            DataFusionError::Execution(format!(
+            exec_datafusion_err!(
                 "Cannot generate timestamp for stop: {}: {:?}",
-                stop, stop_tz
-            )),
+                stop,
+                stop_tz
+            ),
         )?;
 
         let mut current = start;
         let mut current_dt = as_datetime_with_timezone::<TSNT>(current, start_tz).ok_or(
-            DataFusionError::Execution(format!(
+            exec_datafusion_err!(
                 "Cannot generate timestamp for start: {}: {:?}",
-                current, start_tz
-            )),
+                current,
+                start_tz
+            ),
         )?;
 
         let values = from_fn(|| {
-            if (include_upper
+            if (include_upper_bound
                 && ((neg && current_dt < stop_dt) || (!neg && current_dt > stop_dt)))
-                || (!include_upper
+                || (!include_upper_bound
                     && ((neg && current_dt <= stop_dt)
                         || (!neg && current_dt >= stop_dt)))
             {
@@ -528,9 +529,9 @@ fn cast_timestamp_arg(
             internal_err!(
                 "Unexpected argument type for {} : {}",
                 if include_upper {
-                    "generate_series"
+                    "GENERATE_SERIES"
                 } else {
-                    "range"
+                    "RANGE"
                 },
                 arg.data_type()
             )
@@ -541,7 +542,6 @@ fn cast_timestamp_arg(
 fn parse_tz(tz: &Option<Arc<str>>) -> Result<Tz> {
     let tz = tz.as_ref().map_or_else(|| "+00", |s| s);
 
-    Tz::from_str(tz).map_err(|op| {
-        DataFusionError::Execution(format!("failed on timezone {tz}: {:?}", op))
-    })
+    Tz::from_str(tz)
+        .map_err(|op| exec_datafusion_err!("failed on timezone {tz}: {:?}", op))
 }
