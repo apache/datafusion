@@ -1692,22 +1692,22 @@ pub fn get_unnested_columns(
 /// For example:
 /// Input schema as
 ///
-/// +---------------------+-----------+
-/// | col1                | col2      |
-/// +---------------------+-----------+
-/// | Struct(INT64,INT32) | [[Int64]] |
-/// +---------------------+-----------+
+/// +---------------------+-------------------+
+/// | col1                | col2              |
+/// +---------------------+-------------------+
+/// | Struct(INT64,INT32) | List(List(Int64)) |
+/// +---------------------+-------------------+
 ///
 /// Then unnesting columns with:
-/// - [col1,Struct]
-/// - [col2,List([depth=1,depth=2])]
+/// - (col1,Struct)
+/// - (col2,List(\[depth=1,depth=2\]))
 ///
 /// will generate a new schema as
 ///    
 /// +---------+---------+---------------------+---------------------+
 /// | col1.c0 | col1.c1 | unnest_col2_depth_1 | unnest_col2_depth_2 |
 /// +---------+---------+---------------------+---------------------+
-/// | Int64   | Int32   | [Int64]             |  Int64              |
+/// | Int64   | Int32   | List(Int64)         |  Int64              |
 /// +---------+---------+---------------------+---------------------+
 pub fn unnest_with_options(
     input: LogicalPlan,

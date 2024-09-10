@@ -378,11 +378,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    /// Try converting Unnest(Expr) of group by to Unnest/Projection
+    /// Try converting Unnest(Expr) of group by to Unnest/Projection.
     /// Return the new input and group_by_exprs of Aggregate.
-    /// Select exprs can be different from agg exprs, for instance:
-    /// - select unnest(arr) as c1, unnest(arr) + unnest(arr) as c2 group by c1
-    /// We need both for this funciton argument to check how select exprs has been transformed
+    /// Select exprs can be different from agg exprs, for example:
     fn try_process_group_by_unnest(
         &self,
         agg: Aggregate,
@@ -429,7 +427,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if unnest_columns.is_empty() {
                 break;
             } else {
-                let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
 
                 let mut projection_exprs = match &aggr_expr_using_columns {
@@ -454,7 +451,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(projection_exprs)?
-                    .unnest_columns_recursive_with_options(columns, unnest_options)?
+                    .unnest_columns_recursive_with_options(
+                        unnest_columns,
+                        unnest_options,
+                    )?
                     .build()?;
 
                 intermediate_select_exprs = outer_projection_exprs;
