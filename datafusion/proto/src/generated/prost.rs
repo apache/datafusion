@@ -430,9 +430,9 @@ pub struct UnnestNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
-    pub exec_columns: ::prost::alloc::vec::Vec<super::datafusion_common::Column>,
-    #[prost(uint64, repeated, tag = "3")]
-    pub list_type_columns: ::prost::alloc::vec::Vec<u64>,
+    pub exec_columns: ::prost::alloc::vec::Vec<ColumnUnnestExec>,
+    #[prost(message, repeated, tag = "3")]
+    pub list_type_columns: ::prost::alloc::vec::Vec<ColumnUnnestListItem>,
     #[prost(uint64, repeated, tag = "4")]
     pub struct_type_columns: ::prost::alloc::vec::Vec<u64>,
     #[prost(uint64, repeated, tag = "5")]
@@ -441,6 +441,49 @@ pub struct UnnestNode {
     pub schema: ::core::option::Option<super::datafusion_common::DfSchema>,
     #[prost(message, optional, tag = "7")]
     pub options: ::core::option::Option<UnnestOptions>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ColumnUnnestListItem {
+    #[prost(uint32, tag = "1")]
+    pub input_index: u32,
+    #[prost(message, optional, tag = "2")]
+    pub recursion: ::core::option::Option<ColumnUnnestListRecursion>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ColumnUnnestListRecursions {
+    #[prost(message, repeated, tag = "2")]
+    pub recursions: ::prost::alloc::vec::Vec<ColumnUnnestListRecursion>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ColumnUnnestListRecursion {
+    #[prost(message, optional, tag = "1")]
+    pub output_column: ::core::option::Option<super::datafusion_common::Column>,
+    #[prost(uint32, tag = "2")]
+    pub depth: u32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ColumnUnnestExec {
+    #[prost(message, optional, tag = "1")]
+    pub column: ::core::option::Option<super::datafusion_common::Column>,
+    #[prost(oneof = "column_unnest_exec::UnnestType", tags = "2, 3, 4")]
+    pub unnest_type: ::core::option::Option<column_unnest_exec::UnnestType>,
+}
+/// Nested message and enum types in `ColumnUnnestExec`.
+pub mod column_unnest_exec {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum UnnestType {
+        #[prost(message, tag = "2")]
+        List(super::ColumnUnnestListRecursions),
+        #[prost(message, tag = "3")]
+        Struct(super::super::datafusion_common::EmptyMessage),
+        #[prost(message, tag = "4")]
+        Inferred(super::super::datafusion_common::EmptyMessage),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -1204,12 +1247,20 @@ pub struct UnnestExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, optional, tag = "2")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
-    #[prost(uint64, repeated, tag = "3")]
-    pub list_type_columns: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, repeated, tag = "3")]
+    pub list_type_columns: ::prost::alloc::vec::Vec<ListUnnest>,
     #[prost(uint64, repeated, tag = "4")]
     pub struct_type_columns: ::prost::alloc::vec::Vec<u64>,
     #[prost(message, optional, tag = "5")]
     pub options: ::core::option::Option<UnnestOptions>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ListUnnest {
+    #[prost(uint32, tag = "1")]
+    pub index_in_input_schema: u32,
+    #[prost(uint32, tag = "2")]
+    pub depth: u32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

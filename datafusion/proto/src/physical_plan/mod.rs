@@ -58,7 +58,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
-use datafusion::physical_plan::unnest::UnnestExec;
+use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
@@ -78,7 +78,9 @@ use crate::physical_plan::to_proto::{
 use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
-use crate::protobuf::{self, proto_error, window_agg_exec_node};
+use crate::protobuf::{
+    self, proto_error, window_agg_exec_node, ListUnnest as ProtoListUnnest,
+};
 use crate::{convert_required, into_required};
 
 use self::from_proto::parse_protobuf_partitioning;
@@ -1108,7 +1110,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
                 Ok(Arc::new(UnnestExec::new(
                     input,
-                    unnest.list_type_columns.iter().map(|c| *c as _).collect(),
+                    unnest
+                        .list_type_columns
+                        .iter()
+                        .map(|c| ListUnnest {
+                            index_in_input_schema: c.index_in_input_schema as _,
+                            depth: c.depth as _,
+                        })
+                        .collect(),
                     unnest.struct_type_columns.iter().map(|c| *c as _).collect(),
                     Arc::new(convert_required!(unnest.schema)?),
                     into_required!(unnest.options)?,
@@ -1984,7 +1993,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         list_type_columns: exec
                             .list_column_indices()
                             .iter()
-                            .map(|c| *c as _)
+                            .map(|c| ProtoListUnnest {
+                                index_in_input_schema: c.index_in_input_schema as _,
+                                depth: c.depth as _,
+                            })
                             .collect(),
                         struct_type_columns: exec
                             .struct_column_indices()
