@@ -2207,6 +2207,17 @@ impl Filter {
         Self::try_new_internal(predicate, input, true)
     }
 
+    fn is_allowed_filter_type(data_type: &DataType) -> bool {
+        match data_type {
+            // Interpret NULL as a missing boolean value.
+            DataType::Boolean | DataType::Null => true,
+            DataType::Dictionary(_, value_type) => {
+                Filter::is_allowed_filter_type(value_type.as_ref())
+            }
+            _ => false,
+        }
+    }
+
     fn try_new_internal(
         predicate: Expr,
         input: Arc<LogicalPlan>,
@@ -2217,8 +2228,7 @@ impl Filter {
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
-            // Interpret NULL as a missing boolean value.
-            if predicate_type != DataType::Boolean && predicate_type != DataType::Null {
+            if !Filter::is_allowed_filter_type(&predicate_type) {
                 return plan_err!(
                     "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
                 );
