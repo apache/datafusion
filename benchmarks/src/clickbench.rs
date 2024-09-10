@@ -121,7 +121,7 @@ impl RunOpt {
             .options_mut()
             .execution
             .parquet
-            .schema_force_string_view = self.common.string_view;
+            .schema_force_view_types = self.common.force_view_types;
 
         let ctx = SessionContext::new_with_config(config);
         self.register_hits(&ctx).await?;
