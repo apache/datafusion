@@ -871,15 +871,17 @@ mod tests {
         // Only the inner most/ bottom most unnest is transformed
         assert_eq!(
             transformed_exprs,
-            vec![unnest(col(
-                "unnest_placeholder(struct_col[matrix],depth=2)"
-            ))]
+            vec![col("unnest_placeholder(struct_col[matrix],depth=2)")
+                .alias("UNNEST(UNNEST(struct_col[matrix]))")]
         );
         // TODO: add a test case where
         // unnest -> field access -> unnest
 
         column_unnests_eq(
-            vec![("unnest_placeholder(struct_col[matrix])", "Struct")],
+            vec![(
+                "unnest_placeholder(struct_col[matrix])",
+                "List([unnest_placeholder(struct_col[matrix],depth=2)|depth=2])",
+            )],
             &mut unnest_placeholder_columns,
         );
 
