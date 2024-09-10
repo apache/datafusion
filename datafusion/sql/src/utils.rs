@@ -33,7 +33,10 @@ use datafusion_common::{
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
-use datafusion_expr::{col,expr_vec_fmt, Expr, ExprSchemable, LogicalPlan,ColumnUnnestList, ColumnUnnestType};
+use datafusion_expr::{
+    col, expr_vec_fmt, ColumnUnnestList, ColumnUnnestType, Expr, ExprSchemable,
+    LogicalPlan,
+};
 use sqlparser::ast::{Ident, Value};
 
 /// Make a best-effort attempt at resolving all columns in the expression tree

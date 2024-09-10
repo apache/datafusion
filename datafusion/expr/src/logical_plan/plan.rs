@@ -1973,7 +1973,7 @@ impl LogicalPlan {
                         let input_columns = plan.schema().columns();
                         let list_type_columns = list_col_indices
                             .iter()
-                            .map(|(i,unnest_info)| 
+                            .map(|(i,unnest_info)|
                                 format!("{}|depth={}", &input_columns[*i].to_string(),
                                 unnest_info.depth))
                             .collect::<Vec<String>>();
@@ -3066,7 +3066,8 @@ impl fmt::Display for ColumnUnnestType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ColumnUnnestType::List(lists) => {
-                let list_strs: Vec<String> = lists.iter().map(|list| list.to_string()).collect();
+                let list_strs: Vec<String> =
+                    lists.iter().map(|list| list.to_string()).collect();
                 write!(f, "List([{}])", list_strs.join(", "))
             }
             ColumnUnnestType::Struct => write!(f, "Struct"),
