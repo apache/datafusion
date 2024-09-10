@@ -124,7 +124,7 @@ impl RunOpt {
             .options_mut()
             .execution
             .parquet
-            .schema_force_string_view = self.common.string_view;
+            .schema_force_view_types = self.common.force_view_types;
         let ctx = SessionContext::new_with_config(config);
 
         // register tables
@@ -345,7 +345,7 @@ mod tests {
             partitions: Some(2),
             batch_size: 8192,
             debug: false,
-            string_view: false,
+            force_view_types: false,
         };
         let opt = RunOpt {
             query: Some(query),
@@ -379,7 +379,7 @@ mod tests {
             partitions: Some(2),
             batch_size: 8192,
             debug: false,
-            string_view: false,
+            force_view_types: false,
         };
         let opt = RunOpt {
             query: Some(query),
