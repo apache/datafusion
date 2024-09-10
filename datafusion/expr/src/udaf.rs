@@ -18,6 +18,7 @@
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
 use std::any::Any;
+use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
@@ -68,7 +69,7 @@ use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 /// [`create_udaf`]: crate::expr_fn::create_udaf
 /// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
 /// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd)]
 pub struct AggregateUDF {
     inner: Arc<dyn AggregateUDFImpl>,
 }
@@ -581,6 +582,107 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// while `count` returns 0 if input is Null
     fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         ScalarValue::try_from(data_type)
+    }
+}
+
+impl PartialEq for dyn AggregateUDFImpl {
+    fn eq(&self, other: &Self) -> bool {
+        self.equals(other)
+    }
+}
+
+// manual implementation of `PartialOrd`
+// There might be some wackiness with it, but this is based on the impl of eq for AggregateUDFImpl
+// https://users.rust-lang.org/t/how-to-compare-two-trait-objects-for-equality/88063/5
+impl PartialOrd for dyn AggregateUDFImpl {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name().partial_cmp(other.name()) {
+            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
+            cmp => cmp
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::any::Any;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{plan_err, Result};
+    use datafusion_expr_common::accumulator::Accumulator;
+    use datafusion_expr_common::signature::{Signature, Volatility};
+    use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
+    use crate::{AggregateUDF, AggregateUDFImpl};
+
+    #[derive(Debug, Clone)]
+    struct GeoMeanUdf {
+       signature: Signature
+    }
+    #[derive(Debug, Clone)]
+    struct AstroMeanUdf {
+        signature: Signature
+    }
+    impl GeoMeanUdf {
+       fn new() -> Self {
+         Self {
+           signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable)
+          }
+       }
+     }
+    impl AstroMeanUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable)
+            }
+        }
+    }
+
+     impl AggregateUDFImpl for GeoMeanUdf {
+        fn as_any(&self) -> &dyn Any { self }
+        fn name(&self) -> &str { "geo_mean" }
+        fn signature(&self) -> &Signature { &self.signature }
+        fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+          if !matches!(args.get(0), Some(&DataType::Float64)) {
+            return plan_err!("add_one only accepts Float64 arguments");
+          }
+          Ok(DataType::Float64)
+        }
+        fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
+        fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+            Ok(vec![
+                 Field::new("value", args.return_type.clone(), true),
+                 Field::new("ordering", DataType::UInt32, true)
+            ])
+        }
+     }
+
+    impl AggregateUDFImpl for AstroMeanUdf {
+        fn as_any(&self) -> &dyn Any { self }
+        fn name(&self) -> &str { "astro_mean" }
+        fn signature(&self) -> &Signature { &self.signature }
+        fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+            if !matches!(args.get(0), Some(&DataType::Float64)) {
+                return plan_err!("add_one only accepts Float64 arguments");
+            }
+            Ok(DataType::Float64)
+        }
+        fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
+        fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+            Ok(vec![
+                Field::new("value", args.return_type.clone(), true),
+                Field::new("ordering", DataType::UInt32, true)
+            ])
+        }
+    }
+
+    #[test]
+    fn test_partial_ord() {
+        let geometric_mean = AggregateUDF::from(GeoMeanUdf::new());
+        let geometric_mean2 = AggregateUDF::from(GeoMeanUdf::new());
+        assert!(!(geometric_mean < geometric_mean2));
+        assert!(!(geometric_mean > geometric_mean2));
+
+        let astro_mean = AggregateUDF::from(AstroMeanUdf::new());
+        assert!(astro_mean < geometric_mean2);
     }
 }
 

@@ -24,7 +24,7 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     sync::Arc,
 };
-
+use std::cmp::Ordering;
 use arrow::datatypes::DataType;
 
 use datafusion_common::{not_impl_err, Result};
@@ -383,6 +383,21 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// arguments to these specific types.
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
+    }
+}
+
+impl PartialEq for dyn WindowUDFImpl {
+    fn eq(&self, other: &Self) -> bool {
+        self.equals(other)
+    }
+}
+
+impl PartialOrd for dyn WindowUDFImpl {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name().partial_cmp(other.name()) {
+            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
+            cmp => cmp
+        }
     }
 }
 
