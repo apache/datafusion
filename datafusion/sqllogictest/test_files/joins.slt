@@ -4055,9 +4055,9 @@ logical_plan
 03)----TableScan: join_t1 projection=[t1_id, t1_name]
 04)--SubqueryAlias: series
 05)----Subquery:
-06)------Projection: UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int))) AS i
-07)--------Unnest: lists[UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int)))] structs[]
-08)----------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int)))
+06)------Projection: unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)),depth=1) AS i
+07)--------Unnest: lists[unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))|depth=1] structs[]
+08)----------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))
 09)------------EmptyRelation
 
 
