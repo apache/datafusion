@@ -31,7 +31,6 @@ use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
-use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -122,34 +121,21 @@ pub fn check_plan_sanity(
     check_finiteness_requirements(plan.clone(), optimizer_options)?;
 
     for ((idx, child), sort_req, dist_req) in izip!(
-        plan.children().into_iter().enumerate(),
+        plan.children().iter().enumerate(),
         plan.required_input_ordering().iter(),
         plan.required_input_distribution().iter()
     ) {
         let child_eq_props = child.equivalence_properties();
         if let Some(sort_req) = sort_req {
-            // The `EquivalenceProperties::ordering_satisfy_requirement` compares the oeq_class
-            // orderings, minus their constants, to the requirement.
-            //
-            // For the UnionExec, it has the oeq_class orderings from it's children but does not
-            // have the same constants. As such, the sort requirements cannot be fulfilled
-            // without examination of the union's children with both the orderings & constants.
-            let children = match child.as_any().downcast_ref::<UnionExec>() {
-                Some(union) => union.children(),
-                _ => vec![child],
-            };
-            for child in children {
-                let child_eq_props = child.equivalence_properties();
-                if !child_eq_props.ordering_satisfy_requirement(sort_req) {
-                    let plan_str = get_plan_string(&plan);
-                    return plan_err!(
-                        "Plan: {:?} does not satisfy order requirements: {:?}. Child-{} order: {:?}",
-                        plan_str,
-                        sort_req,
-                        idx,
-                        child_eq_props.oeq_class
-                    );
-                }
+            if !child_eq_props.ordering_satisfy_requirement(sort_req) {
+                let plan_str = get_plan_string(&plan);
+                return plan_err!(
+                    "Plan: {:?} does not satisfy order requirements: {:?}. Child-{} order: {:?}",
+                    plan_str,
+                    sort_req,
+                    idx,
+                    child_eq_props.oeq_class
+                );
             }
         }
 
