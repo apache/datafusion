@@ -18,6 +18,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use super::class::concat_const_exprs;
 use super::ordering::collapse_lex_ordering;
 use crate::equivalence::class::const_exprs_contains;
 use crate::equivalence::{
@@ -1539,19 +1540,8 @@ fn calculate_union_binary(
     }
 
     // First, calculate valid constants for the union. A quantity is constant
-    // after the union if it is constant in both sides.
-    let constants = lhs
-        .constants()
-        .iter()
-        .filter(|const_expr| const_exprs_contains(rhs.constants(), const_expr.expr()))
-        .map(|const_expr| {
-            // TODO: When both sides' constants are valid across partitions,
-            //       the union's constant should also be valid if values are
-            //       the same. However, we do not have the capability to
-            //       check this yet.
-            ConstExpr::new(Arc::clone(const_expr.expr())).with_across_partitions(false)
-        })
-        .collect();
+    // after the union if it is constant on one of the sides.
+    let constants = concat_const_exprs(lhs.constants(), rhs.constants());
 
     // Next, calculate valid orderings for the union by searching for prefixes
     // in both sides.
