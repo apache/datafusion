@@ -194,8 +194,7 @@ pub fn pushdown_limit_helper(
 
     let skip_and_fetch = Some(global_fetch + global_state.skip);
 
-    let global_skip = global_state.skip;
-    if global_skip == 0 && pushdown_plan.supports_limit_pushdown() {
+    if pushdown_plan.supports_limit_pushdown() {
         if !combines_input_partitions(&pushdown_plan) {
             // We have information in the global state and the plan pushes down,
             // continue:
@@ -204,10 +203,15 @@ pub fn pushdown_limit_helper(
             // This plan is combining input partitions, so we need to add the
             // fetch info to plan if possible. If not, we must add a `LimitExec`
             // with the information from the global state.
+            let mut new_plan = plan_with_fetch;
+            if global_state.skip > 0 {
+                new_plan =
+                    add_global_limit(new_plan, global_state.skip, global_state.fetch);
+            }
             global_state.fetch = skip_and_fetch;
             global_state.skip = 0;
             global_state.satisfied = true;
-            Ok((Transformed::yes(plan_with_fetch), global_state))
+            Ok((Transformed::yes(new_plan), global_state))
         } else if global_state.satisfied {
             // If the plan is already satisfied, do not add a limit:
             Ok((Transformed::no(pushdown_plan), global_state))
@@ -228,6 +232,7 @@ pub fn pushdown_limit_helper(
         // to add the fetch info and return the plan.
 
         // There's no push down, change fetch & skip to default values:
+        let global_skip = global_state.skip;
         global_state.fetch = None;
         global_state.skip = 0;
 
