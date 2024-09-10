@@ -598,91 +598,8 @@ impl PartialOrd for dyn AggregateUDFImpl {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.name().partial_cmp(other.name()) {
             Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
-            cmp => cmp
+            cmp => cmp,
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::any::Any;
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{plan_err, Result};
-    use datafusion_expr_common::accumulator::Accumulator;
-    use datafusion_expr_common::signature::{Signature, Volatility};
-    use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
-    use crate::{AggregateUDF, AggregateUDFImpl};
-
-    #[derive(Debug, Clone)]
-    struct GeoMeanUdf {
-       signature: Signature
-    }
-    #[derive(Debug, Clone)]
-    struct AstroMeanUdf {
-        signature: Signature
-    }
-    impl GeoMeanUdf {
-       fn new() -> Self {
-         Self {
-           signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable)
-          }
-       }
-     }
-    impl AstroMeanUdf {
-        fn new() -> Self {
-            Self {
-                signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable)
-            }
-        }
-    }
-
-     impl AggregateUDFImpl for GeoMeanUdf {
-        fn as_any(&self) -> &dyn Any { self }
-        fn name(&self) -> &str { "geo_mean" }
-        fn signature(&self) -> &Signature { &self.signature }
-        fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-          if !matches!(args.get(0), Some(&DataType::Float64)) {
-            return plan_err!("add_one only accepts Float64 arguments");
-          }
-          Ok(DataType::Float64)
-        }
-        fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
-        fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-            Ok(vec![
-                 Field::new("value", args.return_type.clone(), true),
-                 Field::new("ordering", DataType::UInt32, true)
-            ])
-        }
-     }
-
-    impl AggregateUDFImpl for AstroMeanUdf {
-        fn as_any(&self) -> &dyn Any { self }
-        fn name(&self) -> &str { "astro_mean" }
-        fn signature(&self) -> &Signature { &self.signature }
-        fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-            if !matches!(args.get(0), Some(&DataType::Float64)) {
-                return plan_err!("add_one only accepts Float64 arguments");
-            }
-            Ok(DataType::Float64)
-        }
-        fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
-        fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-            Ok(vec![
-                Field::new("value", args.return_type.clone(), true),
-                Field::new("ordering", DataType::UInt32, true)
-            ])
-        }
-    }
-
-    #[test]
-    fn test_partial_ord() {
-        let geometric_mean = AggregateUDF::from(GeoMeanUdf::new());
-        let geometric_mean2 = AggregateUDF::from(GeoMeanUdf::new());
-        assert!(!(geometric_mean < geometric_mean2));
-        assert!(!(geometric_mean > geometric_mean2));
-
-        let astro_mean = AggregateUDF::from(AstroMeanUdf::new());
-        assert!(astro_mean < geometric_mean2);
     }
 }
 
@@ -858,5 +775,113 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         (self.accumulator)(acc_args)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{AggregateUDF, AggregateUDFImpl};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::Result;
+    use datafusion_expr_common::accumulator::Accumulator;
+    use datafusion_expr_common::signature::{Signature, Volatility};
+    use datafusion_functions_aggregate_common::accumulator::{
+        AccumulatorArgs, StateFieldsArgs,
+    };
+    use std::any::Any;
+
+    #[derive(Debug, Clone)]
+    struct AMeanUdf {
+        signature: Signature,
+    }
+
+    impl AMeanUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for AMeanUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "a"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!()
+        }
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+            unimplemented!()
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct BMeanUdf {
+        signature: Signature,
+    }
+    impl BMeanUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for BMeanUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "b"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!()
+        }
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_partial_ord() {
+        // Test validates that partial ord is defined for AggregateUDF using the name and signature,
+        // not intended to exhaustively test all possibilities
+        let a1 = AggregateUDF::from(AMeanUdf::new());
+        let a2 = AggregateUDF::from(AMeanUdf::new());
+        assert!(!(a1 < a2));
+        assert!(!(a1 > a2));
+
+        let b1 = AggregateUDF::from(BMeanUdf::new());
+        assert!(a1 < b1);
+        assert!(!(a1 == b1));
     }
 }
