@@ -403,9 +403,7 @@ pub struct ListUnnest {
 /// - colB(1-dimension) unnest into P3 (unnesting of P3 starts from this level)
 ///
 /// The returned array will has the same size as the input batch
-/// and only contains original columns that are not being unnested
-/// If there are multiple unnest operations with different recursion level,
-/// the total time of unnesting will be max(recursion)
+/// and only contains original columns that are not being unnested.
 fn list_unnest_at_level(
     batch: &[ArrayRef],
     list_type_unnests: &[ListUnnest],
