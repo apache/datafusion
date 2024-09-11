@@ -16,7 +16,7 @@
 # under the License.
 
 # This file is intended to be run with tables already defined
-# with standard data but possibly different types in string columns
+# with standard values, but different types in string columns
 # (String, StringView, etc.)
 
 query TTTTTTTTTTTTTT
