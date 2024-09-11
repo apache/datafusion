@@ -31,6 +31,7 @@ pub mod nvl;
 pub mod nvl2;
 pub mod planner;
 pub mod r#struct;
+pub mod version;
 
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, ARROW_CAST, arrow_cast);
@@ -42,6 +43,7 @@ make_udf_function!(r#struct::StructFunc, STRUCT, r#struct);
 make_udf_function!(named_struct::NamedStructFunc, NAMED_STRUCT, named_struct);
 make_udf_function!(getfield::GetFieldFunc, GET_FIELD, get_field);
 make_udf_function!(coalesce::CoalesceFunc, COALESCE, coalesce);
+make_udf_function!(version::Version, VERSION, version);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
@@ -104,5 +106,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         // calls to `get_field`
         get_field(),
         coalesce(),
+        version(),
     ]
 }
