@@ -19,8 +19,6 @@
 //! and return types of functions in DataFusion.
 
 use arrow::datatypes::DataType;
-use std::cmp::Ordering;
-use std::cmp::Ordering::Equal;
 
 /// Constant that is used as a placeholder for any valid timezone.
 /// This is used where a function can accept a timestamp type with any
@@ -86,7 +84,7 @@ pub enum Volatility {
 ///   DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
 /// ]);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum TypeSignature {
     /// One or more arguments of an common type out of a list of valid types.
     ///
@@ -127,61 +125,6 @@ pub enum TypeSignature {
     /// Fixed number of arguments of numeric types.
     /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
     Numeric(usize),
-}
-
-// manual implementation of `PartialOrd`
-impl PartialOrd for TypeSignature {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (Self::Variadic(self_vec), Self::Variadic(other_vec)) => {
-                self_vec.partial_cmp(other_vec)
-            }
-            (Self::UserDefined {}, Self::UserDefined {}) => Some(Ordering::Equal),
-            (Self::VariadicAny {}, Self::VariadicAny {}) => Some(Ordering::Equal),
-            (Self::Uniform(u1, v1), Self::Uniform(u2, v2)) => {
-                match u1.partial_cmp(u2) {
-                    Some(Equal) => v1.partial_cmp(v2),
-                    cmp => cmp,
-                }
-            },
-            (Self::Exact(v1), Self::Exact(v2)) => {
-                v1.partial_cmp(v2)
-            }
-            (Self::Coercible(v1), Self::Coercible(v2)) => {
-                v1.partial_cmp(v2)
-            }
-            (Self::Any(u1), Self::Any(u2)) => {
-                u1.partial_cmp(u2)
-            }
-            (Self::OneOf(v1), Self::OneOf(v2)) => {
-                v1.partial_cmp(v2)
-            }
-            (Self::ArraySignature(a1), Self::ArraySignature(a2)) => {
-                a1.partial_cmp(a2)
-            }
-            (Self::Numeric(u1), Self::Numeric(u2)) => {
-                u1.partial_cmp(u2)
-            }
-            (Self::Variadic { .. }, _) => Some(Ordering::Less),
-            (_, Self::Variadic { .. }) => Some(Ordering::Greater),
-            (Self::UserDefined {}, _) => Some(Ordering::Less),
-            (_, Self::UserDefined { .. }) => Some(Ordering::Greater),
-            (Self::VariadicAny { .. }, _) => Some(Ordering::Less),
-            (_, Self::VariadicAny { .. }) => Some(Ordering::Greater),
-            (Self::Uniform { .. }, _) => Some(Ordering::Less),
-            (_, Self::Uniform { .. }) => Some(Ordering::Greater),
-            (Self::Exact { .. }, _) => Some(Ordering::Less),
-            (_, Self::Exact { .. }) => Some(Ordering::Greater),
-            (Self::Coercible { .. }, _) => Some(Ordering::Less),
-            (_, Self::Coercible { .. }) => Some(Ordering::Greater),
-            (Self::Any { .. }, _) => Some(Ordering::Less),
-            (_, Self::Any { .. }) => Some(Ordering::Greater),
-            (Self::OneOf { .. }, _) => Some(Ordering::Less),
-            (_, Self::OneOf { .. }) => Some(Ordering::Greater),
-            (Self::ArraySignature { .. }, _) => Some(Ordering::Less),
-            (_, Self::ArraySignature { .. }) => Some(Ordering::Greater),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -484,6 +427,6 @@ mod tests {
 
         assert!(TypeSignature::Uniform(1, vec![DataType::Null]) < TypeSignature::Uniform(1, vec![DataType::Boolean]));
         assert!(TypeSignature::Uniform(1, vec![DataType::Null]) < TypeSignature::Uniform(2, vec![DataType::Null]));
-
+        assert!(TypeSignature::Uniform(1, vec![DataType::Null]) < TypeSignature::Exact(vec![DataType::Null]));
     }
 }
