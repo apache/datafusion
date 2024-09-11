@@ -3086,10 +3086,15 @@ mod tests {
             &df_results
         );
 
-        let actual_err = df.clone().with_column("new_column", lit(true)).unwrap_err();
-        let expected_err = "Error during planning: Projections require unique expression names \
-            but the expression \"t1.c1\" at position 0 and \"t1.c1\" at position 1 have the same name. \
-            Consider aliasing (\"AS\") one of them.";
+        // The error now doesn't occur until the `physical` stage.
+        // I assume there's a way to catch this during hte `logical` stage, so please let me know.
+        let df_with_new_column = df
+            .clone()
+            .with_column("new_column", lit(true))
+            .expect("with-column");
+        let actual_err = df_with_new_column.collect().await.unwrap_err();
+
+        let expected_err = "expand_wildcard_rule\ncaused by\nError during planning: Projections require unique expression names but the expression \"t1.c1\" at position 0 and \"t1.c1\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.";
         assert_eq!(actual_err.strip_backtrace(), expected_err);
 
         Ok(())
