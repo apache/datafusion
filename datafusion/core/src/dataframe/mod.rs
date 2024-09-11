@@ -1452,12 +1452,12 @@ impl DataFrame {
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
         let window_func_exprs = find_window_exprs(&[expr.clone()]);
 
-        let ( window_fn_str, plan) = if window_func_exprs.is_empty() {
+        let (window_fn_str, plan) = if window_func_exprs.is_empty() {
             (None, self.plan)
         } else {
             (
                 Some(window_func_exprs[0].to_string()),
-                LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
+                LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?,
             )
         };
 
@@ -1472,7 +1472,10 @@ impl DataFrame {
                     Some(new_column.clone())
                 } else {
                     let e = col(Column::from((qualifier, field)));
-                    let match_window_fn = window_fn_str.as_ref().map(|s| s == &e.to_string()).unwrap_or(false);
+                    let match_window_fn = window_fn_str
+                        .as_ref()
+                        .map(|s| s == &e.to_string())
+                        .unwrap_or(false);
                     match match_window_fn {
                         true => None,
                         false => Some(e),
@@ -2987,7 +2990,7 @@ mod tests {
         let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
         let func = row_number().alias("row_num");
 
-        // This first `with_column` results in a column without a `qualifier` 
+        // This first `with_column` results in a column without a `qualifier`
         let df_impl = df_impl.with_column("s", col("c2") + col("c3"))?;
 
         // This second `with_column` then assigns `"r"` alias to the above column and the window function
