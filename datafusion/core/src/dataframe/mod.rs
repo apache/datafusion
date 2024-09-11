@@ -52,7 +52,7 @@ use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
-use datafusion_expr::{case, is_null, lit, SortExpr};
+use datafusion_expr::{case, is_null, lit, wildcard, SortExpr};
 use datafusion_expr::{
     utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
@@ -1450,44 +1450,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
-        let window_func_exprs = find_window_exprs(&[expr.clone()]);
-
-        let (plan, mut col_exists, window_func) = if window_func_exprs.is_empty() {
-            (self.plan, false, false)
-        } else {
-            (
-                LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?,
-                true,
-                true,
-            )
-        };
-
-        let new_column = expr.alias(name);
-        let mut fields: Vec<Expr> = plan
-            .schema()
-            .iter()
-            .map(|(qualifier, field)| {
-                if field.name() == name {
-                    col_exists = true;
-                    new_column.clone()
-                } else if window_func && qualifier.is_none() {
-                    col(Column::from((qualifier, field))).alias(name)
-                } else {
-                    col(Column::from((qualifier, field)))
-                }
-            })
-            .collect();
-
-        if !col_exists {
-            fields.push(new_column);
-        }
-
-        let project_plan = LogicalPlanBuilder::from(plan).project(fields)?.build()?;
-
-        Ok(DataFrame {
-            session_state: self.session_state,
-            plan: project_plan,
-        })
+        self.select(vec![wildcard(), expr.alias(name)])
     }
 
     /// Rename one column by applying a new projection. This is a no-op if the column to be
