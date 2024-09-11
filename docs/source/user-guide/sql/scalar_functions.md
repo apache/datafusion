@@ -1454,7 +1454,7 @@ position(substr in origstr)
 
 ### `contains`
 
-Return true if search_string is found within string.
+Return true if search_string is found within string (case-sensitive).
 
 ```
 contains(string, search_string)
