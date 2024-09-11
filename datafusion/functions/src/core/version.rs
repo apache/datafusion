@@ -24,17 +24,17 @@ use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
-pub struct Version {
+pub struct VersionFunc {
     signature: Signature,
 }
 
-impl Default for Version {
+impl Default for VersionFunc {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Version {
+impl VersionFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::exact(vec![], Volatility::Immutable),
@@ -42,7 +42,7 @@ impl Version {
     }
 }
 
-impl ScalarUDFImpl for Version {
+impl ScalarUDFImpl for VersionFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -87,7 +87,7 @@ mod test {
 
     #[tokio::test]
     async fn test_version_udf() {
-        let version_udf = ScalarUDF::from(Version::new());
+        let version_udf = ScalarUDF::from(VersionFunc::new());
         let version = version_udf.invoke_no_args(0).unwrap();
 
         if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(version))) = version {

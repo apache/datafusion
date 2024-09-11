@@ -43,7 +43,7 @@ make_udf_function!(r#struct::StructFunc, STRUCT, r#struct);
 make_udf_function!(named_struct::NamedStructFunc, NAMED_STRUCT, named_struct);
 make_udf_function!(getfield::GetFieldFunc, GET_FIELD, get_field);
 make_udf_function!(coalesce::CoalesceFunc, COALESCE, coalesce);
-make_udf_function!(version::Version, VERSION, version);
+make_udf_function!(version::VersionFunc, VERSION, version);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
