@@ -1472,14 +1472,7 @@ impl DataFrame {
                     Some(new_column.clone())
                 } else {
                     let e = col(Column::from((qualifier, field)));
-                    let match_window_fn = window_fn_str
-                        .as_ref()
-                        .map(|s| s == &e.to_string())
-                        .unwrap_or(false);
-                    match match_window_fn {
-                        true => None,
-                        false => Some(e),
-                    }
+                    window_fn_str.as_ref().filter(|s| *s == &e.to_string()).is_none().then_some(e)
                 }
             })
             .collect();
