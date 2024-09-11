@@ -213,6 +213,22 @@ impl ExecutionPlan for ArrowExec {
             cache: self.cache.clone(),
         }))
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let new_cache = self.cache.clone().with_node_id(_node_id);
+
+        Ok(Some(Arc::new(Self {
+            base_config: self.base_config.clone(),
+            projected_statistics: self.projected_statistics.clone(),
+            projected_schema: self.projected_schema.clone(),
+            projected_output_ordering: self.projected_output_ordering.clone(),
+            metrics: self.metrics.clone(),
+            cache: new_cache,
+        })))
+    }
 }
 
 pub struct ArrowOpener {

@@ -672,6 +672,16 @@ impl ExecutionPlan for RepartitionExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
     }
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan =
+            RepartitionExec::try_new(self.input.clone(), self.partitioning().clone())?;
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 impl RepartitionExec {
