@@ -114,26 +114,14 @@ fn string_view_trim<'a>(
             let array_iter = string_view_array.iter();
             let views_iter = string_view_array.views().iter();
             for (src_str_opt, raw_view) in array_iter.zip(views_iter) {
-                if let Some(src_str) = src_str_opt {
-                    let trim_str = trim_func(src_str, " ");
-
-                    // Safety:
-                    // `trim_str` is computed from `str::trim_xxx_matches`,
-                    // and its addr is ensured to be >= `origin_str`'s
-                    let start =
-                        unsafe { trim_str.as_ptr().offset_from(src_str.as_ptr()) as u32 };
-
-                    make_and_append_view(
-                        &mut views_buf,
-                        &mut null_builder,
-                        raw_view,
-                        trim_str,
-                        start,
-                    );
-                } else {
-                    null_builder.append_null();
-                    views_buf.push(0);
-                }
+                trim_and_append_str(
+                    src_str_opt,
+                    Some(" "),
+                    trim_func,
+                    &mut views_buf,
+                    &mut null_builder,
+                    raw_view,
+                );
             }
         }
         2 => {
