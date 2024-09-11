@@ -141,7 +141,7 @@ where
     V1: StringArrayType<'a, Item = &'a str>,
     V2: StringArrayType<'a, Item = &'a str>,
 {
-    let ascii_only = string_array.is_ascii() && substring_array.is_ascii();
+    let ascii_only = substring_array.is_ascii() && string_array.is_ascii();
     let string_iter = string_array.iter();
     let substring_iter = substring_array.iter();
 
