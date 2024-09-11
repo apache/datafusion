@@ -94,7 +94,7 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
     };
 
     if use_string_view {
-        string_view_trim::<T>(func, args)
+        string_view_trim(func, args)
     } else {
         string_trim::<T>(func, args)
     }
