@@ -71,7 +71,7 @@ impl ScalarUDFImpl for Version {
         // TODO it would be great to add rust version and arrow version,
         // but that requires a `build.rs` script and/or adding a version const to arrow-rs
         let version = format!(
-            "DataFusion {}, {} on {}",
+            "Apache DataFusion {}, {} on {}",
             env!("CARGO_PKG_VERSION"),
             std::env::consts::ARCH,
             std::env::consts::OS,
@@ -91,7 +91,7 @@ mod test {
         let version = version_udf.invoke_no_args(0).unwrap();
 
         if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(version))) = version {
-            assert!(version.starts_with("DataFusion"));
+            assert!(version.starts_with("Apache DataFusion"));
         } else {
             panic!("Expected version string");
         }
