@@ -204,6 +204,8 @@ pub fn pushdown_limit_helper(
             // fetch info to plan if possible. If not, we must add a `LimitExec`
             // with the information from the global state.
             let mut new_plan = plan_with_fetch;
+            // Execution plans can't (yet) handle skip, so if we have one,
+            // we still need to add a global limit
             if global_state.skip > 0 {
                 new_plan =
                     add_global_limit(new_plan, global_state.skip, global_state.fetch);
