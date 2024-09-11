@@ -1450,7 +1450,29 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
-        self.select(vec![wildcard(), expr.alias(name)])
+        let col_exists = self
+            .plan
+            .schema()
+            .fields()
+            .iter()
+            .any(|f| f.name() == name);
+
+        if col_exists {
+            // if `name` matches a field in the schema, we replace it with expr
+            // ```select * REPLACE expr as name```
+            // 
+            // PlannedReplaceSelectItem.items should be a vec of `ReplaceSelectElement`
+            // however, ReplaceSelectElement.expr is a `sqlparser::ast::Expr`
+            // I'm unsure how to construct it from here or if it's necessary / possible
+            let replace = todo!(); // PlannedReplaceSelectItem
+            let options = WildcardOptions::default().with_replace(replace);
+            self.select(vec![wildcard_with_options(options)])
+        } else {
+            // otherwise we add a new column
+            // ```select *, expr as name```
+            // LogicalPlan::columnized_output_exprs
+            self.select(vec![wildcard(), expr.alias(name)])
+        }
     }
 
     /// Rename one column by applying a new projection. This is a no-op if the column to be
