@@ -411,7 +411,6 @@ pub struct ListUnnest {
 /// Recursion happens for the highest level first
 /// Demonstatring with examples:
 ///
-///
 /// Set "A" as a 3-dimension columns and "B" as an array (1-dimension)
 /// Query: select unnest(A, max_depth:=3), unnest(A,max_depth:=2), unnest(B, max_depth:=1) from temp;
 /// Let's given these projection names P1,P2,P3 respectively
@@ -420,12 +419,15 @@ pub struct ListUnnest {
 /// This is needed, even if the same column is being unnested for different recursion levels
 ///
 /// This function is called with the descending order of recursion
+///
 /// Depth = 3
 /// - P1(3-dimension) unnest into temp column temp_P1(2_dimension)
 /// - A(3-dimension) having indice repeated by the unnesting above
+///
 /// Depth = 2
 /// - temp_P1(2-dimension) unnest into temp column temp_P1(1-dimension)
 /// - A(3-dimension) unnest into temp column temp_P2(2-dimension)
+///
 /// Depth = 1
 /// - temp_P1(1-dimension) unnest into P1
 /// - temp_P2(2-dimension) unnest into P2
