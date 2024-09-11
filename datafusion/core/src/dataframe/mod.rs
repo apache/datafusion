@@ -2974,7 +2974,8 @@ mod tests {
         Ok(())
     }
 
-    // Test issue: https://github.com/apache/datafusion/issues/11982
+    // Test issues: https://github.com/apache/datafusion/issues/11982
+    // and https://github.com/apache/datafusion/issues/12425
     // Window function was creating unwanted projection when using with_column() method.
     #[tokio::test]
     async fn test_window_function_with_column() -> Result<()> {
@@ -2986,8 +2987,7 @@ mod tests {
         // This first `with_column` results in a column without a `qualifier`
         let df_impl = df_impl.with_column("s", col("c2") + col("c3"))?;
 
-        // This second `with_column` then assigns `"r"` alias to the above column and the window function
-        // Should create an additional column with alias 'r' that has window func results
+        // This second `with_column` should only alias `func` as `"r"`
         let df = df_impl.with_column("r", func)?.limit(0, Some(2))?;
 
         df.clone().show().await?;
