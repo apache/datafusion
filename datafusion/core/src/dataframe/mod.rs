@@ -3013,7 +3013,7 @@ mod tests {
 
         assert_eq!(
             "\
-        Projection: t1.c1, t2.c1, Boolean(true) AS new_column\
+        Projection: *, Boolean(true) AS new_column\
         \n  Limit: skip=0, fetch=1\
         \n    Sort: t1.c1 ASC NULLS FIRST\
         \n      Inner Join: t1.c1 = t2.c1\
