@@ -35,8 +35,7 @@ use datafusion_expr::ColumnarValue;
 
 /// Make a `u128` based on the given substr, start(offset to view.offset), and
 /// push into to the given buffers
-// TODO: tmp copy, remove after #12383 is merged
-fn make_and_append_view(
+pub(crate) fn make_and_append_view(
     views_buffer: &mut Vec<u128>,
     null_builder: &mut NullBufferBuilder,
     raw: &u128,
