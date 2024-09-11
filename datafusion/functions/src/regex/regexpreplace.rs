@@ -16,15 +16,15 @@
 // under the License.
 
 //! Regx expressions
-use arrow::array::ArrayAccessor;
 use arrow::array::ArrayDataBuilder;
 use arrow::array::BufferBuilder;
 use arrow::array::GenericStringArray;
 use arrow::array::StringViewBuilder;
 use arrow::array::{new_null_array, ArrayIter, AsArray};
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow::array::{ArrayAccessor, StringViewArray};
 use arrow::datatypes::DataType;
-use datafusion_common::cast::{as_string_array, as_string_view_array};
+use datafusion_common::cast::as_string_view_array;
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
 use datafusion_common::ScalarValue;
@@ -204,13 +204,15 @@ where
     // creating Regex is expensive so create hashmap for memoization
     let mut patterns: HashMap<String, Regex> = HashMap::new();
 
+    let datatype = string_array.data_type().to_owned();
+
     let string_array_iter = ArrayIter::new(string_array);
     let pattern_array_iter = ArrayIter::new(pattern_array);
     let replacement_array_iter = ArrayIter::new(replacement_array);
 
     match flags {
         None => {
-            let result = string_array_iter
+            let result_iter = string_array_iter
                 .zip(pattern_array_iter)
                 .zip(replacement_array_iter)
                 .map(|((string, pattern), replacement)| {
@@ -236,15 +238,29 @@ where
                         }
                         _ => Ok(None),
                     }
-                })
-                .collect::<Result<GenericStringArray<T>>>()?;
+                });
 
-            Ok(Arc::new(result) as ArrayRef)
+            match datatype {
+                DataType::Utf8 | DataType::LargeUtf8 => {
+                    let result =
+                        result_iter.collect::<Result<GenericStringArray<T>>>()?;
+                    Ok(Arc::new(result) as ArrayRef)
+                }
+                DataType::Utf8View => {
+                    let result = result_iter.collect::<Result<StringViewArray>>()?;
+                    Ok(Arc::new(result) as ArrayRef)
+                }
+                other => {
+                    exec_err!(
+                        "Unsupported data type {other:?} for function regex_replace"
+                    )
+                }
+            }
         }
         Some(flags) => {
             let flags_array = as_generic_string_array::<T>(flags)?;
 
-            let result = string_array_iter
+            let result_iter = string_array_iter
                 .zip(pattern_array_iter)
                 .zip(replacement_array_iter)
                 .zip(flags_array.iter())
@@ -294,10 +310,24 @@ where
                         }
                         _ => Ok(None),
                     }
-                })
-                .collect::<Result<GenericStringArray<T>>>()?;
+                });
 
-            Ok(Arc::new(result) as ArrayRef)
+            match datatype {
+                DataType::Utf8 | DataType::LargeUtf8 => {
+                    let result =
+                        result_iter.collect::<Result<GenericStringArray<T>>>()?;
+                    Ok(Arc::new(result) as ArrayRef)
+                }
+                DataType::Utf8View => {
+                    let result = result_iter.collect::<Result<StringViewArray>>()?;
+                    Ok(Arc::new(result) as ArrayRef)
+                }
+                other => {
+                    exec_err!(
+                        "Unsupported data type {other:?} for function regex_replace"
+                    )
+                }
+            }
         }
     }
 }
@@ -516,34 +546,12 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                     let string_array = args[0].as_string_view();
                     let pattern_array = args[1].as_string::<i32>();
                     let replacement_array = args[2].as_string::<i32>();
-                    let regexp_replace_result = regexp_replace::<i32, _, _>(
+                    regexp_replace::<i32, _, _>(
                         string_array,
                         pattern_array,
                         replacement_array,
                         args.get(3),
-                    )?;
-
-                    if regexp_replace_result.data_type() == &DataType::Utf8 {
-                        let string_view_array =
-                            as_string_array(&regexp_replace_result)?.to_owned();
-
-                        let mut builder =
-                            StringViewBuilder::with_capacity(string_view_array.len())
-                                .with_block_size(1024 * 1024 * 2);
-
-                        for val in string_view_array.iter() {
-                            if let Some(val) = val {
-                                builder.append_value(val);
-                            } else {
-                                builder.append_null();
-                            }
-                        }
-
-                        let result = builder.finish();
-                        Ok(Arc::new(result) as ArrayRef)
-                    } else {
-                        Ok(regexp_replace_result)
-                    }
+                    )
                 }
                 DataType::Utf8 => {
                     let string_array = args[0].as_string::<i32>();
