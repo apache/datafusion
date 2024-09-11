@@ -2984,19 +2984,23 @@ mod tests {
         let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
         let func = row_number().alias("row_num");
 
+        // This first `with_column` results in a column without a `qualifier`
+        let df_impl = df_impl.with_column("s", col("c2") + col("c3"))?;
+
+        // This second `with_column` then assigns `"r"` alias to the above column and the window function
         // Should create an additional column with alias 'r' that has window func results
         let df = df_impl.with_column("r", func)?.limit(0, Some(2))?;
-        assert_eq!(4, df.schema().fields().len());
+        assert_eq!(5, df.schema().fields().len());
 
         let df_results = df.clone().collect().await?;
         assert_batches_sorted_eq!(
             [
-                "+----+----+-----+---+",
-                "| c1 | c2 | c3  | r |",
-                "+----+----+-----+---+",
-                "| c  | 2  | 1   | 1 |",
-                "| d  | 5  | -40 | 2 |",
-                "+----+----+-----+---+",
+                "+----+----+-----+-----+---+",
+                "| c1 | c2 | c3  | s   | r |",
+                "+----+----+-----+-----+---+",
+                "| c  | 2  | 1   | 3   | 1 |",
+                "| d  | 5  | -40 | -35 | 2 |",
+                "+----+----+-----+-----+---+",
             ],
             &df_results
         );
