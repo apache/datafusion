@@ -98,9 +98,11 @@ Optional features:
 
 ## Rust Version Compatibility Policy
 
-DataFusion's Minimum Required Stable Rust Version (MSRV) policy is to support
-each stable Rust version for 6 months after it is
-[released](https://github.com/rust-lang/rust/blob/master/RELEASES.md). This
-generally translates to support for the most recent 3 to 4 stable Rust versions.
+DataFusion's Minimum Required Stable Rust Version (MSRV) policy is to support stable [4 latest
+Rust versions](https://releases.rs) OR the stable minor Rust version as of 4 months, whichever is lower.
+
+For example, given the releases `1.78.0`, `1.79.0`, `1.80.0`, `1.80.1` and `1.81.0` DataFusion will support 1.78.0, which is 3 minor versions prior to the most minor recent `1.81`.
+
+If a hotfix is released for the minimum supported Rust version (MSRV), the MSRV will be the minor version with all hotfixes, even if it surpasses the four-month window.
 
 We enforce this policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
