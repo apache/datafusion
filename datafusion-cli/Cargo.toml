@@ -52,7 +52,7 @@ datafusion = { path = "../datafusion/core", version = "41.0.0", features = [
     "unicode_expressions",
     "compression",
 ] }
-dirs = "4.0.0"
+dirs = "5.0.1"
 env_logger = "0.9"
 futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
@@ -68,4 +68,4 @@ url = "2.2"
 assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
-rstest = "0.17"
+rstest = "0.22"
