@@ -2,3 +2,4 @@ SELECT COUNT(DISTINCT "SearchPhrase"), COUNT(DISTINCT "MobilePhone"), COUNT(DIST
 SELECT COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserCountry"), COUNT(DISTINCT "BrowserLanguage")  FROM hits;
 SELECT "BrowserCountry",  COUNT(DISTINCT "SocialNetwork"), COUNT(DISTINCT "HitColor"), COUNT(DISTINCT "BrowserLanguage"), COUNT(DISTINCT "SocialAction") FROM hits GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 SELECT "SocialSourceNetworkID", "RegionID", COUNT(*), AVG("Age"), AVG("ParamPrice"), STDDEV("ParamPrice") as s, VAR("ParamPrice")  FROM hits GROUP BY "SocialSourceNetworkID", "RegionID" HAVING s IS NOT NULL ORDER BY s DESC LIMIT 10;
+SELECT MIN("ResponseStartTiming") tmin, MEDIAN("ResponseStartTiming") tmed, approx_percentile_cont("ResponseStartTiming", 0.95) tp95, approx_percentile_cont("ResponseStartTiming", 0.95) tp99, MAX("ResponseStartTiming") tmax,  "UserID" FROM hits GROUP BY "UserID" HAVING tmin > 0 AND tmed > 0 ORDER BY tp95 DESC LIMIT 10;

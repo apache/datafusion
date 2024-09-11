@@ -60,7 +60,7 @@ LIMIT 10;
 
 ### Q3: What is the income distribution for users in specific regions
 
-**Question**: "What regions and social networks have the highest variance of parameter price 
+**Question**: "What regions and social networks have the highest variance of parameter price?"
 
 **Important Query Properties**: STDDEV and VAR aggregation functions, GROUP BY multiple small ints
 
@@ -72,6 +72,38 @@ HAVING s IS NOT NULL
 ORDER BY s DESC 
 LIMIT 10;
 ```
+
+### Q4: Response start time distribution analysis
+
+**Question**:  Find the distribution of "ResponseStartTiming" for the users who experience the highest 95th percentile response time
+
+**Important Query Properties**: MEDIAN, approx_percentile_cont functions, high cardinality grouping (17.5M unique users)
+
+```sql
+SELECT MIN("ResponseStartTiming") tmin, MEDIAN("ResponseStartTiming") tmed, approx_percentile_cont("ResponseStartTiming", 0.95) tp95, approx_percentile_cont("ResponseStartTiming", 0.95) tp99, MAX("ResponseStartTiming") tmax,  "UserID"  
+FROM 'hits.parquet' 
+GROUP BY "UserID"
+HAVING tmin > 0 AND tmed > 0
+ORDER BY tp95 DESC 
+LIMIT 10;
+```
+
+Results look like
+
++-------+-------+-------+-------+-------+---------------------+
+| tmin  | tmed  | tp95  | tp99  | tmax  | UserID              |
++-------+-------+-------+-------+-------+---------------------+
+| 30000 | 30000 | 30000 | 30000 | 30000 | 188127522838992355  |
+| 30000 | 30000 | 30000 | 30000 | 30000 | 574438275023052131  |
+| 30000 | 30000 | 30000 | 30000 | 30000 | 990735883225442232  |
+| 4986  | 15166 | 30000 | 30000 | 30000 | 1348425397573671542 |
+| 416   | 686   | 30000 | 30000 | 30000 | 2043090912976845896 |
+| 869   | 2544  | 30000 | 30000 | 30000 | 3033783404094078623 |
+| 296   | 4008  | 30000 | 30000 | 30000 | 2233867613462292005 |
+| 30    | 30000 | 30000 | 30000 | 30000 | 93517800688584195   |
+| 321   | 615   | 30000 | 30000 | 30000 | 4774012320452377021 |
+| 84    | 2097  | 30000 | 30000 | 30000 | 2092888969349861031 |
++-------+-------+-------+-------+-------+---------------------+
 
 ## Data Notes
 
