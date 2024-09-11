@@ -33,12 +33,13 @@
 [discord-badge]: https://img.shields.io/discord/885562378132000778.svg?logo=discord&style=flat-square
 [discord-url]: https://discord.com/invite/Qw5gKqHxUM
 
-[Website](https://github.com/apache/datafusion) |
-[Guides](https://github.com/apache/datafusion/tree/main/docs) |
+[Website](https://datafusion.apache.org/) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
 [Chat](https://discord.com/channels/885562378132000778/885562378132000781)
 
-<img src="./docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
+<a href="https://datafusion.apache.org/">
+  <img src="./docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
+</a>
 
 Apache DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
 [Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
