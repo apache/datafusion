@@ -293,7 +293,7 @@ pub(crate) fn value_to_string(value: &Value) -> Option<String> {
     }
 }
 
-pub(crate) fn group_bottom_most_consecutive_unnests(
+pub(crate) fn rewrite_recursive_unnests_bottom_up(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
     inner_projection_exprs: &mut Vec<Expr>,
@@ -302,7 +302,7 @@ pub(crate) fn group_bottom_most_consecutive_unnests(
     Ok(original_exprs
         .iter()
         .map(|expr| {
-            group_bottom_most_consecutive_unnest(
+            rewrite_recursive_unnest_bottom_up(
                 input,
                 unnest_placeholder_columns,
                 inner_projection_exprs,
@@ -582,7 +582,6 @@ fn push_projection_dedupl(projection: &mut Vec<Expr>, expr: Expr) {
         projection.push(expr);
     }
 }
-/// TODO: maybe renamed into transform_bottom_most_consecutive_unnests
 /// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
 /// Given an expression which contains unnest expr as one of its children,
 /// Try transform depends on unnest type
@@ -592,7 +591,7 @@ fn push_projection_dedupl(projection: &mut Vec<Expr>, expr: Expr) {
 /// The transformed exprs will be used in the outer projection
 /// If along the path from root to bottom, there are multiple unnest expressions, the transformation
 /// is done only for the bottom expression
-pub(crate) fn group_bottom_most_consecutive_unnest(
+pub(crate) fn rewrite_recursive_unnest_bottom_up(
     input: &LogicalPlan,
     unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
     inner_projection_exprs: &mut Vec<Expr>,
@@ -655,9 +654,7 @@ mod tests {
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
 
-    use crate::utils::{
-        group_bottom_most_consecutive_unnest, resolve_positions_to_exprs,
-    };
+    use crate::utils::{resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up};
     fn column_unnests_eq(l: Vec<(&str, &str)>, r: &[(Column, ColumnUnnestType)]) {
         let r_formatted: Vec<String> =
             r.iter().map(|i| format!("{}|{}", i.0, i.1)).collect();
@@ -699,7 +696,7 @@ mod tests {
         let original_expr = unnest(unnest(col("3d_col")))
             .add(unnest(unnest(col("3d_col"))))
             .add(col("i64_col"));
-        let transformed_exprs = group_bottom_most_consecutive_unnest(
+        let transformed_exprs = rewrite_recursive_unnest_bottom_up(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -736,7 +733,7 @@ mod tests {
 
         // unnest(3d_col) as 2d_col
         let original_expr_2 = unnest(col("3d_col")).alias("2d_col");
-        let transformed_exprs = group_bottom_most_consecutive_unnest(
+        let transformed_exprs = rewrite_recursive_unnest_bottom_up(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -804,7 +801,7 @@ mod tests {
 
         // unnest(struct_col)
         let original_expr = unnest(col("struct_col"));
-        let transformed_exprs = group_bottom_most_consecutive_unnest(
+        let transformed_exprs = rewrite_recursive_unnest_bottom_up(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -830,7 +827,7 @@ mod tests {
 
         // unnest(array_col) + 1
         let original_expr = unnest(col("array_col")).add(lit(1i64));
-        let transformed_exprs = group_bottom_most_consecutive_unnest(
+        let transformed_exprs = rewrite_recursive_unnest_bottom_up(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -899,7 +896,7 @@ mod tests {
 
         // An expr with multiple unnest
         let original_expr = unnest(unnest(col("struct_col").field("matrix")));
-        let transformed_exprs = group_bottom_most_consecutive_unnest(
+        let transformed_exprs = rewrite_recursive_unnest_bottom_up(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,

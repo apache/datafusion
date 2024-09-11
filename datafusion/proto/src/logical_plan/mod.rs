@@ -1580,7 +1580,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     input,
                     extension_codec,
                 )?;
-                let todo = list_type_columns
+                let proto_unnest_list_items = list_type_columns
                     .iter()
                     .map(|(index, ul)| ColumnUnnestListItem {
                         input_index: *index as _,
@@ -1623,7 +1623,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     }),
                                 })
                                 .collect(),
-                            list_type_columns: todo,
+                            list_type_columns: proto_unnest_list_items,
                             struct_type_columns: struct_type_columns
                                 .iter()
                                 .map(|c| *c as u64)

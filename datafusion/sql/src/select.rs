@@ -22,8 +22,8 @@ use crate::planner::{
     idents_to_table_reference, ContextProvider, PlannerContext, SqlToRel,
 };
 use crate::utils::{
-    check_columns_satisfy_exprs, extract_aliases, group_bottom_most_consecutive_unnests,
-    rebase_expr, resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
+    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
+    resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -318,7 +318,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
             // - unnest(array_col) will be transformed into unnest(array_col).element
             // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
-            let outer_projection_exprs = group_bottom_most_consecutive_unnests(
+            let outer_projection_exprs = rewrite_recursive_unnests_bottom_up(
                 &intermediate_plan,
                 &mut unnest_columns,
                 &mut inner_projection_exprs,
@@ -350,11 +350,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
 
-        let ret = LogicalPlanBuilder::from(intermediate_plan)
+        LogicalPlanBuilder::from(intermediate_plan)
             .project(intermediate_select_exprs)?
-            .build()?;
-
-        Ok(ret)
+            .build()
     }
 
     fn try_process_aggregate_unnest(&self, input: LogicalPlan) -> Result<LogicalPlan> {
@@ -417,7 +415,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let mut unnest_columns = vec![];
             let mut inner_projection_exprs = vec![];
 
-            let outer_projection_exprs = group_bottom_most_consecutive_unnests(
+            let outer_projection_exprs = rewrite_recursive_unnests_bottom_up(
                 &intermediate_plan,
                 &mut unnest_columns,
                 &mut inner_projection_exprs,

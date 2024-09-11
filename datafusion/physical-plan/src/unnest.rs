@@ -807,7 +807,6 @@ fn unnest_list_array(
     capacity: usize,
 ) -> Result<ArrayRef> {
     let values = list_array.values();
-    // TODO: handle me recursively
     let mut take_indicies_builder = PrimitiveArray::<Int64Type>::builder(capacity);
     for row in 0..list_array.len() {
         let mut value_length = 0;

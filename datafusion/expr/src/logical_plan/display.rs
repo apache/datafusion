@@ -643,7 +643,6 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 let input_columns = plan.schema().columns();
                 let list_type_columns = list_col_indices
                     .iter()
-                    // TODO: fix me
                     .map(|(i, unnest_info)| {
                         format!(
                             "{}|depth={:?}",
