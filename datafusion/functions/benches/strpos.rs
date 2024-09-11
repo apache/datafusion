@@ -81,8 +81,7 @@ fn gen_string_array(
         ]
     } else {
         let string_array: StringArray = output_string_vec.clone().into_iter().collect();
-        let sub_string_array: StringArray =
-            output_sub_string_vec.into_iter().collect();
+        let sub_string_array: StringArray = output_sub_string_vec.into_iter().collect();
         vec![
             ColumnarValue::Array(Arc::new(string_array)),
             ColumnarValue::Array(Arc::new(sub_string_array)),
