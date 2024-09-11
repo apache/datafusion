@@ -543,5 +543,5 @@ fn parse_tz(tz: &Option<Arc<str>>) -> Result<Tz> {
     let tz = tz.as_ref().map_or_else(|| "+00", |s| s);
 
     Tz::from_str(tz)
-        .map_err(|op| exec_datafusion_err!("failed on timezone {tz}: {:?}", op))
+        .map_err(|op| exec_datafusion_err!("failed to parse timezone {tz}: {:?}", op))
 }
