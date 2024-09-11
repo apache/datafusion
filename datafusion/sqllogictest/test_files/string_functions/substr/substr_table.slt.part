@@ -1,0 +1,45 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# This file is intended to be run with tables already defined
+# with standard data but possibly different types in string columns
+# (String, StringView, etc.)
+
+query TTTTTTTTTTTTTT
+select 
+    substr(c1, 1),
+    substr(c1, 3),
+    substr(c1, 100),
+    substr(c1, -1),
+    substr(c1, 0, 0),
+    substr(c1, -1, 2),
+    substr(c1, -2, 10),
+    substr(c1, -100, 200),
+    substr(c1, -10, 10),
+    substr(c1, -100, 10),
+    substr(c1, 1, 100),
+    substr(c1, 5, 3),
+    substr(c1, 100, 200),
+    substr(c1, 8, 0)
+from test_substr;
+----
+foo o (empty) foo (empty) (empty) foo foo (empty) (empty) foo (empty) (empty) (empty)
+hello🌏世界 llo🌏世界 (empty) hello🌏世界 (empty) (empty) hello🌏世 hello🌏世界 (empty) (empty) hello🌏世界 o🌏世 (empty) (empty)
+💩 (empty) (empty) 💩 (empty) (empty) 💩 💩 (empty) (empty) 💩 (empty) (empty) (empty)
+ThisIsAVeryLongASCIIString isIsAVeryLongASCIIString (empty) ThisIsAVeryLongASCIIString (empty) (empty) ThisIsA ThisIsAVeryLongASCIIString (empty) (empty) ThisIsAVeryLongASCIIString IsA (empty) (empty)
+(empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty)
+NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
