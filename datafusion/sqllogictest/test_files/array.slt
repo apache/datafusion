@@ -629,6 +629,38 @@ AS VALUES
   (arrow_cast(make_array([28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]), 'FixedSizeList(10, List(Int64))'), [28, 29, 30], [28, 29, 30], 10)
 ;
 
+statement ok
+CREATE TABLE arrays_distance_table
+AS VALUES
+  (make_array(1, 2, 3), make_array(1, 2, 3), make_array(1.1, 2.2, 3.3) , make_array(1.1, NULL, 3.3)),
+  (make_array(1, 2, 3), make_array(4, 5, 6), make_array(4.4, 5.5, 6.6), make_array(4.4, NULL, 6.6)),
+  (make_array(1, 2, 3), make_array(7, 8, 9), make_array(7.7, 8.8, 9.9), make_array(7.7, NULL, 9.9)),
+  (make_array(1, 2, 3), make_array(10, 11, 12), make_array(10.1, 11.2, 12.3), make_array(10.1, NULL, 12.3))
+;
+
+statement ok
+CREATE TABLE large_arrays_distance_table
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(Int64)') AS column1,
+    arrow_cast(column2, 'LargeList(Int64)') AS column2,
+    arrow_cast(column3, 'LargeList(Float64)') AS column3,
+    arrow_cast(column4, 'LargeList(Float64)') AS column4
+FROM arrays_distance_table
+;
+
+statement ok
+CREATE TABLE fixed_size_arrays_distance_table
+AS
+  SELECT
+    arrow_cast(column1, 'FixedSizeList(3, Int64)') AS column1,
+    arrow_cast(column2, 'FixedSizeList(3, Int64)') AS column2,
+    arrow_cast(column3, 'FixedSizeList(3, Float64)') AS column3,
+    arrow_cast(column4, 'FixedSizeList(3, Float64)') AS column4
+FROM arrays_distance_table
+;
+
+
 # Array literal
 
 ## boolean coercion is not supported
@@ -4767,6 +4799,31 @@ query R
 select list_distance([1, 2, 3], [1, 2, 3]) AS distance;
 ----
 0
+
+# array_distance with columns
+query RRR
+select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from arrays_distance_table;
+----
+0 0.374165738677 NULL
+5.196152422707 6.063827174318 NULL
+10.392304845413 11.778794505381 NULL
+15.58845726812 15.935494971917 NULL
+
+query RRR
+select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from large_arrays_distance_table;
+----
+0 0.374165738677 NULL
+5.196152422707 6.063827174318 NULL
+10.392304845413 11.778794505381 NULL
+15.58845726812 15.935494971917 NULL
+
+query RRR
+select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from fixed_size_arrays_distance_table;
+----
+0 0.374165738677 NULL
+5.196152422707 6.063827174318 NULL
+10.392304845413 11.778794505381 NULL
+15.58845726812 15.935494971917 NULL
 
 
 ## array_dims (aliases: `list_dims`)

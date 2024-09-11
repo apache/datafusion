@@ -31,13 +31,13 @@ fn create_args<O: OffsetSizeTrait>(
     size: usize,
     str_len: usize,
     repeat_times: i64,
-    use_string_view: bool,
+    force_view_types: bool,
 ) -> Vec<ColumnarValue> {
     let number_array = Arc::new(Int64Array::from(
         (0..size).map(|_| repeat_times).collect::<Vec<_>>(),
     ));
 
-    if use_string_view {
+    if force_view_types {
         let string_array =
             Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false));
         vec![
