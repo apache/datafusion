@@ -338,9 +338,12 @@ struct RecursiveUnnestRewriter<'a> {
     transformed_root_exprs: Option<Vec<Expr>>,
 }
 impl<'a> RecursiveUnnestRewriter<'a> {
-    // given a sequence of [None,Unnest,Unnest,None,None]
-    // returns [Unnest,Unnest]
-    // The first items is the inner most unnest
+    /// This struct stores the history of expr
+    /// during its tree-traversal with a notation of
+    /// \[None,**Unnest(exprA)**,**Unnest(exprB)**,None,None\]
+    /// then this function will returns \[**Unnest(exprA)**,**Unnest(exprB)**\]
+    ///
+    /// The first item will be the inner most expr
     fn get_latest_consecutive_unnest(&self) -> Vec<Unnest> {
         self.consecutive_unnest
             .iter()
@@ -450,6 +453,10 @@ impl<'a> RecursiveUnnestRewriter<'a> {
 impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
     type Node = Expr;
 
+    /// This downward traversal needs to keep track of:
+    /// - Whether or not some unnest expr has been visited from the top util the current node
+    /// - If some unnest expr has been visited, maintain a stack of such information, this
+    /// is used to detect if some recursive unnest expr exists (e.g **unnest(unnest(unnest(3d column))))**
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref unnest_expr) = expr {
             let (data_type, _) =
@@ -478,6 +485,36 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
         }
     }
 
+    /// The rewriting only happens when the traversal has reached the top-most unnest expr
+    /// within a sequence of consecutive unnest exprs.
+    /// node, for example given a stack of expr
+    ///
+    /// For example an expr of **unnest(unnest(column1)) + unnest(unnest(unnest(column2)))**
+    /// ```text
+    ///                         ┌──────────────────┐           
+    ///                         │    binaryexpr    │           
+    ///                         │                  │           
+    ///                         └──────────────────┘           
+    ///                f_down  / /            │ │              
+    ///                       / / f_up        │ │              
+    ///                      / /        f_down│ │f_up          
+    ///                  unnest               │ │              
+    ///                                       │ │              
+    ///       f_down  / / f_up(rewriting)     │ │              
+    ///              / /                                       
+    ///             / /                      unnest            
+    ///         unnest                                         
+    ///                           f_down  / / f_up(rewriting)  
+    /// f_down / /f_up                   / /                   
+    ///       / /                       / /                    
+    ///      / /                    unnest                     
+    ///   column1                                              
+    ///                     f_down / /f_up                     
+    ///                           / /                          
+    ///                          / /                           
+    ///                       column2                          
+    /// ```
+    ///         
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref traversing_unnest) = expr {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {
@@ -807,7 +844,7 @@ mod tests {
                     "List([unnest_placeholder(array_col,depth=1)|depth=1])",
                 ),
             ],
-            &mut unnest_placeholder_columns,
+            &unnest_placeholder_columns,
         );
         // only transform the unnest children
         assert_eq!(
@@ -882,7 +919,7 @@ mod tests {
                 "unnest_placeholder(struct_col[matrix])",
                 "List([unnest_placeholder(struct_col[matrix],depth=2)|depth=2])",
             )],
-            &mut unnest_placeholder_columns,
+            &unnest_placeholder_columns,
         );
 
         assert_eq!(
