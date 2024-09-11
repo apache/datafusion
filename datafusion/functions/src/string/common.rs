@@ -38,13 +38,13 @@ use datafusion_expr::ColumnarValue;
 pub(crate) fn make_and_append_view(
     views_buffer: &mut Vec<u128>,
     null_builder: &mut NullBufferBuilder,
-    raw: &u128,
+    raw_view: &u128,
     substr: &str,
     start: u32,
 ) {
     let substr_len = substr.len();
     let sub_view = if substr_len > 12 {
-        let view = ByteView::from(*raw);
+        let view = ByteView::from(*raw_view);
         make_view(substr.as_bytes(), view.buffer_index, view.offset + start)
     } else {
         // inline value does not need block id or offset
@@ -101,8 +101,8 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
 }
 
 // removing 'a will cause compiler complaining lifetime of `func`
-fn string_view_trim<'a, T: OffsetSizeTrait>(
-    func: fn(&'a str, &'a str) -> &'a str,
+fn string_view_trim<'a>(
+    trim_func: fn(&'a str, &'a str) -> &'a str,
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
     let string_view_array = as_string_view_array(&args[0])?;
@@ -111,25 +111,28 @@ fn string_view_trim<'a, T: OffsetSizeTrait>(
 
     match args.len() {
         1 => {
-            for (idx, raw) in string_view_array.views().iter().enumerate() {
-                unsafe {
-                    // Safety:
-                    // idx is always smaller or equal to string_view_array.views.len()
-                    let origin_str = string_view_array.value_unchecked(idx);
-                    let trim_str = func(origin_str, " ");
+            let array_iter = string_view_array.iter();
+            let views_iter = string_view_array.views().iter();
+            for (src_str_opt, raw_view) in array_iter.zip(views_iter) {
+                if let Some(src_str) = src_str_opt {
+                    let trim_str = trim_func(src_str, " ");
 
                     // Safety:
                     // `trim_str` is computed from `str::trim_xxx_matches`,
                     // and its addr is ensured to be >= `origin_str`'s
-                    let start = trim_str.as_ptr().offset_from(origin_str.as_ptr()) as u32;
+                    let start =
+                        unsafe { trim_str.as_ptr().offset_from(src_str.as_ptr()) as u32 };
 
                     make_and_append_view(
                         &mut views_buf,
                         &mut null_builder,
-                        raw,
+                        raw_view,
                         trim_str,
                         start,
                     );
+                } else {
+                    null_builder.append_null();
+                    views_buf.push(0);
                 }
             }
         }
@@ -137,6 +140,7 @@ fn string_view_trim<'a, T: OffsetSizeTrait>(
             let characters_array = as_string_view_array(&args[1])?;
 
             if characters_array.len() == 1 {
+                // Only one `trim characters` exist
                 if characters_array.is_null(0) {
                     return Ok(new_null_array(
                         // The schema is expecting utf8 as null
@@ -146,61 +150,34 @@ fn string_view_trim<'a, T: OffsetSizeTrait>(
                 }
 
                 let characters = characters_array.value(0);
-
-                for (idx, raw) in string_view_array.views().iter().enumerate() {
-                    unsafe {
-                        // Safety:
-                        // idx is always smaller or equal to string_view_array.views.len()
-                        let origin_str = string_view_array.value_unchecked(idx);
-                        let trim_str = func(origin_str, characters);
-
-                        // Safety:
-                        // `trim_str` is computed from `str::trim_xxx_matches`,
-                        // and its addr is ensured to be >= `origin_str`'s
-                        let start =
-                            trim_str.as_ptr().offset_from(origin_str.as_ptr()) as u32;
-
-                        make_and_append_view(
-                            &mut views_buf,
-                            &mut null_builder,
-                            raw,
-                            trim_str,
-                            start,
-                        );
-                    }
+                let array_iter = string_view_array.iter();
+                let views_iter = string_view_array.views().iter();
+                for (src_str_opt, raw_view) in array_iter.zip(views_iter) {
+                    trim_and_append_str(
+                        src_str_opt,
+                        Some(characters),
+                        trim_func,
+                        &mut views_buf,
+                        &mut null_builder,
+                        raw_view,
+                    );
                 }
-            }
-
-            for (idx, (raw, characters_opt)) in string_view_array
-                .views()
-                .iter()
-                .zip(characters_array.iter())
-                .enumerate()
-            {
-                if let Some(characters) = characters_opt {
-                    unsafe {
-                        // Safety:
-                        // idx is always smaller or equal to string_view_array.views.len()
-                        let origin_str = string_view_array.value_unchecked(idx);
-                        let trim_str = func(origin_str, characters);
-
-                        // Safety:
-                        // `trim_str` is computed from `str::trim_xxx_matches`,
-                        // and its addr is ensured to be >= `origin_str`'s
-                        let start =
-                            trim_str.as_ptr().offset_from(origin_str.as_ptr()) as u32;
-
-                        make_and_append_view(
-                            &mut views_buf,
-                            &mut null_builder,
-                            raw,
-                            trim_str,
-                            start,
-                        );
-                    }
-                } else {
-                    null_builder.append_null();
-                    views_buf.push(0);
+            } else {
+                // A specific `trim characters` for a row in the string view array
+                let characters_iter = characters_array.iter();
+                let array_iter = string_view_array.iter();
+                let views_iter = string_view_array.views().iter();
+                for ((src_str_opt, raw_view), characters_opt) in
+                    array_iter.zip(views_iter).zip(characters_iter)
+                {
+                    trim_and_append_str(
+                        src_str_opt,
+                        characters_opt,
+                        trim_func,
+                        &mut views_buf,
+                        &mut null_builder,
+                        raw_view,
+                    );
                 }
             }
         }
@@ -225,6 +202,29 @@ fn string_view_trim<'a, T: OffsetSizeTrait>(
             nulls_buf,
         );
         Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+fn trim_and_append_str<'a>(
+    src_str_opt: Option<&'a str>,
+    trim_characters_opt: Option<&'a str>,
+    trim_func: fn(&'a str, &'a str) -> &'a str,
+    views_buf: &mut Vec<u128>,
+    null_builder: &mut NullBufferBuilder,
+    raw: &u128,
+) {
+    if let (Some(src_str), Some(characters)) = (src_str_opt, trim_characters_opt) {
+        let trim_str = trim_func(src_str, characters);
+
+        // Safety:
+        // `trim_str` is computed from `str::trim_xxx_matches`,
+        // and its addr is ensured to be >= `origin_str`'s
+        let start = unsafe { trim_str.as_ptr().offset_from(src_str.as_ptr()) as u32 };
+
+        make_and_append_view(views_buf, null_builder, raw, trim_str, start);
+    } else {
+        null_builder.append_null();
+        views_buf.push(0);
     }
 }
 
