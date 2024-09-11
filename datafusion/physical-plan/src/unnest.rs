@@ -366,76 +366,47 @@ pub struct ListUnnest {
     pub depth: usize,
 }
 
-/// Note: unnest has a big difference in behavior between Postgres and DuckDB
-/// Take this example
-/// 1.Postgres
-/// ```ignored
-/// create table temp (
-///     i integer[][][], j integer[]
-/// )
-/// insert into temp values ('{{{1,2},{3,4}},{{5,6},{7,8}}}', '{1,2}');
-/// select unnest(i), unnest(j) from temp;
+/// This function is used to execute the unnesting on multiple columns all at once, but
+/// one level at a time, and is called n times, where n is the highest recursion level among
+/// the unnest exprs in the query.
+///
+/// For example giving the following query:
+/// ```sql
+/// select unnest(colA, max_depth:=3) as P1, unnest(colA,max_depth:=2) as P2, unnest(colB, max_depth:=1) as P3 from temp;
 /// ```
+/// Then the total times this function being called is 3
 ///
-/// Result
-///     1   1
-///     2   2
-///     3
-///     4
-///     5
-///     6
-///     7
-///     8
-/// 2. DuckDB
-/// ```ignore
-///     create table temp (i integer[][][], j integer[]);
-///     insert into temp values ([[[1,2],[3,4]],[[5,6],[7,8]]], [1,2]);
-///     select unnest(i,recursive:=true), unnest(j,recursive:=true) from temp;
-/// ```
-/// Result:
-///     ┌────────────────────────────────────────────────┬────────────────────────────────────────────────┐
-///     │ unnest(i, "recursive" := CAST('t' AS BOOLEAN)) │ unnest(j, "recursive" := CAST('t' AS BOOLEAN)) │
-///     │                     int32                      │                     int32                      │
-///     ├────────────────────────────────────────────────┼────────────────────────────────────────────────┤
-///     │                                              1 │                                              1 │
-///     │                                              2 │                                              2 │
-///     │                                              3 │                                              1 │
-///     │                                              4 │                                              2 │
-///     │                                              5 │                                              1 │
-///     │                                              6 │                                              2 │
-///     │                                              7 │                                              1 │
-///     │                                              8 │                                              2 │
-///     └────────────────────────────────────────────────┴────────────────────────────────────────────────┘
-/// The following implementation refer to DuckDB's implementation
+/// It needs to be aware of which level the current unnesting is, because if there exists
+/// multiple unnesting on the same column, but with different recursion levels, say
+/// **unnest(colA, max_depth:=3)** and **unnest(colA, max_depth:=2)**, then the unnesting
+/// of expr **unnest(colA, max_depth:=3)** will start at level 3, while unnesting for expr
+/// **unnest(colA, max_depth:=2)** has to start at level 2
 ///
-/// Recursion happens for the highest level first
-/// Demonstatring with examples:
-///
-/// Set "A" as a 3-dimension columns and "B" as an array (1-dimension)
-/// Query: select unnest(A, max_depth:=3), unnest(A,max_depth:=2), unnest(B, max_depth:=1) from temp;
-/// Let's given these projection names P1,P2,P3 respectively
-///
-/// Each combination of (column,depth) result in an entry in temp_batch
-/// This is needed, even if the same column is being unnested for different recursion levels
-///
-/// This function is called with the descending order of recursion
+/// Set *colA* as a 3-dimension columns and *colB* as an array (1-dimension). As stated,
+/// this function is called with the descending order of recursion depth
 ///
 /// Depth = 3
-/// - P1(3-dimension) unnest into temp column temp_P1(2_dimension)
-/// - A(3-dimension) having indice repeated by the unnesting above
+/// - colA(3-dimension) unnest into temp column temp_P1(2_dimension) (unnesting of P1 starts
+///   from this level)
+/// - colA(3-dimension) having indices repeated by the unnesting operation above
+/// - colB(1-dimension) having indices repeated by the unnesting operation above
 ///
 /// Depth = 2
 /// - temp_P1(2-dimension) unnest into temp column temp_P1(1-dimension)
-/// - A(3-dimension) unnest into temp column temp_P2(2-dimension)
+/// - colA(3-dimension) unnest into temp column temp_P2(2-dimension) (unnesting of P2 starts
+///   from this level)
+/// - colB(1-dimension) having indices repeated by the unnesting operation above
 ///
 /// Depth = 1
 /// - temp_P1(1-dimension) unnest into P1
 /// - temp_P2(2-dimension) unnest into P2
-/// - B(1-dimension) unnest into P3
+/// - colB(1-dimension) unnest into P3 (unnesting of P3 starts from this level)
 ///
 /// The returned array will has the same size as the input batch
 /// and only contains original columns that are not being unnested
-fn unnest_at_level(
+/// If there are multiple unnest operations with different recursion level,
+/// the total time of unnesting will be max(recursion)
+fn list_unnest_at_level(
     batch: &[ArrayRef],
     list_type_unnests: &[ListUnnest],
     temp_unnested_arrs: &mut HashMap<ListUnnest, ArrayRef>,
@@ -508,6 +479,56 @@ struct UnnestingResult {
 /// - For struct columns: We will expand the struct columns into multiple subfield columns.
 ///
 /// For columns that don't need to be unnested, repeat their values until reaching the longest length.
+///
+/// Note: unnest has a big difference in behavior between Postgres and DuckDB
+///
+/// Take this example
+///
+/// 1. Postgres
+/// ```ignored
+/// create table temp (
+///     i integer[][][], j integer[]
+/// )
+/// insert into temp values ('{{{1,2},{3,4}},{{5,6},{7,8}}}', '{1,2}');
+/// select unnest(i), unnest(j) from temp;
+/// ```
+///
+/// Result
+/// ```text
+///     1   1
+///     2   2
+///     3
+///     4
+///     5
+///     6
+///     7
+///     8
+/// ```
+/// 2. DuckDB
+/// ```ignore
+///     create table temp (i integer[][][], j integer[]);
+///     insert into temp values ([[[1,2],[3,4]],[[5,6],[7,8]]], [1,2]);
+///     select unnest(i,recursive:=true), unnest(j,recursive:=true) from temp;
+/// ```
+/// Result:
+/// ```text
+///
+///     ┌────────────────────────────────────────────────┬────────────────────────────────────────────────┐
+///     │ unnest(i, "recursive" := CAST('t' AS BOOLEAN)) │ unnest(j, "recursive" := CAST('t' AS BOOLEAN)) │
+///     │                     int32                      │                     int32                      │
+///     ├────────────────────────────────────────────────┼────────────────────────────────────────────────┤
+///     │                                              1 │                                              1 │
+///     │                                              2 │                                              2 │
+///     │                                              3 │                                              1 │
+///     │                                              4 │                                              2 │
+///     │                                              5 │                                              1 │
+///     │                                              6 │                                              2 │
+///     │                                              7 │                                              1 │
+///     │                                              8 │                                              2 │
+///     └────────────────────────────────────────────────┴────────────────────────────────────────────────┘
+/// ```
+///
+/// The following implementation refer to DuckDB's implementation
 fn build_batch(
     batch: &RecordBatch,
     schema: &SchemaRef,
@@ -535,7 +556,7 @@ fn build_batch(
                     true => batch.columns(),
                     false => &flatten_arrs,
                 };
-                let (temp_result, num_rows) = unnest_at_level(
+                let (temp_result, num_rows) = list_unnest_at_level(
                     input,
                     list_type_columns,
                     &mut temp_unnested_result,

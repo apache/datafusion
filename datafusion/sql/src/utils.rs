@@ -456,7 +456,7 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
     /// This downward traversal needs to keep track of:
     /// - Whether or not some unnest expr has been visited from the top util the current node
     /// - If some unnest expr has been visited, maintain a stack of such information, this
-    /// is used to detect if some recursive unnest expr exists (e.g **unnest(unnest(unnest(3d column))))**
+    ///   is used to detect if some recursive unnest expr exists (e.g **unnest(unnest(unnest(3d column))))**
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref unnest_expr) = expr {
             let (data_type, _) =
