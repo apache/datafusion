@@ -4009,6 +4009,22 @@
      </li>
     </ul>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#version">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       version
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id244">
+       Example
+      </a>
+     </li>
+    </ul>
+   </li>
   </ul>
  </li>
 </ul>
@@ -8149,6 +8165,7 @@ Can be a constant, column, or function, and any combination of string operators.
 <ul class="simple">
 <li><p><a class="reference internal" href="#arrow-cast">arrow_cast</a></p></li>
 <li><p><a class="reference internal" href="#arrow-typeof">arrow_typeof</a></p></li>
+<li><p><a class="reference internal" href="#version">version</a></p></li>
 </ul>
 <section id="arrow-cast">
 <h3><code class="docutils literal notranslate"><span class="pre">arrow_cast</span></code><a class="headerlink" href="#arrow-cast" title="Link to this heading">¶</a></h3>
@@ -8206,6 +8223,24 @@ string operators.</p></li>
 <span class="o">|</span> <span class="n">Utf8</span>                      <span class="o">|</span> <span class="n">Int64</span>                  <span class="o">|</span>
 <span class="o">+---------------------------+------------------------+</span>
 <span class="mi">1</span> <span class="n">row</span> <span class="ow">in</span> <span class="nb">set</span><span class="o">.</span> <span class="n">Query</span> <span class="n">took</span> <span class="mf">0.001</span> <span class="n">seconds</span><span class="o">.</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="version">
+<h3><code class="docutils literal notranslate"><span class="pre">version</span></code><a class="headerlink" href="#version" title="Link to this heading">¶</a></h3>
+<p>Returns the version of DataFusion.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">version</span><span class="p">()</span>
+</pre></div>
+</div>
+<section id="id244">
+<h4>Example<a class="headerlink" href="#id244" title="Link to this heading">¶</a></h4>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">version</span><span class="p">();</span>
+<span class="o">+--------------------------------------------+</span>
+<span class="o">|</span> <span class="n">version</span><span class="p">()</span>                                  <span class="o">|</span>
+<span class="o">+--------------------------------------------+</span>
+<span class="o">|</span> <span class="n">Apache</span> <span class="n">DataFusion</span> <span class="mf">41.0.0</span><span class="p">,</span> <span class="n">aarch64</span> <span class="n">on</span> <span class="n">macos</span> <span class="o">|</span>
+<span class="o">+--------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
