@@ -38,9 +38,10 @@ use crate::sorts::streaming_merge;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
+use arrow::array::ArrayRef;
+use arrow::datatypes::{SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
+use arrow_array::{PrimitiveArray, RecordBatchOptions};
 use datafusion_common::utils::transpose;
 use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
@@ -275,12 +276,11 @@ impl BatchPartitioner {
                     create_hashes(&arrays, random_state, hash_buffer)?;
 
                     let mut indices: Vec<_> = (0..*partitions)
-                        .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
+                        .map(|_| Vec::with_capacity(batch.num_rows()))
                         .collect();
 
                     for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize]
-                            .append_value(index as u64);
+                        indices[(*hash % *partitions as u64) as usize].push(index as u64);
                     }
 
                     // Finished building index-arrays for output partitions
@@ -291,8 +291,8 @@ impl BatchPartitioner {
                     let it = indices
                         .into_iter()
                         .enumerate()
-                        .filter_map(|(partition, mut indices)| {
-                            let indices = indices.finish();
+                        .filter_map(|(partition, indices)| {
+                            let indices: PrimitiveArray<UInt64Type> = indices.into();
                             (!indices.is_empty()).then_some((partition, indices))
                         })
                         .map(move |(partition, indices)| {
@@ -309,8 +309,14 @@ impl BatchPartitioner {
                                 })
                                 .collect::<Result<Vec<ArrayRef>>>()?;
 
-                            let batch =
-                                RecordBatch::try_new(batch.schema(), columns).unwrap();
+                            let mut options = RecordBatchOptions::new();
+                            options = options.with_row_count(Some(indices.len()));
+                            let batch = RecordBatch::try_new_with_options(
+                                batch.schema(),
+                                columns,
+                                &options,
+                            )
+                            .unwrap();
 
                             Ok((partition, batch))
                         });
@@ -1025,7 +1031,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::{assert_batches_sorted_eq, exec_err};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
     use tokio::task::JoinSet;
 
@@ -1506,9 +1512,9 @@ mod tests {
         let partitioning = Partitioning::RoundRobinBatch(4);
 
         // setup up context
-        let runtime = Arc::new(
-            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(1, 1.0)).unwrap(),
-        );
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
 
         let task_ctx = TaskContext::default().with_runtime(runtime);
         let task_ctx = Arc::new(task_ctx);

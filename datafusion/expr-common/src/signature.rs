@@ -105,6 +105,11 @@ pub enum TypeSignature {
     Uniform(usize, Vec<DataType>),
     /// Exact number of arguments of an exact type
     Exact(Vec<DataType>),
+    /// The number of arguments that can be coerced to in order
+    /// For example, `Coercible(vec![DataType::Float64])` accepts
+    /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
+    /// since i32 and f32 can be casted to f64
+    Coercible(Vec<DataType>),
     /// Fixed number of arguments of arbitrary types
     /// If a function takes 0 argument, its `TypeSignature` should be `Any(0)`
     Any(usize),
@@ -188,7 +193,7 @@ impl TypeSignature {
             TypeSignature::Numeric(num) => {
                 vec![format!("Numeric({})", num)]
             }
-            TypeSignature::Exact(types) => {
+            TypeSignature::Exact(types) | TypeSignature::Coercible(types) => {
                 vec![Self::join_types(types, ", ")]
             }
             TypeSignature::Any(arg_count) => {
@@ -300,6 +305,14 @@ impl Signature {
             volatility,
         }
     }
+    /// Target coerce types in order
+    pub fn coercible(target_types: Vec<DataType>, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Coercible(target_types),
+            volatility,
+        }
+    }
+
     /// A specified number of arguments of any type
     pub fn any(arg_count: usize, volatility: Volatility) -> Self {
         Signature {

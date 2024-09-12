@@ -392,13 +392,16 @@ impl<'a> PagesPruningStatistics<'a> {
             trace!("No page offsets for row group {row_group_index}, skipping");
             return None;
         };
-        let Some(page_offsets) = row_group_page_offsets.get(parquet_column_index) else {
+        let Some(offset_index_metadata) =
+            row_group_page_offsets.get(parquet_column_index)
+        else {
             trace!(
                 "No page offsets for column {:?} in row group {row_group_index}, skipping",
                 converter.arrow_field()
             );
             return None;
         };
+        let page_offsets = offset_index_metadata.page_locations();
 
         Some(Self {
             row_group_index,

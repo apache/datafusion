@@ -19,12 +19,12 @@
 
 use std::sync::Arc;
 
-use crate::physical_plan::aggregates::AggregateExec;
-use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
-use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::ExecutionPlan;
+use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::ExecutionPlan;
 
 use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
@@ -33,7 +33,7 @@ use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use crate::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
@@ -76,7 +76,7 @@ impl TopKAggregation {
             aggr.group_expr().clone(),
             aggr.aggr_expr().to_vec(),
             aggr.filter_expr().to_vec(),
-            aggr.input().clone(),
+            Arc::clone(aggr.input()),
             aggr.input_schema(),
         )
         .expect("Unable to copy Aggregate!")
@@ -84,7 +84,7 @@ impl TopKAggregation {
         Some(Arc::new(new_aggr))
     }
 
-    fn transform_sort(plan: Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
+    fn transform_sort(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
         let sort = plan.as_any().downcast_ref::<SortExec>()?;
 
         let children = sort.children();
@@ -114,13 +114,13 @@ impl TopKAggregation {
                 }
             } else {
                 // or we continue down whitelisted nodes of other types
-                if !is_cardinality_preserving(plan.clone()) {
+                if !is_cardinality_preserving(Arc::clone(&plan)) {
                     cardinality_preserved = false;
                 }
             }
             Ok(Transformed::no(plan))
         };
-        let child = child.clone().transform_down(closure).data().ok()?;
+        let child = Arc::clone(child).transform_down(closure).data().ok()?;
         let sort = SortExec::new(sort.expr().to_vec(), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());
@@ -142,13 +142,11 @@ impl PhysicalOptimizerRule for TopKAggregation {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if config.optimizer.enable_topk_aggregation {
             plan.transform_down(|plan| {
-                Ok(
-                    if let Some(plan) = TopKAggregation::transform_sort(plan.clone()) {
-                        Transformed::yes(plan)
-                    } else {
-                        Transformed::no(plan)
-                    },
-                )
+                Ok(if let Some(plan) = TopKAggregation::transform_sort(&plan) {
+                    Transformed::yes(plan)
+                } else {
+                    Transformed::no(plan)
+                })
             })
             .data()
         } else {

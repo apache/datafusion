@@ -3856,7 +3856,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan = "Projection: Int32(10)\n  EmptyRelation";
+    let expected_plan = "Projection: Int32(10) AS $1\n  EmptyRelation";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
 
@@ -3872,7 +3872,8 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     ///////////////////
     // replace params with values
     let param_values = vec![ScalarValue::Int32(Some(10))];
-    let expected_plan = "Projection: Int64(1) + Int32(10)\n  EmptyRelation";
+    let expected_plan =
+        "Projection: Int64(1) + Int32(10) AS Int64(1) + $1\n  EmptyRelation";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
 
@@ -3891,7 +3892,9 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         ScalarValue::Int32(Some(10)),
         ScalarValue::Float64(Some(10.0)),
     ];
-    let expected_plan = "Projection: Int64(1) + Int32(10) + Float64(10)\n  EmptyRelation";
+    let expected_plan =
+        "Projection: Int64(1) + Int32(10) + Float64(10) AS Int64(1) + $1 + $2\
+        \n  EmptyRelation";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
 }
@@ -4106,7 +4109,7 @@ fn test_prepare_statement_insert_infer() {
                         \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
                                     CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
                                     CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
-                        \n    Values: (UInt32(1), Utf8(\"Alan\"), Utf8(\"Turing\"))";
+                        \n    Values: (UInt32(1) AS $1, Utf8(\"Alan\") AS $2, Utf8(\"Turing\") AS $3)";
     let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
@@ -4187,7 +4190,7 @@ fn test_prepare_statement_to_plan_multi_params() {
         ScalarValue::from("xyz"),
     ];
     let expected_plan =
-            "Projection: person.id, person.age, Utf8(\"xyz\")\
+            "Projection: person.id, person.age, Utf8(\"xyz\") AS $6\
         \n  Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8(\"abc\")\
         \n    TableScan: person";
 
@@ -4256,7 +4259,7 @@ fn test_prepare_statement_to_plan_value_list() {
     let expected_plan = "Projection: *\
         \n  SubqueryAlias: t\
         \n    Projection: column1 AS num, column2 AS letter\
-        \n      Values: (Int64(1), Utf8(\"a\")), (Int64(2), Utf8(\"b\"))";
+        \n      Values: (Int64(1), Utf8(\"a\") AS $1), (Int64(2), Utf8(\"b\") AS $2)";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
 }

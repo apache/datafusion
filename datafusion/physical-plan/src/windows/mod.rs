@@ -37,14 +37,13 @@ use datafusion_expr::{
     BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
     WindowUDF,
 };
+use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
-    AggregateExpr, ConstExpr, EquivalenceProperties, LexOrdering,
-    PhysicalSortRequirement,
+    ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
-use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use itertools::Itertools;
 
 mod bounded_window_agg_exec;
@@ -56,6 +55,7 @@ use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 pub use window_agg_exec::WindowAggExec;
 
 /// Build field from window function and add it into schema
@@ -141,7 +141,7 @@ fn window_expr_from_aggregate_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
-    aggregate: Arc<dyn AggregateExpr>,
+    aggregate: AggregateFunctionExpr,
 ) -> Arc<dyn WindowExpr> {
     // Is there a potentially unlimited sized window frame?
     let unbounded_window = window_frame.start_bound.is_unbounded();
@@ -401,7 +401,7 @@ pub(crate) fn calc_requirements<
 >(
     partition_by_exprs: impl IntoIterator<Item = T>,
     orderby_sort_exprs: impl IntoIterator<Item = S>,
-) -> Option<Vec<PhysicalSortRequirement>> {
+) -> Option<LexRequirement> {
     let mut sort_reqs = partition_by_exprs
         .into_iter()
         .map(|partition_by| {
@@ -571,7 +571,7 @@ pub fn get_window_mode(
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
-    let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
+    let mut partition_by_reqs: LexRequirement = vec![];
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
     partition_by_reqs.extend(indices.iter().map(|&idx| PhysicalSortRequirement {
         expr: Arc::clone(&partitionby_exprs[idx]),
@@ -728,7 +728,7 @@ mod tests {
                 orderbys.push(PhysicalSortExpr { expr, options });
             }
 
-            let mut expected: Option<Vec<PhysicalSortRequirement>> = None;
+            let mut expected: Option<LexRequirement> = None;
             for (col_name, reqs) in expected_params {
                 let options = reqs.map(|(descending, nulls_first)| SortOptions {
                     descending,

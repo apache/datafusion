@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use itertools::izip;
 
-use arrow::datatypes::{DataType, Field, IntervalUnit};
+use arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 
 use crate::analyzer::AnalyzerRule;
 use crate::utils::NamePreserver;
@@ -29,15 +29,14 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Column,
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like,
-    ScalarFunction, WindowFunction,
+    ScalarFunction, Sort, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, get_input_types, like_coercion,
@@ -56,6 +55,8 @@ use datafusion_expr::{
     Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 
+/// Performs type coercion by determining the schema
+/// and performing the expression rewrites.
 #[derive(Default)]
 pub struct TypeCoercion {}
 
@@ -65,19 +66,39 @@ impl TypeCoercion {
     }
 }
 
+/// Coerce output schema based upon optimizer config.
+fn coerce_output(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
+    if !config.optimizer.expand_views_at_output {
+        return Ok(plan);
+    }
+
+    let outer_refs = plan.expressions();
+    if outer_refs.is_empty() {
+        return Ok(plan);
+    }
+
+    if let Some(dfschema) = transform_schema_to_nonview(plan.schema()) {
+        coerce_plan_expr_for_schema(plan, &dfschema?)
+    } else {
+        Ok(plan)
+    }
+}
+
 impl AnalyzerRule for TypeCoercion {
     fn name(&self) -> &str {
         "type_coercion"
     }
 
-    fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
+    fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
         let empty_schema = DFSchema::empty();
 
+        // recurse
         let transformed_plan = plan
             .transform_up_with_subqueries(|plan| analyze_internal(&empty_schema, plan))?
             .data;
 
-        Ok(transformed_plan)
+        // finish
+        coerce_output(transformed_plan, config)
     }
 }
 
@@ -90,7 +111,7 @@ fn analyze_internal(
 ) -> Result<Transformed<LogicalPlan>> {
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
-    let mut schema = merge_schema(plan.inputs());
+    let mut schema = merge_schema(&plan.inputs());
 
     if let LogicalPlan::TableScan(ts) = &plan {
         let source_schema = DFSchema::try_from_qualified_schema(
@@ -118,9 +139,9 @@ fn analyze_internal(
     let name_preserver = NamePreserver::new(&plan);
     // apply coercion rewrite all expressions in the plan individually
     plan.map_expressions(|expr| {
-        let original_name = name_preserver.save(&expr)?;
-        expr.rewrite(&mut expr_rewrite)?
-            .map_data(|expr| original_name.restore(expr))
+        let original_name = name_preserver.save(&expr);
+        expr.rewrite(&mut expr_rewrite)
+            .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     })?
     // some plans need extra coercion after their expressions are coerced
     .map_data(|plan| expr_rewrite.coerce_plan(plan))?
@@ -128,16 +149,23 @@ fn analyze_internal(
     .map_data(|plan| plan.recompute_schema())
 }
 
-pub(crate) struct TypeCoercionRewriter<'a> {
+/// Rewrite expressions to apply type coercion.
+pub struct TypeCoercionRewriter<'a> {
     pub(crate) schema: &'a DFSchema,
 }
 
 impl<'a> TypeCoercionRewriter<'a> {
+    /// Create a new [`TypeCoercionRewriter`] with a provided schema
+    /// representing both the inputs and output of the [`LogicalPlan`] node.
     fn new(schema: &'a DFSchema) -> Self {
         Self { schema }
     }
 
-    fn coerce_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
+    /// Coerce the [`LogicalPlan`].
+    ///
+    /// Refer to [`TypeCoercionRewriter::coerce_join`] and [`TypeCoercionRewriter::coerce_union`]
+    /// for type-coercion approach.
+    pub fn coerce_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
@@ -153,7 +181,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     ///
     /// For example, on_exprs like `t1.a = t2.b AND t1.x = t2.y` will be stored
     /// as a list of `(t1.a, t2.b), (t1.x, t2.y)`
-    fn coerce_join(&mut self, mut join: Join) -> Result<LogicalPlan> {
+    pub fn coerce_join(&mut self, mut join: Join) -> Result<LogicalPlan> {
         join.on = join
             .on
             .into_iter()
@@ -176,7 +204,7 @@ impl<'a> TypeCoercionRewriter<'a> {
 
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
     /// This occurs after wildcard expansion and the coercion of the input expressions.
-    fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
+    pub fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
         let union_schema = Arc::new(coerce_union_schema(&union_plan.inputs)?);
         let new_inputs = union_plan
             .inputs
@@ -241,15 +269,19 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 subquery,
                 outer_ref_columns,
             }) => {
-                let new_plan = analyze_internal(self.schema, unwrap_arc(subquery))?.data;
+                let new_plan =
+                    analyze_internal(self.schema, Arc::unwrap_or_clone(subquery))?.data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
                 })))
             }
             Expr::Exists(Exists { subquery, negated }) => {
-                let new_plan =
-                    analyze_internal(self.schema, unwrap_arc(subquery.subquery))?.data;
+                let new_plan = analyze_internal(
+                    self.schema,
+                    Arc::unwrap_or_clone(subquery.subquery),
+                )?
+                .data;
                 Ok(Transformed::yes(Expr::Exists(Exists {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
@@ -263,8 +295,11 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                 subquery,
                 negated,
             }) => {
-                let new_plan =
-                    analyze_internal(self.schema, unwrap_arc(subquery.subquery))?.data;
+                let new_plan = analyze_internal(
+                    self.schema,
+                    Arc::unwrap_or_clone(subquery.subquery),
+                )?
+                .data;
                 let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
                 let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
@@ -491,13 +526,61 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
             | Expr::Negative(_)
             | Expr::Cast(_)
             | Expr::TryCast(_)
-            | Expr::Sort(_)
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn(_, _) => Ok(Transformed::no(expr)),
         }
     }
+}
+
+/// Transform a schema to use non-view types for Utf8View and BinaryView
+fn transform_schema_to_nonview(dfschema: &DFSchemaRef) -> Option<Result<DFSchema>> {
+    let metadata = dfschema.as_arrow().metadata.clone();
+    let mut transformed = false;
+
+    let (qualifiers, transformed_fields): (Vec<Option<TableReference>>, Vec<Arc<Field>>) =
+        dfschema
+            .iter()
+            .map(|(qualifier, field)| match field.data_type() {
+                DataType::Utf8View => {
+                    transformed = true;
+                    (
+                        qualifier.cloned() as Option<TableReference>,
+                        Arc::new(Field::new(
+                            field.name(),
+                            DataType::LargeUtf8,
+                            field.is_nullable(),
+                        )),
+                    )
+                }
+                DataType::BinaryView => {
+                    transformed = true;
+                    (
+                        qualifier.cloned() as Option<TableReference>,
+                        Arc::new(Field::new(
+                            field.name(),
+                            DataType::LargeBinary,
+                            field.is_nullable(),
+                        )),
+                    )
+                }
+                _ => (
+                    qualifier.cloned() as Option<TableReference>,
+                    Arc::clone(field),
+                ),
+            })
+            .unzip();
+
+    if !transformed {
+        return None;
+    }
+
+    let schema = Schema::new_with_metadata(transformed_fields, metadata);
+    Some(DFSchema::from_field_specific_qualified_schema(
+        qualifiers,
+        &Arc::new(schema),
+    ))
 }
 
 /// Casts the given `value` to `target_type`. Note that this function
@@ -530,12 +613,12 @@ fn coerce_scalar(target_type: &DataType, value: &ScalarValue) -> Result<ScalarVa
 /// Downstream code uses this signal to treat these values as *unbounded*.
 fn coerce_scalar_range_aware(
     target_type: &DataType,
-    value: ScalarValue,
+    value: &ScalarValue,
 ) -> Result<ScalarValue> {
-    coerce_scalar(target_type, &value).or_else(|err| {
+    coerce_scalar(target_type, value).or_else(|err| {
         // If type coercion fails, check if the largest type in family works:
         if let Some(largest_type) = get_widest_type_in_family(target_type) {
-            coerce_scalar(largest_type, &value).map_or_else(
+            coerce_scalar(largest_type, value).map_or_else(
                 |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
                 |_| ScalarValue::try_from(target_type),
             )
@@ -564,11 +647,11 @@ fn coerce_frame_bound(
 ) -> Result<WindowFrameBound> {
     match bound {
         WindowFrameBound::Preceding(v) => {
-            coerce_scalar_range_aware(target_type, v).map(WindowFrameBound::Preceding)
+            coerce_scalar_range_aware(target_type, &v).map(WindowFrameBound::Preceding)
         }
         WindowFrameBound::CurrentRow => Ok(WindowFrameBound::CurrentRow),
         WindowFrameBound::Following(v) => {
-            coerce_scalar_range_aware(target_type, v).map(WindowFrameBound::Following)
+            coerce_scalar_range_aware(target_type, &v).map(WindowFrameBound::Following)
         }
     }
 }
@@ -578,12 +661,12 @@ fn coerce_frame_bound(
 fn coerce_window_frame(
     window_frame: WindowFrame,
     schema: &DFSchema,
-    expressions: &[Expr],
+    expressions: &[Sort],
 ) -> Result<WindowFrame> {
     let mut window_frame = window_frame;
     let current_types = expressions
         .iter()
-        .map(|e| e.get_type(schema))
+        .map(|s| s.expr.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
@@ -809,7 +892,10 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 }
 
 /// Get a common schema that is compatible with all inputs of UNION.
-fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
+///
+/// This method presumes that the wildcard expansion is unneeded, or has already
+/// been applied.
+pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
     let base_schema = inputs[0].schema();
     let mut union_datatypes = base_schema
         .fields()
@@ -918,10 +1004,11 @@ mod test {
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
 
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
-    use datafusion_expr::logical_plan::{EmptyRelation, Projection};
+    use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
@@ -934,7 +1021,7 @@ mod test {
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
     };
-    use crate::test::assert_analyzed_plan_eq;
+    use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -963,6 +1050,155 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: a < CAST(UInt32(2) AS Float64)\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
+    }
+
+    fn coerce_on_output_if_viewtype(plan: LogicalPlan, expected: &str) -> Result<()> {
+        let mut options = ConfigOptions::default();
+        options.optimizer.expand_views_at_output = true;
+
+        assert_analyzed_plan_with_config_eq(
+            options,
+            Arc::new(TypeCoercion::new()),
+            plan.clone(),
+            expected,
+        )
+    }
+
+    fn do_not_coerce_on_output(plan: LogicalPlan, expected: &str) -> Result<()> {
+        assert_analyzed_plan_with_config_eq(
+            ConfigOptions::default(),
+            Arc::new(TypeCoercion::new()),
+            plan.clone(),
+            expected,
+        )
+    }
+
+    #[test]
+    fn coerce_utf8view_output() -> Result<()> {
+        // Plan A
+        // scenario: outermost utf8view projection
+        let expr = col("a");
+        let empty = empty_with_type(DataType::Utf8View);
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![expr.clone()],
+            Arc::clone(&empty),
+        )?);
+        // Plan A: no coerce
+        let if_not_coerced = "Projection: a\n  EmptyRelation";
+        do_not_coerce_on_output(plan.clone(), if_not_coerced)?;
+        // Plan A: coerce requested: Utf8View => LargeUtf8
+        let if_coerced = "Projection: CAST(a AS LargeUtf8)\n  EmptyRelation";
+        coerce_on_output_if_viewtype(plan.clone(), if_coerced)?;
+
+        // Plan B
+        // scenario: outermost bool projection
+        let bool_expr = col("a").lt(lit("foo"));
+        let bool_plan = LogicalPlan::Projection(Projection::try_new(
+            vec![bool_expr],
+            Arc::clone(&empty),
+        )?);
+        // Plan B: no coerce
+        let if_not_coerced =
+            "Projection: a < CAST(Utf8(\"foo\") AS Utf8View)\n  EmptyRelation";
+        do_not_coerce_on_output(bool_plan.clone(), if_not_coerced)?;
+        // Plan B: coerce requested: no coercion applied
+        let if_coerced = if_not_coerced;
+        coerce_on_output_if_viewtype(bool_plan, if_coerced)?;
+
+        // Plan C
+        // scenario: with a non-projection root logical plan node
+        let sort_expr = expr.sort(true, true);
+        let sort_plan = LogicalPlan::Sort(Sort {
+            expr: vec![sort_expr],
+            input: Arc::new(plan),
+            fetch: None,
+        });
+        // Plan C: no coerce
+        let if_not_coerced =
+            "Sort: a ASC NULLS FIRST\n  Projection: a\n    EmptyRelation";
+        do_not_coerce_on_output(sort_plan.clone(), if_not_coerced)?;
+        // Plan C: coerce requested: Utf8View => LargeUtf8
+        let if_coerced = "Projection: CAST(a AS LargeUtf8)\n  Sort: a ASC NULLS FIRST\n    Projection: a\n      EmptyRelation";
+        coerce_on_output_if_viewtype(sort_plan.clone(), if_coerced)?;
+
+        // Plan D
+        // scenario: two layers of projections with view types
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![col("a")],
+            Arc::new(sort_plan),
+        )?);
+        // Plan D: no coerce
+        let if_not_coerced = "Projection: a\n  Sort: a ASC NULLS FIRST\n    Projection: a\n      EmptyRelation";
+        do_not_coerce_on_output(plan.clone(), if_not_coerced)?;
+        // Plan B: coerce requested: Utf8View => LargeUtf8 only on outermost
+        let if_coerced = "Projection: CAST(a AS LargeUtf8)\n  Sort: a ASC NULLS FIRST\n    Projection: a\n      EmptyRelation";
+        coerce_on_output_if_viewtype(plan.clone(), if_coerced)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn coerce_binaryview_output() -> Result<()> {
+        // Plan A
+        // scenario: outermost binaryview projection
+        let expr = col("a");
+        let empty = empty_with_type(DataType::BinaryView);
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![expr.clone()],
+            Arc::clone(&empty),
+        )?);
+        // Plan A: no coerce
+        let if_not_coerced = "Projection: a\n  EmptyRelation";
+        do_not_coerce_on_output(plan.clone(), if_not_coerced)?;
+        // Plan A: coerce requested: BinaryView => LargeBinary
+        let if_coerced = "Projection: CAST(a AS LargeBinary)\n  EmptyRelation";
+        coerce_on_output_if_viewtype(plan.clone(), if_coerced)?;
+
+        // Plan B
+        // scenario: outermost bool projection
+        let bool_expr = col("a").lt(lit(vec![8, 1, 8, 1]));
+        let bool_plan = LogicalPlan::Projection(Projection::try_new(
+            vec![bool_expr],
+            Arc::clone(&empty),
+        )?);
+        // Plan B: no coerce
+        let if_not_coerced =
+            "Projection: a < CAST(Binary(\"8,1,8,1\") AS BinaryView)\n  EmptyRelation";
+        do_not_coerce_on_output(bool_plan.clone(), if_not_coerced)?;
+        // Plan B: coerce requested: no coercion applied
+        let if_coerced = if_not_coerced;
+        coerce_on_output_if_viewtype(bool_plan, if_coerced)?;
+
+        // Plan C
+        // scenario: with a non-projection root logical plan node
+        let sort_expr = expr.sort(true, true);
+        let sort_plan = LogicalPlan::Sort(Sort {
+            expr: vec![sort_expr],
+            input: Arc::new(plan),
+            fetch: None,
+        });
+        // Plan C: no coerce
+        let if_not_coerced =
+            "Sort: a ASC NULLS FIRST\n  Projection: a\n    EmptyRelation";
+        do_not_coerce_on_output(sort_plan.clone(), if_not_coerced)?;
+        // Plan C: coerce requested: BinaryView => LargeBinary
+        let if_coerced = "Projection: CAST(a AS LargeBinary)\n  Sort: a ASC NULLS FIRST\n    Projection: a\n      EmptyRelation";
+        coerce_on_output_if_viewtype(sort_plan.clone(), if_coerced)?;
+
+        // Plan D
+        // scenario: two layers of projections with view types
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![col("a")],
+            Arc::new(sort_plan),
+        )?);
+        // Plan D: no coerce
+        let if_not_coerced = "Projection: a\n  Sort: a ASC NULLS FIRST\n    Projection: a\n      EmptyRelation";
+        do_not_coerce_on_output(plan.clone(), if_not_coerced)?;
+        // Plan B: coerce requested: BinaryView => LargeBinary only on outermost
+        let if_coerced = "Projection: CAST(a AS LargeBinary)\n  Sort: a ASC NULLS FIRST\n    Projection: a\n      EmptyRelation";
+        coerce_on_output_if_viewtype(plan.clone(), if_coerced)?;
+
+        Ok(())
     }
 
     #[test]
@@ -1442,26 +1678,26 @@ mod test {
 
     fn cast_helper(
         case: Case,
-        case_when_type: DataType,
-        then_else_type: DataType,
+        case_when_type: &DataType,
+        then_else_type: &DataType,
         schema: &DFSchemaRef,
     ) -> Case {
         let expr = case
             .expr
-            .map(|e| cast_if_not_same_type(e, &case_when_type, schema));
+            .map(|e| cast_if_not_same_type(e, case_when_type, schema));
         let when_then_expr = case
             .when_then_expr
             .into_iter()
             .map(|(when, then)| {
                 (
-                    cast_if_not_same_type(when, &case_when_type, schema),
-                    cast_if_not_same_type(then, &then_else_type, schema),
+                    cast_if_not_same_type(when, case_when_type, schema),
+                    cast_if_not_same_type(then, then_else_type, schema),
                 )
             })
             .collect::<Vec<_>>();
         let else_expr = case
             .else_expr
-            .map(|e| cast_if_not_same_type(e, &then_else_type, schema));
+            .map(|e| cast_if_not_same_type(e, then_else_type, schema));
 
         Case {
             expr,
@@ -1509,8 +1745,8 @@ mod test {
         let then_else_common_type = DataType::Utf8;
         let expected = cast_helper(
             case.clone(),
-            case_when_common_type,
-            then_else_common_type,
+            &case_when_common_type,
+            &then_else_common_type,
             &schema,
         );
         let actual = coerce_case_expression(case, &schema)?;
@@ -1529,8 +1765,8 @@ mod test {
         let then_else_common_type = DataType::Utf8;
         let expected = cast_helper(
             case.clone(),
-            case_when_common_type,
-            then_else_common_type,
+            &case_when_common_type,
+            &then_else_common_type,
             &schema,
         );
         let actual = coerce_case_expression(case, &schema)?;

@@ -48,9 +48,10 @@ use datafusion_expr::{
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, DescribeTable,
     DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView, EmptyRelation,
     Explain, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder,
-    OperateFunctionArg, PlanType, Prepare, SetVariable, Statement as PlanStatement,
-    ToStringifiedPlan, TransactionAccessMode, TransactionConclusion, TransactionEnd,
-    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp,
+    OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr,
+    Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
+    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
+    Volatility, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
@@ -952,7 +953,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         order_exprs: Vec<LexOrdering>,
         schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<Vec<Expr>>> {
+    ) -> Result<Vec<Vec<SortExpr>>> {
         // Ask user to provide a schema if schema is empty.
         if !order_exprs.is_empty() && schema.fields().is_empty() {
             return plan_err!(
@@ -966,8 +967,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let expr_vec =
                 self.order_by_to_sort_expr(expr, schema, planner_context, true, None)?;
             // Verify that columns of all SortExprs exist in the schema:
-            for expr in expr_vec.iter() {
-                for column in expr.column_refs().iter() {
+            for sort in expr_vec.iter() {
+                for column in sort.expr.column_refs().iter() {
                     if !schema.has_column(column) {
                         // Return an error if any column is not in the schema:
                         return plan_err!("Column {column} is not in schema");

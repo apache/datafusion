@@ -15,6 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Technically, all aggregate functions that depend on `expr` crate should be included here.
-
-pub mod aggregate;
+pub(crate) mod catalog;

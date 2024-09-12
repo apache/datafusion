@@ -43,7 +43,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{ready, Stream, StreamExt};
 
 /// Window execution plan
@@ -191,7 +191,7 @@ impl ExecutionPlan for WindowAggExec {
         vec![true]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         if self.ordered_partition_by_indices.len() < partition_bys.len() {

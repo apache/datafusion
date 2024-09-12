@@ -863,6 +863,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             has_header: proto_opts.has_header.first().map(|h| *h != 0),
             delimiter: proto_opts.delimiter[0],
             quote: proto_opts.quote[0],
+            terminator: proto_opts.terminator.first().copied(),
             escape: proto_opts.escape.first().copied(),
             double_quote: proto_opts.has_header.first().map(|h| *h != 0),
             newlines_in_values: proto_opts.newlines_in_values.first().map(|h| *h != 0),
@@ -956,7 +957,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             allow_single_file_parallelism: value.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as usize,
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as usize,
-            schema_force_string_view: value.schema_force_string_view,
+            schema_force_view_types: value.schema_force_view_types,
         })
     }
 }

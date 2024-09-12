@@ -16,6 +16,7 @@
 // under the License.
 
 //! Fuzz Test for various corner cases merging streams of RecordBatches
+
 use std::sync::Arc;
 
 use arrow::{

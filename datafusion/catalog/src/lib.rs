@@ -16,11 +16,13 @@
 // under the License.
 
 mod catalog;
+mod dynamic_file;
 mod schema;
 mod session;
 mod table;
 
 pub use catalog::*;
+pub use dynamic_file::catalog::*;
 pub use schema::*;
 pub use session::*;
 pub use table::*;
