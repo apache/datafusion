@@ -511,7 +511,7 @@ select '1 month'::interval - ts from t;
 
 # interval + date
 query D
-select interval 1 month + '2012-01-01'::date;
+select interval '1 month' + '2012-01-01'::date;
 ----
 2012-02-01
 

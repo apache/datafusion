@@ -62,7 +62,7 @@ h
 query T rowsort
 select i_item_desc
 from test
-where d3_date > d2_date + INTERVAL 5 day AND i_item_desc != 'g';
+where d3_date > d2_date + INTERVAL '5 day' AND i_item_desc != 'g';
 ----
 h
 
@@ -77,8 +77,8 @@ h
 ## Use OR
 query T rowsort
 select i_item_desc from test
-where d3_date > d2_date + INTERVAL 5 day
-   OR d3_date = d2_date + INTERVAL 3 day;
+where d3_date > d2_date + INTERVAL '5 day'
+   OR d3_date = d2_date + INTERVAL '3 day';
 ----
 d
 g

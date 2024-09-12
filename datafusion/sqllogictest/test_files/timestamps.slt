@@ -3156,18 +3156,18 @@ select arrow_cast(123, 'Duration(Nanosecond)') < interval '1 seconds';
 true
 
 query B
-select interval 1 second < arrow_cast(123, 'Duration(Nanosecond)')
+select interval '1 second' < arrow_cast(123, 'Duration(Nanosecond)')
 ----
 false
 
 # interval as LHS
 query B
-select interval 2 second = interval 2 second;
+select interval '2 second' = interval '2 second';
 ----
 true
 
 query B
-select interval 1 second < interval 2 second;
+select interval '1 second' < interval '2 second';
 ----
 true
 

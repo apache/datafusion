@@ -17,7 +17,7 @@
 
 # Use `interval` SQL literal syntax with MySQL dialect
 
-# this should fail generic dialect
+# this should fail with the generic dialect
 query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \+ Utf8 to valid types
 select interval '1' + '1' month
 
