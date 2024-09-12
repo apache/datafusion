@@ -2758,7 +2758,7 @@ fn negative_interval_plus_interval_in_projection() {
 
 #[test]
 fn complex_interval_expression_in_projection() {
-    let sql ="select -interval '2 days' + interval '5 days'+ (-interval '3 days' + interval '5 days');";
+    let sql = "select -interval '2 days' + interval '5 days'+ (-interval '3 days' + interval '5 days');";
     let expected =
     "Projection: IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: -2, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: -3, nanoseconds: 0 }\") + IntervalMonthDayNano(\"IntervalMonthDayNano { months: 0, days: 5, nanoseconds: 0 }\")\n  EmptyRelation";
     quick_test(sql, expected);
