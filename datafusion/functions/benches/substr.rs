@@ -30,7 +30,7 @@ fn create_args_without_count<O: OffsetSizeTrait>(
     size: usize,
     str_len: usize,
     start_half_way: bool,
-    use_string_view: bool,
+    force_view_types: bool,
 ) -> Vec<ColumnarValue> {
     let start_array = Arc::new(Int64Array::from(
         (0..size)
@@ -44,7 +44,7 @@ fn create_args_without_count<O: OffsetSizeTrait>(
             .collect::<Vec<_>>(),
     ));
 
-    if use_string_view {
+    if force_view_types {
         let string_array =
             Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false));
         vec![
@@ -66,7 +66,7 @@ fn create_args_with_count<O: OffsetSizeTrait>(
     size: usize,
     str_len: usize,
     count_max: usize,
-    use_string_view: bool,
+    force_view_types: bool,
 ) -> Vec<ColumnarValue> {
     let start_array =
         Arc::new(Int64Array::from((0..size).map(|_| 1).collect::<Vec<_>>()));
@@ -75,7 +75,7 @@ fn create_args_with_count<O: OffsetSizeTrait>(
         (0..size).map(|_| count).collect::<Vec<_>>(),
     ));
 
-    if use_string_view {
+    if force_view_types {
         let string_array =
             Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false));
         vec![

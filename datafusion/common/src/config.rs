@@ -380,6 +380,10 @@ config_namespace! {
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
 
+        /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
+        /// and `Binary/BinaryLarge` with `BinaryView`.
+        pub schema_force_view_types: bool, default = false
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
@@ -483,10 +487,6 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
-
-        /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
-        /// and `Binary/BinaryLarge` with `BinaryView`.
-        pub schema_force_string_view: bool, default = false
     }
 }
 
@@ -606,6 +606,11 @@ config_namespace! {
 
         /// When set to true, the optimizer will not attempt to convert Union to Interleave
         pub prefer_existing_union: bool, default = false
+
+        /// When set to true, if the returned type is a view type
+        /// then the output will be coerced to a non-view.
+        /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
+        pub expand_views_at_output: bool, default = false
     }
 }
 

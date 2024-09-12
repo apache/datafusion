@@ -28,6 +28,7 @@ use datafusion_common::cast::{
     as_float32_array, as_float64_array, as_generic_list_array, as_int32_array,
     as_int64_array,
 };
+use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::DataFusionError;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -51,7 +52,7 @@ pub(super) struct ArrayDistance {
 impl ArrayDistance {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec!["list_distance".to_string()],
         }
     }
@@ -75,6 +76,21 @@ impl ScalarUDFImpl for ArrayDistance {
             List(_) | LargeList(_) | FixedSizeList(_, _) => Ok(Float64),
             _ => exec_err!("The array_distance function can only accept List/LargeList/FixedSizeList."),
         }
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return exec_err!("array_distance expects exactly two arguments");
+        }
+        let mut result = Vec::new();
+        for arg_type in arg_types {
+            match arg_type {
+                List(_) | LargeList(_) | FixedSizeList(_, _) => result.push(coerced_fixed_size_list_to_list(arg_type)),
+                _ => return exec_err!("The array_distance function can only accept List/LargeList/FixedSizeList."),
+            }
+        }
+
+        Ok(result)
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

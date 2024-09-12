@@ -1454,7 +1454,7 @@ position(substr in origstr)
 
 ### `contains`
 
-Return true if search_string is found within string.
+Return true if search_string is found within string (case-sensitive).
 
 ```
 contains(string, search_string)
@@ -3917,6 +3917,7 @@ sha512(expression)
 
 - [arrow_cast](#arrow_cast)
 - [arrow_typeof](#arrow_typeof)
+- [version](#version)
 
 ### `arrow_cast`
 
@@ -3974,4 +3975,23 @@ arrow_typeof(expression)
 | Utf8                      | Int64                  |
 +---------------------------+------------------------+
 1 row in set. Query took 0.001 seconds.
+```
+
+### `version`
+
+Returns the version of DataFusion.
+
+```
+version()
+```
+
+#### Example
+
+```
+> select version();
++--------------------------------------------+
+| version()                                  |
++--------------------------------------------+
+| Apache DataFusion 41.0.0, aarch64 on macos |
++--------------------------------------------+
 ```

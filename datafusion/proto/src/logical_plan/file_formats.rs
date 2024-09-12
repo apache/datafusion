@@ -406,7 +406,7 @@ impl TableParquetOptionsProto {
                 allow_single_file_parallelism: global_options.global.allow_single_file_parallelism,
                 maximum_parallel_row_group_writers: global_options.global.maximum_parallel_row_group_writers as u64,
                 maximum_buffered_record_batches_per_stream: global_options.global.maximum_buffered_record_batches_per_stream as u64,
-                schema_force_string_view: global_options.global.schema_force_string_view,
+                schema_force_view_types: global_options.global.schema_force_view_types,
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -496,7 +496,7 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             allow_single_file_parallelism: proto.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: proto.maximum_parallel_row_group_writers as usize,
             maximum_buffered_record_batches_per_stream: proto.maximum_buffered_record_batches_per_stream as usize,
-            schema_force_string_view: proto.schema_force_string_view,
+            schema_force_view_types: proto.schema_force_view_types,
         }
     }
 }
