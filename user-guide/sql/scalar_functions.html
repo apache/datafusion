@@ -7445,9 +7445,9 @@ Can be a constant, column, or function, and any combination of array operators.<
 <section id="id208">
 <h4>Arguments<a class="headerlink" href="#id208" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>start</strong>: start of the range</p></li>
-<li><p><strong>end</strong>: end of the range (included)</p></li>
-<li><p><strong>step</strong>: increase by step (can not be 0)</p></li>
+<li><p><strong>start</strong>: start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.</p></li>
+<li><p><strong>end</strong>: end of the series (included). Type must be the same as start.</p></li>
+<li><p><strong>step</strong>: increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.</p></li>
 </ul>
 </section>
 <section id="id209">
@@ -7744,7 +7744,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 <p>Returns an Arrow array between start and stop with step. <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">range(2,</span> <span class="pre">10,</span> <span class="pre">3)</span> <span class="pre">-&gt;</span> <span class="pre">[2,</span> <span class="pre">5,</span> <span class="pre">8]</span></code> or <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">range(DATE</span> <span class="pre">'1992-09-01',</span> <span class="pre">DATE</span> <span class="pre">'1993-03-01',</span> <span class="pre">INTERVAL</span> <span class="pre">'1'</span> <span class="pre">MONTH);</span></code></p>
 <p>The range start..end contains all values with start &lt;= x &lt; end. It is empty if start &gt;= end.</p>
 <p>Step can not be 0 (then the range will be nonsense.).</p>
-<p>Note that when the required range is a number, it accepts (stop), (start, stop), and (start, stop, step) as parameters, but when the required range is a date, it must be 3 non-NULL parameters.
+<p>Note that when the required range is a number, it accepts (stop), (start, stop), and (start, stop, step) as parameters, but when the required range is a date or timestamp, it must be 3 non-NULL parameters.
 For example,</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">);</span>
 <span class="n">SELECT</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">5</span><span class="p">);</span>
@@ -7752,8 +7752,9 @@ For example,</p>
 </pre></div>
 </div>
 <p>are allowed in number ranges</p>
-<p>but in date ranges, only</p>
+<p>but in date and timestamp ranges, only</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">range</span><span class="p">(</span><span class="n">DATE</span> <span class="s1">&#39;1992-09-01&#39;</span><span class="p">,</span> <span class="n">DATE</span> <span class="s1">&#39;1993-03-01&#39;</span><span class="p">,</span> <span class="n">INTERVAL</span> <span class="s1">&#39;1&#39;</span> <span class="n">MONTH</span><span class="p">);</span>
+<span class="n">SELECT</span> <span class="nb">range</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">&#39;1992-09-01&#39;</span><span class="p">,</span> <span class="n">TIMESTAMP</span> <span class="s1">&#39;1993-03-01&#39;</span><span class="p">,</span> <span class="n">INTERVAL</span> <span class="s1">&#39;1&#39;</span> <span class="n">MONTH</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>is allowed, and</p>
@@ -7766,9 +7767,9 @@ For example,</p>
 <section id="id217">
 <h4>Arguments<a class="headerlink" href="#id217" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>start</strong>: start of the range</p></li>
-<li><p><strong>end</strong>: end of the range (not included)</p></li>
-<li><p><strong>step</strong>: increase by step (can not be 0)</p></li>
+<li><p><strong>start</strong>: start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.</p></li>
+<li><p><strong>end</strong>: end of the range (not included). Type must be the same as start.</p></li>
+<li><p><strong>step</strong>: increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.</p></li>
 </ul>
 </section>
 <section id="id218">
