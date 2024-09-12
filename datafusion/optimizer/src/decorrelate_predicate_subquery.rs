@@ -1918,7 +1918,7 @@ mod tests {
         ];
 
         let schema = Schema::new(fields);
-        let table_scan_A = table_scan(Some("\"TEST_A\""), &schema, None)?.build()?;
+        let table_scan_a = table_scan(Some("\"TEST_A\""), &schema, None)?.build()?;
         let table_scan_b = table_scan(Some("\"TEST_B\""), &schema, None)?.build()?;
 
         let subquery = LogicalPlanBuilder::from(table_scan_b)
@@ -1926,7 +1926,7 @@ mod tests {
             .project(vec![lit(1)])?
             .build()?;
 
-        let plan = LogicalPlanBuilder::from(table_scan_A)
+        let plan = LogicalPlanBuilder::from(table_scan_a)
             .filter(exists(Arc::new(subquery)))?
             .project(vec![col("\"TEST_A\".\"B\"")])?
             .build()?;
