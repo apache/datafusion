@@ -80,7 +80,7 @@ LIMIT 10;
 **Important Query Properties**: MEDIAN, approx_percentile_cont functions, high cardinality grouping (17.5M unique users)
 
 ```sql
-SELECT MIN("ResponseStartTiming") tmin, MEDIAN("ResponseStartTiming") tmed, approx_percentile_cont("ResponseStartTiming", 0.95) tp95, approx_percentile_cont("ResponseStartTiming", 0.95) tp99, MAX("ResponseStartTiming") tmax,  "UserID"  
+SELECT MIN("ResponseStartTiming") tmin, MEDIAN("ResponseStartTiming") tmed, approx_percentile_cont("ResponseStartTiming", 0.95) tp95, approx_percentile_cont("ResponseStartTiming", 0.99) tp99, MAX("ResponseStartTiming") tmax,  "UserID"  
 FROM 'hits.parquet' 
 GROUP BY "UserID"
 HAVING tmin > 0 AND tmed > 0
