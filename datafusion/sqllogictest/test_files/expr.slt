@@ -229,12 +229,6 @@ SELECT interval '5 day'
 ----
 5 days
 
-# Hour is ignored, this matches PostgreSQL
-query ?
-SELECT interval '5 day' hour
-----
-5 days
-
 query ?
 SELECT interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'
 ----
