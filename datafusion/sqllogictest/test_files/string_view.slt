@@ -459,6 +459,96 @@ Xiangpeng
 Raphael
 NULL
 
+### Test REGEXP_REPLACE
+
+# Should run REGEXP_REPLACE with Scalar value for utf8view
+query T
+SELECT
+  REGEXP_REPLACE(column1_utf8view, 'e', 'f') AS k
+FROM test;
+----
+Andrfw
+Xiangpfng
+Raphafl
+NULL
+
+# Should run REGEXP_REPLACE with Scalar value for utf8view with flag
+query T
+SELECT
+  REGEXP_REPLACE(column1_utf8view, 'e', 'f', 'i') AS k
+FROM test;
+----
+Andrfw
+Xiangpfng
+Raphafl
+NULL
+
+# Should run REGEXP_REPLACE with Scalar value for utf8
+query T
+SELECT
+  REGEXP_REPLACE(column1_utf8, 'e', 'f') AS k
+FROM test;
+----
+Andrfw
+Xiangpfng
+Raphafl
+NULL
+
+# Should run REGEXP_REPLACE with Scalar value for utf8 with flag
+query T
+SELECT
+  REGEXP_REPLACE(column1_utf8, 'e', 'f', 'i') AS k
+FROM test;
+----
+Andrfw
+Xiangpfng
+Raphafl
+NULL
+
+# Should run REGEXP_REPLACE with ScalarArray value for utf8view
+query T
+SELECT
+  REGEXP_REPLACE(column1_utf8view, lower(column1_utf8view), 'bar') AS k
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+# Should run REGEXP_REPLACE with ScalarArray value for utf8view with flag
+query T
+SELECT
+  REGEXP_REPLACE(column1_utf8view, lower(column1_utf8view), 'bar', 'g') AS k
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+# Should run REGEXP_REPLACE with ScalarArray value for utf8
+query T
+SELECT
+  REGEXP_REPLACE(column1_utf8, lower(column1_utf8), 'bar') AS k
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+# Should run REGEXP_REPLACE with ScalarArray value for utf8 with flag
+query T
+SELECT
+  REGEXP_REPLACE(column1_utf8, lower(column1_utf8), 'bar', 'g') AS k
+FROM test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
 ### Initcap
 
 query TT
