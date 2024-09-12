@@ -425,8 +425,17 @@ mod tests {
         assert!(TypeSignature::UserDefined < TypeSignature::VariadicAny);
         assert!(TypeSignature::UserDefined < TypeSignature::Any(1));
 
-        assert!(TypeSignature::Uniform(1, vec![DataType::Null]) < TypeSignature::Uniform(1, vec![DataType::Boolean]));
-        assert!(TypeSignature::Uniform(1, vec![DataType::Null]) < TypeSignature::Uniform(2, vec![DataType::Null]));
-        assert!(TypeSignature::Uniform(usize::MAX, vec![DataType::Null]) < TypeSignature::Exact(vec![DataType::Null]));
+        assert!(
+            TypeSignature::Uniform(1, vec![DataType::Null])
+                < TypeSignature::Uniform(1, vec![DataType::Boolean])
+        );
+        assert!(
+            TypeSignature::Uniform(1, vec![DataType::Null])
+                < TypeSignature::Uniform(2, vec![DataType::Null])
+        );
+        assert!(
+            TypeSignature::Uniform(usize::MAX, vec![DataType::Null])
+                < TypeSignature::Exact(vec![DataType::Null])
+        );
     }
 }

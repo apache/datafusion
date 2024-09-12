@@ -534,6 +534,7 @@ mod test {
     use datafusion_common::Result;
     use datafusion_expr_common::signature::{Signature, Volatility};
     use std::any::Any;
+    use std::cmp::Ordering;
 
     #[derive(Debug, Clone)]
     struct AWindowUDF {
@@ -611,9 +612,7 @@ mod test {
     fn test_partial_ord() {
         let a1 = WindowUDF::from(AWindowUDF::new());
         let a2 = WindowUDF::from(AWindowUDF::new());
-
-        assert!(!(a1 < a2));
-        assert!(!(a1 > a2));
+        assert_eq!(a1.partial_cmp(&a2), Some(Ordering::Equal));
 
         let b1 = WindowUDF::from(BWindowUDF::new());
         assert!(a1 < b1);

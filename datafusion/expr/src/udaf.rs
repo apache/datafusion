@@ -789,6 +789,7 @@ mod test {
         AccumulatorArgs, StateFieldsArgs,
     };
     use std::any::Any;
+    use std::cmp::Ordering;
 
     #[derive(Debug, Clone)]
     struct AMeanUdf {
@@ -877,8 +878,7 @@ mod test {
         // not intended to exhaustively test all possibilities
         let a1 = AggregateUDF::from(AMeanUdf::new());
         let a2 = AggregateUDF::from(AMeanUdf::new());
-        assert!(!(a1 < a2));
-        assert!(!(a1 > a2));
+        assert_eq!(a1.partial_cmp(&a2), Some(Ordering::Equal));
 
         let b1 = AggregateUDF::from(BMeanUdf::new());
         assert!(a1 < b1);
