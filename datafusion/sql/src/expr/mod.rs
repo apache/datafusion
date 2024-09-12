@@ -27,7 +27,7 @@ use sqlparser::ast::{
 
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
-    ScalarValue, TableReference,
+    ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{InList, WildcardOptions};
@@ -562,7 +562,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 options: WildcardOptions::default(),
             }),
             SQLExpr::QualifiedWildcard(object_name) => Ok(Expr::Wildcard {
-                qualifier: Some(TableReference::from(object_name.to_string())),
+                qualifier: Some(self.object_name_to_table_reference(object_name)?),
                 options: WildcardOptions::default(),
             }),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),

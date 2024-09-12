@@ -544,6 +544,10 @@ impl<'a> DFParser<'a> {
         } else if self.parser.parse_keyword(Keyword::UNBOUNDED) {
             self.parser.expect_keyword(Keyword::EXTERNAL)?;
             self.parse_create_external_table(true)
+        } else if self.parser.parse_keyword(Keyword::TEMPORARY) {
+            Err(ParserError::ParserError(
+                "Creating temporary tables is Unsupported".to_owned(),
+            ))
         } else {
             Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
         }
