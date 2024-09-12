@@ -40,13 +40,12 @@ use crate::{
     RecordBatchStream, SendableRecordBatchStream,
 };
 
-use arrow::array::{
-    BooleanBufferBuilder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder,
-};
+use arrow::array::{BooleanBufferBuilder, UInt32Array, UInt64Array};
 use arrow::compute::concat_batches;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
+use arrow_array::PrimitiveArray;
 use datafusion_common::{exec_datafusion_err, JoinSide, Result, Statistics};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -573,23 +572,21 @@ fn join_left_and_right_batch(
             )
         })?;
 
-    let mut left_indices_builder = UInt64Builder::new();
-    let mut right_indices_builder = UInt32Builder::new();
+    let mut left_indices_builder: Vec<u64> = vec![];
+    let mut right_indices_builder: Vec<u32> = vec![];
     for (left_side, right_side) in indices {
-        left_indices_builder
-            .append_values(left_side.values(), &vec![true; left_side.len()]);
-        right_indices_builder
-            .append_values(right_side.values(), &vec![true; right_side.len()]);
+        left_indices_builder.extend(left_side.values());
+        right_indices_builder.extend(right_side.values());
     }
 
-    let left_side = left_indices_builder.finish();
-    let right_side = right_indices_builder.finish();
+    let left_side: PrimitiveArray<UInt64Type> = left_indices_builder.into();
+    let right_side = right_indices_builder.into();
     // set the left bitmap
     // and only full join need the left bitmap
     if need_produce_result_in_final(join_type) {
         let mut bitmap = visited_left_side.lock();
-        left_side.iter().flatten().for_each(|x| {
-            bitmap.set_bit(x as usize, true);
+        left_side.values().iter().for_each(|x| {
+            bitmap.set_bit(*x as usize, true);
         });
     }
     // adjust the two side indices base on the join type
@@ -647,7 +644,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
@@ -1022,8 +1019,9 @@ mod tests {
         ];
 
         for join_type in join_types {
-            let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
-            let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(100, 1.0)
+                .build_arc()?;
             let task_ctx = TaskContext::default().with_runtime(runtime);
             let task_ctx = Arc::new(task_ctx);
 

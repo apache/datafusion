@@ -18,7 +18,6 @@
 //! [`EliminateOuterJoin`] converts `LEFT/RIGHT/FULL` joins to `INNER` joins
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, Result};
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan};
 use datafusion_expr::{Expr, Filter, Operator};
 
@@ -79,7 +78,7 @@ impl OptimizerRule for EliminateOuterJoin {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Filter(mut filter) => match unwrap_arc(filter.input) {
+            LogicalPlan::Filter(mut filter) => match Arc::unwrap_or_clone(filter.input) {
                 LogicalPlan::Join(join) => {
                     let mut non_nullable_cols: Vec<Column> = vec![];
 

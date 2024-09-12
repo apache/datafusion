@@ -22,7 +22,6 @@ use std::sync::Arc;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::JoinType;
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, Projection, Union};
 
@@ -184,7 +183,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                 } else if new_inputs.len() == 1 {
                     let mut new_inputs = new_inputs;
                     let input_plan = new_inputs.pop().unwrap(); // length checked
-                    let child = unwrap_arc(input_plan);
+                    let child = Arc::unwrap_or_clone(input_plan);
                     if child.schema().eq(plan.schema()) {
                         Ok(Transformed::yes(child))
                     } else {

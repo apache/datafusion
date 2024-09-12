@@ -23,7 +23,7 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::Result;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statistics};
+use datafusion_physical_plan::{expressions, ExecutionPlan, Statistics};
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::stats::Precision;
@@ -58,12 +58,12 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 if let Some((non_null_rows, name)) =
-                    take_optimizable_column_and_table_count(&**expr, &stats)
+                    take_optimizable_column_and_table_count(expr, &stats)
                 {
                     projections.push((expressions::lit(non_null_rows), name.to_owned()));
-                } else if let Some((min, name)) = take_optimizable_min(&**expr, &stats) {
+                } else if let Some((min, name)) = take_optimizable_min(expr, &stats) {
                     projections.push((expressions::lit(min), name.to_owned()));
-                } else if let Some((max, name)) = take_optimizable_max(&**expr, &stats) {
+                } else if let Some((max, name)) = take_optimizable_max(expr, &stats) {
                     projections.push((expressions::lit(max), name.to_owned()));
                 } else {
                     // TODO: we need all aggr_expr to be resolved (cf TODO fullres)
@@ -137,7 +137,7 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
 
 /// If this agg_expr is a count that can be exactly derived from the statistics, return it.
 fn take_optimizable_column_and_table_count(
-    agg_expr: &dyn AggregateExpr,
+    agg_expr: &AggregateFunctionExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
@@ -174,7 +174,7 @@ fn take_optimizable_column_and_table_count(
 
 /// If this agg_expr is a min that is exactly defined in the statistics, return it.
 fn take_optimizable_min(
-    agg_expr: &dyn AggregateExpr,
+    agg_expr: &AggregateFunctionExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     if let Precision::Exact(num_rows) = &stats.num_rows {
@@ -183,7 +183,7 @@ fn take_optimizable_min(
                 // MIN/MAX with 0 rows is always null
                 if is_min(agg_expr) {
                     if let Ok(min_data_type) =
-                        ScalarValue::try_from(agg_expr.field().unwrap().data_type())
+                        ScalarValue::try_from(agg_expr.field().data_type())
                     {
                         return Some((min_data_type, agg_expr.name().to_string()));
                     }
@@ -220,7 +220,7 @@ fn take_optimizable_min(
 
 /// If this agg_expr is a max that is exactly defined in the statistics, return it.
 fn take_optimizable_max(
-    agg_expr: &dyn AggregateExpr,
+    agg_expr: &AggregateFunctionExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     if let Precision::Exact(num_rows) = &stats.num_rows {
@@ -229,7 +229,7 @@ fn take_optimizable_max(
                 // MIN/MAX with 0 rows is always null
                 if is_max(agg_expr) {
                     if let Ok(max_data_type) =
-                        ScalarValue::try_from(agg_expr.field().unwrap().data_type())
+                        ScalarValue::try_from(agg_expr.field().data_type())
                     {
                         return Some((max_data_type, agg_expr.name().to_string()));
                     }
@@ -266,33 +266,27 @@ fn take_optimizable_max(
 
 // TODO: Move this check into AggregateUDFImpl
 // https://github.com/apache/datafusion/issues/11153
-fn is_non_distinct_count(agg_expr: &dyn AggregateExpr) -> bool {
-    if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-        if agg_expr.fun().name() == "count" && !agg_expr.is_distinct() {
-            return true;
-        }
+fn is_non_distinct_count(agg_expr: &AggregateFunctionExpr) -> bool {
+    if agg_expr.fun().name() == "count" && !agg_expr.is_distinct() {
+        return true;
     }
     false
 }
 
 // TODO: Move this check into AggregateUDFImpl
 // https://github.com/apache/datafusion/issues/11153
-fn is_min(agg_expr: &dyn AggregateExpr) -> bool {
-    if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-        if agg_expr.fun().name().to_lowercase() == "min" {
-            return true;
-        }
+fn is_min(agg_expr: &AggregateFunctionExpr) -> bool {
+    if agg_expr.fun().name().to_lowercase() == "min" {
+        return true;
     }
     false
 }
 
 // TODO: Move this check into AggregateUDFImpl
 // https://github.com/apache/datafusion/issues/11153
-fn is_max(agg_expr: &dyn AggregateExpr) -> bool {
-    if let Some(agg_expr) = agg_expr.as_any().downcast_ref::<AggregateFunctionExpr>() {
-        if agg_expr.fun().name().to_lowercase() == "max" {
-            return true;
-        }
+fn is_max(agg_expr: &AggregateFunctionExpr) -> bool {
+    if agg_expr.fun().name().to_lowercase() == "max" {
+        return true;
     }
     false
 }

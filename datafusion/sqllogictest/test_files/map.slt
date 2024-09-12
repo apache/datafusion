@@ -198,6 +198,45 @@ SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33]);
 query error DataFusion error: Execution error: map key cannot be null
 SELECT MAP(['POST', 'HEAD', null], [41, 33, 30]);
 
+statement error DataFusion error: Execution error: map key cannot be null
+CREATE TABLE duplicated_keys_table 
+AS VALUES
+  (MAP {1: [1, NULL, 3], NULL: [4, NULL, 6]});
+
+# Test duplicate keys
+# key is a scalar type
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: POST
+SELECT MAP(['POST', 'HEAD', 'POST'], [41, 33, null]);
+
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: POST
+SELECT MAP(make_array('POST', 'HEAD', 'POST'), make_array(41, 33, 30));
+
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: POST
+SELECT make_map('POST', 41, 'HEAD', 33, 'POST', 30);
+
+statement error DataFusion error: Execution error: map key must be unique, duplicate key found: 1
+CREATE TABLE duplicated_keys_table 
+AS VALUES
+  (MAP {1: [1, NULL, 3], 1: [4, NULL, 6]});
+
+statement ok
+create table duplicate_keys_table as values
+('a', 1, 'a', 10, ['k1', 'k1'], [1, 2]);
+
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: a
+SELECT make_map(column1, column2, column3, column4) FROM duplicate_keys_table;
+
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: k1
+SELECT map(column5, column6) FROM duplicate_keys_table;
+
+# key is a nested type
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[1, 2\]
+SELECT MAP([[1,2], [1,2], []], [41, 33, null]);
+
+query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[\{1:1\}\]
+SELECT MAP([Map {1:'1'}, Map {1:'1'}, Map {2:'2'}], [41, 33, null]);
+
+
 query ?
 SELECT MAP(make_array('POST', 'HEAD', 'PATCH'), make_array(41, 33, 30));
 ----
@@ -376,11 +415,10 @@ SELECT MAP {'a':1, 'b':2, 'c':3 }['a'] FROM t;
 1
 1
 
-# TODO(https://github.com/sqlparser-rs/sqlparser-rs/pull/1361): support parsing an empty map. Enable this after upgrading sqlparser-rs.
-# query ?
-# SELECT MAP {};
-# ----
-# {}
+query ?
+SELECT MAP {};
+----
+{}
 
 # values contain null
 query ?
@@ -568,6 +606,101 @@ select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7)
 [[1, , 3]] [] []
 [] [[4, , 6]] []
 [] [] [[1, , 3]]
+
+# Tests for map_keys
+
+query ?
+SELECT map_keys(MAP { 'a': 1, 2: 3 });
+----
+[a, 2]
+
+query ?
+SELECT map_keys(MAP {'a':1, 'b':2, 'c':3 }) FROM t;
+----
+[a, b, c]
+[a, b, c]
+[a, b, c]
+
+query ?
+SELECT map_keys(Map{column1: column2, column3: column4}) FROM t;
+----
+[a, k1]
+[b, k3]
+[d, k5]
+
+query ?
+SELECT map_keys(map(column5, column6)) FROM t;
+----
+[k1, k2]
+[k3]
+[k5]
+
+query ?
+SELECT map_keys(map(column8, column9)) FROM t;
+----
+[[1, 2, 3]]
+[[4]]
+[[1, 2]]
+
+query ?
+SELECT map_keys(Map{});
+----
+[]
+
+query ?
+SELECT map_keys(column1) from map_array_table_1;
+----
+[1, 2, 3]
+[4, 5, 6]
+[7, 8, 9]
+
+
+# Tests for map_values
+
+query ?
+SELECT map_values(MAP { 'a': 1, 2: 3 });
+----
+[1, 3]
+
+query ?
+SELECT map_values(MAP {'a':1, 'b':2, 'c':3 }) FROM t;
+----
+[1, 2, 3]
+[1, 2, 3]
+[1, 2, 3]
+
+query ?
+SELECT map_values(Map{column1: column2, column3: column4}) FROM t;
+----
+[1, 10]
+[2, 30]
+[4, 50]
+
+query ?
+SELECT map_values(map(column5, column6)) FROM t;
+----
+[1, 2]
+[3]
+[5]
+
+query ?
+SELECT map_values(map(column8, column9)) FROM t;
+----
+[a]
+[b]
+[c]
+
+query ?
+SELECT map_values(Map{});
+----
+[]
+
+query ?
+SELECT map_values(column1) from map_array_table_1;
+----
+[[1, , 3], [4, , 6], [7, 8, 9]]
+[[1, , 3], [4, , 6], [7, 8, 9]]
+[[1, , 3], [9, , 6], [7, 8, 9]]
 
 statement ok
 drop table map_array_table_1;

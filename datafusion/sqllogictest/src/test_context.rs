@@ -99,6 +99,9 @@ impl TestContext {
                     return None;
                 }
             }
+            "dynamic_file.slt" => {
+                test_ctx.ctx = test_ctx.ctx.enable_url_table();
+            }
             "joins.slt" => {
                 info!("Registering partition table tables");
                 let example_udf = create_example_udf();

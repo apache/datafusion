@@ -88,7 +88,11 @@ impl ValuesExec {
                     .and_then(ScalarValue::iter_to_array)
             })
             .collect::<Result<Vec<_>>>()?;
-        let batch = RecordBatch::try_new(Arc::clone(&schema), arr)?;
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&schema),
+            arr,
+            &RecordBatchOptions::new().with_row_count(Some(n_row)),
+        )?;
         let data: Vec<RecordBatch> = vec![batch];
         Self::try_new_from_batches(schema, data)
     }

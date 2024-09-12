@@ -34,6 +34,7 @@ pub mod array_has;
 pub mod cardinality;
 pub mod concat;
 pub mod dimension;
+pub mod distance;
 pub mod empty;
 pub mod except;
 pub mod expr_ext;
@@ -43,6 +44,8 @@ pub mod length;
 pub mod make_array;
 pub mod map;
 pub mod map_extract;
+pub mod map_keys;
+pub mod map_values;
 pub mod planner;
 pub mod position;
 pub mod range;
@@ -73,6 +76,7 @@ pub mod expr_fn {
     pub use super::concat::array_prepend;
     pub use super::dimension::array_dims;
     pub use super::dimension::array_ndims;
+    pub use super::distance::array_distance;
     pub use super::empty::array_empty;
     pub use super::except::array_except;
     pub use super::extract::array_element;
@@ -83,6 +87,8 @@ pub mod expr_fn {
     pub use super::length::array_length;
     pub use super::make_array::make_array;
     pub use super::map_extract::map_extract;
+    pub use super::map_keys::map_keys;
+    pub use super::map_values::map_values;
     pub use super::position::array_position;
     pub use super::position::array_positions;
     pub use super::range::gen_series;
@@ -128,6 +134,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         array_has::array_has_any_udf(),
         empty::array_empty_udf(),
         length::array_length_udf(),
+        distance::array_distance_udf(),
         flatten::flatten_udf(),
         sort::array_sort_udf(),
         repeat::array_repeat_udf(),
@@ -146,6 +153,8 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         replace::array_replace_udf(),
         map::map_udf(),
         map_extract::map_extract_udf(),
+        map_keys::map_keys_udf(),
+        map_values::map_values_udf(),
     ]
 }
 

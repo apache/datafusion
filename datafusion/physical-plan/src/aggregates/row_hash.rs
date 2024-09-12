@@ -27,11 +27,10 @@ use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
     PhysicalGroupBy,
 };
-use crate::common::IPCWriter;
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge;
-use crate::spill::read_spill_as_stream;
+use crate::spill::{read_spill_as_stream, spill_record_batch_by_size};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -47,10 +46,9 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{
-    AggregateExpr, GroupsAccumulatorAdapter, PhysicalSortExpr,
-};
+use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -76,35 +74,45 @@ use super::AggregateExec;
 
 /// This encapsulates the spilling state
 struct SpillState {
-    /// If data has previously been spilled, the locations of the
-    /// spill files (in Arrow IPC format)
-    spills: Vec<RefCountedTempFile>,
-
+    // ========================================================================
+    // PROPERTIES:
+    // These fields are initialized at the start and remain constant throughout
+    // the execution.
+    // ========================================================================
     /// Sorting expression for spilling batches
     spill_expr: Vec<PhysicalSortExpr>,
 
     /// Schema for spilling batches
     spill_schema: SchemaRef,
 
-    /// true when streaming merge is in progress
-    is_stream_merging: bool,
-
     /// aggregate_arguments for merging spilled data
     merging_aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
     /// GROUP BY expressions for merging spilled data
     merging_group_by: PhysicalGroupBy,
+
+    // ========================================================================
+    // STATES:
+    // Fields changes during execution. Can be buffer, or state flags that
+    // influence the execution in parent `GroupedHashAggregateStream`
+    // ========================================================================
+    /// If data has previously been spilled, the locations of the
+    /// spill files (in Arrow IPC format)
+    spills: Vec<RefCountedTempFile>,
+
+    /// true when streaming merge is in progress
+    is_stream_merging: bool,
 }
 
 /// Tracks if the aggregate should skip partial aggregations
 ///
 /// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
 struct SkipAggregationProbe {
-    /// Number of processed input rows (updated during probing)
-    input_rows: usize,
-    /// Number of total group values for `input_rows` (updated during probing)
-    num_groups: usize,
-
+    // ========================================================================
+    // PROPERTIES:
+    // These fields are initialized at the start and remain constant throughout
+    // the execution.
+    // ========================================================================
     /// Aggregation ratio check performed when the number of input rows exceeds
     /// this threshold (from `SessionConfig`)
     probe_rows_threshold: usize,
@@ -112,6 +120,16 @@ struct SkipAggregationProbe {
     /// (from `SessionConfig`). If the ratio exceeds this value, aggregation
     /// is skipped and input rows are directly converted to output
     probe_ratio_threshold: f64,
+
+    // ========================================================================
+    // STATES:
+    // Fields changes during execution. Can be buffer, or state flags that
+    // influence the exeuction in parent `GroupedHashAggregateStream`
+    // ========================================================================
+    /// Number of processed input rows (updated during probing)
+    input_rows: usize,
+    /// Number of total group values for `input_rows` (updated during probing)
+    num_groups: usize,
 
     /// Flag indicating further data aggregation may be skipped (decision made
     /// when probing complete)
@@ -316,16 +334,14 @@ impl SkipAggregationProbe {
 /// └─────────────────┘    └─────────────────┘
 /// ```
 pub(crate) struct GroupedHashAggregateStream {
+    // ========================================================================
+    // PROPERTIES:
+    // These fields are initialized at the start and remain constant throughout
+    // the execution.
+    // ========================================================================
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
-
-    /// Accumulators, one for each `AggregateExpr` in the query
-    ///
-    /// For example, if the query has aggregates, `SUM(x)`,
-    /// `COUNT(y)`, there will be two accumulators, each one
-    /// specialized for that particular aggregate and its input types
-    accumulators: Vec<Box<dyn GroupsAccumulator>>,
 
     /// Arguments to pass to each accumulator.
     ///
@@ -347,38 +363,8 @@ pub(crate) struct GroupedHashAggregateStream {
     /// GROUP BY expressions
     group_by: PhysicalGroupBy,
 
-    /// The memory reservation for this grouping
-    reservation: MemoryReservation,
-
-    /// An interning store of group keys
-    group_values: Box<dyn GroupValues>,
-
-    /// scratch space for the current input [`RecordBatch`] being
-    /// processed. Reused across batches here to avoid reallocations
-    current_group_indices: Vec<usize>,
-
-    /// Tracks if this stream is generating input or output
-    exec_state: ExecutionState,
-
-    /// Execution metrics
-    baseline_metrics: BaselineMetrics,
-
     /// max rows in output RecordBatches
     batch_size: usize,
-
-    /// Optional ordering information, that might allow groups to be
-    /// emitted from the hash table prior to seeing the end of the
-    /// input
-    group_ordering: GroupOrdering,
-
-    /// Have we seen the end of the input
-    input_done: bool,
-
-    /// The [`RuntimeEnv`] associated with the [`TaskContext`] argument
-    runtime: Arc<RuntimeEnv>,
-
-    /// The spill state object
-    spill_state: SpillState,
 
     /// Optional soft limit on the number of `group_values` in a batch
     /// If the number of `group_values` in a single batch exceeds this value,
@@ -386,9 +372,63 @@ pub(crate) struct GroupedHashAggregateStream {
     /// output mode and emits all groups.
     group_values_soft_limit: Option<usize>,
 
+    // ========================================================================
+    // STATE FLAGS:
+    // These fields will be updated during the execution. And control the flow of
+    // the execution.
+    // ========================================================================
+    /// Tracks if this stream is generating input or output
+    exec_state: ExecutionState,
+
+    /// Have we seen the end of the input
+    input_done: bool,
+
+    // ========================================================================
+    // STATE BUFFERS:
+    // These fields will accumulate intermediate results during the execution.
+    // ========================================================================
+    /// An interning store of group keys
+    group_values: Box<dyn GroupValues>,
+
+    /// scratch space for the current input [`RecordBatch`] being
+    /// processed. Reused across batches here to avoid reallocations
+    current_group_indices: Vec<usize>,
+
+    /// Accumulators, one for each `AggregateFunctionExpr` in the query
+    ///
+    /// For example, if the query has aggregates, `SUM(x)`,
+    /// `COUNT(y)`, there will be two accumulators, each one
+    /// specialized for that particular aggregate and its input types
+    accumulators: Vec<Box<dyn GroupsAccumulator>>,
+
+    // ========================================================================
+    // TASK-SPECIFIC STATES:
+    // Inner states groups together properties, states for a specific task.
+    // ========================================================================
+    /// Optional ordering information, that might allow groups to be
+    /// emitted from the hash table prior to seeing the end of the
+    /// input
+    group_ordering: GroupOrdering,
+
+    /// The spill state object
+    spill_state: SpillState,
+
     /// Optional probe for skipping data aggregation, if supported by
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
+
+    // ========================================================================
+    // EXECUTION RESOURCES:
+    // Fields related to managing execution resources and monitoring performance.
+    // ========================================================================
+    /// The memory reservation for this grouping
+    reservation: MemoryReservation,
+
+    /// Execution metrics
+    baseline_metrics: BaselineMetrics,
+
+    /// The [`RuntimeEnv`] associated with the [`TaskContext`] argument
+    runtime: Arc<RuntimeEnv>,
 }
 
 impl GroupedHashAggregateStream {
@@ -537,7 +577,7 @@ impl GroupedHashAggregateStream {
 /// that is supported by the aggregate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
-    agg_expr: &Arc<dyn AggregateExpr>,
+    agg_expr: &AggregateFunctionExpr,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     if agg_expr.groups_accumulator_supported() {
         agg_expr.create_groups_accumulator()
@@ -547,7 +587,7 @@ pub(crate) fn create_group_accumulator(
             "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
             agg_expr.name()
         );
-        let agg_expr_captured = Arc::clone(agg_expr);
+        let agg_expr_captured = agg_expr.clone();
         let factory = move || agg_expr_captured.create_accumulator();
         Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
     }
@@ -864,19 +904,13 @@ impl GroupedHashAggregateStream {
         let emit = self.emit(EmitTo::All, true)?;
         let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
         let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
-        let mut writer = IPCWriter::new(spillfile.path(), &emit.schema())?;
         // TODO: slice large `sorted` and write to multiple files in parallel
-        let mut offset = 0;
-        let total_rows = sorted.num_rows();
-
-        while offset < total_rows {
-            let length = std::cmp::min(total_rows - offset, self.batch_size);
-            let batch = sorted.slice(offset, length);
-            offset += batch.num_rows();
-            writer.write(&batch)?;
-        }
-
-        writer.finish()?;
+        spill_record_batch_by_size(
+            &sorted,
+            spillfile.path().into(),
+            sorted.schema(),
+            self.batch_size,
+        )?;
         self.spill_state.spills.push(spillfile);
         Ok(())
     }

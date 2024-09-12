@@ -24,7 +24,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
 use datafusion_expr::expr::WildcardOptions;
-use datafusion_expr::{logical_plan::LogicalPlan, Expr, LogicalPlanBuilder, TableScan};
+use datafusion_expr::{logical_plan::LogicalPlan, Expr, LogicalPlanBuilder};
 
 /// Analyzed rule that inlines TableScan that provide a [`LogicalPlan`]
 /// (DataFrame / ViewTable)
@@ -56,24 +56,23 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         match plan {
             // Match only on scans without filter / projection / fetch
             // Views and DataFrames won't have those added
-            // during the early stage of planning
-            LogicalPlan::TableScan(TableScan {
-                table_name,
-                source,
-                projection,
-                filters,
-                ..
-            }) if filters.is_empty() && source.get_logical_plan().is_some() => {
-                let sub_plan = source.get_logical_plan().unwrap();
-                let projection_exprs = generate_projection_expr(&projection, sub_plan)?;
-                LogicalPlanBuilder::from(sub_plan.clone())
-                    .project(projection_exprs)?
-                    // Ensures that the reference to the inlined table remains the
-                    // same, meaning we don't have to change any of the parent nodes
-                    // that reference this table.
-                    .alias(table_name)?
-                    .build()
-                    .map(Transformed::yes)
+            // during the early stage of planning.
+            LogicalPlan::TableScan(table_scan) if table_scan.filters.is_empty() => {
+                if let Some(sub_plan) = table_scan.source.get_logical_plan() {
+                    let sub_plan = sub_plan.into_owned();
+                    let projection_exprs =
+                        generate_projection_expr(&table_scan.projection, &sub_plan)?;
+                    LogicalPlanBuilder::from(sub_plan)
+                        .project(projection_exprs)?
+                        // Ensures that the reference to the inlined table remains the
+                        // same, meaning we don't have to change any of the parent nodes
+                        // that reference this table.
+                        .alias(table_scan.table_name)?
+                        .build()
+                        .map(Transformed::yes)
+                } else {
+                    Ok(Transformed::no(LogicalPlan::TableScan(table_scan)))
+                }
             }
             _ => Ok(Transformed::no(plan)),
         }
@@ -104,13 +103,13 @@ fn generate_projection_expr(
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, vec};
+    use std::{borrow::Cow, sync::Arc, vec};
 
     use crate::analyzer::inline_table_scan::InlineTableScan;
     use crate::test::assert_analyzed_plan_eq;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, TableSource};
+    use datafusion_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder, TableSource};
 
     pub struct RawTableSource {}
 
@@ -126,12 +125,14 @@ mod tests {
             ]))
         }
 
-        fn supports_filter_pushdown(
+        fn supports_filters_pushdown(
             &self,
-            _filter: &datafusion_expr::Expr,
-        ) -> datafusion_common::Result<datafusion_expr::TableProviderFilterPushDown>
+            filters: &[&Expr],
+        ) -> datafusion_common::Result<Vec<datafusion_expr::TableProviderFilterPushDown>>
         {
-            Ok(datafusion_expr::TableProviderFilterPushDown::Inexact)
+            Ok((0..filters.len())
+                .map(|_| datafusion_expr::TableProviderFilterPushDown::Inexact)
+                .collect())
         }
     }
 
@@ -155,20 +156,22 @@ mod tests {
             self
         }
 
-        fn supports_filter_pushdown(
+        fn supports_filters_pushdown(
             &self,
-            _filter: &datafusion_expr::Expr,
-        ) -> datafusion_common::Result<datafusion_expr::TableProviderFilterPushDown>
+            filters: &[&Expr],
+        ) -> datafusion_common::Result<Vec<datafusion_expr::TableProviderFilterPushDown>>
         {
-            Ok(datafusion_expr::TableProviderFilterPushDown::Exact)
+            Ok((0..filters.len())
+                .map(|_| datafusion_expr::TableProviderFilterPushDown::Exact)
+                .collect())
         }
 
         fn schema(&self) -> arrow::datatypes::SchemaRef {
             Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
         }
 
-        fn get_logical_plan(&self) -> Option<&LogicalPlan> {
-            Some(&self.plan)
+        fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+            Some(Cow::Borrowed(&self.plan))
         }
     }
 

@@ -1454,7 +1454,7 @@ position(substr in origstr)
 
 ### `contains`
 
-Return true if search_string is found within string.
+Return true if search_string is found within string (case-sensitive).
 
 ```
 contains(string, search_string)
@@ -1735,9 +1735,7 @@ Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format]s are 
 Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
 Returns the corresponding date.
 
-Note: `to_date` returns Date32. The supported range for integer input is between `-96465293` and `95026237`.
-Supported range for string input is between `1677-09-21` and `2262-04-11` exclusive. To parse dates outside of
-that range use a [Chrono format].
+Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.
 
 ```
 to_date(expression[, ..., format_n])
@@ -2093,6 +2091,7 @@ to_unixtime(expression[, ..., format_n])
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
+- [array_distance](#array_distance)
 - [array_distinct](#array_distinct)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
@@ -2135,6 +2134,7 @@ to_unixtime(expression[, ..., format_n])
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
 - [list_dims](#list_dims)
+- [list_distance](#list_distance)
 - [list_distinct](#list_distinct)
 - [list_element](#list_element)
 - [list_except](#list_except)
@@ -2387,6 +2387,36 @@ array_dims(array)
 #### Aliases
 
 - list_dims
+
+### `array_distance`
+
+Returns the Euclidean distance between two input arrays of equal length.
+
+```
+array_distance(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+> select array_distance([1, 2], [1, 4]);
++------------------------------------+
+| array_distance(List([1,2], [1,4])) |
++------------------------------------+
+| 2.0                                |
++------------------------------------+
+```
+
+#### Aliases
+
+- list_distance
 
 ### `array_distinct`
 
@@ -3193,9 +3223,9 @@ generate_series(start, stop, step)
 
 #### Arguments
 
-- **start**: start of the range
-- **end**: end of the range (included)
-- **step**: increase by step (can not be 0)
+- **start**: start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
+- **end**: end of the series (included). Type must be the same as start.
+- **step**: increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.
 
 #### Example
 
@@ -3224,9 +3254,13 @@ _Alias of [array_concat](#array_concat)._
 
 _Alias of [array_dims](#array_dims)._
 
+### `list_distance`
+
+_Alias of [array_distance](#array_distance)._
+
 ### `list_distinct`
 
-_Alias of [array_dims](#array_distinct)._
+_Alias of [array_distinct](#array_distinct)._
 
 ### `list_element`
 
@@ -3482,7 +3516,7 @@ The range start..end contains all values with start <= x < end. It is empty if s
 
 Step can not be 0 (then the range will be nonsense.).
 
-Note that when the required range is a number, it accepts (stop), (start, stop), and (start, stop, step) as parameters, but when the required range is a date, it must be 3 non-NULL parameters.
+Note that when the required range is a number, it accepts (stop), (start, stop), and (start, stop, step) as parameters, but when the required range is a date or timestamp, it must be 3 non-NULL parameters.
 For example,
 
 ```
@@ -3493,10 +3527,11 @@ SELECT range(1,5,1);
 
 are allowed in number ranges
 
-but in date ranges, only
+but in date and timestamp ranges, only
 
 ```
 SELECT range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
+SELECT range(TIMESTAMP '1992-09-01', TIMESTAMP '1993-03-01', INTERVAL '1' MONTH);
 ```
 
 is allowed, and
@@ -3511,9 +3546,9 @@ are not allowed
 
 #### Arguments
 
-- **start**: start of the range
-- **end**: end of the range (not included)
-- **step**: increase by step (can not be 0)
+- **start**: start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
+- **end**: end of the range (not included). Type must be the same as start.
+- **step**: increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.
 
 #### Aliases
 
@@ -3641,6 +3676,8 @@ Unwraps struct fields into columns.
 - [map](#map)
 - [make_map](#make_map)
 - [map_extract](#map_extract)
+- [map_keys](#map_keys)
+- [map_values](#map_values)
 
 ### `map`
 
@@ -3728,6 +3765,56 @@ SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
 #### Aliases
 
 - element_at
+
+### `map_keys`
+
+Return a list of all keys in the map.
+
+```
+map_keys(map)
+```
+
+#### Arguments
+
+- `map`: Map expression.
+  Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```
+SELECT map_keys(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[a, b, c]
+
+select map_keys(map([100, 5], [42,43]));
+----
+[100, 5]
+```
+
+### `map_values`
+
+Return a list of all values in the map.
+
+```
+map_values(map)
+```
+
+#### Arguments
+
+- `map`: Map expression.
+  Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```
+SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[1, , 3]
+
+select map_values(map([100, 5], [42,43]));
+----
+[42, 43]
+```
 
 ## Hashing Functions
 
@@ -3885,6 +3972,7 @@ union_extract(union, field_name)
 
 - [arrow_cast](#arrow_cast)
 - [arrow_typeof](#arrow_typeof)
+- [version](#version)
 
 ### `arrow_cast`
 
@@ -3942,4 +4030,23 @@ arrow_typeof(expression)
 | Utf8                      | Int64                  |
 +---------------------------+------------------------+
 1 row in set. Query took 0.001 seconds.
+```
+
+### `version`
+
+Returns the version of DataFusion.
+
+```
+version()
+```
+
+#### Example
+
+```
+> select version();
++--------------------------------------------+
+| version()                                  |
++--------------------------------------------+
+| Apache DataFusion 41.0.0, aarch64 on macos |
++--------------------------------------------+
 ```

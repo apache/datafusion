@@ -261,9 +261,6 @@ config_namespace! {
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
 
-        /// Aggregate options
-        pub aggregate: AggregateOptions, default = Default::default()
-
         /// Fan-out during initial physical planning.
         ///
         /// This is mostly use to plan `UNION` children in parallel.
@@ -383,6 +380,10 @@ config_namespace! {
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
 
+        /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
+        /// and `Binary/BinaryLarge` with `BinaryView`.
+        pub schema_force_view_types: bool, default = false
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
@@ -486,31 +487,6 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
-
-        /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
-        /// and `Binary/BinaryLarge` with `BinaryView`.
-        pub schema_force_string_view: bool, default = false
-    }
-}
-
-config_namespace! {
-    /// Options related to aggregate execution
-    ///
-    /// See also: [`SessionConfig`]
-    ///
-    /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
-    pub struct AggregateOptions {
-        /// Specifies the threshold for using `ScalarValue`s to update
-        /// accumulators during high-cardinality aggregations for each input batch.
-        ///
-        /// The aggregation is considered high-cardinality if the number of affected groups
-        /// is greater than or equal to `batch_size / scalar_update_factor`. In such cases,
-        /// `ScalarValue`s are utilized for updating accumulators, rather than the default
-        /// batch-slice approach. This can lead to performance improvements.
-        ///
-        /// By adjusting the `scalar_update_factor`, you can balance the trade-off between
-        /// more efficient accumulator updates and the number of groups affected.
-        pub scalar_update_factor: usize, default = 10
     }
 }
 
@@ -630,6 +606,11 @@ config_namespace! {
 
         /// When set to true, the optimizer will not attempt to convert Union to Interleave
         pub prefer_existing_union: bool, default = false
+
+        /// When set to true, if the returned type is a view type
+        /// then the output will be coerced to a non-view.
+        /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
+        pub expand_views_at_output: bool, default = false
     }
 }
 
@@ -781,7 +762,7 @@ impl ConfigOptions {
     ///
     /// Only the built-in configurations will be extracted from the hash map
     /// and other key value pairs will be ignored.
-    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+    pub fn from_string_hash_map(settings: &HashMap<String, String>) -> Result<Self> {
         struct Visitor(Vec<String>);
 
         impl Visit for Visitor {
@@ -1628,6 +1609,7 @@ config_namespace! {
         pub has_header: Option<bool>, default = None
         pub delimiter: u8, default = b','
         pub quote: u8, default = b'"'
+        pub terminator: Option<u8>, default = None
         pub escape: Option<u8>, default = None
         pub double_quote: Option<bool>, default = None
         /// Specifies whether newlines in (quoted) values are supported.
@@ -1696,6 +1678,13 @@ impl CsvOptions {
         self
     }
 
+    /// The character that terminates a row.
+    /// - default to None (CRLF)
+    pub fn with_terminator(mut self, terminator: Option<u8>) -> Self {
+        self.terminator = terminator;
+        self
+    }
+
     /// The escape character in a row.
     /// - default is None
     pub fn with_escape(mut self, escape: Option<u8>) -> Self {
@@ -1740,6 +1729,11 @@ impl CsvOptions {
     /// The quote character.
     pub fn quote(&self) -> u8 {
         self.quote
+    }
+
+    /// The terminator character.
+    pub fn terminator(&self) -> Option<u8> {
+        self.terminator
     }
 
     /// The escape character.

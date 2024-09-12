@@ -50,6 +50,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 paste = "1.0.14"

@@ -124,10 +124,12 @@ fn semi_join_with_join_filter() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
                     \n  LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32 Filter: test.col_uint32 != __correlated_sq_1.col_uint32\
-                    \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
+                    \n    Filter: test.col_int32 IS NOT NULL\
+                    \n      TableScan: test projection=[col_int32, col_uint32, col_utf8]\
                     \n    SubqueryAlias: __correlated_sq_1\
                     \n      SubqueryAlias: t2\
-                    \n        TableScan: test projection=[col_int32, col_uint32]";
+                    \n        Filter: test.col_int32 IS NOT NULL\
+                    \n          TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
@@ -144,7 +146,8 @@ fn anti_join_with_join_filter() -> Result<()> {
     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
     \n    SubqueryAlias: __correlated_sq_1\
     \n      SubqueryAlias: t2\
-    \n        TableScan: test projection=[col_int32, col_uint32]";
+    \n        Filter: test.col_int32 IS NOT NULL\
+    \n          TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
@@ -155,11 +158,13 @@ fn where_exists_distinct() -> Result<()> {
                SELECT DISTINCT col_int32 FROM test t2 WHERE test.col_int32 = t2.col_int32)";
     let plan = test_sql(sql)?;
     let expected = "LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32\
-    \n  TableScan: test projection=[col_int32]\
+    \n  Filter: test.col_int32 IS NOT NULL\
+    \n    TableScan: test projection=[col_int32]\
     \n  SubqueryAlias: __correlated_sq_1\
     \n    Aggregate: groupBy=[[t2.col_int32]], aggr=[[]]\
     \n      SubqueryAlias: t2\
-    \n        TableScan: test projection=[col_int32]";
+    \n        Filter: test.col_int32 IS NOT NULL\
+    \n          TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
@@ -172,12 +177,12 @@ fn intersect() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected =
         "LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n  Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
-    \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n      Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
-    \n        TableScan: test projection=[col_int32, col_utf8]\
-    \n      TableScan: test projection=[col_int32, col_utf8]\
-    \n  TableScan: test projection=[col_int32, col_utf8]";
+        \n  Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
+        \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
+        \n      Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
+        \n        TableScan: test projection=[col_int32, col_utf8]\
+        \n      TableScan: test projection=[col_int32, col_utf8]\
+        \n  TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan}"));
     Ok(())
 }

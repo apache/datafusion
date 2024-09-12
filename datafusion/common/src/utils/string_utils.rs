@@ -15,6 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Variable provider for `@name` and `@@name` style runtime values.
+//! Utilities for working with strings
 
-pub use datafusion_expr::var_provider::{VarProvider, VarType};
+use arrow::{array::AsArray, datatypes::DataType};
+use arrow_array::Array;
+
+/// Convenient function to convert an Arrow string array to a vector of strings
+pub fn string_array_to_vec(array: &dyn Array) -> Vec<Option<&str>> {
+    match array.data_type() {
+        DataType::Utf8 => array.as_string::<i32>().iter().collect(),
+        DataType::LargeUtf8 => array.as_string::<i64>().iter().collect(),
+        DataType::Utf8View => array.as_string_view().iter().collect(),
+        _ => unreachable!(),
+    }
+}

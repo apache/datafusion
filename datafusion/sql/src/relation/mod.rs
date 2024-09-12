@@ -214,7 +214,7 @@ fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>>
     // 2. RANK / ROW_NUMBER ... => Handled by a `WindowAggr` and its requirements.
     // 3. LIMIT => Handled by a `Sort`, so we need to search for it.
     let mut has_limit = false;
-    let new_plan = plan.clone().transform_down(|c| {
+    let new_plan = plan.transform_down(|c| {
         if let LogicalPlan::Limit(_) = c {
             has_limit = true;
             return Ok(Transformed::no(c));

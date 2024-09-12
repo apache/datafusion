@@ -629,6 +629,38 @@ AS VALUES
   (arrow_cast(make_array([28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]), 'FixedSizeList(10, List(Int64))'), [28, 29, 30], [28, 29, 30], 10)
 ;
 
+statement ok
+CREATE TABLE arrays_distance_table
+AS VALUES
+  (make_array(1, 2, 3), make_array(1, 2, 3), make_array(1.1, 2.2, 3.3) , make_array(1.1, NULL, 3.3)),
+  (make_array(1, 2, 3), make_array(4, 5, 6), make_array(4.4, 5.5, 6.6), make_array(4.4, NULL, 6.6)),
+  (make_array(1, 2, 3), make_array(7, 8, 9), make_array(7.7, 8.8, 9.9), make_array(7.7, NULL, 9.9)),
+  (make_array(1, 2, 3), make_array(10, 11, 12), make_array(10.1, 11.2, 12.3), make_array(10.1, NULL, 12.3))
+;
+
+statement ok
+CREATE TABLE large_arrays_distance_table
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(Int64)') AS column1,
+    arrow_cast(column2, 'LargeList(Int64)') AS column2,
+    arrow_cast(column3, 'LargeList(Float64)') AS column3,
+    arrow_cast(column4, 'LargeList(Float64)') AS column4
+FROM arrays_distance_table
+;
+
+statement ok
+CREATE TABLE fixed_size_arrays_distance_table
+AS
+  SELECT
+    arrow_cast(column1, 'FixedSizeList(3, Int64)') AS column1,
+    arrow_cast(column2, 'FixedSizeList(3, Int64)') AS column2,
+    arrow_cast(column3, 'FixedSizeList(3, Float64)') AS column3,
+    arrow_cast(column4, 'FixedSizeList(3, Float64)') AS column4
+FROM arrays_distance_table
+;
+
+
 # Array literal
 
 ## boolean coercion is not supported
@@ -4715,6 +4747,85 @@ NULL 10
 NULL 10
 NULL 10
 
+query RRR
+select array_distance([2], [3]), list_distance([1], [2]), list_distance([1], [-2]);
+----
+1 1 3
+
+query error
+select list_distance([1], [1, 2]);
+
+query R
+select array_distance([[1, 1]], [1, 2]);
+----
+1
+
+query R
+select array_distance([[1, 1]], [[1, 2]]);
+----
+1
+
+query R
+select array_distance([[1, 1]], [[1, 2]]);
+----
+1
+
+query RR
+select array_distance([1, 1, 0, 0], [2, 2, 1, 1]), list_distance([1, 2, 3], [1, 2, 3]);
+----
+2 0
+
+query RR
+select array_distance([1.0, 1, 0, 0], [2, 2.0, 1, 1]), list_distance([1, 2.0, 3], [1, 2, 3]);
+----
+2 0
+
+query R
+select list_distance([1, 1, NULL, 0], [2, 2, NULL, NULL]);
+----
+NULL
+
+query R
+select list_distance([NULL, NULL], [NULL, NULL]);
+----
+NULL
+
+query R
+select list_distance([1.0, 2.0, 3.0], [1.0, 2.0, 3.5]) AS distance;
+----
+0.5
+
+query R
+select list_distance([1, 2, 3], [1, 2, 3]) AS distance;
+----
+0
+
+# array_distance with columns
+query RRR
+select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from arrays_distance_table;
+----
+0 0.374165738677 NULL
+5.196152422707 6.063827174318 NULL
+10.392304845413 11.778794505381 NULL
+15.58845726812 15.935494971917 NULL
+
+query RRR
+select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from large_arrays_distance_table;
+----
+0 0.374165738677 NULL
+5.196152422707 6.063827174318 NULL
+10.392304845413 11.778794505381 NULL
+15.58845726812 15.935494971917 NULL
+
+query RRR
+select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from fixed_size_arrays_distance_table;
+----
+0 0.374165738677 NULL
+5.196152422707 6.063827174318 NULL
+10.392304845413 11.778794505381 NULL
+15.58845726812 15.935494971917 NULL
+
+
 ## array_dims (aliases: `list_dims`)
 
 # array dims error
@@ -4972,11 +5083,19 @@ NULL 1 1
 
 ## array_has/array_has_all/array_has_any
 
-query BB
-select array_has([], null),
-       array_has([1, 2, 3], null);
+# If lhs is empty, return false
+query B
+select array_has([], 1);
 ----
-false false
+false
+
+# If rhs is Null, we returns Null
+query BBB
+select array_has([], null),
+       array_has([1, 2, 3], null),
+       array_has([null, 1], null);
+----
+NULL NULL NULL
 
 #TODO: array_has_all and array_has_any cannot handle NULL
 #query BBBB
@@ -5762,8 +5881,19 @@ select range(DATE '1992-09-01', NULL, INTERVAL '1' YEAR);
 ----
 NULL
 
+## should return NULL
+query ?
+select range(TIMESTAMP '1992-09-01', NULL, INTERVAL '1' YEAR);
+----
+NULL
+
 query ?
 select range(DATE '1992-09-01', DATE '1993-03-01', NULL);
+----
+NULL
+
+query ?
+select range(TIMESTAMP '1992-09-01', TIMESTAMP '1993-03-01', NULL);
 ----
 NULL
 
@@ -5773,7 +5903,17 @@ select range(NULL, DATE '1993-03-01', INTERVAL '1' YEAR);
 NULL
 
 query ?
+select range(NULL, TIMESTAMP '1993-03-01', INTERVAL '1' YEAR);
+----
+NULL
+
+query ?
 select range(NULL, NULL, NULL);
+----
+NULL
+
+query ?
+select range(NULL::timestamp, NULL::timestamp, NULL);
 ----
 NULL
 
@@ -5783,12 +5923,27 @@ select range(DATE '1989-04-01', DATE '1993-03-01', INTERVAL '-1' YEAR)
 []
 
 query ?
+select range(TIMESTAMP '1989-04-01', TIMESTAMP '1993-03-01', INTERVAL '-1' YEAR)
+----
+[]
+
+query ?
 select range(DATE '1993-03-01', DATE '1989-04-01', INTERVAL '1' YEAR)
+----
+[]
+
+query ?
+select range(TIMESTAMP '1993-03-01', TIMESTAMP '1989-04-01', INTERVAL '1' YEAR)
 ----
 []
 
 query error DataFusion error: Execution error: Cannot generate date range less than 1 day\.
 select range(DATE '1993-03-01', DATE '1993-03-01', INTERVAL '1' HOUR)
+
+query ?
+select range(TIMESTAMP '1993-03-01', TIMESTAMP '1993-03-01', INTERVAL '1' HOUR)
+----
+[]
 
 query ?????????
 select generate_series(5),
@@ -5804,12 +5959,41 @@ select generate_series(5),
 ----
 [0, 1, 2, 3, 4, 5] [2, 3, 4, 5] [2, 5, 8] [1, 2, 3, 4, 5] [5, 4, 3, 2, 1] [10, 7, 4] [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01, 1993-03-01] [1993-02-01, 1993-01-31, 1993-01-30, 1993-01-29, 1993-01-28, 1993-01-27, 1993-01-26, 1993-01-25, 1993-01-24, 1993-01-23, 1993-01-22, 1993-01-21, 1993-01-20, 1993-01-19, 1993-01-18, 1993-01-17, 1993-01-16, 1993-01-15, 1993-01-14, 1993-01-13, 1993-01-12, 1993-01-11, 1993-01-10, 1993-01-09, 1993-01-08, 1993-01-07, 1993-01-06, 1993-01-05, 1993-01-04, 1993-01-03, 1993-01-02, 1993-01-01] [1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
 
-query error DataFusion error: Execution error: Cannot generate date range less than 1 day\.
-select generate_series('2021-01-01'::timestamp, '2021-01-02'::timestamp, INTERVAL '1' HOUR);
+query ?
+select generate_series('2021-01-01'::timestamp, '2021-01-01T15:00:00'::timestamp, INTERVAL '1' HOUR);
+----
+[2021-01-01T00:00:00, 2021-01-01T01:00:00, 2021-01-01T02:00:00, 2021-01-01T03:00:00, 2021-01-01T04:00:00, 2021-01-01T05:00:00, 2021-01-01T06:00:00, 2021-01-01T07:00:00, 2021-01-01T08:00:00, 2021-01-01T09:00:00, 2021-01-01T10:00:00, 2021-01-01T11:00:00, 2021-01-01T12:00:00, 2021-01-01T13:00:00, 2021-01-01T14:00:00, 2021-01-01T15:00:00]
+
+query ?
+select generate_series('2021-01-01T00:00:00EST'::timestamp, '2021-01-01T15:00:00-12:00'::timestamp, INTERVAL '1' HOUR);
+----
+[2021-01-01T05:00:00, 2021-01-01T06:00:00, 2021-01-01T07:00:00, 2021-01-01T08:00:00, 2021-01-01T09:00:00, 2021-01-01T10:00:00, 2021-01-01T11:00:00, 2021-01-01T12:00:00, 2021-01-01T13:00:00, 2021-01-01T14:00:00, 2021-01-01T15:00:00, 2021-01-01T16:00:00, 2021-01-01T17:00:00, 2021-01-01T18:00:00, 2021-01-01T19:00:00, 2021-01-01T20:00:00, 2021-01-01T21:00:00, 2021-01-01T22:00:00, 2021-01-01T23:00:00, 2021-01-02T00:00:00, 2021-01-02T01:00:00, 2021-01-02T02:00:00, 2021-01-02T03:00:00]
+
+query ?
+select generate_series(arrow_cast('2021-01-01T00:00:00', 'Timestamp(Nanosecond, Some("-05:00"))'), arrow_cast('2021-01-01T15:00:00', 'Timestamp(Nanosecond, Some("+05:00"))'), INTERVAL '1' HOUR);
+----
+[2021-01-01T00:00:00-05:00, 2021-01-01T01:00:00-05:00, 2021-01-01T02:00:00-05:00, 2021-01-01T03:00:00-05:00, 2021-01-01T04:00:00-05:00, 2021-01-01T05:00:00-05:00]
+
+## -5500000000 ns is -5.5 sec
+query ?
+select generate_series(arrow_cast('2021-01-01T00:00:00', 'Timestamp(Nanosecond, Some("-05:00"))'), arrow_cast('2021-01-01T06:00:00', 'Timestamp(Nanosecond, Some("-05:00"))'), INTERVAL '1 HOUR 30 MINUTE -5500000000 NANOSECOND');
+----
+[2021-01-01T00:00:00-05:00, 2021-01-01T01:29:54.500-05:00, 2021-01-01T02:59:49-05:00, 2021-01-01T04:29:43.500-05:00, 2021-01-01T05:59:38-05:00]
+
+## mixing types for timestamps is not supported
+query error DataFusion error: Internal error: Unexpected argument type for GENERATE_SERIES : Date32
+select generate_series(arrow_cast('2021-01-01T00:00:00', 'Timestamp(Nanosecond, Some("-05:00"))'), DATE '2021-01-02', INTERVAL '1' HOUR);
+
 
 ## should return NULL
 query ?
 select generate_series(DATE '1992-09-01', NULL, INTERVAL '1' YEAR);
+----
+NULL
+
+## should return NULL
+query ?
+select generate_series(TIMESTAMP '1992-09-01', NULL, INTERVAL '1' YEAR);
 ----
 NULL
 
@@ -5819,7 +6003,17 @@ select generate_series(DATE '1992-09-01', DATE '1993-03-01', NULL);
 NULL
 
 query ?
+select generate_series(TIMESTAMP '1992-09-01', DATE '1993-03-01', NULL);
+----
+NULL
+
+query ?
 select generate_series(NULL, DATE '1993-03-01', INTERVAL '1' YEAR);
+----
+NULL
+
+query ?
+select generate_series(NULL, TIMESTAMP '1993-03-01', INTERVAL '1' YEAR);
 ----
 NULL
 
@@ -5829,12 +6023,27 @@ select generate_series(NULL, NULL, NULL);
 NULL
 
 query ?
+select generate_series(NULL::timestamp, NULL::timestamp, NULL);
+----
+NULL
+
+query ?
 select generate_series(DATE '1989-04-01', DATE '1993-03-01', INTERVAL '-1' YEAR)
 ----
 []
 
 query ?
+select generate_series(TIMESTAMP '1989-04-01', TIMESTAMP '1993-03-01', INTERVAL '-1' YEAR)
+----
+[]
+
+query ?
 select generate_series(DATE '1993-03-01', DATE '1989-04-01', INTERVAL '1' YEAR)
+----
+[]
+
+query ?
+select generate_series(TIMESTAMP '1993-03-01', TIMESTAMP '1989-04-01', INTERVAL '1' YEAR)
 ----
 []
 
@@ -5844,9 +6053,29 @@ select generate_series(DATE '2000-01-01', DATE '2000-01-03', INTERVAL '1' HOUR)
 query error DataFusion error: Execution error: Cannot generate date range less than 1 day.
 select generate_series(DATE '2000-01-01', DATE '2000-01-03', INTERVAL '-1' HOUR)
 
+query ?
+select generate_series(TIMESTAMP '2000-01-01', TIMESTAMP '2000-01-02', INTERVAL '1' HOUR)
+----
+[2000-01-01T00:00:00, 2000-01-01T01:00:00, 2000-01-01T02:00:00, 2000-01-01T03:00:00, 2000-01-01T04:00:00, 2000-01-01T05:00:00, 2000-01-01T06:00:00, 2000-01-01T07:00:00, 2000-01-01T08:00:00, 2000-01-01T09:00:00, 2000-01-01T10:00:00, 2000-01-01T11:00:00, 2000-01-01T12:00:00, 2000-01-01T13:00:00, 2000-01-01T14:00:00, 2000-01-01T15:00:00, 2000-01-01T16:00:00, 2000-01-01T17:00:00, 2000-01-01T18:00:00, 2000-01-01T19:00:00, 2000-01-01T20:00:00, 2000-01-01T21:00:00, 2000-01-01T22:00:00, 2000-01-01T23:00:00, 2000-01-02T00:00:00]
+
+query ?
+select generate_series(TIMESTAMP '2000-01-02', TIMESTAMP '2000-01-01', INTERVAL '-1' HOUR)
+----
+[2000-01-02T00:00:00, 2000-01-01T23:00:00, 2000-01-01T22:00:00, 2000-01-01T21:00:00, 2000-01-01T20:00:00, 2000-01-01T19:00:00, 2000-01-01T18:00:00, 2000-01-01T17:00:00, 2000-01-01T16:00:00, 2000-01-01T15:00:00, 2000-01-01T14:00:00, 2000-01-01T13:00:00, 2000-01-01T12:00:00, 2000-01-01T11:00:00, 2000-01-01T10:00:00, 2000-01-01T09:00:00, 2000-01-01T08:00:00, 2000-01-01T07:00:00, 2000-01-01T06:00:00, 2000-01-01T05:00:00, 2000-01-01T04:00:00, 2000-01-01T03:00:00, 2000-01-01T02:00:00, 2000-01-01T01:00:00, 2000-01-01T00:00:00]
+
+# Test generate_series with small intervals
+query ?
+select generate_series('2000-01-01T00:00:00.000000001Z'::timestamp, '2000-01-01T00:00:00.00000001Z'::timestamp, INTERVAL '1' NANOSECONDS)
+----
+[2000-01-01T00:00:00.000000001, 2000-01-01T00:00:00.000000002, 2000-01-01T00:00:00.000000003, 2000-01-01T00:00:00.000000004, 2000-01-01T00:00:00.000000005, 2000-01-01T00:00:00.000000006, 2000-01-01T00:00:00.000000007, 2000-01-01T00:00:00.000000008, 2000-01-01T00:00:00.000000009, 2000-01-01T00:00:00.000000010]
+
 # Test generate_series with zero step
 query error DataFusion error: Execution error: step can't be 0 for function generate_series\(start \[, stop, step\]\)
 select generate_series(1, 1, 0);
+
+# Test generate_series with zero step
+query error DataFusion error: Execution error: Interval argument to GENERATE_SERIES must not be 0
+select generate_series(TIMESTAMP '2000-01-02', TIMESTAMP '2000-01-01', INTERVAL '0' MINUTE);
 
 # Test generate_series with big steps
 query ????
@@ -5902,7 +6131,7 @@ select generate_series(NULL)
 ----
 NULL
 
-# Test generate_series with a table of values
+# Test generate_series with a table of date values
 statement ok
 CREATE TABLE date_table(
   start DATE,
@@ -5934,15 +6163,45 @@ select generate_series(start, '1993-03-01'::date, INTERVAL '1 year') from date_t
 [1993-02-01]
 [1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
 
+# Test generate_series with a table of timestamp values
+statement ok
+CREATE TABLE timestamp_table(
+  start TIMESTAMP,
+  stop TIMESTAMP,
+  step INTERVAL
+) AS VALUES
+  (TIMESTAMP '1992-01-01T00:00:00', TIMESTAMP '1993-01-02T00:00:00', INTERVAL '1' MONTH),
+  (TIMESTAMP '1993-02-01T00:00:00', TIMESTAMP '1993-01-01T00:00:00', INTERVAL '-1' DAY),
+  (TIMESTAMP '1989-04-01T00:00:00', TIMESTAMP '1993-03-01T00:00:00', INTERVAL '1' YEAR);
+
+query ?
+select generate_series(start, stop, step) from timestamp_table;
+----
+[1992-01-01T00:00:00, 1992-02-01T00:00:00, 1992-03-01T00:00:00, 1992-04-01T00:00:00, 1992-05-01T00:00:00, 1992-06-01T00:00:00, 1992-07-01T00:00:00, 1992-08-01T00:00:00, 1992-09-01T00:00:00, 1992-10-01T00:00:00, 1992-11-01T00:00:00, 1992-12-01T00:00:00, 1993-01-01T00:00:00]
+[1993-02-01T00:00:00, 1993-01-31T00:00:00, 1993-01-30T00:00:00, 1993-01-29T00:00:00, 1993-01-28T00:00:00, 1993-01-27T00:00:00, 1993-01-26T00:00:00, 1993-01-25T00:00:00, 1993-01-24T00:00:00, 1993-01-23T00:00:00, 1993-01-22T00:00:00, 1993-01-21T00:00:00, 1993-01-20T00:00:00, 1993-01-19T00:00:00, 1993-01-18T00:00:00, 1993-01-17T00:00:00, 1993-01-16T00:00:00, 1993-01-15T00:00:00, 1993-01-14T00:00:00, 1993-01-13T00:00:00, 1993-01-12T00:00:00, 1993-01-11T00:00:00, 1993-01-10T00:00:00, 1993-01-09T00:00:00, 1993-01-08T00:00:00, 1993-01-07T00:00:00, 1993-01-06T00:00:00, 1993-01-05T00:00:00, 1993-01-04T00:00:00, 1993-01-03T00:00:00, 1993-01-02T00:00:00, 1993-01-01T00:00:00]
+[1989-04-01T00:00:00, 1990-04-01T00:00:00, 1991-04-01T00:00:00, 1992-04-01T00:00:00]
+
+query ?
+select generate_series(start, stop, INTERVAL '1 year') from timestamp_table;
+----
+[1992-01-01T00:00:00, 1993-01-01T00:00:00]
+[]
+[1989-04-01T00:00:00, 1990-04-01T00:00:00, 1991-04-01T00:00:00, 1992-04-01T00:00:00]
+
+query ?
+select generate_series(start, '1993-03-01T00:00:00'::timestamp, INTERVAL '1 year') from timestamp_table;
+----
+[1992-01-01T00:00:00, 1993-01-01T00:00:00]
+[1993-02-01T00:00:00]
+[1989-04-01T00:00:00, 1990-04-01T00:00:00, 1991-04-01T00:00:00, 1992-04-01T00:00:00]
 
 # https://github.com/apache/datafusion/issues/11922
 query ?
-select generate_series(start, '1993-03-01', INTERVAL '1 year') from date_table;
+select generate_series(start, '1993-03-01T00:00:00'::timestamp, INTERVAL '1 year') from timestamp_table;
 ----
-[1992-01-01, 1993-01-01]
-[1993-02-01]
-[1989-04-01, 1990-04-01, 1991-04-01, 1992-04-01]
-
+[1992-01-01T00:00:00, 1993-01-01T00:00:00]
+[1993-02-01T00:00:00]
+[1989-04-01T00:00:00, 1990-04-01T00:00:00, 1991-04-01T00:00:00, 1992-04-01T00:00:00]
 
 ## array_except
 

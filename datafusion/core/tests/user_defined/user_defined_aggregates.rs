@@ -272,7 +272,7 @@ async fn deregister_udaf() -> Result<()> {
         Arc::new(vec![DataType::UInt64, DataType::Float64]),
     );
 
-    ctx.register_udaf(my_avg.clone());
+    ctx.register_udaf(my_avg);
 
     assert!(ctx.state().aggregate_functions().contains_key("my_avg"));
 

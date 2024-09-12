@@ -17,7 +17,7 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
-use crate::datasource::file_format::transform_schema_to_view;
+use crate::datasource::file_format::coerce_file_schema_to_view_type;
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::row_group_filter::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
@@ -57,7 +57,6 @@ pub(super) struct ParquetOpener {
     pub enable_page_index: bool,
     pub enable_bloom_filter: bool,
     pub schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    pub schema_force_string_view: bool,
 }
 
 impl FileOpener for ParquetOpener {
@@ -77,8 +76,9 @@ impl FileOpener for ParquetOpener {
             )?;
 
         let batch_size = self.batch_size;
-        let projection = self.projection.clone();
-        let projected_schema = SchemaRef::from(self.table_schema.project(&projection)?);
+
+        let projected_schema =
+            SchemaRef::from(self.table_schema.project(&self.projection)?);
         let schema_adapter = self.schema_adapter_factory.create(projected_schema);
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
@@ -92,7 +92,6 @@ impl FileOpener for ParquetOpener {
         );
         let enable_bloom_filter = self.enable_bloom_filter;
         let limit = self.limit;
-        let schema_force_string_view = self.schema_force_string_view;
 
         Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
@@ -100,9 +99,10 @@ impl FileOpener for ParquetOpener {
             let metadata =
                 ArrowReaderMetadata::load_async(&mut reader, options.clone()).await?;
             let mut schema = metadata.schema().clone();
-
-            if schema_force_string_view {
-                schema = Arc::new(transform_schema_to_view(&schema));
+            // read with view types
+            if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &schema)
+            {
+                schema = Arc::new(merged);
             }
 
             let options = ArrowReaderOptions::new()
