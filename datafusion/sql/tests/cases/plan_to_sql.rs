@@ -56,6 +56,11 @@ fn roundtrip_expr() {
             "sum((age * 2))",
             r#"sum((age * 2))"#,
         ),
+        (
+            TableReference::bare("person"),
+            "'2024-01-10 01:23:45'::timestamp - interval '1 day' - interval '2 day'",
+            "((CAST('2024-01-10 01:23:45' AS TIMESTAMP) - INTERVAL '1 DAYS') - INTERVAL '2 DAYS')",
+        ),
     ];
 
     let roundtrip = |table, sql: &str| -> Result<String> {
