@@ -34,7 +34,7 @@ use datafusion_expr::builder::{
     table_scan_with_filter_and_fetch, table_scan_with_filters,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
-use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect};
+use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
 #[test]
@@ -610,8 +610,8 @@ fn test_pretty_roundtrip() -> Result<()> {
     Ok(())
 }
 
-fn sql_round_trip(query: &str, expect: &str, dialect: &dyn Dialect) {
-    let statement = Parser::new(dialect)
+fn sql_round_trip(query: &str, expect: &str) {
+    let statement = Parser::new(&GenericDialect {})
         .try_with_sql(query)
         .unwrap()
         .parse_statement()
@@ -776,35 +776,15 @@ fn test_table_scan_pushdown() -> Result<()> {
 #[test]
 fn test_interval_lhs_eq() {
     sql_round_trip(
-        "select interval 2 second = interval 2 second",
-        "SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')",
-        &GenericDialect {},
-    );
-}
-
-#[test]
-fn test_interval_lhs_eq_pg() {
-    sql_round_trip(
         "select interval '2 seconds' = interval '2 seconds'",
         "SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')",
-        &PostgreSqlDialect {},
     );
 }
 
 #[test]
 fn test_interval_lhs_lt() {
     sql_round_trip(
-        "select interval 2 second < interval 2 second",
-        "SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')",
-        &GenericDialect {},
-    );
-}
-
-#[test]
-fn test_interval_lhs_lt_pg() {
-    sql_round_trip(
         "select interval '2 seconds' < interval '2 seconds'",
         "SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')",
-        &PostgreSqlDialect {},
     );
 }
