@@ -31,7 +31,12 @@ use crate::utils::normalize_ident;
 
 use arrow_schema::{DataType, Fields};
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err, unqualified_field_not_found, Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SchemaError, SchemaReference, TableReference, ToDFSchema};
+use datafusion_common::{
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
+    unqualified_field_not_found, Column, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, Result, ScalarValue, SchemaError, SchemaReference, TableReference,
+    ToDFSchema,
+};
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
@@ -276,12 +281,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return not_impl_err!("Volatile tables not supported")?;
                 }
                 if hive_distribution != ast::HiveDistributionStyle::NONE {
-                    return not_impl_err!("Hive distribution not supported: {hive_distribution:?}")?;
+                    return not_impl_err!(
+                        "Hive distribution not supported: {hive_distribution:?}"
+                    )?;
                 }
-                if !matches!(hive_formats, Some(ast::HiveFormat {
-                    row_format:None,serde_properties:None,storage: None,location: None,
-                })) {
-                    return not_impl_err!("Hive formats not supported: {hive_formats:?}")?;
+                if !matches!(
+                    hive_formats,
+                    Some(ast::HiveFormat {
+                        row_format: None,
+                        serde_properties: None,
+                        storage: None,
+                        location: None,
+                    })
+                ) {
+                    return not_impl_err!(
+                        "Hive formats not supported: {hive_formats:?}"
+                    )?;
                 }
                 if file_format.is_some() {
                     return not_impl_err!("File format not supported")?;
@@ -350,7 +365,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return not_impl_err!("Data retention time in days not supported")?;
                 }
                 if max_data_extension_time_in_days.is_some() {
-                    return not_impl_err!("Max data extension time in days not supported")?;
+                    return not_impl_err!(
+                        "Max data extension time in days not supported"
+                    )?;
                 }
                 if default_ddl_collation.is_some() {
                     return not_impl_err!("Default DDL collation not supported")?;
@@ -364,7 +381,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if with_tags.is_some() {
                     return not_impl_err!("With tags not supported")?;
                 }
-
 
                 // Merge inline constraints and existing constraints
                 let mut all_constraints = constraints;
@@ -451,12 +467,40 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             Statement::CreateView {
                 or_replace,
+                materialized,
                 name,
                 columns,
                 query,
                 options: CreateTableOptions::None,
-                ..
+                cluster_by,
+                comment,
+                with_no_schema_binding,
+                if_not_exists,
+                temporary,
+                to,
             } => {
+                if materialized {
+                    return not_impl_err!("Materialized views not supported")?;
+                }
+                if !cluster_by.is_empty() {
+                    return not_impl_err!("Cluster by not supported")?;
+                }
+                if comment.is_some() {
+                    return not_impl_err!("Comment not supported")?;
+                }
+                if with_no_schema_binding {
+                    return not_impl_err!("With no schema binding not supported")?;
+                }
+                if if_not_exists {
+                    return not_impl_err!("If not exists not supported")?;
+                }
+                if temporary {
+                    return not_impl_err!("Temporary views not supported")?;
+                }
+                if to.is_some() {
+                    return not_impl_err!("To not supported")?;
+                }
+
                 let columns = columns
                     .into_iter()
                     .map(|view_column_def| {
