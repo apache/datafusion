@@ -544,6 +544,31 @@ select i - d from t;
 query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
 select i - ts from t;
 
+# interval unit abreiviation and plurals
+query ?
+select interval '1s'
+----
+1.000000000 secs
+
+query ?
+select '1s'::interval
+----
+1.000000000 secs
+
+query ?
+select interval'1sec'
+----
+1.000000000 secs
+
+query ?
+select interval '1ms'
+----
+0.001000000 secs
+
+query ?
+select interval '1 y' + interval '1 year'
+----
+24 mons
 
 # interval (scalar) + date / timestamp (array)
 query D
