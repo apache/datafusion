@@ -315,14 +315,6 @@ pub(crate) fn rewrite_recursive_unnests_bottom_up(
         .collect::<Vec<_>>())
 }
 
-fn print_unnest(expr: &str, level: usize) -> String {
-    let mut result = String::from(expr);
-    for _ in 0..level {
-        result = format!("UNNEST({})", result);
-    }
-    result
-}
-
 /*
 This is only usedful when used with transform down up
 A full example of how the transformation works:
@@ -359,6 +351,7 @@ impl<'a> RecursiveUnnestRewriter<'a> {
     fn transform(
         &mut self,
         level: usize,
+        alias_name: String,
         expr_in_unnest: &Expr,
         struct_allowed: bool,
     ) -> Result<Vec<Expr>> {
@@ -373,7 +366,7 @@ impl<'a> RecursiveUnnestRewriter<'a> {
             format!("unnest_placeholder({},depth={})", inner_expr_name, level);
         // This is due to the fact that unnest transformation should keep the original
         // column name as is, to comply with group by and order by
-        let post_unnest_alias = print_unnest(&inner_expr_name, level);
+        // let post_unnest_alias = print_unnest(&inner_expr_name, level);
         let placeholder_column = Column::from_name(placeholder_name.clone());
 
         let (data_type, _) = expr_in_unnest.data_type_and_nullable(self.input_schema)?;
@@ -407,8 +400,7 @@ impl<'a> RecursiveUnnestRewriter<'a> {
                 );
 
                 // let post_unnest_column = Column::from_name(post_unnest_name);
-                let post_unnest_expr =
-                    col(post_unnest_name.clone()).alias(post_unnest_alias);
+                let post_unnest_expr = col(post_unnest_name.clone()).alias(alias_name);
                 match self
                     .columns_unnestings
                     .iter_mut()
@@ -546,8 +538,12 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
                 let unnest_recursion = unnest_stack.len();
                 let struct_allowed = (&expr == self.root_expr) && unnest_recursion == 1;
 
-                let mut transformed_exprs =
-                    self.transform(unnest_recursion, inner_expr, struct_allowed)?;
+                let mut transformed_exprs = self.transform(
+                    unnest_recursion,
+                    expr.schema_name().to_string(),
+                    inner_expr,
+                    struct_allowed,
+                )?;
                 if struct_allowed {
                     self.transformed_root_exprs = Some(transformed_exprs.clone());
                 }

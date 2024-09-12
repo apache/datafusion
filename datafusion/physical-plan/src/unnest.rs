@@ -247,7 +247,7 @@ struct UnnestStream {
     schema: Arc<Schema>,
     /// represents all unnest operations to be applied to the input (input index, depth)
     /// e.g unnest(col1),unnest(unnest(col1)) where col1 has index 1 in original input schema
-    /// then list_type_columns = [(1,1),(1,2)]
+    /// then list_type_columns = [ListUnnest{1,1},ListUnnest{1,2}]
     list_type_columns: Vec<ListUnnest>,
     struct_column_indices: HashSet<usize>,
     /// Options
@@ -456,8 +456,9 @@ fn list_unnest_at_level(
     // Create the take indices array for other columns
     let take_indices = create_take_indicies(unnested_length, total_length);
 
-    // vertical expansion because of list unnest
-    let ret = flatten_arrs_from_indices(batch, &take_indices)?;
+    // dimension of arrays in batch is untouch, but the values are repeated
+    // as the side effect of unnesting
+    let ret = repeat_arrs_from_indices(batch, &take_indices)?;
     unnested_temp_arrays
         .into_iter()
         .zip(list_unnest_specs.iter())
@@ -597,7 +598,7 @@ fn build_batch(
                 .into_iter()
                 .map(
                     // each item in unnested_columns is the result of unnesting the same input column
-                    // we need to sort them to conform with the unnest definition
+                    // we need to sort them to conform with the original expression order
                     // e.g unnest(unnest(col)) must goes before unnest(col)
                     |(original_index, mut unnested_columns)| {
                         unnested_columns.sort_by(
@@ -683,18 +684,11 @@ fn find_longest_length(
     } else {
         Scalar::new(Int64Array::from_value(0, 1))
     };
-    // col1: [[1,2]]|[[2,3]]
-    // unnest(col1): [1,2]|[2,3] => length = 2
-    // unnest(unnest(col1)): 1|2|2|3 => length = 4
-    // col2: [3]|[4] => length =2
-    // unnest(col2): 3|4 => length = 2
-    // unnest(col1), unnest(unnest(col1)), unnest(col2)
     let list_lengths: Vec<ArrayRef> = list_arrays
         .iter()
         .map(|list_array| {
             let mut length_array = length(list_array)?;
             // Make sure length arrays have the same type. Int64 is the most general one.
-            // Respect the depth of unnest( current func only get the length of 1 level of unnest)
             length_array = cast(&length_array, &DataType::Int64)?;
             length_array =
                 zip(&is_not_null(&length_array)?, &length_array, &null_length)?;
@@ -867,10 +861,10 @@ fn create_take_indicies(
     builder.finish()
 }
 
-/// Create the batch given the unnested column arrays and a `indices` array
+/// Create the batch given an arrays and a `indices` array
 /// that is used by the take kernel to copy values.
 ///
-/// For example if we have the following `RecordBatch`:
+/// For example if we have the following batch:
 ///
 /// ```ignore
 /// c1: [1], null, [2, 3, 4], null, [5, 6]
@@ -898,7 +892,7 @@ fn create_take_indicies(
 /// c2: 'a', 'b', 'c', 'c', 'c', null, 'd', 'd'
 /// ```
 ///
-fn flatten_arrs_from_indices(
+fn repeat_arrs_from_indices(
     batch: &[ArrayRef],
     indices: &PrimitiveArray<Int64Type>,
 ) -> Result<Vec<Arc<dyn Array>>> {
@@ -1001,7 +995,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_batch_list_arr() -> datafusion_common::Result<()> {
+    fn test_build_batch_list_arr_recursive() -> datafusion_common::Result<()> {
         // col1                             | col2
         // [[1,2,3],null,[4,5]]             | ['a','b']
         // [[7,8,9,10], null, [11,12,13]]   | ['c','d']
