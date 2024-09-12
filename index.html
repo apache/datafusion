@@ -513,13 +513,20 @@
   <a class="github-button" href="https://github.com/apache/datafusion" data-size="large" data-show-count="true" aria-label="Star apache/datafusion on GitHub">Star</a>
   <!-- Place this tag where you want the button to render. -->
    <a class="github-button" href="https://github.com/apache/datafusion/fork" data-size="large" data-show-count="true" aria-label="Fork apache/datafusion on GitHub">Fork</a>
-</p><p>DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
-<a class="reference external" href="http://rustlang.org">Rust</a>, using the <a class="reference external" href="https://arrow.apache.org">Apache Arrow</a>
-in-memory format.</p>
-<p>DataFusion offers SQL and Dataframe APIs, excellent
-<a class="reference external" href="https://benchmark.clickhouse.com">performance</a>, built-in support for
-CSV, Parquet, JSON, and Avro, extensive customization, and a great
-community.</p>
+</p><p>DataFusion is an extensible query engine written in <a class="reference external" href="http://rustlang.org">Rust</a> that
+uses <a class="reference external" href="https://arrow.apache.org">Apache Arrow</a> as its in-memory format. DataFusion’s target users are
+developers building fast and feature rich database and analytic systems,
+customized to particular workloads. See <a class="reference external" href="https://datafusion.apache.org/user-guide/introduction.html#use-cases">use cases</a> for examples.</p>
+<p>“Out of the box,” DataFusion offers <a class="reference external" href="https://datafusion.apache.org/user-guide/sql/index.html">SQL</a>
+and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html">Dataframe</a> APIs,
+excellent <a class="reference external" href="https://benchmark.clickhouse.com/">performance</a>, built-in support for CSV, Parquet, JSON, and Avro,
+extensive customization, and a great community.
+<a class="reference external" href="https://github.com/apache/datafusion-python">Python Bindings</a> are also available.</p>
+<p>DataFusion features a full query planner, a columnar, streaming, multi-threaded,
+vectorized execution engine, and partitioned data sources. You can
+customize DataFusion at almost all points including additional data sources,
+query languages, functions, custom operators and more.
+See the <a class="reference external" href="https://datafusion.apache.org/contributor-guide/architecture.html">Architecture</a> section for more details.</p>
 <p>To get started, see</p>
 <ul class="simple">
 <li><p>The <a class="reference external" href="user-guide/example-usage.html">example usage</a> section of the user guide and the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion-examples">datafusion-examples</a> directory.</p></li>
