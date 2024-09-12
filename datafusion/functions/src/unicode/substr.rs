@@ -118,15 +118,37 @@ pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-// Return the exact byte index for [start, end), set count to -1 to ignore count
-fn get_true_start_end(input: &str, start: usize, count: i64) -> (usize, usize) {
+// Convert the given `start` and `count` to valid byte indices within `input` string
+// Input `start` and `count` are equivalent to PostgreSQL's `substr(s, start, count)`
+// `start` is 1-based, if `count` is not provided count to the end of the string
+// Input indices are character-based, and return values are byte indices
+// The input bounds can be outside string bounds, this function will return
+// the intersection between input bounds and valid string bounds
+//
+// * Example
+// 'Hi🌏' in-mem (`[]` for one char, `x` for one byte): [x][x][xxxx]
+// `get_true_start_end('Hi🌏', 1, None) -> (0, 6)`
+// `get_true_start_end('Hi🌏', 1, 1) -> (0, 1)`
+// `get_true_start_end('Hi🌏', -10, 2) -> (0, 0)`
+fn get_true_start_end(input: &str, start: i64, count: Option<u64>) -> (usize, usize) {
+    let start = start - 1;
+    let end = match count {
+        Some(count) => start + count as i64,
+        None => input.len() as i64,
+    };
+    let count_to_end = count.is_some();
+
+    let start = start.clamp(0, input.len() as i64) as usize;
+    let end = end.clamp(0, input.len() as i64) as usize;
+    let count = end - start;
+
     let (mut st, mut ed) = (input.len(), input.len());
     let mut start_counting = false;
     let mut cnt = 0;
     for (char_cnt, (byte_cnt, _)) in input.char_indices().enumerate() {
         if char_cnt == start {
             st = byte_cnt;
-            if count != -1 {
+            if count_to_end {
                 start_counting = true;
             } else {
                 break;
@@ -153,20 +175,15 @@ fn make_and_append_view(
     start: u32,
 ) {
     let substr_len = substr.len();
-    if substr_len == 0 {
-        null_builder.append_null();
-        views_buffer.push(0);
+    let sub_view = if substr_len > 12 {
+        let view = ByteView::from(*raw);
+        make_view(substr.as_bytes(), view.buffer_index, view.offset + start)
     } else {
-        let sub_view = if substr_len > 12 {
-            let view = ByteView::from(*raw);
-            make_view(substr.as_bytes(), view.buffer_index, view.offset + start)
-        } else {
-            // inline value does not need block id or offset
-            make_view(substr.as_bytes(), 0, 0)
-        };
-        views_buffer.push(sub_view);
-        null_builder.append_non_null();
-    }
+        // inline value does not need block id or offset
+        make_view(substr.as_bytes(), 0, 0)
+    };
+    views_buffer.push(sub_view);
+    null_builder.append_non_null();
 }
 
 // The decoding process refs the trait at: arrow/arrow-data/src/byte_view.rs:44
@@ -180,32 +197,26 @@ fn string_view_substr(
 
     let start_array = as_int64_array(&args[0])?;
 
+    // In either case of `substr(s, i)` or `substr(s, i, cnt)`
+    // If any of input argument is `NULL`, the result is `NULL`
     match args.len() {
         1 => {
-            for (idx, (raw, start)) in string_view_array
-                .views()
+            for ((str_opt, raw_view), start_opt) in string_view_array
                 .iter()
+                .zip(string_view_array.views().iter())
                 .zip(start_array.iter())
-                .enumerate()
             {
-                if let Some(start) = start {
-                    let start = (start - 1).max(0) as usize;
+                if let (Some(str), Some(start)) = (str_opt, start_opt) {
+                    let (start, end) = get_true_start_end(str, start, None);
+                    let substr = &str[start..end];
 
-                    // Safety:
-                    // idx is always smaller or equal to string_view_array.views.len()
-                    unsafe {
-                        let str = string_view_array.value_unchecked(idx);
-                        let (start, end) = get_true_start_end(str, start, -1);
-                        let substr = &str[start..end];
-
-                        make_and_append_view(
-                            &mut views_buf,
-                            &mut null_builder,
-                            raw,
-                            substr,
-                            start as u32,
-                        );
-                    }
+                    make_and_append_view(
+                        &mut views_buf,
+                        &mut null_builder,
+                        raw_view,
+                        substr,
+                        start as u32,
+                    );
                 } else {
                     null_builder.append_null();
                     views_buf.push(0);
@@ -214,35 +225,31 @@ fn string_view_substr(
         }
         2 => {
             let count_array = as_int64_array(&args[1])?;
-            for (idx, ((raw, start), count)) in string_view_array
-                .views()
+            for (((str_opt, raw_view), start_opt), count_opt) in string_view_array
                 .iter()
+                .zip(string_view_array.views().iter())
                 .zip(start_array.iter())
                 .zip(count_array.iter())
-                .enumerate()
             {
-                if let (Some(start), Some(count)) = (start, count) {
-                    let start = (start - 1).max(0) as usize;
+                if let (Some(str), Some(start), Some(count)) =
+                    (str_opt, start_opt, count_opt)
+                {
                     if count < 0 {
                         return exec_err!(
                             "negative substring length not allowed: substr(<str>, {start}, {count})"
                         );
                     } else {
-                        // Safety:
-                        // idx is always smaller or equal to string_view_array.views.len()
-                        unsafe {
-                            let str = string_view_array.value_unchecked(idx);
-                            let (start, end) = get_true_start_end(str, start, count);
-                            let substr = &str[start..end];
+                        let (start, end) =
+                            get_true_start_end(str, start, Some(count as u64));
+                        let substr = &str[start..end];
 
-                            make_and_append_view(
-                                &mut views_buf,
-                                &mut null_builder,
-                                raw,
-                                substr,
-                                start as u32,
-                            );
-                        }
+                        make_and_append_view(
+                            &mut views_buf,
+                            &mut null_builder,
+                            raw_view,
+                            substr,
+                            start as u32,
+                        );
                     }
                 } else {
                     null_builder.append_null();
