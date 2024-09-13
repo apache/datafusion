@@ -61,10 +61,10 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                     take_optimizable_column_and_table_count(expr, &stats)
                 {
                     projections.push((expressions::lit(non_null_rows), name.to_owned()));
-                } else if let Some((min, name)) = take_optimizable_min(expr, &stats) {
-                    projections.push((expressions::lit(min), name.to_owned()));
-                } else if let Some((max, name)) = take_optimizable_max(expr, &stats) {
-                    projections.push((expressions::lit(max), name.to_owned()));
+                } else if let Some((min_or_max, name)) =
+                    take_optimizable_value_from_statistics(expr, &stats)
+                {
+                    projections.push((expressions::lit(min_or_max), name.to_owned()));
                 } else {
                     // TODO: we need all aggr_expr to be resolved (cf TODO fullres)
                     break;
@@ -140,126 +140,24 @@ fn take_optimizable_column_and_table_count(
     agg_expr: &AggregateFunctionExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
-    let col_stats = &stats.column_statistics;
-    if agg_expr.fun().is_count() && !agg_expr.is_distinct() {
-        if let Precision::Exact(num_rows) = stats.num_rows {
-            let exprs = agg_expr.expressions();
-            if exprs.len() == 1 {
-                // TODO optimize with exprs other than Column
-                if let Some(col_expr) =
-                    exprs[0].as_any().downcast_ref::<expressions::Column>()
-                {
-                    let current_val = &col_stats[col_expr.index()].null_count;
-                    if let &Precision::Exact(val) = current_val {
-                        return Some((
-                            ScalarValue::Int64(Some((num_rows - val) as i64)),
-                            agg_expr.name().to_string(),
-                        ));
-                    }
-                } else if let Some(lit_expr) =
-                    exprs[0].as_any().downcast_ref::<expressions::Literal>()
-                {
-                    if lit_expr.value() == &COUNT_STAR_EXPANSION {
-                        return Some((
-                            ScalarValue::Int64(Some(num_rows as i64)),
-                            agg_expr.name().to_string(),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// If this agg_expr is a min that is exactly defined in the statistics, return it.
-fn take_optimizable_min(
-    agg_expr: &AggregateFunctionExpr,
-    stats: &Statistics,
-) -> Option<(ScalarValue, String)> {
-    if let Precision::Exact(num_rows) = &stats.num_rows {
-        match *num_rows {
-            0 => {
-                // MIN/MAX with 0 rows is always null
-                if agg_expr.fun().is_min() {
-                    if let Ok(min_data_type) =
-                        ScalarValue::try_from(agg_expr.field().data_type())
-                    {
-                        return Some((min_data_type, agg_expr.name().to_string()));
-                    }
-                }
-            }
-            value if value > 0 => {
-                let col_stats = &stats.column_statistics;
-                if agg_expr.fun().is_min() {
-                    let exprs = agg_expr.expressions();
-                    if exprs.len() == 1 {
-                        // TODO optimize with exprs other than Column
-                        if let Some(col_expr) =
-                            exprs[0].as_any().downcast_ref::<expressions::Column>()
-                        {
-                            if let Precision::Exact(val) =
-                                &col_stats[col_expr.index()].min_value
-                            {
-                                if !val.is_null() {
-                                    return Some((
-                                        val.clone(),
-                                        agg_expr.name().to_string(),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
+    if !agg_expr.is_distinct() {
+        if let Some((val, name)) = take_optimizable_value_from_statistics(agg_expr, stats)
+        {
+            return Some((val, name));
         }
     }
     None
 }
 
 /// If this agg_expr is a max that is exactly defined in the statistics, return it.
-fn take_optimizable_max(
+fn take_optimizable_value_from_statistics(
     agg_expr: &AggregateFunctionExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
-    if let Precision::Exact(num_rows) = &stats.num_rows {
-        match *num_rows {
-            0 => {
-                // MIN/MAX with 0 rows is always null
-                if agg_expr.fun().is_max() {
-                    if let Ok(max_data_type) =
-                        ScalarValue::try_from(agg_expr.field().data_type())
-                    {
-                        return Some((max_data_type, agg_expr.name().to_string()));
-                    }
-                }
-            }
-            value if value > 0 => {
-                let col_stats = &stats.column_statistics;
-                if agg_expr.fun().is_max() {
-                    let exprs = agg_expr.expressions();
-                    if exprs.len() == 1 {
-                        // TODO optimize with exprs other than Column
-                        if let Some(col_expr) =
-                            exprs[0].as_any().downcast_ref::<expressions::Column>()
-                        {
-                            if let Precision::Exact(val) =
-                                &col_stats[col_expr.index()].max_value
-                            {
-                                if !val.is_null() {
-                                    return Some((
-                                        val.clone(),
-                                        agg_expr.name().to_string(),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+    let value = agg_expr.fun().value_from_stats(
+        &stats,
+        agg_expr.field().data_type(),
+        agg_expr.expressions().as_slice(),
+    );
+    value.map(|val| (val, agg_expr.name().to_string()))
 }

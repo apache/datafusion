@@ -25,7 +25,8 @@ use std::vec;
 
 use arrow::datatypes::{DataType, Field};
 
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::AggregateFunction;
 use crate::function::{
@@ -262,19 +263,16 @@ impl AggregateUDF {
         self.inner.is_descending()
     }
 
-    /// Returns true if the function is min. Used by the optimizer
-    pub fn is_min(&self) -> bool {
-        self.inner.is_min()
+    pub fn value_from_stats(
+        &self,
+        statistics: &Statistics,
+        data_type: &DataType,
+        arguments: &[Arc<dyn PhysicalExpr>],
+    ) -> Option<ScalarValue> {
+        self.inner
+            .value_from_stats(statistics, &data_type, arguments)
     }
 
-    /// Returns true if the function is max. Used by the optimizer
-    pub fn is_max(&self) -> bool {
-        self.inner.is_max()
-    }
-    /// Returns true if the function is count. Used by the optimizer
-    pub fn is_count(&self) -> bool {
-        self.inner.is_count()
-    }
     /// See [`AggregateUDFImpl::default_value`] for more details.
     pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         self.inner.default_value(data_type)
@@ -587,18 +585,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn is_descending(&self) -> Option<bool> {
         None
     }
-
-    // Returns true if the function is min. Used by the optimizer
-    fn is_min(&self) -> bool {
-        false
-    }
-    // Returns true if the function is max. Used by the optimizer
-    fn is_max(&self) -> bool {
-        false
-    }
-    // Returns true if the function is count. Used by the optimizer
-    fn is_count(&self) -> bool {
-        false
+    // Return the value of the current UDF from the statistics
+    fn value_from_stats(
+        &self,
+        _statistics: &Statistics,
+        _data_type: &DataType,
+        _arguments: &[Arc<dyn PhysicalExpr>],
+    ) -> Option<ScalarValue> {
+        None
     }
 
     /// Returns default value of the function given the input is all `null`.
