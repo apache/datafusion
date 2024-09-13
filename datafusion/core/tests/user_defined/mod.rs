@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+/// Tests for `array_has`
+mod array_has;
+
 /// Tests for user defined Scalar functions
 mod user_defined_scalar_functions;
 
