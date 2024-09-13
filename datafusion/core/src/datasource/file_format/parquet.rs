@@ -26,7 +26,7 @@ use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
 use super::{
     coerce_file_schema_to_view_type, transform_schema_to_view, FileFormat,
-    FilePushdownSupport, FileFormatFactory, FileScanConfig,
+    FileFormatFactory, FilePushdownSupport, FileScanConfig,
 };
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};

@@ -406,6 +406,7 @@ impl ParquetExecBuilder {
 
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
+
         let cache = ParquetExec::compute_properties(
             projected_schema,
             &projected_output_ordering,
@@ -708,7 +709,7 @@ impl ExecutionPlan for ParquetExec {
         let schema_adapter_factory = self
             .schema_adapter_factory
             .clone()
-            .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory::default()));
+            .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
 
         let opener = ParquetOpener {
             partition_index,

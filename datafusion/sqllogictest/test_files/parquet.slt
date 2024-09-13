@@ -202,63 +202,10 @@ SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
 0 0
 1 1
 
-# Query with filtering on a column
-query I
-select id from alltypes_plain where id > 3;
-----
-4
-5
-6
-7
-
-# When filter pushdown is not enabled, ParquetExec only filters based on
-# metadata, so a FilterExec is required to filter the
-# output of the `ParquetExec`
-query TT
-EXPLAIN SELECT id FROM alltypes_plain WHERE id > 3;
-----
-logical_plan
-01)Filter: alltypes_plain.id > Int32(3)
-02)--TableScan: alltypes_plain projection=[id], partial_filters=[alltypes_plain.id > Int32(3)]
-physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: id@0 > 3
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-04)------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], predicate=id@0 > 3, pruning_predicate=CASE WHEN id_null_count@1 = id_row_count@2 THEN false ELSE id_max@0 > 3 END, required_guarantees=[]
-
-
-# Enable predicate pushdown
-statement ok
-set datafusion.execution.parquet.pushdown_filters = true;
-
-# Query with filtering on a column
-query I
-select id from alltypes_plain where id > 3;
-----
-4
-5
-6
-7
-
-# When filter pushdown *is* enabled, ParquetExec can filter exactly,
-# not just metadata, so we expect to see no FilterExec
-#once https://github.com/apache/datafusion/issues/4028 is fixed
-
-query TT
-EXPLAIN SELECT id FROM alltypes_plain WHERE id > 3;
-----
-logical_plan
-01)Filter: alltypes_plain.id > Int32(3)
-02)--TableScan: alltypes_plain projection=[id], partial_filters=[alltypes_plain.id > Int32(3)]
-physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: id@0 > 3
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-04)------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], predicate=id@0 > 3, pruning_predicate=CASE WHEN id_null_count@1 = id_row_count@2 THEN false ELSE id_max@0 > 3 END, required_guarantees=[]
-
-# reset pushdown
-statement ok
-set datafusion.execution.parquet.pushdown_filters = false;
+# Ensure that local files can not be read by default (a potential security issue)
+# (url table is only supported when DynamicFileCatalog is enabled)
+statement error DataFusion error: Error during planning: table 'datafusion.public.../../parquet-testing/data/alltypes_plain.parquet' not found
+SELECT id, CAST(string_col AS varchar) FROM '../../parquet-testing/data/alltypes_plain.parquet';
 
 # Clean up
 statement ok

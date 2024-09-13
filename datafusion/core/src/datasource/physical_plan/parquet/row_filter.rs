@@ -237,7 +237,6 @@ struct FilterCandidateBuilder<'a> {
     /// The schema of the table (merged schema) -- columns may be in different
     /// order than in the file and have columns that are not in the file schema
     table_schema: &'a Schema,
-    required_column_indices: BTreeSet<usize>,
 }
 
 impl<'a> FilterCandidateBuilder<'a> {
@@ -250,7 +249,6 @@ impl<'a> FilterCandidateBuilder<'a> {
             expr,
             file_schema,
             table_schema,
-            required_column_indices: BTreeSet::default(),
         }
     }
 
@@ -262,23 +260,20 @@ impl<'a> FilterCandidateBuilder<'a> {
     /// * `Ok(None)` if the expression cannot be used as an ArrowFilter
     /// * `Err(e)` if an error occurs while building the candidate
     pub fn build(self, metadata: &ParquetMetaData) -> Result<Option<FilterCandidate>> {
-        let Some((projection, rewritten_expr)) = pushdown_columns(
-            Arc::clone(&self.expr),
-            self.file_schema,
-            self.table_schema,
-        )?
+        let Some((required_indices, rewritten_expr)) =
+            pushdown_columns(self.expr, self.file_schema, self.table_schema)?
         else {
             return Ok(None);
         };
 
-        let required_bytes = size_of_columns(&self.required_column_indices, metadata)?;
-        let can_use_index = columns_sorted(&self.required_column_indices, metadata)?;
+        let required_bytes = size_of_columns(&required_indices, metadata)?;
+        let can_use_index = columns_sorted(&required_indices, metadata)?;
 
         Ok(Some(FilterCandidate {
             expr: rewritten_expr,
             required_bytes,
             can_use_index,
-            projection,
+            projection: required_indices.into_iter().collect(),
         }))
     }
 }
@@ -383,7 +378,7 @@ impl<'schema> TreeNodeRewriter for PushdownChecker<'schema> {
     }
 }
 
-type ProjectionAndExpr = (Vec<usize>, Arc<dyn PhysicalExpr>);
+type ProjectionAndExpr = (BTreeSet<usize>, Arc<dyn PhysicalExpr>);
 
 // Checks if a given expression can be pushed down into `ParquetExec` as opposed to being evaluated
 // post-parquet-scan in a `FilterExec`. If it can be pushed down, this returns returns all the
@@ -398,8 +393,7 @@ fn pushdown_columns(
 
     let expr = expr.rewrite(&mut checker).data()?;
 
-    Ok((!checker.prevents_pushdown())
-        .then(|| (checker.required_column_indices.into_iter().collect(), expr)))
+    Ok((!checker.prevents_pushdown()).then_some((checker.required_column_indices, expr)))
 }
 
 /// creates a PushdownChecker for a single use to check a given column with the given schemes. Used
@@ -539,11 +533,13 @@ pub fn build_row_filter(
     // Determine which conjuncts can be evaluated as ArrowPredicates, if any
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
-        .flat_map(|expr| {
+        .map(|expr| {
             FilterCandidateBuilder::new(expr.clone(), file_schema, table_schema)
                 .build(metadata)
-                .unwrap_or_default()
         })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
         .collect();
 
     // no candidates
@@ -679,8 +675,9 @@ mod test {
             false,
         )]);
 
+        let table_ref = Arc::new(table_schema.clone());
         let schema_adapter =
-            DefaultSchemaAdapterFactory {}.create(Arc::new(table_schema.clone()));
+            DefaultSchemaAdapterFactory.create(Arc::clone(&table_ref), table_ref);
         let (schema_mapping, _) = schema_adapter
             .map_schema(&file_schema)
             .expect("creating schema mapping");

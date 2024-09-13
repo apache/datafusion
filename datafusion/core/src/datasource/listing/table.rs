@@ -792,19 +792,22 @@ impl TableProvider for ListingTable {
             .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
             .collect::<Result<Vec<_>>>()?;
 
-        let filters = if let Some(expr) = conjunction(filters.to_vec()) {
-            // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
-            let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
-            let filters =
-                create_physical_expr(&expr, &table_df_schema, state.execution_props())?;
-            Some(filters)
-        } else {
-            None
-        };
+        let filters = conjunction(filters.to_vec())
+            .map(|expr| -> Result<_> {
+                // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
+                let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
+                let filters = create_physical_expr(
+                    &expr,
+                    &table_df_schema,
+                    state.execution_props(),
+                )?;
+                Ok(Some(filters))
+            })
+            .unwrap_or(Ok(None))?;
 
-        let object_store_url = if let Some(url) = self.table_paths.first() {
-            url.object_store()
-        } else {
+        let Some(object_store_url) =
+            self.table_paths.first().map(ListingTableUrl::object_store)
+        else {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
