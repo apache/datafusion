@@ -21,6 +21,7 @@ use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::{Datum, GenericListArray, Scalar};
+use arrow_buffer::BooleanBuffer;
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result, ScalarValue};
@@ -200,7 +201,10 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
     // If first argument is empty list (second argument is non-null), return false
     // i.e. array_has([], non-null element) -> false
     if values.len() == 0 {
-        return Ok(Arc::new(BooleanArray::from(vec![Some(false)])));
+        return Ok(Arc::new(BooleanArray::new(
+            BooleanBuffer::new_unset(haystack.len()),
+            None,
+        )));
     }
     let eq_array = compare_with_eq(values, needle, is_nested)?;
     let mut final_contained = vec![None; haystack.len()];
@@ -455,5 +459,45 @@ fn general_array_has_all_and_any_kernel(
                 .iter()
                 .any(|haystack_row| haystack_row == needle_row)
         }),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use arrow::datatypes::UInt32Type;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use arrow_array::ListArray;
+    use datafusion::logical_expr::ScalarUDF;
+    use datafusion::prelude::*;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_empty_haystack() {
+        let ctx = SessionContext::new();
+        let udf = ScalarUDF::from(ArrayHas::default());
+        ctx.register_udf(udf);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "items",
+                DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
+                true,
+            )])),
+            vec![Arc::new(
+                ListArray::from_iter_primitive::<UInt32Type, _, _>(vec![
+                    Some(vec![]),
+                    Some(vec![]),
+                    Some(vec![]),
+                ]),
+            )],
+        )
+        .unwrap();
+        ctx.register_batch("test", batch).unwrap();
+
+        let sql = "SELECT 1 from test where array_has(items, 1)";
+        let count = ctx.sql(sql).await.unwrap().count().await.unwrap();
+        assert_eq!(count, 0);
     }
 }

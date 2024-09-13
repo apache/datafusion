@@ -58,6 +58,8 @@ rand = "0.8.5"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
+datafusion = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [[bench]]
 harness = false
