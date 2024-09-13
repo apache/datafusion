@@ -34,7 +34,7 @@ use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 
 /// Represents the column at a given index in a RecordBatch
 ///
-/// This is a physical expression that represents a column at a given index in a
+/// This is a physical expression that represents a column at a given index in an
 /// arrow [`Schema`] / [`RecordBatch`].
 ///
 /// Unlike the [logical `Expr::Column`], this expression is always resolved by schema index,
@@ -66,7 +66,7 @@ use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 /// [logical `Expr::Column`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html#variant.Column
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct Column {
-    /// THe name of the column (used for debugging and display purposes)
+    /// The name of the column (used for debugging and display purposes)
     name: String,
     /// The index of the column in its schema
     index: usize,
