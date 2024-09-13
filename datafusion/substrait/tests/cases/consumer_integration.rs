@@ -26,21 +26,11 @@
 mod tests {
     use crate::utils::test::add_plan_schemas_to_ctx;
     use datafusion::common::Result;
-    use datafusion::execution::options::CsvReadOptions;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use std::fs::File;
     use std::io::BufReader;
     use substrait::proto::Plan;
-
-    async fn create_context(files: Vec<(&str, &str)>) -> Result<SessionContext> {
-        let ctx = SessionContext::new();
-        for (table_name, file_path) in files {
-            ctx.register_csv(table_name, file_path, CsvReadOptions::default())
-                .await?;
-        }
-        Ok(ctx)
-    }
 
     async fn tpch_plan_to_string(query_id: i32) -> Result<String> {
         let path =
@@ -180,7 +170,30 @@ mod tests {
         Ok(())
     }
 
-    // TODO: missing plan 7, 8, 9
+    #[ignore]
+    #[tokio::test]
+    async fn tpch_test_07() -> Result<()> {
+        let plan_str = tpch_plan_to_string(7).await?;
+        assert_eq!(plan_str, "Missing support for enum function arguments");
+        Ok(())
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn tpch_test_08() -> Result<()> {
+        let plan_str = tpch_plan_to_string(8).await?;
+        assert_eq!(plan_str, "Missing support for enum function arguments");
+        Ok(())
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn tpch_test_09() -> Result<()> {
+        let plan_str = tpch_plan_to_string(9).await?;
+        assert_eq!(plan_str, "Missing support for enum function arguments");
+        Ok(())
+    }
+
     #[tokio::test]
     async fn tpch_test_10() -> Result<()> {
         let plan_str = tpch_plan_to_string(10).await?;
@@ -234,7 +247,23 @@ mod tests {
         Ok(())
     }
 
-    // missing query 12
+    #[tokio::test]
+    async fn tpch_test_12() -> Result<()> {
+        let plan_str = tpch_plan_to_string(12).await?;
+        assert_eq!(
+            plan_str,
+            "Projection: LINEITEM.L_SHIPMODE, sum(CASE WHEN ORDERS.O_ORDERPRIORITY = Utf8(\"1-URGENT\") OR ORDERS.O_ORDERPRIORITY = Utf8(\"2-HIGH\") THEN Int32(1) ELSE Int32(0) END) AS HIGH_LINE_COUNT, sum(CASE WHEN ORDERS.O_ORDERPRIORITY != Utf8(\"1-URGENT\") AND ORDERS.O_ORDERPRIORITY != Utf8(\"2-HIGH\") THEN Int32(1) ELSE Int32(0) END) AS LOW_LINE_COUNT\
+            \n  Sort: LINEITEM.L_SHIPMODE ASC NULLS LAST\
+            \n    Aggregate: groupBy=[[LINEITEM.L_SHIPMODE]], aggr=[[sum(CASE WHEN ORDERS.O_ORDERPRIORITY = Utf8(\"1-URGENT\") OR ORDERS.O_ORDERPRIORITY = Utf8(\"2-HIGH\") THEN Int32(1) ELSE Int32(0) END), sum(CASE WHEN ORDERS.O_ORDERPRIORITY != Utf8(\"1-URGENT\") AND ORDERS.O_ORDERPRIORITY != Utf8(\"2-HIGH\") THEN Int32(1) ELSE Int32(0) END)]]\
+            \n      Projection: LINEITEM.L_SHIPMODE, CASE WHEN ORDERS.O_ORDERPRIORITY = Utf8(\"1-URGENT\") OR ORDERS.O_ORDERPRIORITY = Utf8(\"2-HIGH\") THEN Int32(1) ELSE Int32(0) END, CASE WHEN ORDERS.O_ORDERPRIORITY != Utf8(\"1-URGENT\") AND ORDERS.O_ORDERPRIORITY != Utf8(\"2-HIGH\") THEN Int32(1) ELSE Int32(0) END\
+            \n        Filter: ORDERS.O_ORDERKEY = LINEITEM.L_ORDERKEY AND (LINEITEM.L_SHIPMODE = CAST(Utf8(\"MAIL\") AS Utf8) OR LINEITEM.L_SHIPMODE = CAST(Utf8(\"SHIP\") AS Utf8)) AND LINEITEM.L_COMMITDATE < LINEITEM.L_RECEIPTDATE AND LINEITEM.L_SHIPDATE < LINEITEM.L_COMMITDATE AND LINEITEM.L_RECEIPTDATE >= CAST(Utf8(\"1994-01-01\") AS Date32) AND LINEITEM.L_RECEIPTDATE < CAST(Utf8(\"1995-01-01\") AS Date32)\
+            \n          CrossJoin:\
+            \n            TableScan: ORDERS projection=[O_ORDERKEY, O_CUSTKEY, O_ORDERSTATUS, O_TOTALPRICE, O_ORDERDATE, O_ORDERPRIORITY, O_CLERK, O_SHIPPRIORITY, O_COMMENT]\
+            \n            TableScan: LINEITEM projection=[L_ORDERKEY, L_PARTKEY, L_SUPPKEY, L_LINENUMBER, L_QUANTITY, L_EXTENDEDPRICE, L_DISCOUNT, L_TAX, L_RETURNFLAG, L_LINESTATUS, L_SHIPDATE, L_COMMITDATE, L_RECEIPTDATE, L_SHIPINSTRUCT, L_SHIPMODE, L_COMMENT]"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn tpch_test_13() -> Result<()> {
         let plan_str = tpch_plan_to_string(13).await?;
@@ -270,7 +299,14 @@ mod tests {
         Ok(())
     }
 
-    // query 15 is missing
+    #[ignore]
+    #[tokio::test]
+    async fn tpch_test_15() -> Result<()> {
+        let plan_str = tpch_plan_to_string(15).await?;
+        assert_eq!(plan_str, "Test file is empty");
+        Ok(())
+    }
+
     #[tokio::test]
     async fn tpch_test_16() -> Result<()> {
         let plan_str = tpch_plan_to_string(16).await?;
@@ -291,23 +327,12 @@ mod tests {
         );
         Ok(())
     }
-    /// this test has some problem in json file internally, gonna fix it
+
     #[ignore]
     #[tokio::test]
     async fn tpch_test_17() -> Result<()> {
-        let ctx = create_context(vec![
-            ("FILENAME_PLACEHOLDER_0", "tests/testdata/tpch/lineitem.csv"),
-            ("FILENAME_PLACEHOLDER_1", "tests/testdata/tpch/part.csv"),
-            ("FILENAME_PLACEHOLDER_2", "tests/testdata/tpch/lineitem.csv"),
-        ])
-        .await?;
-        let path = "tests/testdata/tpch_substrait_plans/query_17_plan.json";
-        let proto = serde_json::from_reader::<_, Plan>(BufReader::new(
-            File::open(path).expect("file not found"),
-        ))
-        .expect("failed to parse json");
-
-        let _plan = from_substrait_plan(&ctx, &proto).await?;
+        let plan_str = tpch_plan_to_string(17).await?;
+        assert_eq!(plan_str, "panics due to out of bounds field access");
         Ok(())
     }
 
