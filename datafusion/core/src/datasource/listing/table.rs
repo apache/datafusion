@@ -281,14 +281,14 @@ impl ListingOptions {
     /// assert_eq!(listing_options.file_extension, ".parquet");
     /// ```
     pub fn with_file_extension_opt<S>(mut self, file_extension: Option<S>) -> Self
-    where S: Into<String>
+    where
+        S: Into<String>,
     {
         if let Some(file_extension) = file_extension {
             self.file_extension = file_extension.into();
         }
         self
     }
-
 
     /// Set `table partition columns` on [`ListingOptions`] and returns self.
     ///
