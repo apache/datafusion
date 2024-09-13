@@ -27,6 +27,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
+use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
@@ -61,6 +62,15 @@ pub struct ScalarUDF {
 impl PartialEq for ScalarUDF {
     fn eq(&self, other: &Self) -> bool {
         self.inner.equals(other.inner.as_ref())
+    }
+}
+
+impl PartialOrd for ScalarUDF {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name().partial_cmp(other.name()) {
+            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
+            cmp => cmp,
+        }
     }
 }
 

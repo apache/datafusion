@@ -300,7 +300,7 @@ impl WindowFrame {
 /// 4. `<expr>` FOLLOWING
 /// 5. UNBOUNDED FOLLOWING
 ///
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum WindowFrameBound {
     /// 1. UNBOUNDED PRECEDING
     ///    The frame boundary is the first row in the partition.
