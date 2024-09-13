@@ -57,6 +57,7 @@ macro_rules! assert_metrics {
 }
 
 pub mod aggregates;
+pub mod array_has;
 pub mod create_drop;
 pub mod explain_analyze;
 pub mod joins;
