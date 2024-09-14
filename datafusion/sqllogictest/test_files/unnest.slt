@@ -165,6 +165,13 @@ select unnest(column1), column1 from unnest_table;
 6 [6]
 12 [12]
 
+# unnest at different level at the same time
+query II
+select unnest([1,2,3]), unnest(unnest([[1,2,3]]));
+----
+1 1
+2 2
+3 3
 
 # binary expr linking different unnest exprs
 query II
