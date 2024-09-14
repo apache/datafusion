@@ -1590,7 +1590,7 @@ pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
     unnest_with_options(input, unnestings, UnnestOptions::default())
 }
 
-pub fn get_unnested_list_column_recursive(
+pub fn get_unnested_list_datatype_recursive(
     data_type: &DataType,
     depth: usize,
 ) -> Result<DataType> {
@@ -1601,7 +1601,7 @@ pub fn get_unnested_list_column_recursive(
             if depth == 1 {
                 return Ok(field.data_type().clone());
             }
-            return get_unnested_list_column_recursive(field.data_type(), depth - 1);
+            return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
         }
         _ => {}
     };
@@ -1609,7 +1609,10 @@ pub fn get_unnested_list_column_recursive(
     internal_err!("trying to unnest on invalid data type {:?}", data_type)
 }
 
-fn get_unnested_columns_inferred(
+/// Infer the unnest type based on the data type:
+/// - list type: infer to unnest(list(col, depth=1))
+/// - struct type: infer to unnest(struct)
+fn infer_unnest_type(
     col_name: &String,
     data_type: &DataType,
 ) -> Result<ColumnUnnestType> {
@@ -1654,7 +1657,7 @@ pub fn get_unnested_columns(
 
     match data_type {
         DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
-            let data_type = get_unnested_list_column_recursive(data_type, depth)?;
+            let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
             let new_field = Arc::new(Field::new(
                 col_name, data_type,
                 // Unnesting may produce NULLs even if the list is not null.
@@ -1756,7 +1759,7 @@ pub fn unnest_with_options(
                 Some((column_to_unnest, unnest_type)) => {
                     let mut inferred_unnest_type = unnest_type.clone();
                     if let ColumnUnnestType::Inferred = unnest_type {
-                        inferred_unnest_type = get_unnested_columns_inferred(
+                        inferred_unnest_type = infer_unnest_type(
                             &column_to_unnest.name,
                             original_field.data_type(),
                         )?;
