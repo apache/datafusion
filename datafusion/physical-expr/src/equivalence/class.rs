@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::hash::{Hash, Hasher};
-use std::ops::RangeFull;
 use std::sync::Arc;
 
 use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
@@ -29,7 +27,6 @@ use crate::{
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
-use indexmap::IndexSet;
 
 #[derive(Debug, Clone)]
 /// A structure representing a expression known to be constant in a physical execution plan.
@@ -124,35 +121,6 @@ pub fn const_exprs_contains(
     const_exprs
         .iter()
         .any(|const_expr| const_expr.expr.eq(expr))
-}
-
-impl Eq for ConstExpr {}
-
-impl PartialEq for ConstExpr {
-    fn eq(&self, other: &Self) -> bool {
-        self.expr.eq(other.expr())
-    }
-}
-
-impl Hash for ConstExpr {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.expr.hash(state);
-    }
-}
-
-/// Concats two slices of `const_exprs, removing duplicates and
-/// maintaining the order.
-///
-/// Equality based upon the expression. `across_partitions` will
-/// always be false as we do not validate the same constant value
-/// on both sides.
-pub fn concat_const_exprs(lhs: &[ConstExpr], rhs: &[ConstExpr]) -> Vec<ConstExpr> {
-    IndexSet::<&ConstExpr>::from_iter(lhs.iter().chain(rhs.iter()))
-        .drain(RangeFull)
-        .map(|constant_expr| {
-            ConstExpr::new(Arc::clone(&constant_expr.expr)).with_across_partitions(false)
-        })
-        .collect()
 }
 
 /// An `EquivalenceClass` is a set of [`Arc<dyn PhysicalExpr>`]s that are known
