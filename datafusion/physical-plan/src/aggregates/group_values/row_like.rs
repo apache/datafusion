@@ -33,7 +33,7 @@ use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
-use datafusion_physical_expr_common::group_value_row::ArrayEqV2;
+use datafusion_physical_expr_common::group_value_row::ArrayRowEq;
 use hashbrown::raw::RawTable;
 
 pub(super) const INITIAL_CAPACITY: usize = 8 * 1024;
@@ -77,7 +77,7 @@ pub struct GroupValuesRowLike {
 
     /// Random state for creating hashes
     random_state: RandomState,
-    group_values_v2: Option<Vec<Box<dyn ArrayEqV2>>>,
+    group_values_v2: Option<Vec<Box<dyn ArrayRowEq>>>,
 }
 
 impl GroupValuesRowLike {
@@ -112,17 +112,6 @@ impl GroupValuesRowLike {
 
 impl GroupValues for GroupValuesRowLike {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        // Convert the group keys into the row format
-        // let group_rows = &mut self.rows_buffer;
-        // group_rows.clear();
-        // self.row_converter.append(group_rows, cols)?;
-        // let n_rows = group_rows.num_rows();
-
-        // let mut group_values = match self.group_values.take() {
-        //     Some(group_values) => group_values,
-        //     None => self.row_converter.empty_rows(0, 0),
-        // };
-
         let n_rows = cols[0].len();
         let mut group_values_v2 = match self.group_values_v2.take() {
             Some(group_values) => group_values,
@@ -130,7 +119,7 @@ impl GroupValues for GroupValuesRowLike {
                 let len = cols.len();
                 let mut v = Vec::with_capacity(len);
                 // Move to `try_new`
-                for (i, f) in self.schema.fields().iter().enumerate() {
+                for f in self.schema.fields().iter() {
                     match f.data_type() {
                         &DataType::Int8 => {
                             let b = PrimitiveBuilder::<Int8Type>::new();
@@ -225,7 +214,7 @@ impl GroupValues for GroupValuesRowLike {
                 // && group_rows.row(row) == group_values.row(*group_idx)
 
                 fn compare_equal(
-                    arry_eq: &dyn ArrayEqV2,
+                    arry_eq: &dyn ArrayRowEq,
                     lhs_row: usize,
                     array: &ArrayRef,
                     rhs_row: usize,
@@ -310,24 +299,19 @@ impl GroupValues for GroupValuesRowLike {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        // println!("emit");
-        // let mut group_values = self
-        //     .group_values
-        //     .take()
-        //     .expect("Can not emit from empty rows");
-
         let mut group_values_v2 = self
             .group_values_v2
             .take()
             .expect("Can not emit from empty rows");
 
+        // println!("emit_to: {:?}", emit_to);
+
         let mut output = match emit_to {
             EmitTo::All => {
                 let output = group_values_v2
-                    .into_iter()
-                    .map(|mut v| {
-                        let p = v.deref_mut().build();
-                        p
+                    .iter_mut()
+                    .map(|v| {
+                        v.deref_mut().build()
                     })
                     .collect::<Vec<_>>();
                 // let output = self.row_converter.convert_rows(&group_values)?;
@@ -341,7 +325,7 @@ impl GroupValues for GroupValuesRowLike {
 
                 // println!("to first n");
                 let len = group_values_v2.len();
-                let first_n: Vec<Box<dyn ArrayEqV2>> =
+                let first_n: Vec<Box<dyn ArrayRowEq>> =
                     group_values_v2.drain(..n).collect();
                 let output = first_n
                     .into_iter()
@@ -394,6 +378,7 @@ impl GroupValues for GroupValuesRowLike {
         }
 
         // self.group_values = Some(group_values);
+        // println!("output: {:?}", output);
         Ok(output)
     }
 
