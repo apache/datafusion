@@ -151,13 +151,13 @@ pub mod test {
             let rel_type = rel
                 .rel_type
                 .as_ref()
-                .ok_or(substrait_datafusion_err!("RelRoot must set input"))?;
+                .ok_or(substrait_datafusion_err!("Rel must set rel_type"))?;
             match rel_type {
                 RelType::Read(r) => {
                     let read_type = r
                         .read_type
                         .as_ref()
-                        .ok_or(substrait_datafusion_err!("read_type not set on Read"))?;
+                        .ok_or(substrait_datafusion_err!("Read must set read_type"))?;
                     match read_type {
                         // Virtual Tables do not contribute to the schema
                         ReadType::VirtualTable(_) => (),
@@ -382,6 +382,9 @@ pub mod test {
                             self.collect_schemas_from_expr(expr)?
                         }
                     }
+                    if let Some(expr) = se.r#else.as_ref() {
+                        self.collect_schemas_from_expr(expr);
+                    }
                 }
                 RexType::SingularOrList(sol) => {
                     if let Some(expr) = sol.value.as_ref() {
@@ -402,7 +405,7 @@ pub mod test {
                     }
                 }
                 RexType::Cast(c) => {
-                    for expr in c.input.iter() {
+                    if let Some(expr) = c.input.as_ref() {
                         self.collect_schemas_from_expr(expr)?
                     }
                 }
