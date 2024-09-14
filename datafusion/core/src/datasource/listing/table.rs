@@ -245,6 +245,7 @@ impl ListingOptions {
 
     /// Set file extension on [`ListingOptions`] and returns self.
     ///
+    /// # Example
     /// ```
     /// # use std::sync::Arc;
     /// # use datafusion::prelude::SessionContext;
@@ -259,6 +260,33 @@ impl ListingOptions {
     /// ```
     pub fn with_file_extension(mut self, file_extension: impl Into<String>) -> Self {
         self.file_extension = file_extension.into();
+        self
+    }
+
+    /// Optionally set file extension on [`ListingOptions`] and returns self.
+    ///
+    /// If `file_extension` is `None`, the file extension will not be changed
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::SessionContext;
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// let extension = Some(".parquet");
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::default()
+    ///   ))
+    ///   .with_file_extension_opt(extension);
+    ///
+    /// assert_eq!(listing_options.file_extension, ".parquet");
+    /// ```
+    pub fn with_file_extension_opt<S>(mut self, file_extension: Option<S>) -> Self
+    where
+        S: Into<String>,
+    {
+        if let Some(file_extension) = file_extension {
+            self.file_extension = file_extension.into();
+        }
         self
     }
 
