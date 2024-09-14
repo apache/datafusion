@@ -22,7 +22,7 @@ use crate::string::common::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     make_view, Array, ArrayIter, ArrayRef, AsArray, ByteView, GenericStringArray,
-    OffsetSizeTrait, StringViewArray,
+    Int64Array, OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
@@ -202,6 +202,53 @@ fn make_and_append_view(
     null_builder.append_non_null();
 }
 
+// String characters are variable length encoded in UTF-8, `substr()` function's
+// arguments are character-based, converting them into byte-based indices
+// requires expensive decoding.
+// However, checking if a string is ASCII-only is relatively cheap.
+// If strings are ASCII only, use byte-based indices instead.
+//
+// A common pattern to call `substr()` is taking a small prefix of a long
+// string, such as `substr(long_str_with_1k_chars, 1, 32)`.
+// In such case the overhead of ASCII-validation may not be worth it, so
+// skip the validation for short prefix for now.
+fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
+    string_array: &V,
+    start: &Int64Array,
+    count: Option<&Int64Array>,
+) -> bool {
+    let is_short_prefix = match count {
+        Some(count) => {
+            let short_prefix_threshold = 32.0;
+            let n_sample = 10;
+
+            // HACK: can be simplified if function has specialized
+            // implementation for `ScalarValue` (implement without `make_scalar_function()`)
+            let avg_prefix_len = start
+                .iter()
+                .zip(count.iter())
+                .take(n_sample)
+                .map(|(start, count)| {
+                    let start = start.unwrap_or(0);
+                    let count = count.unwrap_or(0);
+                    // To get substring, need to decode from 0 to start+count instead of start to start+count
+                    start + count
+                })
+                .sum::<i64>();
+
+            avg_prefix_len as f64 / n_sample as f64 <= short_prefix_threshold
+        }
+        None => false,
+    };
+
+    if is_short_prefix {
+        // Skip ASCII validation for short prefix
+        false
+    } else {
+        string_array.is_ascii()
+    }
+}
+
 // The decoding process refs the trait at: arrow/arrow-data/src/byte_view.rs:44
 // From<u128> for ByteView
 fn string_view_substr(
@@ -212,29 +259,14 @@ fn string_view_substr(
     let mut null_builder = NullBufferBuilder::new(string_view_array.len());
 
     let start_array = as_int64_array(&args[0])?;
-
-    // Notes for ASCII-only optimization:
-    //
-    // String characters are variable length encoded in UTF-8, `substr()` function's
-    // arguments are character-based, converting them into byte-based indices
-    // requires expensive decoding.
-    // However, checking if a string is ASCII-only is relatively cheap.
-    // If strings are ASCII only, use byte-based indices instead.
-    //
-    // A common pattern to call `substr()` is taking a small prefix of a long
-    // string, such as `substr(long_str_with_1k_chars, 1, 32)`.
-    // In such case the overhead of ASCII-validation may not be worth it, so
-    // skip the validation for long strings for now.
-    // TODO: A better heuristic is to use the ratio to decide whether to validate
-    // like `(start + count) / estimate_avg_strlen > threshold`, but it requires
-    // specialized implementation for `ScalarValue` input.
-    let estimate_avg_strlen =
-        string_view_array.get_buffer_memory_size() / string_view_array.len();
-    let enable_ascii_fast_path = if estimate_avg_strlen > 256 {
-        false // Skip ASCII validation
+    let count_array_opt = if args.len() == 2 {
+        Some(as_int64_array(&args[1])?)
     } else {
-        string_view_array.is_ascii()
+        None
     };
+
+    let enable_ascii_fast_path =
+        enable_ascii_fast_path(&string_view_array, start_array, count_array_opt);
 
     // In either case of `substr(s, i)` or `substr(s, i, cnt)`
     // If any of input argument is `NULL`, the result is `NULL`
@@ -264,7 +296,7 @@ fn string_view_substr(
             }
         }
         2 => {
-            let count_array = as_int64_array(&args[1])?;
+            let count_array = count_array_opt.unwrap();
             for (((str_opt, raw_view), start_opt), count_opt) in string_view_array
                 .iter()
                 .zip(string_view_array.views().iter())
@@ -335,19 +367,19 @@ where
     V: StringArrayType<'a>,
     T: OffsetSizeTrait,
 {
-    // Notes for ASCII-only optimization:
-    // see comment in `string_view_substr()`
-    let estimate_avg_strlen = string_array.get_buffer_memory_size() / string_array.len();
-    let enable_ascii_fast_path = if estimate_avg_strlen > 256 {
-        false // Skip ASCII validation
+    let start_array = as_int64_array(&args[0])?;
+    let count_array_opt = if args.len() == 2 {
+        Some(as_int64_array(&args[1])?)
     } else {
-        string_array.is_ascii()
+        None
     };
+
+    let enable_ascii_fast_path =
+        enable_ascii_fast_path(&string_array, start_array, count_array_opt);
 
     match args.len() {
         1 => {
             let iter = ArrayIter::new(string_array);
-            let start_array = as_int64_array(&args[0])?;
 
             let result = iter
                 .zip(start_array.iter())
@@ -369,8 +401,7 @@ where
         }
         2 => {
             let iter = ArrayIter::new(string_array);
-            let start_array = as_int64_array(&args[0])?;
-            let count_array = as_int64_array(&args[1])?;
+            let count_array = count_array_opt.unwrap();
 
             let result = iter
                 .zip(start_array.iter())
