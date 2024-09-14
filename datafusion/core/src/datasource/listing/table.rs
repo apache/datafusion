@@ -1511,11 +1511,9 @@ mod tests {
 
         let format = AvroFormat {};
 
-        let mut opt = ListingOptions::new(Arc::new(format))
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
-        if let Some(ext) = file_ext {
-            opt = opt.with_file_extension(ext);
-        }
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
@@ -1547,11 +1545,9 @@ mod tests {
 
         let format = AvroFormat {};
 
-        let mut opt = ListingOptions::new(Arc::new(format))
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
-        if let Some(ext) = file_ext {
-            opt = opt.with_file_extension(ext);
-        }
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
