@@ -44,8 +44,7 @@ use indexmap::IndexSet;
 ///
 /// - `across_partitions`: A boolean flag indicating whether the constant expression is
 ///   valid across partitions. If set to `true`, the constant expression has same value for all partitions.
-///   If set to `false`, the constant expression may have different constant values for different partitions
-///   or only be constant within one of the partitions.
+///   If set to `false`, the constant expression may have different values for different partitions.
 ///
 /// # Example
 ///
