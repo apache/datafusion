@@ -21,6 +21,7 @@ use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::{Datum, GenericListArray, Scalar};
+use arrow_buffer::BooleanBuffer;
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result, ScalarValue};
@@ -200,7 +201,10 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
     // If first argument is empty list (second argument is non-null), return false
     // i.e. array_has([], non-null element) -> false
     if values.len() == 0 {
-        return Ok(Arc::new(BooleanArray::from(vec![Some(false)])));
+        return Ok(Arc::new(BooleanArray::new(
+            BooleanBuffer::new_unset(haystack.len()),
+            None,
+        )));
     }
     let eq_array = compare_with_eq(values, needle, is_nested)?;
     let mut final_contained = vec![None; haystack.len()];
