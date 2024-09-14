@@ -18,8 +18,11 @@
 use arrow::array::BooleanBufferBuilder;
 use arrow::array::BufferBuilder;
 use arrow::array::GenericBinaryArray;
+use arrow::array::GenericBinaryBuilder;
 use arrow::array::GenericStringArray;
+use arrow::array::GenericStringBuilder;
 use arrow::array::OffsetSizeTrait;
+use arrow::array::PrimitiveBuilder;
 use arrow::buffer::NullBuffer;
 use arrow::buffer::OffsetBuffer;
 use arrow::buffer::ScalarBuffer;
@@ -37,11 +40,59 @@ use crate::binary_map::INITIAL_BUFFER_CAPACITY;
 
 use std::sync::Arc;
 
+pub trait ArrayEqV2: Send + Sync {
+    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
+    fn append_val(&mut self, array: &ArrayRef, row: usize);
+    fn len(&self) -> usize;
+    fn build(&mut self) -> ArrayRef;
+}
+
 pub trait ArrayEq: Send + Sync {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
     fn append_val(&mut self, array: &ArrayRef, row: usize);
     fn len(&self) -> usize;
     fn build(self: Box<Self>) -> ArrayRef;
+}
+
+impl<T> ArrayEqV2 for PrimitiveBuilder<T>
+where
+    T: ArrowPrimitiveType,
+{
+    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
+        let arr = array.as_primitive::<T>();
+
+        if let Some(nulls) = self.validity_slice() {
+            let null_slice_index = lhs_row / 8;
+            let null_bit_map_index = lhs_row % 8;
+            let is_elem_null = ((nulls[null_slice_index] >> null_bit_map_index) & 1) == 1;
+            if is_elem_null {
+                return arr.is_null(rhs_row);
+            } else if arr.is_null(rhs_row) {
+                return false;
+            }
+        }
+
+        let elem = self.values_slice()[lhs_row];
+        elem == arr.value(rhs_row)
+    }
+
+    fn append_val(&mut self, array: &ArrayRef, row: usize) {
+        let arr = array.as_primitive::<T>();
+        if arr.is_null(row) {
+            self.append_null();
+        } else {
+            let elem = arr.value(row);
+            self.append_value(elem);
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.values_slice().len()
+    }
+
+    fn build(&mut self) -> ArrayRef {
+        Arc::new(self.finish())
+    }
 }
 
 pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType>(Vec<Option<T::Native>>);
@@ -126,6 +177,99 @@ impl<T: ArrowPrimitiveType> ArrayEq for PrimitiveGroupValueBuilder<T> {
 //         Arc::new(StringArray::from_iter(self.0))
 //     }
 // }
+
+impl<O> ArrayEqV2 for GenericStringBuilder<O>
+where
+    O: OffsetSizeTrait,
+{
+    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
+        let arr = array.as_bytes::<GenericStringType<O>>();
+        if let Some(nulls) = self.validity_slice() {
+            let null_slice_index = lhs_row / 8;
+            let null_bit_map_index = lhs_row % 8;
+
+            let is_lhs_null = ((nulls[null_slice_index] >> null_bit_map_index) & 1) == 1;
+            if is_lhs_null {
+                return arr.is_null(rhs_row);
+            } else if arr.is_null(rhs_row) {
+                return false;
+            }
+        }
+
+        let rhs_elem: &[u8] = arr.value(rhs_row).as_ref();
+        let rhs_elem_len = arr.value_length(rhs_row).as_usize();
+        assert_eq!(rhs_elem_len, rhs_elem.len());
+        let l = O::as_usize(self.offsets_slice()[lhs_row]);
+        let r = O::as_usize(self.offsets_slice()[lhs_row + 1]);
+        let existing_elem = &self.values_slice()[l..r];
+        existing_elem.len() == rhs_elem.len() && rhs_elem == existing_elem
+    }
+
+    fn append_val(&mut self, array: &ArrayRef, row: usize) {
+        let arr = array.as_string::<O>();
+        if arr.is_null(row) {
+            self.append_null();
+            return;
+        }
+
+        let value = arr.value(row);
+        self.append_value(value);
+    }
+
+    fn len(&self) -> usize {
+        self.offsets_slice().len() - 1
+    }
+
+    fn build(&mut self) -> ArrayRef {
+        Arc::new(self.finish())
+    }
+}
+
+impl<O> ArrayEqV2 for GenericBinaryBuilder<O>
+where
+    O: OffsetSizeTrait,
+{
+    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
+        let arr = array.as_bytes::<GenericBinaryType<O>>();
+        if let Some(nulls) = self.validity_slice() {
+            let null_slice_index = lhs_row / 8;
+            let null_bit_map_index = lhs_row % 8;
+            let is_lhs_null = ((nulls[null_slice_index] >> null_bit_map_index) & 1) == 1;
+            if is_lhs_null {
+                return arr.is_null(rhs_row);
+            } else if arr.is_null(rhs_row) {
+                return false;
+            }
+        }
+
+        let rhs_elem: &[u8] = arr.value(rhs_row).as_ref();
+        let rhs_elem_len = arr.value_length(rhs_row).as_usize();
+        assert_eq!(rhs_elem_len, rhs_elem.len());
+        let l = O::as_usize(self.offsets_slice()[lhs_row]);
+        let r = O::as_usize(self.offsets_slice()[lhs_row + 1]);
+        let existing_elem = &self.values_slice()[l..r];
+        existing_elem.len() == rhs_elem.len() && rhs_elem == existing_elem
+    }
+
+    fn append_val(&mut self, array: &ArrayRef, row: usize) {
+        let arr = array.as_binary::<O>();
+        if arr.is_null(row) {
+            self.append_null();
+            return;
+        }
+
+        let value: &[u8] = arr.value(row).as_ref();
+        self.append_value(value);
+    }
+
+    fn len(&self) -> usize {
+        self.values_slice().len()
+    }
+
+    fn build(&mut self) -> ArrayRef {
+        Arc::new(self.finish())
+    }
+}
 
 pub struct ByteGroupValueBuilderNaive<O>
 where
@@ -622,3 +766,26 @@ where
 //         self.offset_or_inline..self.offset_or_inline + self.len.as_usize()
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use arrow::{array::GenericByteBuilder, datatypes::GenericStringType};
+
+    #[test]
+    fn test123() {
+        let mut a = GenericByteBuilder::<GenericStringType<i32>>::new();
+        a.append_null();
+        a.append_value("a");
+        a.append_null();
+        a.append_value("bc");
+        a.append_value("def");
+        a.append_null();
+
+        let s = a.validity_slice();
+        println!("s: {:?}", s);
+        let v = a.values_slice();
+        let o = a.offsets_slice();
+        println!("v: {:?}", v);
+        println!("o: {:?}", o);
+    }
+}

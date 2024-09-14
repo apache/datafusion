@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::DerefMut;
+
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
+use arrow::array::{GenericStringBuilder, PrimitiveBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
@@ -30,11 +33,10 @@ use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
-use datafusion_physical_expr::binary_map::OutputType;
-use datafusion_physical_expr_common::group_value_row::{
-    ArrayEq, ByteGroupValueBuilderNaive, PrimitiveGroupValueBuilder,
-};
+use datafusion_physical_expr_common::group_value_row::ArrayEqV2;
 use hashbrown::raw::RawTable;
+
+pub(super) const INITIAL_CAPACITY: usize = 8 * 1024;
 
 /// A [`GroupValues`] making use of [`Rows`]
 pub struct GroupValuesRowLike {
@@ -75,7 +77,7 @@ pub struct GroupValuesRowLike {
 
     /// Random state for creating hashes
     random_state: RandomState,
-    group_values_v2: Option<Vec<Box<dyn ArrayEq>>>,
+    group_values_v2: Option<Vec<Box<dyn ArrayEqV2>>>,
 }
 
 impl GroupValuesRowLike {
@@ -131,53 +133,65 @@ impl GroupValues for GroupValuesRowLike {
                 for (i, f) in self.schema.fields().iter().enumerate() {
                     match f.data_type() {
                         &DataType::Int8 => {
-                            let b = PrimitiveGroupValueBuilder::<Int8Type>::new();
+                            let b = PrimitiveBuilder::<Int8Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int16 => {
-                            let b = PrimitiveGroupValueBuilder::<Int16Type>::new();
+                            let b = PrimitiveBuilder::<Int16Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int32 => {
-                            let b = PrimitiveGroupValueBuilder::<Int32Type>::new();
+                            let b = PrimitiveBuilder::<Int32Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int64 => {
-                            let b = PrimitiveGroupValueBuilder::<Int64Type>::new();
+                            let b = PrimitiveBuilder::<Int64Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt8 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt8Type>::new();
+                            let b = PrimitiveBuilder::<UInt8Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt16 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt16Type>::new();
+                            let b = PrimitiveBuilder::<UInt16Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt32 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt32Type>::new();
+                            let b = PrimitiveBuilder::<UInt32Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt64 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt64Type>::new();
+                            let b = PrimitiveBuilder::<UInt64Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Float32 => {
-                            let b = PrimitiveGroupValueBuilder::<Float32Type>::new();
+                            let b = PrimitiveBuilder::<Float32Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Float64 => {
-                            let b = PrimitiveGroupValueBuilder::<Float64Type>::new();
+                            let b = PrimitiveBuilder::<Float64Type>::new();
+                            v.push(Box::new(b) as _)
+                        }
+                        &DataType::Date32 => {
+                            let b = PrimitiveBuilder::<Date32Type>::new();
+                            v.push(Box::new(b) as _)
+                        }
+                        &DataType::Date64 => {
+                            let b = PrimitiveBuilder::<Date64Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Utf8 => {
-                            let b =
-                                ByteGroupValueBuilderNaive::<i32>::new(OutputType::Utf8);
+                            let b = GenericStringBuilder::<i32>::with_capacity(
+                                INITIAL_CAPACITY,
+                                INITIAL_CAPACITY,
+                            );
                             v.push(Box::new(b) as _)
                         }
                         &DataType::LargeUtf8 => {
-                            let b =
-                                ByteGroupValueBuilderNaive::<i64>::new(OutputType::Utf8);
+                            let b = GenericStringBuilder::<i64>::with_capacity(
+                                INITIAL_CAPACITY,
+                                INITIAL_CAPACITY,
+                            );
                             v.push(Box::new(b) as _)
                         }
                         dt => todo!("{dt} not impl"),
@@ -211,7 +225,7 @@ impl GroupValues for GroupValuesRowLike {
                 // && group_rows.row(row) == group_values.row(*group_idx)
 
                 fn compare_equal(
-                    arry_eq: &dyn ArrayEq,
+                    arry_eq: &dyn ArrayEqV2,
                     lhs_row: usize,
                     array: &ArrayRef,
                     rhs_row: usize,
@@ -311,7 +325,10 @@ impl GroupValues for GroupValuesRowLike {
             EmitTo::All => {
                 let output = group_values_v2
                     .into_iter()
-                    .map(|v| v.build())
+                    .map(|mut v| {
+                        let p = v.deref_mut().build();
+                        p
+                    })
                     .collect::<Vec<_>>();
                 // let output = self.row_converter.convert_rows(&group_values)?;
                 // group_values.clear();
@@ -324,8 +341,15 @@ impl GroupValues for GroupValuesRowLike {
 
                 // println!("to first n");
                 let len = group_values_v2.len();
-                let first_n: Vec<Box<dyn ArrayEq>> = group_values_v2.drain(..n).collect();
-                let output = first_n.into_iter().map(|v| v.build()).collect::<Vec<_>>();
+                let first_n: Vec<Box<dyn ArrayEqV2>> =
+                    group_values_v2.drain(..n).collect();
+                let output = first_n
+                    .into_iter()
+                    .map(|mut v| {
+                        let p = v.deref_mut().build();
+                        p
+                    })
+                    .collect::<Vec<_>>();
                 assert_eq!(len, group_values_v2.len() + n);
                 self.group_values_v2 = Some(group_values_v2);
 
