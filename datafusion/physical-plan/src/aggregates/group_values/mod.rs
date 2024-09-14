@@ -33,6 +33,26 @@ mod bytes_view;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
+pub trait PartitionedGroupValues {
+    /// Calculates the `groups` for each input row of `cols`
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<Vec<usize>>) -> Result<()>;
+
+    /// Returns the number of bytes used by this [`GroupValues`]
+    fn size(&self) -> usize;
+
+    /// Returns true if this [`GroupValues`] is empty
+    fn is_empty(&self) -> bool;
+
+    /// The number of values stored in this [`GroupValues`]
+    fn len(&self) -> usize;
+
+    /// Emits the group values
+    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<Vec<ArrayRef>>>;
+
+    /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
+    fn clear(&mut self);
+}
+
 /// An interning store for group keys
 pub trait GroupValues: Send {
     /// Calculates the `groups` for each input row of `cols`
