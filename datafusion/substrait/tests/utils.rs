@@ -383,7 +383,7 @@ pub mod test {
                         }
                     }
                     if let Some(expr) = se.r#else.as_ref() {
-                        self.collect_schemas_from_expr(expr);
+                        self.collect_schemas_from_expr(expr)?
                     }
                 }
                 RexType::SingularOrList(sol) => {
