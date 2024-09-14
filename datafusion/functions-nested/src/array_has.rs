@@ -192,26 +192,23 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
         return Ok(Arc::new(BooleanArray::from(vec![Some(false)])));
     }
     let eq_array = compare_with_eq(values, needle, is_nested)?;
-    let mut final_contained = BooleanArray::builder(haystack.len());
-    for offset in offsets.windows(2) {
+    let mut final_contained = vec![None; haystack.len()];
+    for (i, offset) in offsets.windows(2).enumerate() {
         let start = offset[0].to_usize().unwrap();
         let end = offset[1].to_usize().unwrap();
         let length = end - start;
         // For non-nested list, length is 0 for null
         if length == 0 {
-            final_contained.append_null();
             continue;
         }
         let sliced_array = eq_array.slice(start, length);
         // For nested list, check number of nulls
-        if sliced_array.null_count() == length {
-            final_contained.append_null();
-        } else {
-            final_contained.append_value(sliced_array.true_count() > 0);
+        if sliced_array.null_count() != length {
+            final_contained[i] = Some(sliced_array.true_count() > 0);
         }
     }
 
-    Ok(Arc::new(final_contained.finish()))
+    Ok(Arc::new(BooleanArray::from(final_contained)))
 }
 
 fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
