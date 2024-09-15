@@ -495,11 +495,17 @@ fn test_table_references_in_plan_to_sql() {
         assert_eq!(format!("{}", sql), expected_sql)
     }
 
-    test("catalog.schema.table", "SELECT catalog.\"schema\".\"table\".id, catalog.\"schema\".\"table\".\"value\" FROM catalog.\"schema\".\"table\"");
-    test("schema.table", "SELECT \"schema\".\"table\".id, \"schema\".\"table\".\"value\" FROM \"schema\".\"table\"");
+    test(
+        "catalog.schema.table",
+        r#"SELECT "catalog"."schema"."table".id, "catalog"."schema"."table"."value" FROM "catalog"."schema"."table""#,
+    );
+    test(
+        "schema.table",
+        r#"SELECT "schema"."table".id, "schema"."table"."value" FROM "schema"."table""#,
+    );
     test(
         "table",
-        "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"",
+        r#"SELECT "table".id, "table"."value" FROM "table""#,
     );
 }
 
@@ -521,10 +527,10 @@ fn test_table_scan_with_no_projection_in_plan_to_sql() {
 
     test(
         "catalog.schema.table",
-        "SELECT * FROM catalog.\"schema\".\"table\"",
+        r#"SELECT * FROM "catalog"."schema"."table""#,
     );
-    test("schema.table", "SELECT * FROM \"schema\".\"table\"");
-    test("table", "SELECT * FROM \"table\"");
+    test("schema.table", r#"SELECT * FROM "schema"."table""#);
+    test("table", r#"SELECT * FROM "table""#);
 }
 
 #[test]

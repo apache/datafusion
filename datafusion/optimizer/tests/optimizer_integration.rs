@@ -361,6 +361,31 @@ fn select_wildcard_with_repeated_column_but_is_aliased() {
     assert_eq!(expected, format!("{plan}"));
 }
 
+#[test]
+fn select_correlated_predicate_subquery_with_uppercase_ident() {
+    let sql = r#"
+        SELECT *
+        FROM
+            test
+        WHERE
+            EXISTS (
+                SELECT 1
+                FROM (SELECT col_int32 as "COL_INT32", col_uint32 as "COL_UINT32" FROM test) "T1"
+                WHERE "T1"."COL_INT32" = test.col_int32
+            )
+    "#;
+    let plan = test_sql(sql).unwrap();
+    let expected = "LeftSemi Join: test.col_int32 = __correlated_sq_1.COL_INT32\
+    \n  Filter: test.col_int32 IS NOT NULL\
+    \n    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
+    \n  SubqueryAlias: __correlated_sq_1\
+    \n    SubqueryAlias: T1\
+    \n      Projection: test.col_int32 AS COL_INT32\
+    \n        Filter: test.col_int32 IS NOT NULL\
+    \n          TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{plan}"));
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...

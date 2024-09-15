@@ -688,7 +688,7 @@ impl AggregateFunction {
 }
 
 /// WindowFunction
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 /// Defines which implementation of an aggregate function DataFusion should call.
 pub enum WindowFunctionDefinition {
     /// A built in aggregate function that leverages an aggregate function

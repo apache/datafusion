@@ -104,9 +104,7 @@ pub(crate) fn replace_qualified_name(
 ) -> Result<Expr> {
     let alias_cols: Vec<Column> = cols
         .iter()
-        .map(|col| {
-            Column::from_qualified_name(format!("{}.{}", subquery_alias, col.name))
-        })
+        .map(|col| Column::new(Some(subquery_alias), &col.name))
         .collect();
     let replace_map: HashMap<&Column, &Column> =
         cols.iter().zip(alias_cols.iter()).collect();
