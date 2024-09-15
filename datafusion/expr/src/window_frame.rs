@@ -36,7 +36,7 @@ use sqlparser::parser::ParserError::ParserError;
 /// window function. The ending frame boundary can be omitted if the `BETWEEN`
 /// and `AND` keywords that surround the starting frame boundary are also omitted,
 /// in which case the ending frame boundary defaults to `CURRENT ROW`.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct WindowFrame {
     /// Frame type - either `ROWS`, `RANGE` or `GROUPS`
     pub units: WindowFrameUnits,

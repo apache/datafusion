@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::physical_plan::Accumulator;
 use datafusion::scalar::ScalarValue;
@@ -84,6 +85,15 @@ struct MockUserDefinedLogicalPlan {
     empty_schema: DFSchemaRef,
 }
 
+impl PartialOrd for MockUserDefinedLogicalPlan {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.validation_bytes.partial_cmp(&other.validation_bytes) {
+            Some(Ordering::Equal) => self.inputs.partial_cmp(&other.inputs),
+            cmp => cmp,
+        }
+    }
+}
+
 impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -130,6 +140,10 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
     }
 
     fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
+        unimplemented!()
+    }
+
+    fn dyn_ord(&self, _: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
         unimplemented!()
     }
 }

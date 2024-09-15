@@ -17,6 +17,7 @@
 
 //! Logical plan types
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -190,7 +191,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # }
 /// ```
 ///
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
     /// SELECT with an expression list) on its input.
@@ -2012,6 +2013,12 @@ pub struct EmptyRelation {
     pub schema: DFSchemaRef,
 }
 
+impl PartialOrd for EmptyRelation {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.produce_one_row.partial_cmp(&other.produce_one_row)
+    }
+}
+
 /// A variadic query operation, Recursive CTE.
 ///
 /// # Recursive Query Evaluation
@@ -2034,7 +2041,7 @@ pub struct EmptyRelation {
 ///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
@@ -2059,6 +2066,12 @@ pub struct Values {
     pub values: Vec<Vec<Expr>>,
 }
 
+impl PartialOrd for Values {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.values.partial_cmp(&other.values)
+    }
+}
+
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -2071,6 +2084,15 @@ pub struct Projection {
     pub input: Arc<LogicalPlan>,
     /// The schema description of the output
     pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for Projection {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.expr.partial_cmp(&other.expr) {
+            Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+            cmp => cmp,
+        }
+    }
 }
 
 impl Projection {
@@ -2170,6 +2192,15 @@ impl SubqueryAlias {
     }
 }
 
+impl PartialOrd for SubqueryAlias {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => self.alias.partial_cmp(&other.alias),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Filters rows from its input that do not match an
 /// expression (essentially a WHERE clause with a predicate
 /// expression).
@@ -2181,7 +2212,7 @@ impl SubqueryAlias {
 ///
 /// Filter should not be created directly but instead use `try_new()`
 /// and that these fields are only pub to support pattern matching
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 #[non_exhaustive]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
@@ -2407,6 +2438,15 @@ impl Window {
     }
 }
 
+impl PartialOrd for Window {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => self.window_expr.partial_cmp(&other.window_expr),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Produces rows from a table provider by reference or from the context
 #[derive(Clone)]
 pub struct TableScan {
@@ -2448,6 +2488,25 @@ impl PartialEq for TableScan {
 }
 
 impl Eq for TableScan {}
+
+impl PartialOrd for TableScan {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.table_name.partial_cmp(&other.table_name) {
+            Some(Ordering::Equal) => {
+                match self.projection.partial_cmp(&other.projection) {
+                    Some(Ordering::Equal) => {
+                        match self.filters.partial_cmp(&other.filters) {
+                            Some(Ordering::Equal) => self.fetch.partial_cmp(&other.fetch),
+                            cmp => cmp,
+                        }
+                    }
+                    cmp => cmp,
+                }
+            }
+            cmp => cmp,
+        }
+    }
+}
 
 impl Hash for TableScan {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -2524,8 +2583,17 @@ pub struct CrossJoin {
     pub schema: DFSchemaRef,
 }
 
+impl PartialOrd for CrossJoin {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.left.partial_cmp(&other.left) {
+            Some(Ordering::Equal) => self.right.partial_cmp(&other.right),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Repartition the plan based on a partitioning scheme.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Repartition {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -2542,9 +2610,15 @@ pub struct Union {
     pub schema: DFSchemaRef,
 }
 
+impl PartialOrd for Union {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.inputs.partial_cmp(&other.inputs)
+    }
+}
+
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
 /// `Expr::Placeholder` expressions that are filled in during execution
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Prepare {
     /// The name of the statement
     pub name: String,
@@ -2584,6 +2658,13 @@ pub struct DescribeTable {
     pub output_schema: DFSchemaRef,
 }
 
+impl PartialOrd for DescribeTable {
+    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+        // There is no relevant comparison for schemas
+        None
+    }
+}
+
 /// Produces a relation with string representations of
 /// various parts of the plan
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2600,6 +2681,25 @@ pub struct Explain {
     pub logical_optimization_succeeded: bool,
 }
 
+impl PartialOrd for Explain {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.verbose.partial_cmp(&other.verbose) {
+            Some(Ordering::Equal) => match self.plan.partial_cmp(&other.plan) {
+                Some(Ordering::Equal) => {
+                    match self.stringified_plans.partial_cmp(&other.stringified_plans) {
+                        Some(Ordering::Equal) => self
+                            .logical_optimization_succeeded
+                            .partial_cmp(&other.logical_optimization_succeeded),
+                        cmp => cmp,
+                    }
+                }
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
+}
+
 /// Runs the actual plan, and then prints the physical plan with
 /// with execution metrics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2610,6 +2710,15 @@ pub struct Analyze {
     pub input: Arc<LogicalPlan>,
     /// The output schema of the explain (2 columns of text)
     pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for Analyze {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.verbose.partial_cmp(&other.verbose) {
+            Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+            cmp => cmp,
+        }
+    }
 }
 
 /// Extension operator defined outside of DataFusion
@@ -2632,8 +2741,14 @@ impl PartialEq for Extension {
     }
 }
 
+impl PartialOrd for Extension {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.node.partial_cmp(&other.node)
+    }
+}
+
 /// Produces the first `n` tuples from its input and discards the rest.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Limit {
     /// Number of rows to skip before fetch
     pub skip: usize,
@@ -2645,7 +2760,7 @@ pub struct Limit {
 }
 
 /// Removes duplicate rows from the input
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Distinct {
     /// Plain `DISTINCT` referencing all selection expressions
     All(Arc<LogicalPlan>),
@@ -2740,6 +2855,25 @@ impl DistinctOn {
 
         self.sort_expr = Some(sort_expr);
         Ok(self)
+    }
+}
+
+impl PartialOrd for DistinctOn {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.on_expr.partial_cmp(&other.on_expr) {
+            Some(Ordering::Equal) => {
+                match self.select_expr.partial_cmp(&other.select_expr) {
+                    Some(Ordering::Equal) => {
+                        match self.sort_expr.partial_cmp(&other.sort_expr) {
+                            Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+                            cmp => cmp,
+                        }
+                    }
+                    cmp => cmp,
+                }
+            }
+            cmp => cmp,
+        }
     }
 }
 
@@ -2847,6 +2981,20 @@ impl Aggregate {
     }
 }
 
+impl PartialOrd for Aggregate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => {
+                match self.group_expr.partial_cmp(&other.group_expr) {
+                    Some(Ordering::Equal) => self.aggr_expr.partial_cmp(&other.aggr_expr),
+                    cmp => cmp,
+                }
+            }
+            cmp => cmp,
+        }
+    }
+}
+
 /// Checks whether any expression in `group_expr` contains `Expr::GroupingSet`.
 fn contains_grouping_set(group_expr: &[Expr]) -> bool {
     group_expr
@@ -2945,7 +3093,7 @@ fn calc_func_dependencies_for_project(
 }
 
 /// Sorts its input according to a list of sort expressions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Sort {
     /// The sort expressions
     pub expr: Vec<SortExpr>,
@@ -3011,8 +3159,43 @@ impl Join {
     }
 }
 
+impl PartialOrd for Join {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.left.partial_cmp(&other.right) {
+            Some(Ordering::Equal) => match self.right.partial_cmp(&other.right) {
+                Some(Ordering::Equal) => match self.on.partial_cmp(&other.on) {
+                    Some(Ordering::Equal) => {
+                        match self.filter.partial_cmp(&other.filter) {
+                            Some(Ordering::Equal) => {
+                                match self.join_type.partial_cmp(&other.join_type) {
+                                    Some(Ordering::Equal) => {
+                                        match self
+                                            .join_constraint
+                                            .partial_cmp(&other.join_constraint)
+                                        {
+                                            Some(Ordering::Equal) => self
+                                                .null_equals_null
+                                                .partial_cmp(&other.null_equals_null),
+                                            cmp => cmp,
+                                        }
+                                    }
+                                    cmp => cmp,
+                                }
+                            }
+                            cmp => cmp,
+                        }
+                    }
+                    cmp => cmp,
+                },
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
+}
+
 /// Subquery
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Subquery {
     /// The subquery
     pub subquery: Arc<LogicalPlan>,
@@ -3048,7 +3231,7 @@ impl Debug for Subquery {
 /// See [`Partitioning`] for more details on partitioning
 ///
 /// [`Partitioning`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html#
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
@@ -3080,6 +3263,44 @@ pub struct Unnest {
     pub schema: DFSchemaRef,
     /// Options
     pub options: UnnestOptions,
+}
+
+impl PartialOrd for Unnest {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => {
+                match self.exec_columns.partial_cmp(&other.exec_columns) {
+                    Some(Ordering::Equal) => {
+                        match self.list_type_columns.partial_cmp(&other.list_type_columns)
+                        {
+                            Some(Ordering::Equal) => {
+                                match self
+                                    .struct_type_columns
+                                    .partial_cmp(&other.struct_type_columns)
+                                {
+                                    Some(Ordering::Equal) => {
+                                        match self
+                                            .dependency_indices
+                                            .partial_cmp(&other.dependency_indices)
+                                        {
+                                            Some(Ordering::Equal) => {
+                                                self.options.partial_cmp(&other.options)
+                                            }
+                                            cmp => cmp,
+                                        }
+                                    }
+                                    cmp => cmp,
+                                }
+                            }
+                            cmp => cmp,
+                        }
+                    }
+                    cmp => cmp,
+                }
+            }
+            cmp => cmp,
+        }
+    }
 }
 
 #[cfg(test)]

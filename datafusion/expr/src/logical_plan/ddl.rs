@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::{Expr, LogicalPlan, SortExpr, Volatility};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{
@@ -22,15 +24,13 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::{Expr, LogicalPlan, SortExpr, Volatility};
-
 use crate::expr::Sort;
 use arrow::datatypes::DataType;
 use datafusion_common::{Constraints, DFSchemaRef, SchemaReference, TableReference};
 use sqlparser::ast::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum DdlStatement {
     /// Creates an external table.
     CreateExternalTable(CreateExternalTable),
@@ -232,8 +232,61 @@ impl Hash for CreateExternalTable {
     }
 }
 
+impl PartialOrd for CreateExternalTable {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => {
+                match self.location.partial_cmp(&other.location) {
+                    Some(Ordering::Equal) => {
+                        match self.file_type.partial_cmp(&other.file_type) {
+                            Some(Ordering::Equal) => {
+                                match self
+                                    .table_partition_cols
+                                    .partial_cmp(&other.table_partition_cols)
+                                {
+                                    Some(Ordering::Equal) => {
+                                        match self
+                                            .if_not_exists
+                                            .partial_cmp(&other.if_not_exists)
+                                        {
+                                            Some(Ordering::Equal) => {
+                                                match self
+                                                    .definition
+                                                    .partial_cmp(&other.definition)
+                                                {
+                                                    Some(Ordering::Equal) => {
+                                                        match self.order_exprs.partial_cmp(&other.order_exprs) {
+                                                            Some(Ordering::Equal) => {
+                                                                match self.unbounded.partial_cmp(&other.unbounded) {
+                                                                    Some(Ordering::Equal) => self.constraints.partial_cmp(&other.constraints),
+                                                                    cmp => cmp,
+                                                                }
+                                                            },
+                                                            cmp => cmp,
+                                                        }
+                                                    }
+                                                    cmp => cmp,
+                                                }
+                                            }
+                                            cmp => cmp,
+                                        }
+                                    }
+                                    cmp => cmp,
+                                }
+                            }
+                            cmp => cmp,
+                        }
+                    }
+                    cmp => cmp,
+                }
+            }
+            cmp => cmp,
+        }
+    }
+}
+
 /// Creates an in memory table.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct CreateMemoryTable {
     /// The table name
     pub name: TableReference,
@@ -250,7 +303,7 @@ pub struct CreateMemoryTable {
 }
 
 /// Creates a view.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Hash)]
 pub struct CreateView {
     /// The table name
     pub name: TableReference,
@@ -273,6 +326,15 @@ pub struct CreateCatalog {
     pub schema: DFSchemaRef,
 }
 
+impl PartialOrd for CreateCatalog {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.catalog_name.partial_cmp(&other.catalog_name) {
+            Some(Ordering::Equal) => self.if_not_exists.partial_cmp(&other.if_not_exists),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Creates a schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateCatalogSchema {
@@ -282,6 +344,15 @@ pub struct CreateCatalogSchema {
     pub if_not_exists: bool,
     /// Empty schema
     pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for CreateCatalogSchema {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.schema_name.partial_cmp(&other.schema_name) {
+            Some(Ordering::Equal) => self.if_not_exists.partial_cmp(&other.if_not_exists),
+            cmp => cmp,
+        }
+    }
 }
 
 /// Drops a table.
@@ -295,6 +366,15 @@ pub struct DropTable {
     pub schema: DFSchemaRef,
 }
 
+impl PartialOrd for DropTable {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Drops a view.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropView {
@@ -304,6 +384,15 @@ pub struct DropView {
     pub if_exists: bool,
     /// Dummy schema
     pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for DropView {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
+            cmp => cmp,
+        }
+    }
 }
 
 /// Drops a schema
@@ -317,6 +406,18 @@ pub struct DropCatalogSchema {
     pub cascade: bool,
     /// Dummy schema
     pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for DropCatalogSchema {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => match self.if_exists.partial_cmp(&other.if_exists) {
+                Some(Ordering::Equal) => self.cascade.partial_cmp(&other.cascade),
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
 }
 
 /// Arguments passed to `CREATE FUNCTION`
@@ -336,7 +437,33 @@ pub struct CreateFunction {
     /// Dummy schema
     pub schema: DFSchemaRef,
 }
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+
+impl PartialOrd for CreateFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.or_replace.partial_cmp(&other.or_replace) {
+            Some(Ordering::Equal) => match self.temporary.partial_cmp(&other.temporary) {
+                Some(Ordering::Equal) => match self.name.partial_cmp(&other.name) {
+                    Some(Ordering::Equal) => match self.args.partial_cmp(&other.args) {
+                        Some(Ordering::Equal) => {
+                            match self.return_type.partial_cmp(&other.return_type) {
+                                Some(Ordering::Equal) => {
+                                    self.params.partial_cmp(&other.params)
+                                }
+                                cmp => cmp,
+                            }
+                        }
+                        cmp => cmp,
+                    },
+                    cmp => cmp,
+                },
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct OperateFunctionArg {
     // TODO: figure out how to support mode
     // pub mode: Option<ArgMode>,
@@ -344,7 +471,7 @@ pub struct OperateFunctionArg {
     pub data_type: DataType,
     pub default_expr: Option<Expr>,
 }
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct CreateFunctionBody {
     /// LANGUAGE lang_name
     pub language: Option<Ident>,
@@ -361,6 +488,15 @@ pub struct DropFunction {
     pub schema: DFSchemaRef,
 }
 
+impl PartialOrd for DropFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
+            cmp => cmp,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct CreateIndex {
     pub name: Option<String>,
@@ -370,4 +506,31 @@ pub struct CreateIndex {
     pub unique: bool,
     pub if_not_exists: bool,
     pub schema: DFSchemaRef,
+}
+
+impl PartialOrd for CreateIndex {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => match self.table.partial_cmp(&other.table) {
+                Some(Ordering::Equal) => match self.using.partial_cmp(&other.using) {
+                    Some(Ordering::Equal) => {
+                        match self.columns.partial_cmp(&other.columns) {
+                            Some(Ordering::Equal) => {
+                                match self.unique.partial_cmp(&other.unique) {
+                                    Some(Ordering::Equal) => self
+                                        .if_not_exists
+                                        .partial_cmp(&other.if_not_exists),
+                                    cmp => cmp,
+                                }
+                            }
+                            cmp => cmp,
+                        }
+                    }
+                    cmp => cmp,
+                },
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
 }
