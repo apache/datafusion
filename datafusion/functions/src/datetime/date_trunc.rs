@@ -208,11 +208,9 @@ impl ScalarUDFImpl for DateTruncFunc {
                     >(
                         array, granularity, tz_opt
                     )?,
-                    _ => process_array::<TimestampNanosecondType>(
-                        array,
-                        granularity,
-                        &None,
-                    )?,
+                    _ => {
+                        return exec_err!("second argument of `date_trunc` is an unsupported array type: {array_type}");
+                    }
                 }
             }
             _ => {
