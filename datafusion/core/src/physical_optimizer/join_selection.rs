@@ -193,10 +193,16 @@ pub fn swap_hash_join(
         Ok(Arc::new(new_join))
     } else {
         // TODO avoid adding ProjectionExec again and again, only adding Final Projection
-        let proj = ProjectionExec::try_new(
-            swap_reverting_projection(&left.schema(), &right.schema()),
-            Arc::new(new_join),
-        )?;
+        let mut reverted_cols =
+            swap_reverting_projection(&left.schema(), &right.schema());
+        if let Some(proj) = new_join.projection.as_ref() {
+            reverted_cols = proj
+                .iter()
+                .map(|&col_idx| reverted_cols[col_idx].clone())
+                .collect();
+        }
+
+        let proj = ProjectionExec::try_new(reverted_cols, Arc::new(new_join))?;
         Ok(Arc::new(proj))
     }
 }
@@ -1285,6 +1291,27 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(2097152)
         );
+    }
+
+    #[tokio::test]
+    async fn test_hash_join_swap_on_joins_with_projections() -> Result<()> {
+        let (big, small) = create_big_and_small();
+        let join = Arc::new(HashJoinExec::try_new(
+            Arc::clone(&big),
+            Arc::clone(&small),
+            vec![(
+                Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+                Arc::new(Column::new_with_schema("small_col", &small.schema())?),
+            )],
+            None,
+            &JoinType::Inner,
+            Some(vec![1]),
+            PartitionMode::Partitioned,
+            false,
+        )?);
+        swap_hash_join(&join.clone(), PartitionMode::Partitioned)
+            .expect("swap_hash_join must support joins with projections");
+        Ok(())
     }
 
     #[tokio::test]
