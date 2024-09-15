@@ -2094,6 +2094,7 @@ to_unixtime(expression[, ..., format_n])
 - [array_dims](#array_dims)
 - [array_distance](#array_distance)
 - [array_distinct](#array_distinct)
+- [array_dot_product](#array_dot_product)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
@@ -2138,6 +2139,7 @@ to_unixtime(expression[, ..., format_n])
 - [list_dims](#list_dims)
 - [list_distance](#list_distance)
 - [list_distinct](#list_distinct)
+- [list_dot_product](#list_dot_product)
 - [list_element](#list_element)
 - [list_except](#list_except)
 - [list_extract](#list_extract)
@@ -2471,6 +2473,36 @@ array_distinct(array)
 #### Aliases
 
 - list_distinct
+
+### `array_dot_product`
+
+Returns the dot product between two input arrays of equal length.
+
+```
+array_dot_product(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+> select array_dot_product([1, 2], [1, 4]);
++---------------------------------------+
+| array_dot_product(List([1,2], [1,4])) |
++---------------------------------------+
+| 9.0                                   |
++---------------------------------------+
+```
+
+#### Aliases
+
+- list_dot_product
 
 ### `array_element`
 
@@ -3291,6 +3323,10 @@ _Alias of [array_distance](#array_distance)._
 ### `list_distinct`
 
 _Alias of [array_distinct](#array_distinct)._
+
+### `list_dot_product`
+
+_Alias of [array_dot_product](#array_dot_product)._
 
 ### `list_element`
 
