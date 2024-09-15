@@ -253,6 +253,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 order_by,
                 partition_by,
                 cluster_by,
+                clustered_by,
                 options,
                 strict,
                 copy_grants,
@@ -345,6 +346,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 if cluster_by.is_some() {
                     return not_impl_err!("Cluster by not supported")?;
+                }
+                if clustered_by.is_some() {
+                    return not_impl_err!("Clustered by not supported")?;
                 }
                 if options.is_some() {
                     return not_impl_err!("Options not supported")?;
