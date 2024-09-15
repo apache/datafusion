@@ -96,13 +96,13 @@ LOCATION 'foo.csv'
 OPTIONS ('format.delimiter' ';', 'format.column_index_truncate_length' '123')
 
 # Creating Temporary tables
-statement error DataFusion error: SQL error: ParserError\("Creating temporary tables is Unsupported"\)
+statement error DataFusion error: This feature is not implemented: Temporary tables not supported
 CREATE TEMPORARY TABLE my_temp_table (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL
 );
 
-statement error DataFusion error: SQL error: ParserError\("Creating temporary tables is Unsupported"\)
+statement error DataFusion error: This feature is not implemented: Temporary views not supported
 CREATE TEMPORARY VIEW my_temp_view AS SELECT id, name FROM my_table;
 
 # Partitioned table on a single file
