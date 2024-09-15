@@ -661,6 +661,38 @@ FROM arrays_distance_table
 ;
 
 
+statement ok
+CREATE TABLE arrays_dot_product_table
+AS VALUES
+  (make_array(1, 2, 3), make_array(1, 2, 3), make_array(1.1, 2.2, 3.3) , make_array(1.1, NULL, 3.3)),
+  (make_array(1, 2, 3), make_array(4, 5, 6), make_array(4.4, 5.5, 6.6), make_array(4.4, NULL, 6.6)),
+  (make_array(1, 2, 3), make_array(7, 8, 9), make_array(7.7, 8.8, 9.9), make_array(7.7, NULL, 9.9)),
+  (make_array(1, 2, 3), make_array(10, 11, 12), make_array(10.1, 11.2, 12.3), make_array(10.1, NULL, 12.3))
+;
+
+statement ok
+CREATE TABLE large_arrays_dot_product_table
+AS
+  SELECT
+    arrow_cast(column1, 'LargeList(Int64)') AS column1,
+    arrow_cast(column2, 'LargeList(Int64)') AS column2,
+    arrow_cast(column3, 'LargeList(Float64)') AS column3,
+    arrow_cast(column4, 'LargeList(Float64)') AS column4
+FROM arrays_dot_product_table
+;
+
+statement ok
+CREATE TABLE fixed_size_arrays_dot_product_table
+AS
+  SELECT
+    arrow_cast(column1, 'FixedSizeList(3, Int64)') AS column1,
+    arrow_cast(column2, 'FixedSizeList(3, Int64)') AS column2,
+    arrow_cast(column3, 'FixedSizeList(3, Float64)') AS column3,
+    arrow_cast(column4, 'FixedSizeList(3, Float64)') AS column4
+FROM arrays_dot_product_table
+;
+
+
 # Array literal
 
 ## boolean coercion is not supported
@@ -5207,6 +5239,85 @@ select array_ndims(column1), array_ndims(column2), array_ndims(column3) from lar
 NULL 1 1
 2 NULL 1
 2 1 NULL
+
+
+query RRR
+select array_dot_product([2], [3]), list_dot_product([1], [2]), list_dot_product([1], [-2]);
+----
+6 2 -2
+
+query error
+select list_dot_product([1], [1, 2]);
+
+query R
+select array_dot_product([[1, 1]], [1, 2]);
+----
+3
+
+query R
+select array_dot_product([[1, 1]], [[1, 2]]);
+----
+3
+
+query R
+select list_dot_product([[1, 1]], [[1, 2]]);
+----
+3
+
+query RR
+select array_dot_product([1, 1, 0, 0], [2, 2, 1, 1]), list_dot_product([1, 2, 3], [1, 2, 3]);
+----
+4 14
+
+query RR
+select array_dot_product([1.0, 1, 0, 0], [2, 2.0, 1, 1]), list_dot_product([1, 2.0, 3], [1, 2, 3]);
+----
+4 14
+
+query R
+select list_dot_product([1, 1, NULL, 0], [2, 2, NULL, NULL]);
+----
+NULL
+
+query R
+select list_dot_product([NULL, NULL], [NULL, NULL]);
+----
+NULL
+
+query R
+select list_dot_product([1.0, 2.0, 3.0], [1.0, 2.0, 3.5]) AS dot_product;
+----
+15.5
+
+query R
+select list_dot_product([1, 2, 3], [1, 2, 3]) AS dot_product;
+----
+14
+
+# array_dot_product with columns
+query RRR
+select array_dot_product(column1, column2), array_dot_product(column1, column3), array_dot_product(column1, column4) from arrays_dot_product_table;
+----
+14 15.4 NULL
+32 35.2 NULL
+50 55 NULL
+68 69.4 NULL
+
+query RRR
+select array_dot_product(column1, column2), array_dot_product(column1, column3), array_dot_product(column1, column4) from large_arrays_dot_product_table;
+----
+14 15.4 NULL
+32 35.2 NULL
+50 55 NULL
+68 69.4 NULL
+
+query RRR
+select array_dot_product(column1, column2), array_dot_product(column1, column3), array_dot_product(column1, column4) from fixed_size_arrays_dot_product_table;
+----
+14 15.4 NULL
+32 35.2 NULL
+50 55 NULL
+68 69.4 NULL
 
 ## array_has/array_has_all/array_has_any
 
