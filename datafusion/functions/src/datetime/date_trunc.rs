@@ -217,8 +217,8 @@ impl ScalarUDFImpl for DateTruncFunc {
             }
             _ => {
                 return exec_err!(
-            "second argument of `date_trunc` must be nanosecond timestamp scalar or array"
-        );
+                    "second argument of `date_trunc` must be timestamp scalar or array"
+                );
             }
         })
     }
