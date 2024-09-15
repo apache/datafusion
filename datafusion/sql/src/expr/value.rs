@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
+use arrow::compute::kernels::cast_utils::{
+    parse_interval_month_day_nano_config, IntervalParseConfig, IntervalUnit,
+};
 use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use arrow_schema::DataType;
 use datafusion_common::{
@@ -232,27 +234,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let value = interval_literal(*interval.value, negative)?;
 
-        let value = if has_units(&value) {
-            // If the interval already contains a unit
-            // `INTERVAL '5 month' rather than `INTERVAL '5' month`
-            // skip the other unit
-            value
-        } else {
-            // leading_field really means the unit if specified
-            // for example, "month" in  `INTERVAL '5' month`
-            match interval.leading_field.as_ref() {
-                Some(leading_field) => {
-                    format!("{value} {leading_field}")
-                }
-                None => {
-                    // default to seconds for the units
-                    // `INTERVAL '5' is parsed as '5 seconds'
-                    format!("{value} seconds")
-                }
-            }
+        // leading_field really means the unit if specified
+        // for example, "month" in  `INTERVAL '5' month`
+        let value = match interval.leading_field.as_ref() {
+            Some(leading_field) => format!("{value} {leading_field}"),
+            None => value,
         };
 
-        let val = parse_interval_month_day_nano(&value)?;
+        let config = IntervalParseConfig::new(IntervalUnit::Second);
+        let val = parse_interval_month_day_nano_config(&value, config)?;
         Ok(lit(ScalarValue::IntervalMonthDayNano(Some(val))))
     }
 }
@@ -290,35 +280,6 @@ fn interval_literal(interval_value: SQLExpr, negative: bool) -> Result<String> {
     } else {
         Ok(s)
     }
-}
-
-// TODO make interval parsing better in arrow-rs / expose `IntervalType`
-fn has_units(val: &str) -> bool {
-    let val = val.to_lowercase();
-    val.ends_with("century")
-        || val.ends_with("centuries")
-        || val.ends_with("decade")
-        || val.ends_with("decades")
-        || val.ends_with("year")
-        || val.ends_with("years")
-        || val.ends_with("month")
-        || val.ends_with("months")
-        || val.ends_with("week")
-        || val.ends_with("weeks")
-        || val.ends_with("day")
-        || val.ends_with("days")
-        || val.ends_with("hour")
-        || val.ends_with("hours")
-        || val.ends_with("minute")
-        || val.ends_with("minutes")
-        || val.ends_with("second")
-        || val.ends_with("seconds")
-        || val.ends_with("millisecond")
-        || val.ends_with("milliseconds")
-        || val.ends_with("microsecond")
-        || val.ends_with("microseconds")
-        || val.ends_with("nanosecond")
-        || val.ends_with("nanoseconds")
 }
 
 /// Try to decode bytes from hex literal string.
