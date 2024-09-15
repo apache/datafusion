@@ -17,17 +17,14 @@
 
 //! [ScalarUDFImpl] definitions for array_distance function.
 
-use crate::utils::{downcast_arg, make_scalar_function};
+use crate::utils::{convert_to_f64_array, downcast_arg, make_scalar_function};
 use arrow_array::{
     Array, ArrayRef, Float64Array, LargeListArray, ListArray, OffsetSizeTrait,
 };
 use arrow_schema::DataType;
 use arrow_schema::DataType::{FixedSizeList, Float64, LargeList, List};
 use core::any::type_name;
-use datafusion_common::cast::{
-    as_float32_array, as_float64_array, as_generic_list_array, as_int32_array,
-    as_int64_array,
-};
+use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::DataFusionError;
 use datafusion_common::{exec_err, Result};
@@ -202,30 +199,4 @@ fn compute_array_distance(
         .sum();
 
     Ok(Some(sum_squares.sqrt()))
-}
-
-/// Converts an array of any numeric type to a Float64Array.
-fn convert_to_f64_array(array: &ArrayRef) -> Result<Float64Array> {
-    match array.data_type() {
-        DataType::Float64 => Ok(as_float64_array(array)?.clone()),
-        DataType::Float32 => {
-            let array = as_float32_array(array)?;
-            let converted: Float64Array =
-                array.iter().map(|v| v.map(|v| v as f64)).collect();
-            Ok(converted)
-        }
-        DataType::Int64 => {
-            let array = as_int64_array(array)?;
-            let converted: Float64Array =
-                array.iter().map(|v| v.map(|v| v as f64)).collect();
-            Ok(converted)
-        }
-        DataType::Int32 => {
-            let array = as_int32_array(array)?;
-            let converted: Float64Array =
-                array.iter().map(|v| v.map(|v| v as f64)).collect();
-            Ok(converted)
-        }
-        _ => exec_err!("Unsupported array type for conversion to Float64Array"),
-    }
 }
