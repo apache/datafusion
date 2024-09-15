@@ -189,28 +189,31 @@ impl ScalarUDFImpl for DateTruncFunc {
             }
             ColumnarValue::Array(array) => {
                 let array_type = array.data_type();
-                match array_type {
-                    Timestamp(Second, tz_opt) => {
-                        process_array::<TimestampSecondType>(array, granularity, tz_opt)?
+                if let Timestamp(unit, tz_opt) = array_type {
+                    match unit {
+                        Second => process_array::<TimestampSecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
+                        Millisecond => process_array::<TimestampMillisecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
+                        Microsecond => process_array::<TimestampMicrosecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
+                        Nanosecond => process_array::<TimestampNanosecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
                     }
-                    Timestamp(Millisecond, tz_opt) => process_array::<
-                        TimestampMillisecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
-                    Timestamp(Microsecond, tz_opt) => process_array::<
-                        TimestampMicrosecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
-                    Timestamp(Nanosecond, tz_opt) => process_array::<
-                        TimestampNanosecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
-                    _ => {
-                        return exec_err!("second argument of `date_trunc` is an unsupported array type: {array_type}");
-                    }
+                } else {
+                    return exec_err!("second argument of `date_trunc` is an unsupported array type: {array_type}");
                 }
             }
             _ => {
