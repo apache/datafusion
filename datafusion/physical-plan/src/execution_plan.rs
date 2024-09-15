@@ -379,6 +379,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Returns statistics for this `ExecutionPlan` node. If statistics are not
     /// available, should return [`Statistics::new_unknown`] (the default), not
     /// an error.
+    ///
+    /// For TableScan executors, which supports filter pushdown, special attention
+    /// needs to be paid to whether the stats returned by this method are exact or not
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }
