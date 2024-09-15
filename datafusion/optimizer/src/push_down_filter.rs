@@ -356,6 +356,7 @@ fn push_predicates(
     predicate: &Expr,
     join_plan: &LogicalPlan,
     schema: &DFSchemaRef,
+    all_preserved: bool,
     preserved: bool,
     kept: &mut bool,
     predicates_to_push: &mut Vec<Expr>,
@@ -368,7 +369,10 @@ fn push_predicates(
             predicates_to_push.push(predicate.clone());
         }
     } else {
-        if preserved || can_push_and_keep_unpreserved_predicate(predicate) {
+        if all_preserved
+            || (preserved && !matches!(predicate, Expr::IsNull(_)))
+            || can_push_and_keep_unpreserved_predicate(predicate)
+        {
             let aliased_predicates =
                 get_aliased_predicates(join_plan, &vec![predicate.clone()])?;
 
@@ -391,7 +395,7 @@ fn push_down_all_join(
 ) -> Result<LogicalPlan> {
     let on_filter_empty = on_filter.is_empty();
     let (left_preserved, right_preserved) = lr_is_preserved(join_plan)?;
-
+    let all_preserved = left_preserved && right_preserved;
     // The predicates can be divided to three categories:
     // 1) can push through join to its children(left or right)
     // 2) can be converted to join conditions if the join type is Inner
@@ -417,6 +421,7 @@ fn push_down_all_join(
             &predicate,
             join_plan,
             left.schema(),
+            all_preserved,
             left_preserved,
             &mut kept,
             &mut left_push,
@@ -425,6 +430,7 @@ fn push_down_all_join(
             &predicate,
             join_plan,
             right.schema(),
+            all_preserved,
             right_preserved,
             &mut kept,
             &mut right_push,
