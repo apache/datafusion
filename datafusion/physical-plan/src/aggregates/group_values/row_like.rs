@@ -15,11 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::DerefMut;
-
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::array::{GenericStringBuilder, PrimitiveBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
     Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
@@ -30,13 +27,12 @@ use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
-use datafusion_physical_expr_common::group_value_row::ArrayRowEq;
+use datafusion_physical_expr::binary_map::OutputType;
+use datafusion_physical_expr_common::group_value_row::{ArrayEq, ByteGroupValueBuilderNaive, PrimitiveGroupValueBuilder};
 use hashbrown::raw::RawTable;
-
-pub(super) const INITIAL_CAPACITY: usize = 8 * 1024;
 
 /// A [`GroupValues`] making use of [`Rows`]
 pub struct GroupValuesRowLike {
@@ -77,7 +73,7 @@ pub struct GroupValuesRowLike {
 
     /// Random state for creating hashes
     random_state: RandomState,
-    group_values_v2: Option<Vec<Box<dyn ArrayRowEq>>>,
+    group_values_v2: Option<Vec<Box<dyn ArrayEq>>>,
 }
 
 impl GroupValuesRowLike {
@@ -122,65 +118,59 @@ impl GroupValues for GroupValuesRowLike {
                 for f in self.schema.fields().iter() {
                     match f.data_type() {
                         &DataType::Int8 => {
-                            let b = PrimitiveBuilder::<Int8Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Int8Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int16 => {
-                            let b = PrimitiveBuilder::<Int16Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Int16Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int32 => {
-                            let b = PrimitiveBuilder::<Int32Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Int32Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int64 => {
-                            let b = PrimitiveBuilder::<Int64Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Int64Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt8 => {
-                            let b = PrimitiveBuilder::<UInt8Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<UInt8Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt16 => {
-                            let b = PrimitiveBuilder::<UInt16Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<UInt16Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt32 => {
-                            let b = PrimitiveBuilder::<UInt32Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<UInt32Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt64 => {
-                            let b = PrimitiveBuilder::<UInt64Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<UInt64Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Float32 => {
-                            let b = PrimitiveBuilder::<Float32Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Float32Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Float64 => {
-                            let b = PrimitiveBuilder::<Float64Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Float64Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Date32 => {
-                            let b = PrimitiveBuilder::<Date32Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Date32Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Date64 => {
-                            let b = PrimitiveBuilder::<Date64Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Date64Type>::new();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Utf8 => {
-                            let b = GenericStringBuilder::<i32>::with_capacity(
-                                INITIAL_CAPACITY,
-                                INITIAL_CAPACITY,
-                            );
+                            let b = ByteGroupValueBuilderNaive::<i32>::new(OutputType::Utf8);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::LargeUtf8 => {
-                            let b = GenericStringBuilder::<i64>::with_capacity(
-                                INITIAL_CAPACITY,
-                                INITIAL_CAPACITY,
-                            );
+                            let b = ByteGroupValueBuilderNaive::<i64>::new(OutputType::Utf8);
                             v.push(Box::new(b) as _)
                         }
                         dt => todo!("{dt} not impl"),
@@ -214,7 +204,7 @@ impl GroupValues for GroupValuesRowLike {
                 // && group_rows.row(row) == group_values.row(*group_idx)
 
                 fn compare_equal(
-                    arry_eq: &dyn ArrayRowEq,
+                    arry_eq: &dyn ArrayEq,
                     lhs_row: usize,
                     array: &ArrayRef,
                     rhs_row: usize,
@@ -309,9 +299,9 @@ impl GroupValues for GroupValuesRowLike {
         let mut output = match emit_to {
             EmitTo::All => {
                 let output = group_values_v2
-                    .iter_mut()
+                    .into_iter()
                     .map(|v| {
-                        v.deref_mut().build()
+                        v.build()
                     })
                     .collect::<Vec<_>>();
                 // let output = self.row_converter.convert_rows(&group_values)?;
@@ -321,21 +311,8 @@ impl GroupValues for GroupValuesRowLike {
                 output
             }
             EmitTo::First(n) => {
-                return internal_err!("there is error");
-
-                // println!("to first n");
-                let len = group_values_v2.len();
-                let first_n: Vec<Box<dyn ArrayRowEq>> =
-                    group_values_v2.drain(..n).collect();
-                let output = first_n
-                    .into_iter()
-                    .map(|mut v| {
-                        let p = v.deref_mut().build();
-                        p
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(len, group_values_v2.len() + n);
-                self.group_values_v2 = Some(group_values_v2);
+                // return internal_err!("there is error");
+                let output = group_values_v2.iter_mut().map(|v|v.take_n(n)).collect::<Vec<_>>();
 
                 // let groups_rows = group_values.iter().take(n);
                 // let output = self.row_converter.convert_rows(groups_rows)?;
@@ -359,6 +336,7 @@ impl GroupValues for GroupValuesRowLike {
                         }
                     }
                 }
+                self.group_values_v2 = Some(group_values_v2);
                 output
             }
         };
