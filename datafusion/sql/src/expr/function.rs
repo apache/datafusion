@@ -77,7 +77,7 @@ fn find_closest_match(candidates: Vec<String>, target: &str) -> Result<String> {
                 &target,
             )
         })
-        .ok_or_else(|| internal_datafusion_err!("No candidates provided."))
+        .ok_or_else(|| internal_datafusion_err!("No functions registered with this context."))
 }
 
 /// Arguments to for a function call extracted from the SQL AST
