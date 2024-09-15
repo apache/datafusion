@@ -107,19 +107,19 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
 }
 
 fn has_row_like_feature(data_type: &DataType) -> bool {
-    match *data_type {
+    matches!(
+        *data_type,
         DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Utf8
-        | DataType::LargeUtf8
-        | DataType::Date32
-        | DataType::Date64 => true,
-        _ => false,
-    }
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Date32
+            | DataType::Date64
+    )
 }

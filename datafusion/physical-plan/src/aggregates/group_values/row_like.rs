@@ -23,7 +23,6 @@ use arrow::datatypes::{
     Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
-use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
@@ -31,16 +30,15 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
-use datafusion_physical_expr_common::group_value_row::{ArrayEq, ByteGroupValueBuilderNaive, PrimitiveGroupValueBuilder};
+use datafusion_physical_expr_common::group_value_row::{
+    ArrayRowEq, ByteGroupValueBuilder, PrimitiveGroupValueBuilder,
+};
 use hashbrown::raw::RawTable;
 
-/// A [`GroupValues`] making use of [`Rows`]
+/// Compare GroupValue Rows column by column
 pub struct GroupValuesRowLike {
     /// The output schema
     schema: SchemaRef,
-
-    /// Converter for the group values
-    row_converter: RowConverter,
 
     /// Logically maps group values to a group_index in
     /// [`Self::group_values`] and in each accumulator
@@ -68,39 +66,20 @@ pub struct GroupValuesRowLike {
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
 
-    /// reused buffer to store rows
-    rows_buffer: Rows,
-
     /// Random state for creating hashes
     random_state: RandomState,
-    group_values_v2: Option<Vec<Box<dyn ArrayEq>>>,
+    group_values: Option<Vec<Box<dyn ArrayRowEq>>>,
 }
 
 impl GroupValuesRowLike {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
-        let row_converter = RowConverter::new(
-            schema
-                .fields()
-                .iter()
-                .map(|f| SortField::new(f.data_type().clone()))
-                .collect(),
-        )?;
-
         let map = RawTable::with_capacity(0);
-
-        let starting_rows_capacity = 1000;
-        let starting_data_capacity = 64 * starting_rows_capacity;
-        let rows_buffer =
-            row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
         Ok(Self {
             schema,
-            row_converter,
             map,
             map_size: 0,
-            // group_values: None,
-            group_values_v2: None,
+            group_values: None,
             hashes_buffer: Default::default(),
-            rows_buffer,
             random_state: Default::default(),
         })
     }
@@ -109,68 +88,67 @@ impl GroupValuesRowLike {
 impl GroupValues for GroupValuesRowLike {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         let n_rows = cols[0].len();
-        let mut group_values_v2 = match self.group_values_v2.take() {
+        let mut group_values = match self.group_values.take() {
             Some(group_values) => group_values,
             None => {
                 let len = cols.len();
                 let mut v = Vec::with_capacity(len);
-                // Move to `try_new`
                 for f in self.schema.fields().iter() {
                     match f.data_type() {
                         &DataType::Int8 => {
-                            let b = PrimitiveGroupValueBuilder::<Int8Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Int8Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int16 => {
-                            let b = PrimitiveGroupValueBuilder::<Int16Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Int16Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int32 => {
-                            let b = PrimitiveGroupValueBuilder::<Int32Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Int32Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int64 => {
-                            let b = PrimitiveGroupValueBuilder::<Int64Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Int64Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt8 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt8Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<UInt8Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt16 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt16Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<UInt16Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt32 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt32Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<UInt32Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt64 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt64Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<UInt64Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Float32 => {
-                            let b = PrimitiveGroupValueBuilder::<Float32Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Float32Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Float64 => {
-                            let b = PrimitiveGroupValueBuilder::<Float64Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Float64Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Date32 => {
-                            let b = PrimitiveGroupValueBuilder::<Date32Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Date32Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Date64 => {
-                            let b = PrimitiveGroupValueBuilder::<Date64Type>::new();
+                            let b = PrimitiveGroupValueBuilder::<Date64Type>::default();
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Utf8 => {
-                            let b = ByteGroupValueBuilderNaive::<i32>::new(OutputType::Utf8);
+                            let b = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::LargeUtf8 => {
-                            let b = ByteGroupValueBuilderNaive::<i64>::new(OutputType::Utf8);
+                            let b = ByteGroupValueBuilder::<i64>::new(OutputType::Utf8);
                             v.push(Box::new(b) as _)
                         }
                         dt => todo!("{dt} not impl"),
@@ -204,7 +182,7 @@ impl GroupValues for GroupValuesRowLike {
                 // && group_rows.row(row) == group_values.row(*group_idx)
 
                 fn compare_equal(
-                    arry_eq: &dyn ArrayEq,
+                    arry_eq: &dyn ArrayRowEq,
                     lhs_row: usize,
                     array: &ArrayRef,
                     rhs_row: usize,
@@ -212,7 +190,7 @@ impl GroupValues for GroupValuesRowLike {
                     arry_eq.equal_to(lhs_row, array, rhs_row)
                 }
 
-                for (i, group_val) in group_values_v2.iter().enumerate() {
+                for (i, group_val) in group_values.iter().enumerate() {
                     if !compare_equal(group_val.as_ref(), *group_idx, &cols[i], row) {
                         return false;
                     }
@@ -231,8 +209,8 @@ impl GroupValues for GroupValuesRowLike {
                     // group_values.push(group_rows.row(row));
 
                     let mut checklen = 0;
-                    let group_idx = group_values_v2[0].len();
-                    for (i, group_value) in group_values_v2.iter_mut().enumerate() {
+                    let group_idx = group_values[0].len();
+                    for (i, group_value) in group_values.iter_mut().enumerate() {
                         group_value.append_val(&cols[i], row);
                         let len = group_value.len();
                         if i == 0 {
@@ -254,22 +232,13 @@ impl GroupValues for GroupValuesRowLike {
             groups.push(group_idx);
         }
 
-        // self.group_values = Some(group_values);
-        self.group_values_v2 = Some(group_values_v2);
-
+        self.group_values = Some(group_values);
         Ok(())
     }
 
     fn size(&self) -> usize {
-        // TODO: get real size
-        let group_values_size =
-            self.group_values_v2.as_ref().map(|v| v.len()).unwrap_or(0);
-        // let group_values_size = self.group_values.as_ref().map(|v| v.size()).unwrap_or(0);
-        self.row_converter.size()
-            + group_values_size
-            + self.map_size
-            + self.rows_buffer.size()
-            + self.hashes_buffer.allocated_size()
+        let group_values_size = self.group_values.as_ref().map(|v| v.len()).unwrap_or(0);
+        group_values_size + self.map_size + self.hashes_buffer.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -277,52 +246,29 @@ impl GroupValues for GroupValuesRowLike {
     }
 
     fn len(&self) -> usize {
-        // self.group_values
-        //     .as_ref()
-        //     .map(|group_values| group_values.num_rows())
-        //     .unwrap_or(0)
-
-        self.group_values_v2
-            .as_ref()
-            .map(|v| v[0].len())
-            .unwrap_or(0)
+        self.group_values.as_ref().map(|v| v[0].len()).unwrap_or(0)
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let mut group_values_v2 = self
-            .group_values_v2
+            .group_values
             .take()
             .expect("Can not emit from empty rows");
-
-        // println!("emit_to: {:?}", emit_to);
 
         let mut output = match emit_to {
             EmitTo::All => {
                 let output = group_values_v2
                     .into_iter()
-                    .map(|v| {
-                        v.build()
-                    })
+                    .map(|v| v.build())
                     .collect::<Vec<_>>();
-                // let output = self.row_converter.convert_rows(&group_values)?;
-                // group_values.clear();
-                // println!("output: {:?}", output);
-                self.group_values_v2 = None;
+                self.group_values = None;
                 output
             }
             EmitTo::First(n) => {
-                // return internal_err!("there is error");
-                let output = group_values_v2.iter_mut().map(|v|v.take_n(n)).collect::<Vec<_>>();
-
-                // let groups_rows = group_values.iter().take(n);
-                // let output = self.row_converter.convert_rows(groups_rows)?;
-                // // Clear out first n group keys by copying them to a new Rows.
-                // // TODO file some ticket in arrow-rs to make this more efficient?
-                // let mut new_group_values = self.row_converter.empty_rows(0, 0);
-                // for row in group_values.iter().skip(n) {
-                //     new_group_values.push(row);
-                // }
-                // std::mem::swap(&mut new_group_values, &mut group_values);
+                let output = group_values_v2
+                    .iter_mut()
+                    .map(|v| v.take_n(n))
+                    .collect::<Vec<_>>();
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
@@ -336,7 +282,7 @@ impl GroupValues for GroupValuesRowLike {
                         }
                     }
                 }
-                self.group_values_v2 = Some(group_values_v2);
+                self.group_values = Some(group_values_v2);
                 output
             }
         };
@@ -355,18 +301,12 @@ impl GroupValues for GroupValuesRowLike {
             }
         }
 
-        // self.group_values = Some(group_values);
-        // println!("output: {:?}", output);
         Ok(output)
     }
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {
         let count = batch.num_rows();
-        // self.group_values = self.group_values.take().map(|mut rows| {
-        //     rows.clear();
-        //     rows
-        // });
-        self.group_values_v2 = self.group_values_v2.take().map(|mut rows| {
+        self.group_values = self.group_values.take().map(|mut rows| {
             rows.clear();
             rows
         });
