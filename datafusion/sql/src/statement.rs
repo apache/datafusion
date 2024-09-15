@@ -222,6 +222,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => self.set_variable_to_plan(local, hivevar, &variables, value),
 
             Statement::CreateTable(CreateTable {
+                temporary,
+                external,
+                global,
+                transient,
+                volatile,
+                hive_distribution,
+                hive_formats,
+                file_format,
+                location,
                 query,
                 name,
                 columns,
@@ -230,8 +239,149 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 with_options,
                 if_not_exists,
                 or_replace,
-                ..
+                without_rowid,
+                like,
+                clone,
+                engine,
+                comment,
+                auto_increment_offset,
+                default_charset,
+                collation,
+                on_commit,
+                on_cluster,
+                primary_key,
+                order_by,
+                partition_by,
+                cluster_by,
+                options,
+                strict,
+                copy_grants,
+                enable_schema_evolution,
+                change_tracking,
+                data_retention_time_in_days,
+                max_data_extension_time_in_days,
+                default_ddl_collation,
+                with_aggregation_policy,
+                with_row_access_policy,
+                with_tags,
             }) if table_properties.is_empty() && with_options.is_empty() => {
+                if temporary {
+                    return not_impl_err!("Temporary tables not supported")?;
+                }
+                if external {
+                    return not_impl_err!("External tables not supported")?;
+                }
+                if global.is_some() {
+                    return not_impl_err!("Global tables not supported")?;
+                }
+                if transient {
+                    return not_impl_err!("Transient tables not supported")?;
+                }
+                if volatile {
+                    return not_impl_err!("Volatile tables not supported")?;
+                }
+                if hive_distribution != ast::HiveDistributionStyle::NONE {
+                    return not_impl_err!(
+                        "Hive distribution not supported: {hive_distribution:?}"
+                    )?;
+                }
+                if !matches!(
+                    hive_formats,
+                    Some(ast::HiveFormat {
+                        row_format: None,
+                        serde_properties: None,
+                        storage: None,
+                        location: None,
+                    })
+                ) {
+                    return not_impl_err!(
+                        "Hive formats not supported: {hive_formats:?}"
+                    )?;
+                }
+                if file_format.is_some() {
+                    return not_impl_err!("File format not supported")?;
+                }
+                if location.is_some() {
+                    return not_impl_err!("Location not supported")?;
+                }
+                if without_rowid {
+                    return not_impl_err!("Without rowid not supported")?;
+                }
+                if like.is_some() {
+                    return not_impl_err!("Like not supported")?;
+                }
+                if clone.is_some() {
+                    return not_impl_err!("Clone not supported")?;
+                }
+                if engine.is_some() {
+                    return not_impl_err!("Engine not supported")?;
+                }
+                if comment.is_some() {
+                    return not_impl_err!("Comment not supported")?;
+                }
+                if auto_increment_offset.is_some() {
+                    return not_impl_err!("Auto increment offset not supported")?;
+                }
+                if default_charset.is_some() {
+                    return not_impl_err!("Default charset not supported")?;
+                }
+                if collation.is_some() {
+                    return not_impl_err!("Collation not supported")?;
+                }
+                if on_commit.is_some() {
+                    return not_impl_err!("On commit not supported")?;
+                }
+                if on_cluster.is_some() {
+                    return not_impl_err!("On cluster not supported")?;
+                }
+                if primary_key.is_some() {
+                    return not_impl_err!("Primary key not supported")?;
+                }
+                if order_by.is_some() {
+                    return not_impl_err!("Order by not supported")?;
+                }
+                if partition_by.is_some() {
+                    return not_impl_err!("Partition by not supported")?;
+                }
+                if cluster_by.is_some() {
+                    return not_impl_err!("Cluster by not supported")?;
+                }
+                if options.is_some() {
+                    return not_impl_err!("Options not supported")?;
+                }
+                if strict {
+                    return not_impl_err!("Strict not supported")?;
+                }
+                if copy_grants {
+                    return not_impl_err!("Copy grants not supported")?;
+                }
+                if enable_schema_evolution.is_some() {
+                    return not_impl_err!("Enable schema evolution not supported")?;
+                }
+                if change_tracking.is_some() {
+                    return not_impl_err!("Change tracking not supported")?;
+                }
+                if data_retention_time_in_days.is_some() {
+                    return not_impl_err!("Data retention time in days not supported")?;
+                }
+                if max_data_extension_time_in_days.is_some() {
+                    return not_impl_err!(
+                        "Max data extension time in days not supported"
+                    )?;
+                }
+                if default_ddl_collation.is_some() {
+                    return not_impl_err!("Default DDL collation not supported")?;
+                }
+                if with_aggregation_policy.is_some() {
+                    return not_impl_err!("With aggregation policy not supported")?;
+                }
+                if with_row_access_policy.is_some() {
+                    return not_impl_err!("With row access policy not supported")?;
+                }
+                if with_tags.is_some() {
+                    return not_impl_err!("With tags not supported")?;
+                }
+
                 // Merge inline constraints and existing constraints
                 let mut all_constraints = constraints;
                 let inline_constraints = calc_inline_constraints_from_columns(&columns);
@@ -317,12 +467,40 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             Statement::CreateView {
                 or_replace,
+                materialized,
                 name,
                 columns,
                 query,
                 options: CreateTableOptions::None,
-                ..
+                cluster_by,
+                comment,
+                with_no_schema_binding,
+                if_not_exists,
+                temporary,
+                to,
             } => {
+                if materialized {
+                    return not_impl_err!("Materialized views not supported")?;
+                }
+                if !cluster_by.is_empty() {
+                    return not_impl_err!("Cluster by not supported")?;
+                }
+                if comment.is_some() {
+                    return not_impl_err!("Comment not supported")?;
+                }
+                if with_no_schema_binding {
+                    return not_impl_err!("With no schema binding not supported")?;
+                }
+                if if_not_exists {
+                    return not_impl_err!("If not exists not supported")?;
+                }
+                if temporary {
+                    return not_impl_err!("Temporary views not supported")?;
+                }
+                if to.is_some() {
+                    return not_impl_err!("To not supported")?;
+                }
+
                 let columns = columns
                     .into_iter()
                     .map(|view_column_def| {
