@@ -18,7 +18,6 @@
 //! [`WindowUDF`]: User Defined Window Functions
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::DataType;
 use std::cmp::Ordering;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
@@ -545,9 +544,10 @@ impl WindowUDFImpl for WindowUDFLegacyWrapper {
 #[cfg(test)]
 mod test {
     use crate::{PartitionEvaluator, WindowUDF, WindowUDFImpl};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
     use datafusion_expr_common::signature::{Signature, Volatility};
+    use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use std::any::Any;
     use std::cmp::Ordering;
 
@@ -585,6 +585,9 @@ mod test {
         fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
+            unimplemented!()
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -619,6 +622,9 @@ mod test {
             unimplemented!()
         }
         fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+            unimplemented!()
+        }
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
             unimplemented!()
         }
     }
