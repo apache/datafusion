@@ -45,7 +45,11 @@ pub trait ArrayRowEq: Send + Sync {
     fn take_n(&mut self, n: usize) -> ArrayRef;
 }
 
-pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType>(Vec<T::Native>, Vec<bool>, bool);
+pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType>(
+    Vec<T::Native>,
+    Vec<bool>,
+    bool,
+);
 impl<T: ArrowPrimitiveType> Default for PrimitiveGroupValueBuilder<T> {
     fn default() -> Self {
         Self(vec![], vec![], false)
@@ -56,7 +60,7 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         if self.1[lhs_row] {
             if array.is_null(rhs_row) {
-                return false
+                return false;
             }
 
             return self.0[lhs_row] == array.as_primitive::<T>().value(rhs_row);
@@ -87,7 +91,10 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
 
     fn build(self: Box<Self>) -> ArrayRef {
         if self.2 {
-            Arc::new(PrimitiveArray::<T>::new(ScalarBuffer::from(self.0), Some(NullBuffer::from(self.1))))
+            Arc::new(PrimitiveArray::<T>::new(
+                ScalarBuffer::from(self.0),
+                Some(NullBuffer::from(self.1)),
+            ))
         } else {
             Arc::new(PrimitiveArray::<T>::new(ScalarBuffer::from(self.0), None))
         }
@@ -97,7 +104,10 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
         if self.2 {
             let first_n = self.0.drain(0..n).collect::<Vec<_>>();
             let first_n_nulls = self.1.drain(0..n).collect::<Vec<_>>();
-            Arc::new(PrimitiveArray::<T>::new(ScalarBuffer::from(first_n), Some(NullBuffer::from(first_n_nulls))))
+            Arc::new(PrimitiveArray::<T>::new(
+                ScalarBuffer::from(first_n),
+                Some(NullBuffer::from(first_n_nulls)),
+            ))
         } else {
             let first_n = self.0.drain(0..n).collect::<Vec<_>>();
             self.1.truncate(self.1.len() - n);
@@ -111,8 +121,7 @@ where
     O: OffsetSizeTrait,
 {
     output_type: OutputType,
-    buffer_v2: BufferBuilder<u8>,
-    // buffer: Vec<u8>,
+    buffer: BufferBuilder<u8>,
     /// Offsets into `buffer` for each distinct  value. These offsets as used
     /// directly to create the final `GenericBinaryArray`. The `i`th string is
     /// stored in the range `offsets[i]..offsets[i+1]` in `buffer`. Null values
@@ -129,8 +138,7 @@ where
     pub fn new(output_type: OutputType) -> Self {
         Self {
             output_type,
-            buffer_v2: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
-            // buffer: Vec::with_capacity(INITIAL_BUFFER_CAPACITY),
+            buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()],
             nulls: vec![],
         }
@@ -144,16 +152,15 @@ where
         if arr.is_null(row) {
             self.nulls.push(self.len());
             // nulls need a zero length in the offset buffer
-            let offset = self.buffer_v2.len();
+            let offset = self.buffer.len();
 
             self.offsets.push(O::usize_as(offset));
             return;
         }
 
         let value: &[u8] = arr.value(row).as_ref();
-        // self.buffer.extend_from_slice(value);
-        self.buffer_v2.append_slice(value);
-        self.offsets.push(O::usize_as(self.buffer_v2.len()));
+        self.buffer.append_slice(value);
+        self.offsets.push(O::usize_as(self.buffer.len()));
     }
 
     fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
@@ -175,7 +182,7 @@ where
         assert_eq!(rhs_elem_len, rhs_elem.len());
         let l = self.offsets[lhs_row].as_usize();
         let r = self.offsets[lhs_row + 1].as_usize();
-        let existing_elem = unsafe { self.buffer_v2.as_slice().get_unchecked(l..r) };
+        let existing_elem = unsafe { self.buffer.as_slice().get_unchecked(l..r) };
         existing_elem.len() == rhs_elem.len() && rhs_elem == existing_elem
     }
 }
@@ -237,8 +244,7 @@ where
     fn build(self: Box<Self>) -> ArrayRef {
         let Self {
             output_type,
-            mut buffer_v2,
-            // buffer,
+            mut buffer,
             offsets,
             nulls,
         } = *self;
@@ -259,8 +265,7 @@ where
         // SAFETY: the offsets were constructed correctly in `insert_if_new` --
         // monotonically increasing, overflows were checked.
         let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
-        // let values = Buffer::from_vec(buffer);
-        let values = buffer_v2.finish();
+        let values = buffer.finish();
 
         match output_type {
             OutputType::Binary => {
@@ -315,14 +320,11 @@ where
 
         // Consume first (n - nulls count) of elements since we don't push any value for null case.
         let r = n - self.nulls.len();
-        
-        let mut remaining_buffer = BufferBuilder::new(self.buffer_v2.len() - r);
-        remaining_buffer.append_slice(&self.buffer_v2.as_slice()[r..]);
-        self.buffer_v2.truncate(r);
-        let values = self.buffer_v2.finish();
-        
-        // let first_n_valid_buffer = self.buffer.drain(0..(n - self.nulls.len())).collect();
-        // let values = Buffer::from_vec(first_n_valid_buffer);
+
+        let mut remaining_buffer = BufferBuilder::new(self.buffer.len() - r);
+        remaining_buffer.append_slice(&self.buffer.as_slice()[r..]);
+        self.buffer.truncate(r);
+        let values = self.buffer.finish();
 
         match self.output_type {
             OutputType::Binary => {
