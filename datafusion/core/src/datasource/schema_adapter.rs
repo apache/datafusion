@@ -246,6 +246,10 @@ impl SchemaMapper for SchemaMapping {
 
     /// Adapts a [`RecordBatch`]'s schema into one that has all the correct output types and only
     /// contains the fields that exist in both the file schema and table schema.
+    ///
+    /// Unlike `map_batch` this method also preserves the columns that 
+    /// may not appear in the final output (`projected_table_schema`) but may
+    /// appear in push down predicates
     fn map_partial_batch(
         &self,
         batch: RecordBatch,
