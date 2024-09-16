@@ -195,7 +195,9 @@ pub fn swap_hash_join(
         // TODO avoid adding ProjectionExec again and again, only adding Final Projection
         let mut reverted_cols =
             swap_reverting_projection(&left.schema(), &right.schema());
-        if let Some(proj) = new_join.projection.as_ref() {
+        if let Some(proj) = hash_join.projection.as_ref() {
+            dbg!(proj);
+            dbg!(&reverted_cols);
             reverted_cols = proj
                 .iter()
                 .map(|&col_idx| reverted_cols[col_idx].clone())
@@ -1309,8 +1311,14 @@ mod tests_statistical {
             PartitionMode::Partitioned,
             false,
         )?);
-        swap_hash_join(&join.clone(), PartitionMode::Partitioned)
+        let swapped = swap_hash_join(&join.clone(), PartitionMode::Partitioned)
             .expect("swap_hash_join must support joins with projections");
+        let swapped_proj = swapped
+            .as_any()
+            .downcast_ref::<ProjectionExec>()
+            .expect("a proj is required to swap columns back to their original order");
+        assert_eq!(swapped_proj.expr().len(), 1);
+        assert_eq!(swapped_proj.expr()[0].1, "small_col".to_string());
         Ok(())
     }
 
