@@ -35,7 +35,12 @@ use datafusion_physical_expr::binary_map::OutputType;
 
 pub trait PartitionedGroupValues {
     /// Calculates the `groups` for each input row of `cols`
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<Vec<usize>>) -> Result<()>;
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        part_groups: &mut Vec<Vec<usize>>,
+        part_row_indices: &mut Vec<Vec<usize>>,
+    ) -> Result<()>;
 
     /// Returns the number of bytes used by this [`GroupValues`]
     fn size(&self) -> usize;
