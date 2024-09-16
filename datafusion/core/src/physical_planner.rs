@@ -1974,6 +1974,7 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
+    use std::cmp::Ordering;
     use std::fmt::{self, Debug};
     use std::ops::{BitAnd, Not};
 
@@ -2525,6 +2526,12 @@ mod tests {
     impl Debug for NoOpExtensionNode {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "NoOp")
+        }
+    }
+
+    impl PartialOrd for NoOpExtensionNode {
+        fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+            None
         }
     }
 

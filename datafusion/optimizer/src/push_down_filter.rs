@@ -1195,6 +1195,7 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
+    use std::cmp::Ordering;
     use std::fmt::{Debug, Formatter};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -1449,6 +1450,12 @@ mod tests {
     struct NoopPlan {
         input: Vec<LogicalPlan>,
         schema: DFSchemaRef,
+    }
+
+    impl PartialOrd for NoopPlan {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            self.input.partial_cmp(&other.input)
+        }
     }
 
     impl UserDefinedLogicalNodeCore for NoopPlan {
