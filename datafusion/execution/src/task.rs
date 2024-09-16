@@ -24,7 +24,7 @@ use crate::{
     config::SessionConfig,
     memory_pool::MemoryPool,
     registry::FunctionRegistry,
-    runtime_env::{RuntimeConfig, RuntimeEnv},
+    runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
 };
 use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::planner::ExprPlanner;
@@ -57,7 +57,8 @@ pub struct TaskContext {
 
 impl Default for TaskContext {
     fn default() -> Self {
-        let runtime = RuntimeEnv::new(RuntimeConfig::new())
+        let runtime = RuntimeEnvBuilder::new()
+            .build_arc()
             .expect("default runtime created successfully");
 
         // Create a default task context, mostly useful for testing
@@ -68,7 +69,7 @@ impl Default for TaskContext {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
-            runtime: Arc::new(runtime),
+            runtime,
         }
     }
 }

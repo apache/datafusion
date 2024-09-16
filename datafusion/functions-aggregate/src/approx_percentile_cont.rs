@@ -31,8 +31,8 @@ use arrow::{
 use arrow_schema::{Field, Schema};
 
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, Result,
-    ScalarValue,
+    downcast_value, internal_err, not_impl_datafusion_err, not_impl_err, plan_err,
+    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
@@ -126,9 +126,9 @@ impl ApproxPercentileCont {
             | DataType::Float32
             | DataType::Float64) => {
                 if let Some(max_size) = tdigest_max_size {
-                    ApproxPercentileAccumulator::new_with_max_size(percentile, t.clone(), max_size)
+                    ApproxPercentileAccumulator::new_with_max_size(percentile, t, max_size)
                 }else{
-                    ApproxPercentileAccumulator::new(percentile, t.clone())
+                    ApproxPercentileAccumulator::new(percentile, t)
 
                 }
             }
@@ -154,7 +154,8 @@ fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
 }
 
 fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
-    let percentile = match get_scalar_value(expr)? {
+    let percentile = match get_scalar_value(expr)
+        .map_err(|_| not_impl_datafusion_err!("Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal, got: {expr}"))? {
         ScalarValue::Float32(Some(value)) => {
             value as f64
         }
@@ -179,7 +180,8 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
 }
 
 fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
-    let max_size = match get_scalar_value(expr)? {
+    let max_size = match get_scalar_value(expr)
+        .map_err(|_| not_impl_datafusion_err!("Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal, got: {expr}"))? {
         ScalarValue::UInt8(Some(q)) => q as usize,
         ScalarValue::UInt16(Some(q)) => q as usize,
         ScalarValue::UInt32(Some(q)) => q as usize,
@@ -193,7 +195,7 @@ fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
                 "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
                 sv.data_type()
             )
-        }
+        },
     };
 
     Ok(max_size)
@@ -457,10 +459,6 @@ impl Accumulator for ApproxPercentileAccumulator {
             - std::mem::size_of_val(&self.digest)
             + self.return_type.size()
             - std::mem::size_of_val(&self.return_type)
-    }
-
-    fn supports_retract_batch(&self) -> bool {
-        true
     }
 }
 

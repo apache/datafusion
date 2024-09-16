@@ -1542,6 +1542,9 @@ impl serde::Serialize for CsvOptions {
         if !self.newlines_in_values.is_empty() {
             len += 1;
         }
+        if !self.terminator.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
         if !self.has_header.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1598,6 +1601,10 @@ impl serde::Serialize for CsvOptions {
             #[allow(clippy::needless_borrow)]
             struct_ser.serialize_field("newlinesInValues", pbjson::private::base64::encode(&self.newlines_in_values).as_str())?;
         }
+        if !self.terminator.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("terminator", pbjson::private::base64::encode(&self.terminator).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -1633,6 +1640,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "doubleQuote",
             "newlines_in_values",
             "newlinesInValues",
+            "terminator",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1652,6 +1660,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             Comment,
             DoubleQuote,
             NewlinesInValues,
+            Terminator,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1688,6 +1697,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "comment" => Ok(GeneratedField::Comment),
                             "doubleQuote" | "double_quote" => Ok(GeneratedField::DoubleQuote),
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
+                            "terminator" => Ok(GeneratedField::Terminator),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1722,6 +1732,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut comment__ = None;
                 let mut double_quote__ = None;
                 let mut newlines_in_values__ = None;
+                let mut terminator__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -1830,6 +1841,14 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::Terminator => {
+                            if terminator__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("terminator"));
+                            }
+                            terminator__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvOptions {
@@ -1848,6 +1867,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     comment: comment__.unwrap_or_default(),
                     double_quote: double_quote__.unwrap_or_default(),
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),
+                    terminator: terminator__.unwrap_or_default(),
                 })
             }
         }
@@ -4871,7 +4891,7 @@ impl serde::Serialize for ParquetOptions {
         if self.bloom_filter_on_write {
             len += 1;
         }
-        if self.schema_force_string_view {
+        if self.schema_force_view_types {
             len += 1;
         }
         if self.dictionary_page_size_limit != 0 {
@@ -4957,8 +4977,8 @@ impl serde::Serialize for ParquetOptions {
         if self.bloom_filter_on_write {
             struct_ser.serialize_field("bloomFilterOnWrite", &self.bloom_filter_on_write)?;
         }
-        if self.schema_force_string_view {
-            struct_ser.serialize_field("schemaForceStringView", &self.schema_force_string_view)?;
+        if self.schema_force_view_types {
+            struct_ser.serialize_field("schemaForceViewTypes", &self.schema_force_view_types)?;
         }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -5077,8 +5097,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "bloomFilterOnRead",
             "bloom_filter_on_write",
             "bloomFilterOnWrite",
-            "schema_force_string_view",
-            "schemaForceStringView",
+            "schema_force_view_types",
+            "schemaForceViewTypes",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -5120,7 +5140,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             MaximumBufferedRecordBatchesPerStream,
             BloomFilterOnRead,
             BloomFilterOnWrite,
-            SchemaForceStringView,
+            schemaForceViewTypes,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -5168,7 +5188,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "maximumBufferedRecordBatchesPerStream" | "maximum_buffered_record_batches_per_stream" => Ok(GeneratedField::MaximumBufferedRecordBatchesPerStream),
                             "bloomFilterOnRead" | "bloom_filter_on_read" => Ok(GeneratedField::BloomFilterOnRead),
                             "bloomFilterOnWrite" | "bloom_filter_on_write" => Ok(GeneratedField::BloomFilterOnWrite),
-                            "schemaForceStringView" | "schema_force_string_view" => Ok(GeneratedField::SchemaForceStringView),
+                            "schemaForceViewTypes" | "schema_force_view_types" => Ok(GeneratedField::schemaForceViewTypes),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -5214,7 +5234,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut maximum_buffered_record_batches_per_stream__ = None;
                 let mut bloom_filter_on_read__ = None;
                 let mut bloom_filter_on_write__ = None;
-                let mut schema_force_string_view__ = None;
+                let mut schema_force_view_types__ = None;
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
@@ -5316,11 +5336,11 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             bloom_filter_on_write__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::SchemaForceStringView => {
-                            if schema_force_string_view__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("schemaForceStringView"));
+                        GeneratedField::schemaForceViewTypes => {
+                            if schema_force_view_types__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schemaForceViewTypes"));
                             }
-                            schema_force_string_view__ = Some(map_.next_value()?);
+                            schema_force_view_types__ = Some(map_.next_value()?);
                         }
                         GeneratedField::DictionaryPageSizeLimit => {
                             if dictionary_page_size_limit__.is_some() {
@@ -5422,7 +5442,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     maximum_buffered_record_batches_per_stream: maximum_buffered_record_batches_per_stream__.unwrap_or_default(),
                     bloom_filter_on_read: bloom_filter_on_read__.unwrap_or_default(),
                     bloom_filter_on_write: bloom_filter_on_write__.unwrap_or_default(),
-                    schema_force_string_view: schema_force_string_view__.unwrap_or_default(),
+                    schema_force_view_types: schema_force_view_types__.unwrap_or_default(),
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),

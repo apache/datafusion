@@ -37,7 +37,6 @@ use datafusion_expr::{
     LogicalPlan, LogicalPlanBuilder, Operator,
 };
 
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use log::debug;
 
 /// Optimizer rule for rewriting predicate(IN/EXISTS) subquery to left semi/anti joins
@@ -55,8 +54,10 @@ impl DecorrelatePredicateSubquery {
         mut subquery: Subquery,
         config: &dyn OptimizerConfig,
     ) -> Result<Subquery> {
-        subquery.subquery =
-            Arc::new(self.rewrite(unwrap_arc(subquery.subquery), config)?.data);
+        subquery.subquery = Arc::new(
+            self.rewrite(Arc::unwrap_or_clone(subquery.subquery), config)?
+                .data,
+        );
         Ok(subquery)
     }
 
@@ -164,7 +165,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
         }
 
         // iterate through all exists clauses in predicate, turning each into a join
-        let mut cur_input = unwrap_arc(input);
+        let mut cur_input = Arc::unwrap_or_clone(input);
         for subquery in subqueries {
             if let Some(plan) =
                 build_join(&subquery, &cur_input, config.alias_generator())?
@@ -248,7 +249,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
 fn build_join(
     query_info: &SubqueryInfo,
     left: &LogicalPlan,
-    alias: Arc<AliasGenerator>,
+    alias: &Arc<AliasGenerator>,
 ) -> Result<Option<LogicalPlan>> {
     let where_in_expr_opt = &query_info.where_in_expr;
     let in_predicate_opt = where_in_expr_opt
@@ -369,8 +370,8 @@ mod tests {
     use super::*;
     use crate::test::*;
 
-    use arrow::datatypes::DataType;
-    use datafusion_expr::{and, binary_expr, col, lit, not, or, out_ref_col};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::{and, binary_expr, col, lit, not, or, out_ref_col, table_scan};
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq_display_indent(
@@ -1905,6 +1906,37 @@ mod tests {
                         \n      Distinct: [UInt32(1):UInt32, c:UInt32, a:UInt32]\
                         \n        Projection: UInt32(1), sq.c, sq.a [UInt32(1):UInt32, c:UInt32, a:UInt32]\
                         \n          TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_equal(plan, expected)
+    }
+
+    #[test]
+    fn upper_case_ident() -> Result<()> {
+        let fields = vec![
+            Field::new("A", DataType::UInt32, false),
+            Field::new("B", DataType::UInt32, false),
+        ];
+
+        let schema = Schema::new(fields);
+        let table_scan_a = table_scan(Some("\"TEST_A\""), &schema, None)?.build()?;
+        let table_scan_b = table_scan(Some("\"TEST_B\""), &schema, None)?.build()?;
+
+        let subquery = LogicalPlanBuilder::from(table_scan_b)
+            .filter(col("\"A\"").eq(out_ref_col(DataType::UInt32, "\"TEST_A\".\"A\"")))?
+            .project(vec![lit(1)])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_a)
+            .filter(exists(Arc::new(subquery)))?
+            .project(vec![col("\"TEST_A\".\"B\"")])?
+            .build()?;
+
+        let expected = "Projection: TEST_A.B [B:UInt32]\
+        \n  LeftSemi Join:  Filter: __correlated_sq_1.A = TEST_A.A [A:UInt32, B:UInt32]\
+        \n    TableScan: TEST_A [A:UInt32, B:UInt32]\
+        \n    SubqueryAlias: __correlated_sq_1 [Int32(1):Int32, A:UInt32]\
+        \n      Projection: Int32(1), TEST_B.A [Int32(1):Int32, A:UInt32]\
+        \n        TableScan: TEST_B [A:UInt32, B:UInt32]";
 
         assert_optimized_plan_equal(plan, expected)
     }

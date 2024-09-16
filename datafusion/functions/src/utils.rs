@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use arrow::array::Array;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
@@ -144,7 +145,7 @@ pub mod test {
                     assert_eq!(return_type.unwrap(), $EXPECTED_DATA_TYPE);
 
                     let result = func.invoke($ARGS);
-                    assert_eq!(result.is_ok(), true);
+                    assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
                     let len = $ARGS
                         .iter()

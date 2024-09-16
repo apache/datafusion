@@ -366,7 +366,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                     // wrap OOM message in top consumers
                     DataFusionError::ResourcesExhausted(
                         provide_top_memory_consumers_to_error_msg(
-                            e.to_owned(),
+                            e,
                             self.report_top(self.top.into()),
                         ),
                     )
@@ -540,7 +540,7 @@ mod tests {
         // Test: will be the same per Top Consumers reported.
         r0.grow(10); // make r0=10, pool available=90
         let new_consumer_same_name = MemoryConsumer::new(same_name);
-        let mut r1 = new_consumer_same_name.clone().register(&pool);
+        let mut r1 = new_consumer_same_name.register(&pool);
         // TODO: the insufficient_capacity_err() message is per reservation, not per consumer.
         // a followup PR will clarify this message "0 bytes already allocated for this reservation"
         let expected = "Additional allocation failed with top memory consumers (across reservations) as: foo consumed 10 bytes. Error: Failed to allocate additional 150 bytes for foo with 0 bytes already allocated for this reservation - 90 bytes remain available for the total pool";

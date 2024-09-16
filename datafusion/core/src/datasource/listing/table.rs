@@ -33,8 +33,8 @@ use crate::datasource::{
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::TableType;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
+use datafusion_expr::{SortExpr, TableType};
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
@@ -222,19 +222,19 @@ pub struct ListingOptions {
     ///       ordering (encapsulated by a `Vec<Expr>`). If there aren't
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
-    pub file_sort_order: Vec<Vec<Expr>>,
+    pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
 impl ListingOptions {
     /// Creates an options instance with the given format
     /// Default values:
-    /// - no file extension filter
+    /// - use default file extension filter
     /// - no input partition to discover
     /// - one target partition
     /// - stat collection
     pub fn new(format: Arc<dyn FileFormat>) -> Self {
         Self {
-            file_extension: String::new(),
+            file_extension: format.get_ext(),
             format,
             table_partition_cols: vec![],
             collect_stat: true,
@@ -245,6 +245,7 @@ impl ListingOptions {
 
     /// Set file extension on [`ListingOptions`] and returns self.
     ///
+    /// # Example
     /// ```
     /// # use std::sync::Arc;
     /// # use datafusion::prelude::SessionContext;
@@ -259,6 +260,33 @@ impl ListingOptions {
     /// ```
     pub fn with_file_extension(mut self, file_extension: impl Into<String>) -> Self {
         self.file_extension = file_extension.into();
+        self
+    }
+
+    /// Optionally set file extension on [`ListingOptions`] and returns self.
+    ///
+    /// If `file_extension` is `None`, the file extension will not be changed
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::SessionContext;
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// let extension = Some(".parquet");
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::default()
+    ///   ))
+    ///   .with_file_extension_opt(extension);
+    ///
+    /// assert_eq!(listing_options.file_extension, ".parquet");
+    /// ```
+    pub fn with_file_extension_opt<S>(mut self, file_extension: Option<S>) -> Self
+    where
+        S: Into<String>,
+    {
+        if let Some(file_extension) = file_extension {
+            self.file_extension = file_extension.into();
+        }
         self
     }
 
@@ -385,7 +413,7 @@ impl ListingOptions {
     ///
     /// assert_eq!(listing_options.file_sort_order, file_sort_order);
     /// ```
-    pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+    pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
         self
     }
@@ -826,7 +854,7 @@ impl TableProvider for ListingTable {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        let support: Vec<_> = filters
+        Ok(filters
             .iter()
             .map(|filter| {
                 if expr_applicable_for_cols(
@@ -834,7 +862,7 @@ impl TableProvider for ListingTable {
                         .options
                         .table_partition_cols
                         .iter()
-                        .map(|x| x.0.clone())
+                        .map(|x| x.0.as_str())
                         .collect::<Vec<_>>(),
                     filter,
                 ) {
@@ -846,8 +874,7 @@ impl TableProvider for ListingTable {
                     TableProviderFilterPushDown::Inexact
                 }
             })
-            .collect();
-        Ok(support)
+            .collect())
     }
 
     fn get_table_definition(&self) -> Option<&str> {
@@ -909,8 +936,7 @@ impl TableProvider for ListingTable {
             keep_partition_by_columns,
         };
 
-        let unsorted: Vec<Vec<Expr>> = vec![];
-        let order_requirements = if self.options().file_sort_order != unsorted {
+        let order_requirements = if !self.options().file_sort_order.is_empty() {
             // Multiple sort orders in outer vec are equivalent, so we pass only the first one
             let ordering = self
                 .try_create_output_ordering()?
@@ -1016,7 +1042,7 @@ impl ListingTable {
             .collected_statistics
             .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
         {
-            Some(statistics) => Ok(statistics.clone()),
+            Some(statistics) => Ok(statistics),
             None => {
                 let statistics = self
                     .options
@@ -1160,11 +1186,6 @@ mod tests {
         // (file_sort_order, expected_result)
         let cases = vec![
             (vec![], Ok(vec![])),
-            // not a sort expr
-            (
-                vec![vec![col("string_col")]],
-                Err("Expected Expr::Sort in output_ordering, but got string_col"),
-            ),
             // sort expr, but non column
             (
                 vec![vec![
@@ -1293,6 +1314,7 @@ mod tests {
             "test:///bucket/key-prefix/",
             12,
             5,
+            Some(""),
         )
         .await?;
 
@@ -1307,6 +1329,7 @@ mod tests {
             "test:///bucket/key-prefix/",
             4,
             4,
+            Some(""),
         )
         .await?;
 
@@ -1322,12 +1345,19 @@ mod tests {
             "test:///bucket/key-prefix/",
             2,
             2,
+            Some(""),
         )
         .await?;
 
         // no files => no groups
-        assert_list_files_for_scan_grouping(&[], "test:///bucket/key-prefix/", 2, 0)
-            .await?;
+        assert_list_files_for_scan_grouping(
+            &[],
+            "test:///bucket/key-prefix/",
+            2,
+            0,
+            Some(""),
+        )
+        .await?;
 
         // files that don't match the prefix
         assert_list_files_for_scan_grouping(
@@ -1339,6 +1369,21 @@ mod tests {
             "test:///bucket/key-prefix/",
             10,
             2,
+            Some(""),
+        )
+        .await?;
+
+        // files that don't match the prefix or the default file extention
+        assert_list_files_for_scan_grouping(
+            &[
+                "bucket/key-prefix/file0.avro",
+                "bucket/key-prefix/file1.parquet",
+                "bucket/other-prefix/roguefile.avro",
+            ],
+            "test:///bucket/key-prefix/",
+            10,
+            1,
+            None,
         )
         .await?;
         Ok(())
@@ -1359,6 +1404,7 @@ mod tests {
             &["test:///bucket/key1/", "test:///bucket/key2/"],
             12,
             5,
+            Some(""),
         )
         .await?;
 
@@ -1375,6 +1421,7 @@ mod tests {
             &["test:///bucket/key1/", "test:///bucket/key2/"],
             5,
             5,
+            Some(""),
         )
         .await?;
 
@@ -1391,11 +1438,13 @@ mod tests {
             &["test:///bucket/key1/"],
             2,
             2,
+            Some(""),
         )
         .await?;
 
         // no files => no groups
-        assert_list_files_for_multi_paths(&[], &["test:///bucket/key1/"], 2, 0).await?;
+        assert_list_files_for_multi_paths(&[], &["test:///bucket/key1/"], 2, 0, Some(""))
+            .await?;
 
         // files that don't match the prefix
         assert_list_files_for_multi_paths(
@@ -1410,6 +1459,24 @@ mod tests {
             &["test:///bucket/key3/"],
             2,
             1,
+            Some(""),
+        )
+        .await?;
+
+        // files that don't match the prefix or the default file ext
+        assert_list_files_for_multi_paths(
+            &[
+                "bucket/key1/file0.avro",
+                "bucket/key1/file1.csv",
+                "bucket/key1/file2.avro",
+                "bucket/key2/file3.csv",
+                "bucket/key2/file4.avro",
+                "bucket/key3/file5.csv",
+            ],
+            &["test:///bucket/key1/", "test:///bucket/key3/"],
+            2,
+            2,
+            None,
         )
         .await?;
         Ok(())
@@ -1437,6 +1504,7 @@ mod tests {
         table_prefix: &str,
         target_partitions: usize,
         output_partitioning: usize,
+        file_ext: Option<&str>,
     ) -> Result<()> {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
@@ -1444,7 +1512,7 @@ mod tests {
         let format = AvroFormat {};
 
         let opt = ListingOptions::new(Arc::new(format))
-            .with_file_extension("")
+            .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
@@ -1470,6 +1538,7 @@ mod tests {
         table_prefix: &[&str],
         target_partitions: usize,
         output_partitioning: usize,
+        file_ext: Option<&str>,
     ) -> Result<()> {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
@@ -1477,7 +1546,7 @@ mod tests {
         let format = AvroFormat {};
 
         let opt = ListingOptions::new(Arc::new(format))
-            .with_file_extension("")
+            .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
@@ -1787,7 +1856,7 @@ mod tests {
         // Create the initial context, schema, and batch.
         let session_ctx = match session_config_map {
             Some(cfg) => {
-                let config = SessionConfig::from_string_hash_map(cfg)?;
+                let config = SessionConfig::from_string_hash_map(&cfg)?;
                 SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),
@@ -1985,7 +2054,7 @@ mod tests {
         // Create the initial context
         let session_ctx = match session_config_map {
             Some(cfg) => {
-                let config = SessionConfig::from_string_hash_map(cfg)?;
+                let config = SessionConfig::from_string_hash_map(&cfg)?;
                 SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),

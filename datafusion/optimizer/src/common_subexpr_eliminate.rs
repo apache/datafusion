@@ -33,10 +33,10 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{qualified_name, Column, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::{Alias, ScalarFunction};
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
+use datafusion_expr::tree_node::replace_sort_expressions;
 use datafusion_expr::{col, BinaryExpr, Case, Expr, ExprSchemable, Operator};
 use indexmap::IndexMap;
 
@@ -229,7 +229,7 @@ impl CommonSubexprEliminate {
     fn rewrite_exprs_list<'n>(
         &self,
         exprs_list: Vec<Vec<Expr>>,
-        arrays_list: Vec<Vec<IdArray<'n>>>,
+        arrays_list: &[Vec<IdArray<'n>>],
         expr_stats: &ExprStats<'n>,
         common_exprs: &mut CommonExprs<'n>,
         alias_generator: &AliasGenerator,
@@ -284,10 +284,10 @@ impl CommonSubexprEliminate {
                 // Must clone as Identifiers use references to original expressions so we have
                 // to keep the original expressions intact.
                 exprs_list.clone(),
-                id_arrays_list,
+                &id_arrays_list,
                 &expr_stats,
                 &mut common_exprs,
-                &config.alias_generator(),
+                config.alias_generator().as_ref(),
             )?;
             assert!(!common_exprs.is_empty());
 
@@ -314,7 +314,7 @@ impl CommonSubexprEliminate {
             schema,
             ..
         } = projection;
-        let input = unwrap_arc(input);
+        let input = Arc::unwrap_or_clone(input);
         self.try_unary_plan(expr, input, config)?
             .map_data(|(new_expr, new_input)| {
                 Projection::try_new_with_schema(new_expr, Arc::new(new_input), schema)
@@ -327,16 +327,17 @@ impl CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         let Sort { expr, input, fetch } = sort;
-        let input = unwrap_arc(input);
-        let new_sort = self.try_unary_plan(expr, input, config)?.update_data(
-            |(new_expr, new_input)| {
+        let input = Arc::unwrap_or_clone(input);
+        let sort_expressions = expr.iter().map(|sort| sort.expr.clone()).collect();
+        let new_sort = self
+            .try_unary_plan(sort_expressions, input, config)?
+            .update_data(|(new_expr, new_input)| {
                 LogicalPlan::Sort(Sort {
-                    expr: new_expr,
+                    expr: replace_sort_expressions(expr, new_expr),
                     input: Arc::new(new_input),
                     fetch,
                 })
-            },
-        );
+            });
         Ok(new_sort)
     }
 
@@ -348,7 +349,7 @@ impl CommonSubexprEliminate {
         let Filter {
             predicate, input, ..
         } = filter;
-        let input = unwrap_arc(input);
+        let input = Arc::unwrap_or_clone(input);
         let expr = vec![predicate];
         self.try_unary_plan(expr, input, config)?
             .map_data(|(mut new_expr, new_input)| {
@@ -413,9 +414,9 @@ impl CommonSubexprEliminate {
                             exprs
                                 .iter()
                                 .map(|expr| name_preserver.save(expr))
-                                .collect::<Result<Vec<_>>>()
+                                .collect::<Vec<_>>()
                         })
-                        .collect::<Result<Vec<_>>>()?;
+                        .collect::<Vec<_>>();
                     new_window_expr_list.into_iter().zip(saved_names).try_rfold(
                         new_input,
                         |plan, (new_window_expr, saved_names)| {
@@ -425,7 +426,7 @@ impl CommonSubexprEliminate {
                                 .map(|(new_window_expr, saved_name)| {
                                     saved_name.restore(new_window_expr)
                                 })
-                                .collect::<Result<Vec<_>>>()?;
+                                .collect::<Vec<_>>();
                             Window::try_new(new_window_expr, Arc::new(plan))
                                 .map(LogicalPlan::Window)
                         },
@@ -458,7 +459,7 @@ impl CommonSubexprEliminate {
             schema,
             ..
         } = aggregate;
-        let input = unwrap_arc(input);
+        let input = Arc::unwrap_or_clone(input);
         // Extract common sub-expressions from the aggregate and grouping expressions.
         self.find_common_exprs(vec![group_expr, aggr_expr], config, ExprMask::Normal)?
             .map_data(|common| {
@@ -603,14 +604,14 @@ impl CommonSubexprEliminate {
                                 let saved_names = aggr_expr
                                     .iter()
                                     .map(|expr| name_perserver.save(expr))
-                                    .collect::<Result<Vec<_>>>()?;
+                                    .collect::<Vec<_>>();
                                 let new_aggr_expr = rewritten_aggr_expr
                                     .into_iter()
-                                    .zip(saved_names.into_iter())
+                                    .zip(saved_names)
                                     .map(|(new_expr, saved_name)| {
                                         saved_name.restore(new_expr)
                                     })
-                                    .collect::<Result<Vec<Expr>>>()?;
+                                    .collect::<Vec<Expr>>();
 
                                 // Since `group_expr` may have changed, schema may also.
                                 // Use `try_new()` method.
@@ -729,7 +730,7 @@ fn get_consecutive_window_exprs(
         window_expr_list.push(window_expr);
         window_schemas.push(schema);
 
-        plan = unwrap_arc(input);
+        plan = Arc::unwrap_or_clone(input);
     }
     (window_expr_list, window_schemas, plan)
 }
@@ -883,7 +884,6 @@ enum ExprMask {
     /// - [`Columns`](Expr::Column)
     /// - [`ScalarVariable`](Expr::ScalarVariable)
     /// - [`Alias`](Expr::Alias)
-    /// - [`Sort`](Expr::Sort)
     /// - [`Wildcard`](Expr::Wildcard)
     /// - [`AggregateFunction`](Expr::AggregateFunction)
     Normal,
@@ -900,7 +900,6 @@ impl ExprMask {
                 | Expr::Column(..)
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
-                | Expr::Sort { .. }
                 | Expr::Wildcard { .. }
         );
 
@@ -1432,7 +1431,7 @@ mod test {
     fn nested_aliases() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 (col("a") + col("b") - col("c")).alias("alias1") * (col("a") + col("b")),
                 col("a") + col("b"),
@@ -1843,7 +1842,7 @@ mod test {
         let config = &OptimizerContext::new();
         let _common_expr_1 = config.alias_generator().next(CSE_PREFIX);
         let common_expr_2 = config.alias_generator().next(CSE_PREFIX);
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 (col("a") + col("b")).alias(common_expr_2.clone()),
                 col("c"),
@@ -1887,7 +1886,7 @@ mod test {
         let extracted_short_circuit_leg_1 = (col("a") + col("b")).eq(lit(0));
         let not_extracted_short_circuit_leg_2 = (col("a") - col("b")).eq(lit(0));
         let extracted_short_circuit_leg_3 = (col("a") * col("b")).eq(lit(0));
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 extracted_short_circuit.clone().alias("c1"),
                 extracted_short_circuit.alias("c2"),
@@ -1900,7 +1899,7 @@ mod test {
                     .alias("c4"),
                 extracted_short_circuit_leg_3
                     .clone()
-                    .or(extracted_short_circuit_leg_3.clone())
+                    .or(extracted_short_circuit_leg_3)
                     .alias("c5"),
             ])?
             .build()?;
@@ -1921,7 +1920,7 @@ mod test {
         let extracted_child = col("a") + col("b");
         let rand = rand_func().call(vec![]);
         let not_extracted_volatile = extracted_child + rand;
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 not_extracted_volatile.clone().alias("c1"),
                 not_extracted_volatile.alias("c2"),
@@ -1948,7 +1947,7 @@ mod test {
         let not_extracted_short_circuit_leg_2 = col("b").eq(lit(0));
         let not_extracted_volatile_short_circuit_2 =
             rand.eq(lit(0)).or(not_extracted_short_circuit_leg_2);
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
+        let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 not_extracted_volatile_short_circuit_1.clone().alias("c1"),
                 not_extracted_volatile_short_circuit_1.alias("c2"),

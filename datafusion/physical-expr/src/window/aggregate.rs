@@ -29,20 +29,19 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Accumulator, WindowFrame};
 
+use crate::aggregate::AggregateFunctionExpr;
 use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
 };
-use crate::{
-    expressions::PhysicalSortExpr, reverse_order_bys, AggregateExpr, PhysicalExpr,
-};
+use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
 
 /// A window expr that takes the form of an aggregate function.
 ///
 /// See comments on [`WindowExpr`] for more details.
 #[derive(Debug)]
 pub struct PlainAggregateWindowExpr {
-    aggregate: Arc<dyn AggregateExpr>,
+    aggregate: AggregateFunctionExpr,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
@@ -51,7 +50,7 @@ pub struct PlainAggregateWindowExpr {
 impl PlainAggregateWindowExpr {
     /// Create a new aggregate window function expression
     pub fn new(
-        aggregate: Arc<dyn AggregateExpr>,
+        aggregate: AggregateFunctionExpr,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
         window_frame: Arc<WindowFrame>,
@@ -65,7 +64,7 @@ impl PlainAggregateWindowExpr {
     }
 
     /// Get aggregate expr of AggregateWindowExpr
-    pub fn get_aggregate_expr(&self) -> &Arc<dyn AggregateExpr> {
+    pub fn get_aggregate_expr(&self) -> &AggregateFunctionExpr {
         &self.aggregate
     }
 }
@@ -80,7 +79,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        self.aggregate.field()
+        Ok(self.aggregate.field())
     }
 
     fn name(&self) -> &str {
@@ -176,9 +175,9 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
         value_slice: &[ArrayRef],
         accumulator: &mut Box<dyn Accumulator>,
     ) -> Result<ScalarValue> {
-        let value = if cur_range.start == cur_range.end {
-            // We produce None if the window is empty.
-            ScalarValue::try_from(self.aggregate.field()?.data_type())?
+        if cur_range.start == cur_range.end {
+            self.aggregate
+                .default_value(self.aggregate.field().data_type())
         } else {
             // Accumulate any new rows that have entered the window:
             let update_bound = cur_range.end - last_range.end;
@@ -193,8 +192,7 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
                     .collect();
                 accumulator.update_batch(&update)?
             }
-            accumulator.evaluate()?
-        };
-        Ok(value)
+            accumulator.evaluate()
+        }
     }
 }

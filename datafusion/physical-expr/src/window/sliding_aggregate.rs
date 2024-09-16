@@ -28,13 +28,12 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
 
+use crate::aggregate::AggregateFunctionExpr;
 use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
-use crate::{
-    expressions::PhysicalSortExpr, reverse_order_bys, AggregateExpr, PhysicalExpr,
-};
+use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
 
 /// A window expr that takes the form of an aggregate function that
 /// can be incrementally computed over sliding windows.
@@ -42,7 +41,7 @@ use crate::{
 /// See comments on [`WindowExpr`] for more details.
 #[derive(Debug)]
 pub struct SlidingAggregateWindowExpr {
-    aggregate: Arc<dyn AggregateExpr>,
+    aggregate: AggregateFunctionExpr,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
@@ -51,7 +50,7 @@ pub struct SlidingAggregateWindowExpr {
 impl SlidingAggregateWindowExpr {
     /// Create a new (sliding) aggregate window function expression.
     pub fn new(
-        aggregate: Arc<dyn AggregateExpr>,
+        aggregate: AggregateFunctionExpr,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
         window_frame: Arc<WindowFrame>,
@@ -64,8 +63,8 @@ impl SlidingAggregateWindowExpr {
         }
     }
 
-    /// Get the [AggregateExpr] of this object.
-    pub fn get_aggregate_expr(&self) -> &Arc<dyn AggregateExpr> {
+    /// Get the [AggregateFunctionExpr] of this object.
+    pub fn get_aggregate_expr(&self) -> &AggregateFunctionExpr {
         &self.aggregate
     }
 }
@@ -82,7 +81,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        self.aggregate.field()
+        Ok(self.aggregate.field())
     }
 
     fn name(&self) -> &str {
@@ -183,8 +182,8 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
         accumulator: &mut Box<dyn Accumulator>,
     ) -> Result<ScalarValue> {
         if cur_range.start == cur_range.end {
-            // We produce None if the window is empty.
-            ScalarValue::try_from(self.aggregate.field()?.data_type())
+            self.aggregate
+                .default_value(self.aggregate.field().data_type())
         } else {
             // Accumulate any new rows that have entered the window:
             let update_bound = cur_range.end - last_range.end;
@@ -195,6 +194,7 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
                     .collect();
                 accumulator.update_batch(&update)?
             }
+
             // Remove rows that have now left the window:
             let retract_bound = cur_range.start - last_range.start;
             if retract_bound > 0 {

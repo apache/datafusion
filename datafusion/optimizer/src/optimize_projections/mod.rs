@@ -41,7 +41,6 @@ use crate::utils::NamePreserver;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
 /// inside the [`LogicalPlan`]. This rule:
@@ -121,7 +120,7 @@ fn optimize_projections(
     match plan {
         LogicalPlan::Projection(proj) => {
             return merge_consecutive_projections(proj)?.transform_data(|proj| {
-                rewrite_projection_given_requirements(proj, config, indices)
+                rewrite_projection_given_requirements(proj, config, &indices)
             })
         }
         LogicalPlan::Aggregate(aggregate) => {
@@ -181,7 +180,7 @@ fn optimize_projections(
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
 
             return optimize_projections(
-                unwrap_arc(aggregate.input),
+                Arc::unwrap_or_clone(aggregate.input),
                 config,
                 necessary_indices,
             )?
@@ -221,7 +220,7 @@ fn optimize_projections(
                 child_reqs.with_exprs(&input_schema, &new_window_expr)?;
 
             return optimize_projections(
-                unwrap_arc(window.input),
+                Arc::unwrap_or_clone(window.input),
                 config,
                 required_indices.clone(),
             )?
@@ -488,7 +487,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     }
 
-    let LogicalPlan::Projection(prev_projection) = unwrap_arc(input) else {
+    let LogicalPlan::Projection(prev_projection) = Arc::unwrap_or_clone(input) else {
         // We know it is a `LogicalPlan::Projection` from check above
         unreachable!();
     };
@@ -498,7 +497,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     let name_preserver = NamePreserver::new_for_projection();
     let mut original_names = vec![];
     let new_exprs = expr.into_iter().map_until_stop_and_collect(|expr| {
-        original_names.push(name_preserver.save(&expr)?);
+        original_names.push(name_preserver.save(&expr));
 
         // do not rewrite top level Aliases (rewriter will remove all aliases within exprs)
         match expr {
@@ -520,9 +519,9 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         let new_exprs = new_exprs
             .data
             .into_iter()
-            .zip(original_names.into_iter())
+            .zip(original_names)
             .map(|(expr, original_name)| original_name.restore(expr))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         Projection::try_new(new_exprs, prev_projection.input).map(Transformed::yes)
     } else {
         // not rewritten, so put the projection back together
@@ -755,7 +754,7 @@ fn add_projection_on_top_if_helpful(
 fn rewrite_projection_given_requirements(
     proj: Projection,
     config: &dyn OptimizerConfig,
-    indices: RequiredIndicies,
+    indices: &RequiredIndicies,
 ) -> Result<Transformed<LogicalPlan>> {
     let Projection { expr, input, .. } = proj;
 
@@ -766,8 +765,8 @@ fn rewrite_projection_given_requirements(
 
     // rewrite the children projection, and if they are changed rewrite the
     // projection down
-    optimize_projections(unwrap_arc(input), config, required_indices)?.transform_data(
-        |input| {
+    optimize_projections(Arc::unwrap_or_clone(input), config, required_indices)?
+        .transform_data(|input| {
             if is_projection_unnecessary(&input, &exprs_used)? {
                 Ok(Transformed::yes(input))
             } else {
@@ -775,8 +774,7 @@ fn rewrite_projection_given_requirements(
                     .map(LogicalPlan::Projection)
                     .map(Transformed::yes)
             }
-        },
-    )
+        })
 }
 
 /// Projection is unnecessary, when
@@ -1338,8 +1336,8 @@ mod tests {
         let right_table = test_table_scan_with_name("r")?;
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(UserDefinedCrossJoin::new(
-                Arc::new(left_table.clone()),
-                Arc::new(right_table.clone()),
+                Arc::new(left_table),
+                Arc::new(right_table),
             )),
         });
         let plan = LogicalPlanBuilder::from(custom_plan)

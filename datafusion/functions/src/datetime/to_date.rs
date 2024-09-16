@@ -17,12 +17,14 @@
 
 use std::any::Any;
 
-use arrow::array::types::Date32Type;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
+use arrow::error::ArrowError::ParseError;
+use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
 
 use crate::datetime::common::*;
-use datafusion_common::{exec_err, internal_datafusion_err, Result};
+use datafusion_common::error::DataFusionError;
+use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
@@ -47,22 +49,20 @@ impl ToDateFunc {
         match args.len() {
             1 => handle::<Date32Type, _, Date32Type>(
                 args,
-                |s| {
-                    string_to_timestamp_nanos_shim(s)
-                        .map(|n| n / (1_000_000 * 24 * 60 * 60 * 1_000))
-                        .and_then(|v| {
-                            v.try_into().map_err(|_| {
-                                internal_datafusion_err!("Unable to cast to Date32 for converting from i64 to i32 failed")
-                            })
-                        })
+                |s| match Date32Type::parse(s) {
+                    Some(v) => Ok(v),
+                    None => arrow_err!(ParseError(
+                        "Unable to cast to Date32 for converting from i64 to i32 failed"
+                            .to_string()
+                    )),
                 },
                 "to_date",
             ),
             2.. => handle_multiple::<Date32Type, _, Date32Type, _>(
                 args,
                 |s, format| {
-                    string_to_timestamp_nanos_formatted(s, format)
-                        .map(|n| n / (1_000_000 * 24 * 60 * 60 * 1_000))
+                    string_to_timestamp_millis_formatted(s, format)
+                        .map(|n| n / (24 * 60 * 60 * 1_000))
                         .and_then(|v| {
                             v.try_into().map_err(|_| {
                                 internal_datafusion_err!("Unable to cast to Date32 for converting from i64 to i32 failed")
@@ -114,6 +114,238 @@ impl ScalarUDFImpl for ToDateFunc {
             DataType::Utf8 => self.to_date(args),
             other => {
                 exec_err!("Unsupported data type {:?} for function to_date", other)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::{compute::kernels::cast_utils::Parser, datatypes::Date32Type};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    use super::ToDateFunc;
+
+    #[test]
+    fn test_to_date_without_format() {
+        struct TestCase {
+            name: &'static str,
+            date_str: &'static str,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "Largest four-digit year (9999)",
+                date_str: "9999-12-31",
+            },
+            TestCase {
+                name: "Year 1 (0001)",
+                date_str: "0001-12-31",
+            },
+            TestCase {
+                name: "Year before epoch (1969)",
+                date_str: "1969-01-01",
+            },
+            TestCase {
+                name: "Switch Julian/Gregorian calendar (1582-10-10)",
+                date_str: "1582-10-10",
+            },
+        ];
+
+        for tc in &test_cases {
+            let date_scalar = ScalarValue::Utf8(Some(tc.date_str.to_string()));
+            let to_date_result =
+                ToDateFunc::new().invoke(&[ColumnarValue::from(date_scalar)]);
+
+            match to_date_result {
+                Ok(ColumnarValue::Scalar(scalar)) => match scalar.value() {
+                    ScalarValue::Date32(date_val) => {
+                        let expected =
+                            Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
+                        assert_eq!(
+                            date_val, &expected,
+                            "{}: to_date created wrong value",
+                            tc.name
+                        );
+                    }
+                    _ => panic!("Could not convert '{}' to Date", tc.date_str),
+                },
+                _ => panic!("Could not convert '{}' to Date", tc.date_str),
+            }
+        }
+    }
+
+    #[test]
+    fn test_to_date_with_format() {
+        struct TestCase {
+            name: &'static str,
+            date_str: &'static str,
+            format_str: &'static str,
+            formatted_date: &'static str,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "Largest four-digit year (9999)",
+                date_str: "9999-12-31",
+                format_str: "%Y%m%d",
+                formatted_date: "99991231",
+            },
+            TestCase {
+                name: "Smallest four-digit year (-9999)",
+                date_str: "-9999-12-31",
+                format_str: "%Y/%m/%d",
+                formatted_date: "-9999/12/31",
+            },
+            TestCase {
+                name: "Year 1 (0001)",
+                date_str: "0001-12-31",
+                format_str: "%Y%m%d",
+                formatted_date: "00011231",
+            },
+            TestCase {
+                name: "Year before epoch (1969)",
+                date_str: "1969-01-01",
+                format_str: "%Y%m%d",
+                formatted_date: "19690101",
+            },
+            TestCase {
+                name: "Switch Julian/Gregorian calendar (1582-10-10)",
+                date_str: "1582-10-10",
+                format_str: "%Y%m%d",
+                formatted_date: "15821010",
+            },
+            TestCase {
+                name: "Negative Year, BC (-42-01-01)",
+                date_str: "-42-01-01",
+                format_str: "%Y/%m/%d",
+                formatted_date: "-42/01/01",
+            },
+        ];
+
+        for tc in &test_cases {
+            let formatted_date_scalar =
+                ScalarValue::Utf8(Some(tc.formatted_date.to_string()));
+            let format_scalar = ScalarValue::Utf8(Some(tc.format_str.to_string()));
+
+            let to_date_result = ToDateFunc::new().invoke(&[
+                ColumnarValue::from(formatted_date_scalar),
+                ColumnarValue::from(format_scalar),
+            ]);
+
+            match to_date_result {
+                Ok(ColumnarValue::Scalar(scalar)) => match scalar.value() {
+                    ScalarValue::Date32(date_val) => {
+                        let expected =
+                            Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
+                        assert_eq!(date_val, &expected, "{}: to_date created wrong value for date '{}' with format string '{}'", tc.name, tc.formatted_date, tc.format_str);
+                    }
+                    _ => panic!(
+                        "Could not convert '{}' with format string '{}'to Date",
+                        tc.date_str, tc.format_str
+                    ),
+                },
+                _ => panic!(
+                    "Could not convert '{}' with format string '{}'to Date",
+                    tc.date_str, tc.format_str
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_to_date_multiple_format_strings() {
+        let formatted_date_scalar = ScalarValue::Utf8(Some("2023/01/31".into()));
+        let format1_scalar = ScalarValue::Utf8(Some("%Y-%m-%d".into()));
+        let format2_scalar = ScalarValue::Utf8(Some("%Y/%m/%d".into()));
+
+        let to_date_result = ToDateFunc::new().invoke(&[
+            ColumnarValue::from(formatted_date_scalar),
+            ColumnarValue::from(format1_scalar),
+            ColumnarValue::from(format2_scalar),
+        ]);
+
+        match to_date_result {
+            Ok(ColumnarValue::Scalar(scalar)) => match scalar.value() {
+                ScalarValue::Date32(date_val) => {
+                    let expected = Date32Type::parse_formatted("2023-01-31", "%Y-%m-%d");
+                    assert_eq!(
+                        date_val, &expected,
+                        "to_date created wrong value for date with 2 format strings"
+                    );
+                }
+                _ => panic!("Conversion failed",),
+            },
+            _ => panic!("Conversion failed",),
+        }
+    }
+
+    #[test]
+    fn test_to_date_from_timestamp() {
+        let test_cases = vec![
+            "2020-09-08T13:42:29Z",
+            "2020-09-08T13:42:29.190855-05:00",
+            "2020-09-08 12:13:29",
+        ];
+        for date_str in test_cases {
+            let formatted_date_scalar = ScalarValue::Utf8(Some(date_str.into()));
+
+            let to_date_result =
+                ToDateFunc::new().invoke(&[ColumnarValue::from(formatted_date_scalar)]);
+
+            match to_date_result {
+                Ok(ColumnarValue::Scalar(scalar)) => match scalar.value() {
+                    ScalarValue::Date32(date_val) => {
+                        let expected =
+                            Date32Type::parse_formatted("2020-09-08", "%Y-%m-%d");
+                        assert_eq!(date_val, &expected, "to_date created wrong value");
+                    }
+                    _ => panic!("Conversion of {} failed", date_str),
+                },
+                _ => panic!("Conversion of {} failed", date_str),
+            }
+        }
+    }
+
+    #[test]
+    fn test_to_date_string_with_valid_number() {
+        let date_str = "20241231";
+        let date_scalar = ScalarValue::Utf8(Some(date_str.into()));
+
+        let to_date_result =
+            ToDateFunc::new().invoke(&[ColumnarValue::from(date_scalar)]);
+
+        match to_date_result {
+            Ok(ColumnarValue::Scalar(scalar)) => match scalar.value() {
+                ScalarValue::Date32(date_val) => {
+                    let expected = Date32Type::parse_formatted("2024-12-31", "%Y-%m-%d");
+                    assert_eq!(
+                        date_val, &expected,
+                        "to_date created wrong value for {}",
+                        date_str
+                    );
+                }
+                _ => panic!("Conversion of {} failed", date_str),
+            },
+            _ => panic!("Conversion of {} failed", date_str),
+        }
+    }
+
+    #[test]
+    fn test_to_date_string_with_invalid_number() {
+        let date_str = "202412311";
+        let date_scalar = ScalarValue::Utf8(Some(date_str.into()));
+
+        let to_date_result =
+            ToDateFunc::new().invoke(&[ColumnarValue::from(date_scalar)]);
+
+        if let Ok(ColumnarValue::Scalar(scalar)) = to_date_result {
+            if matches!(scalar.value(), ScalarValue::Date32(_)) {
+                panic!(
+                    "Conversion of {} succeded, but should have failed, ",
+                    date_str
+                );
             }
         }
     }

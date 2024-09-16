@@ -15,18 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::SortOptions;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::Schema;
+use std::sync::Arc;
+use std::time::SystemTime;
 
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::PhysicalExprRef;
 
+use itertools::Itertools;
 use rand::Rng;
 
 use datafusion::common::JoinSide;
@@ -53,33 +54,6 @@ enum JoinTestType {
     // compare HashJoin and SortMergeJoin, no need to compare SortMergeJoin and NestedLoopJoin
     // because if existing variants both passed that means SortMergeJoin and NestedLoopJoin also passes
     HjSmj,
-}
-#[tokio::test]
-async fn test_inner_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::Inner,
-        None,
-    )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
-    .await
-}
-
-fn less_than_100_join_filter(schema1: Arc<Schema>, _schema2: Arc<Schema>) -> JoinFilter {
-    let less_than_100 = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new("a", 0)),
-        Operator::Lt,
-        Arc::new(Literal::new(ScalarValue::from(100))),
-    )) as _;
-    let column_indices = vec![ColumnIndex {
-        index: 0,
-        side: JoinSide::Left,
-    }];
-    let intermediate_schema =
-        Schema::new(vec![schema1.field_with_name("a").unwrap().to_owned()]);
-
-    JoinFilter::new(less_than_100, column_indices, intermediate_schema)
 }
 
 fn col_lt_col_filter(schema1: Arc<Schema>, schema2: Arc<Schema>) -> JoinFilter {
@@ -120,14 +94,14 @@ async fn test_inner_join_1k_filtered() {
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::Inner,
-        Some(Box::new(less_than_100_join_filter)),
+        Some(Box::new(col_lt_col_filter)),
     )
     .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
 }
 
 #[tokio::test]
-async fn test_inner_join_1k_smjoin() {
+async fn test_inner_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
@@ -151,14 +125,16 @@ async fn test_left_join_1k() {
 }
 
 #[tokio::test]
+// flaky for HjSmj case
+// https://github.com/apache/datafusion/issues/12359
 async fn test_left_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::Left,
-        Some(Box::new(less_than_100_join_filter)),
+        Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[JoinTestType::NljHj], false)
     .await
 }
 
@@ -173,17 +149,18 @@ async fn test_right_join_1k() {
     .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
 }
-// Add support for Right filtered joins
-#[ignore]
+
 #[tokio::test]
+// flaky for HjSmj case
+// https://github.com/apache/datafusion/issues/12359
 async fn test_right_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::Right,
-        Some(Box::new(less_than_100_join_filter)),
+        Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[JoinTestType::NljHj], false)
     .await
 }
 
@@ -200,14 +177,16 @@ async fn test_full_join_1k() {
 }
 
 #[tokio::test]
+// flaky for HjSmj case
+// https://github.com/apache/datafusion/issues/12359
 async fn test_full_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::Full,
-        Some(Box::new(less_than_100_join_filter)),
+        Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .run_test(&[JoinTestType::NljHj], false)
     .await
 }
 
@@ -225,15 +204,13 @@ async fn test_semi_join_1k() {
 
 #[tokio::test]
 async fn test_semi_join_1k_filtered() {
-    // NLJ vs HJ gives wrong result
-    // Tracked in https://github.com/apache/datafusion/issues/11537
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::LeftSemi,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj], false)
+    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
 }
 
@@ -250,19 +227,16 @@ async fn test_anti_join_1k() {
 }
 
 #[tokio::test]
-#[ignore]
-// flaky test giving 1 rows difference sometimes
+// flaky for HjSmj case, giving 1 rows difference sometimes
 // https://github.com/apache/datafusion/issues/11555
 async fn test_anti_join_1k_filtered() {
-    // NLJ vs HJ gives wrong result
-    // Tracked in https://github.com/apache/datafusion/issues/11537
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
         JoinType::LeftAnti,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj], false)
+    .run_test(&[JoinTestType::NljHj], false)
     .await
 }
 
@@ -292,27 +266,6 @@ impl JoinFuzzTestCase {
         }
     }
 
-    fn column_indices(&self) -> Vec<ColumnIndex> {
-        vec![
-            ColumnIndex {
-                index: 0,
-                side: JoinSide::Left,
-            },
-            ColumnIndex {
-                index: 1,
-                side: JoinSide::Left,
-            },
-            ColumnIndex {
-                index: 0,
-                side: JoinSide::Right,
-            },
-            ColumnIndex {
-                index: 1,
-                side: JoinSide::Right,
-            },
-        ]
-    }
-
     fn on_columns(&self) -> Vec<(PhysicalExprRef, PhysicalExprRef)> {
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
@@ -328,10 +281,20 @@ impl JoinFuzzTestCase {
         ]
     }
 
+    /// Helper function for building NLJoin filter, returning intermediate
+    /// schema as a union of origin filter intermediate schema and
+    /// on-condition schema
     fn intermediate_schema(&self) -> Schema {
+        let filter_schema = if let Some(filter) = self.join_filter() {
+            filter.schema().to_owned()
+        } else {
+            Schema::empty()
+        };
+
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
-        Schema::new(vec![
+
+        let on_schema = Schema::new(vec![
             schema1
                 .field_with_name("a")
                 .unwrap()
@@ -344,18 +307,90 @@ impl JoinFuzzTestCase {
                 .with_nullable(true),
             schema2.field_with_name("a").unwrap().to_owned(),
             schema2.field_with_name("b").unwrap().to_owned(),
-        ])
+        ]);
+
+        Schema::new(
+            filter_schema
+                .fields
+                .into_iter()
+                .cloned()
+                .chain(on_schema.fields.into_iter().cloned())
+                .collect_vec(),
+        )
+    }
+
+    /// Helper function for building NLJoin filter, returns the union
+    /// of original filter expression and on-condition expression
+    fn composite_filter_expression(&self) -> PhysicalExprRef {
+        let (filter_expression, column_idx_offset) =
+            if let Some(filter) = self.join_filter() {
+                (
+                    filter.expression().to_owned(),
+                    filter.schema().fields().len(),
+                )
+            } else {
+                (Arc::new(Literal::new(ScalarValue::from(true))) as _, 0)
+            };
+
+        let equal_a = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", column_idx_offset)),
+            Operator::Eq,
+            Arc::new(Column::new("a", column_idx_offset + 2)),
+        ));
+        let equal_b = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b", column_idx_offset + 1)),
+            Operator::Eq,
+            Arc::new(Column::new("b", column_idx_offset + 3)),
+        ));
+        let on_expression = Arc::new(BinaryExpr::new(equal_a, Operator::And, equal_b));
+
+        Arc::new(BinaryExpr::new(
+            filter_expression,
+            Operator::And,
+            on_expression,
+        ))
+    }
+
+    /// Helper function for building NLJoin filter, returning the union
+    /// of original filter column indices and on-condition column indices.
+    /// Result must match intermediate schema.
+    fn column_indices(&self) -> Vec<ColumnIndex> {
+        let mut column_indices = if let Some(filter) = self.join_filter() {
+            filter.column_indices().to_vec()
+        } else {
+            vec![]
+        };
+
+        let on_column_indices = vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+        ];
+
+        column_indices.extend(on_column_indices);
+        column_indices
     }
 
     fn left_right(&self) -> (Arc<MemoryExec>, Arc<MemoryExec>) {
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
-        let left = Arc::new(
-            MemoryExec::try_new(&[self.input1.clone()], schema1.clone(), None).unwrap(),
-        );
-        let right = Arc::new(
-            MemoryExec::try_new(&[self.input2.clone()], schema2.clone(), None).unwrap(),
-        );
+        let left =
+            Arc::new(MemoryExec::try_new(&[self.input1.clone()], schema1, None).unwrap());
+        let right =
+            Arc::new(MemoryExec::try_new(&[self.input2.clone()], schema2, None).unwrap());
         (left, right)
     }
 
@@ -402,26 +437,15 @@ impl JoinFuzzTestCase {
 
     fn nested_loop_join(&self) -> Arc<NestedLoopJoinExec> {
         let (left, right) = self.left_right();
-        // Nested loop join uses filter for joining records
+
         let column_indices = self.column_indices();
         let intermediate_schema = self.intermediate_schema();
+        let expression = self.composite_filter_expression();
 
-        let equal_a = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("a", 0)),
-            Operator::Eq,
-            Arc::new(Column::new("a", 2)),
-        )) as _;
-        let equal_b = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("b", 1)),
-            Operator::Eq,
-            Arc::new(Column::new("b", 3)),
-        )) as _;
-        let expression = Arc::new(BinaryExpr::new(equal_a, Operator::And, equal_b)) as _;
-
-        let on_filter = JoinFilter::new(expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(expression, column_indices, intermediate_schema);
 
         Arc::new(
-            NestedLoopJoinExec::try_new(left, right, Some(on_filter), &self.join_type)
+            NestedLoopJoinExec::try_new(left, right, Some(filter), &self.join_type)
                 .unwrap(),
         )
     }
@@ -450,51 +474,6 @@ impl JoinFuzzTestCase {
             let smj_rows = smj_collected.iter().fold(0, |acc, b| acc + b.num_rows());
             let nlj_rows = nlj_collected.iter().fold(0, |acc, b| acc + b.num_rows());
 
-            if debug {
-                let fuzz_debug = "fuzz_test_debug";
-                std::fs::remove_dir_all(fuzz_debug).unwrap_or(());
-                std::fs::create_dir_all(fuzz_debug).unwrap();
-                let out_dir_name = &format!("{fuzz_debug}/batch_size_{batch_size}");
-                println!("The debug is ON. Input data will be saved to {out_dir_name}");
-
-                Self::save_partitioned_batches_as_parquet(
-                    &self.input1,
-                    out_dir_name,
-                    "input1",
-                );
-                Self::save_partitioned_batches_as_parquet(
-                    &self.input2,
-                    out_dir_name,
-                    "input2",
-                );
-
-                if join_tests.contains(&JoinTestType::NljHj) {
-                    Self::save_partitioned_batches_as_parquet(
-                        &nlj_collected,
-                        out_dir_name,
-                        "nlj",
-                    );
-                    Self::save_partitioned_batches_as_parquet(
-                        &hj_collected,
-                        out_dir_name,
-                        "hj",
-                    );
-                }
-
-                if join_tests.contains(&JoinTestType::HjSmj) {
-                    Self::save_partitioned_batches_as_parquet(
-                        &hj_collected,
-                        out_dir_name,
-                        "hj",
-                    );
-                    Self::save_partitioned_batches_as_parquet(
-                        &smj_collected,
-                        out_dir_name,
-                        "smj",
-                    );
-                }
-            }
-
             // compare
             let smj_formatted =
                 pretty_format_batches(&smj_collected).unwrap().to_string();
@@ -513,6 +492,68 @@ impl JoinFuzzTestCase {
             let mut nlj_formatted_sorted: Vec<&str> =
                 nlj_formatted.trim().lines().collect();
             nlj_formatted_sorted.sort_unstable();
+
+            if debug
+                && ((join_tests.contains(&JoinTestType::NljHj) && nlj_rows != hj_rows)
+                    || (join_tests.contains(&JoinTestType::HjSmj) && smj_rows != hj_rows))
+            {
+                let fuzz_debug = "fuzz_test_debug";
+                std::fs::remove_dir_all(fuzz_debug).unwrap_or(());
+                std::fs::create_dir_all(fuzz_debug).unwrap();
+                let out_dir_name = &format!("{fuzz_debug}/batch_size_{batch_size}");
+                println!("Test result data mismatch found. HJ rows {}, SMJ rows {}, NLJ rows {}", hj_rows, smj_rows, nlj_rows);
+                println!("The debug is ON. Input data will be saved to {out_dir_name}");
+
+                Self::save_partitioned_batches_as_parquet(
+                    &self.input1,
+                    out_dir_name,
+                    "input1",
+                );
+                Self::save_partitioned_batches_as_parquet(
+                    &self.input2,
+                    out_dir_name,
+                    "input2",
+                );
+
+                if join_tests.contains(&JoinTestType::NljHj)
+                    && join_tests.contains(&JoinTestType::NljHj)
+                    && nlj_rows != hj_rows
+                {
+                    println!("=============== HashJoinExec ==================");
+                    hj_formatted_sorted.iter().for_each(|s| println!("{}", s));
+                    println!("=============== NestedLoopJoinExec ==================");
+                    smj_formatted_sorted.iter().for_each(|s| println!("{}", s));
+
+                    Self::save_partitioned_batches_as_parquet(
+                        &nlj_collected,
+                        out_dir_name,
+                        "nlj",
+                    );
+                    Self::save_partitioned_batches_as_parquet(
+                        &hj_collected,
+                        out_dir_name,
+                        "hj",
+                    );
+                }
+
+                if join_tests.contains(&JoinTestType::HjSmj) && smj_rows != hj_rows {
+                    println!("=============== HashJoinExec ==================");
+                    hj_formatted_sorted.iter().for_each(|s| println!("{}", s));
+                    println!("=============== SortMergeJoinExec ==================");
+                    smj_formatted_sorted.iter().for_each(|s| println!("{}", s));
+
+                    Self::save_partitioned_batches_as_parquet(
+                        &hj_collected,
+                        out_dir_name,
+                        "hj",
+                    );
+                    Self::save_partitioned_batches_as_parquet(
+                        &smj_collected,
+                        out_dir_name,
+                        "smj",
+                    );
+                }
+            }
 
             if join_tests.contains(&JoinTestType::NljHj) {
                 let err_msg_rowcnt = format!("NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {}", batch_size);
@@ -578,34 +619,6 @@ impl JoinFuzzTestCase {
     ///     )
     ///     .run_test(&[JoinTestType::HjSmj], false)
     ///     .await;
-    ///
-    ///     let ctx: SessionContext = SessionContext::new();
-    ///     let df = ctx
-    ///         .read_parquet(
-    ///             "/tmp/input1/*.parquet",
-    ///             datafusion::prelude::ParquetReadOptions::default(),
-    ///         )
-    ///         .await
-    ///         .unwrap();
-    ///     let left = df.collect().await.unwrap();
-    ///
-    ///     let df = ctx
-    ///         .read_parquet(
-    ///             "/tmp/input2/*.parquet",
-    ///             datafusion::prelude::ParquetReadOptions::default(),
-    ///         )
-    ///         .await
-    ///         .unwrap();
-    ///
-    ///     let right = df.collect().await.unwrap();
-    ///         JoinFuzzTestCase::new(
-    ///             left,
-    ///             right,
-    ///             JoinType::LeftSemi,
-    ///             Some(Box::new(less_than_100_join_filter)),
-    ///         )
-    ///         .run_test()
-    ///         .await
     /// }
     fn save_partitioned_batches_as_parquet(
         input: &[RecordBatch],
@@ -617,9 +630,15 @@ impl JoinFuzzTestCase {
         std::fs::create_dir_all(out_path).unwrap();
 
         input.iter().enumerate().for_each(|(idx, batch)| {
-            let mut file =
-                std::fs::File::create(format!("{out_path}/file_{}.parquet", idx))
-                    .unwrap();
+            let file_path = format!("{out_path}/file_{}.parquet", idx);
+            let mut file = std::fs::File::create(&file_path).unwrap();
+            println!(
+                "{}: Saving batch idx {} rows {} to parquet {}",
+                &out_name,
+                idx,
+                batch.num_rows(),
+                &file_path
+            );
             let mut writer = parquet::arrow::ArrowWriter::try_new(
                 &mut file,
                 input.first().unwrap().schema(),
@@ -629,8 +648,6 @@ impl JoinFuzzTestCase {
             writer.write(batch).unwrap();
             writer.close().unwrap();
         });
-
-        println!("The data {out_name} saved as parquet into {out_path}");
     }
 
     /// Read parquet files preserving partitions, i.e. 1 file -> 1 partition
@@ -643,10 +660,20 @@ impl JoinFuzzTestCase {
     ) -> std::io::Result<Vec<RecordBatch>> {
         let ctx: SessionContext = SessionContext::new();
         let mut batches: Vec<RecordBatch> = vec![];
+        let mut entries = std::fs::read_dir(dir)?
+            .map(|res| res.map(|e| e.path()))
+            .collect::<Result<Vec<_>, std::io::Error>>()?;
 
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
+        // important to read files using the same order as they have been written
+        // sort by modification time
+        entries.sort_by_key(|path| {
+            std::fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+        });
+
+        for entry in entries {
+            let path = entry.as_path();
 
             if path.is_file() {
                 let mut batch = ctx

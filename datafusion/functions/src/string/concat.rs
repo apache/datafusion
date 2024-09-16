@@ -15,17 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{as_largestring_array, Array};
+use arrow::datatypes::DataType;
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::Utf8;
-
-use datafusion_common::cast::as_string_array;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::cast::{as_string_array, as_string_view_array};
+use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{lit, ColumnarValue, Expr, Volatility};
+use datafusion_expr::{lit, ColumnarValue, Expr, Scalar, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
 use crate::string::common::*;
@@ -46,7 +45,10 @@ impl ConcatFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
-            signature: Signature::variadic(vec![Utf8], Volatility::Immutable),
+            signature: Signature::variadic(
+                vec![Utf8, Utf8View, LargeUtf8],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -64,13 +66,36 @@ impl ScalarUDFImpl for ConcatFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Utf8)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+        let mut dt = &Utf8;
+        arg_types.iter().for_each(|data_type| {
+            if data_type == &Utf8View {
+                dt = data_type;
+            }
+            if data_type == &LargeUtf8 && dt != &Utf8View {
+                dt = data_type;
+            }
+        });
+
+        Ok(dt.to_owned())
     }
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
     /// concat('abcde', 2, NULL, 22) = 'abcde222'
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let mut return_datatype = DataType::Utf8;
+        args.iter().for_each(|col| {
+            if col.data_type() == &DataType::Utf8View {
+                return_datatype = col.data_type().clone();
+            }
+            if col.data_type() == &DataType::LargeUtf8
+                && return_datatype != DataType::Utf8View
+            {
+                return_datatype = col.data_type().clone();
+            }
+        });
+
         let array_len = args
             .iter()
             .filter_map(|x| match x {
@@ -89,7 +114,18 @@ impl ScalarUDFImpl for ConcatFunc {
                     }
                 }
             }
-            return Ok(ColumnarValue::from(ScalarValue::Utf8(Some(result))));
+
+            return match return_datatype {
+                DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
+                    Ok(ColumnarValue::Scalar(Scalar::new(
+                        ScalarValue::Utf8(Some(result)),
+                        return_datatype,
+                    )))
+                }
+                other => {
+                    plan_err!("Concat function does not support datatype of {other}")
+                }
+            };
         }
 
         // Array
@@ -109,26 +145,87 @@ impl ScalarUDFImpl for ConcatFunc {
                     _ => unreachable!(),
                 },
                 ColumnarValue::Array(array) => {
-                    let string_array = as_string_array(array)?;
-                    data_size += string_array.values().len();
-                    let column = if array.is_nullable() {
-                        ColumnarValueRef::NullableArray(string_array)
-                    } else {
-                        ColumnarValueRef::NonNullableArray(string_array)
+                    match array.data_type() {
+                        DataType::Utf8 => {
+                            let string_array = as_string_array(array)?;
+
+                            data_size += string_array.values().len();
+                            let column = if array.is_nullable() {
+                                ColumnarValueRef::NullableArray(string_array)
+                            } else {
+                                ColumnarValueRef::NonNullableArray(string_array)
+                            };
+                            columns.push(column);
+                        },
+                        DataType::LargeUtf8 => {
+                            let string_array = as_largestring_array(array);
+
+                            data_size += string_array.values().len();
+                            let column = if array.is_nullable() {
+                                ColumnarValueRef::NullableLargeStringArray(string_array)
+                            } else {
+                                ColumnarValueRef::NonNullableLargeStringArray(string_array)
+                            };
+                            columns.push(column);
+                        },
+                        DataType::Utf8View => {
+                            let string_array = as_string_view_array(array)?;
+
+                            data_size += string_array.len();
+                            let column = if array.is_nullable() {
+                                ColumnarValueRef::NullableStringViewArray(string_array)
+                            } else {
+                                ColumnarValueRef::NonNullableStringViewArray(string_array)
+                            };
+                            columns.push(column);
+                        },
+                        other => {
+                            return plan_err!("Input was {other} which is not a supported datatype for concat function")
+                        }
                     };
-                    columns.push(column);
                 }
             }
         }
 
-        let mut builder = StringArrayBuilder::with_capacity(len, data_size);
-        for i in 0..len {
-            columns
-                .iter()
-                .for_each(|column| builder.write::<true>(column, i));
-            builder.append_offset();
+        match return_datatype {
+            DataType::Utf8 => {
+                let mut builder = StringArrayBuilder::with_capacity(len, data_size);
+                for i in 0..len {
+                    columns
+                        .iter()
+                        .for_each(|column| builder.write::<true>(column, i));
+                    builder.append_offset();
+                }
+
+                let string_array = builder.finish(None);
+                Ok(ColumnarValue::Array(Arc::new(string_array)))
+            }
+            DataType::Utf8View => {
+                let mut builder = StringViewArrayBuilder::with_capacity(len, data_size);
+                for i in 0..len {
+                    columns
+                        .iter()
+                        .for_each(|column| builder.write::<true>(column, i));
+                    builder.append_offset();
+                }
+
+                let string_array = builder.finish();
+                Ok(ColumnarValue::Array(Arc::new(string_array)))
+            }
+            DataType::LargeUtf8 => {
+                let mut builder = LargeStringArrayBuilder::with_capacity(len, data_size);
+                for i in 0..len {
+                    columns
+                        .iter()
+                        .for_each(|column| builder.write::<true>(column, i));
+                    builder.append_offset();
+                }
+
+                let string_array = builder.finish(None);
+                Ok(ColumnarValue::Array(Arc::new(string_array)))
+            }
+            _ => unreachable!(),
         }
-        Ok(ColumnarValue::Array(Arc::new(builder.finish(None))))
     }
 
     /// Simplify the `concat` function by
@@ -201,6 +298,7 @@ mod tests {
     use crate::utils::test::test_function;
     use arrow::array::Array;
     use arrow::array::{ArrayRef, StringArray};
+    use DataType::*;
 
     #[test]
     fn test_functions() -> Result<()> {

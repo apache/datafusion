@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Regx expressions
+//! Regex expressions
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
@@ -48,6 +48,10 @@ impl RegexpMatchFunc {
         Self {
             signature: Signature::one_of(
                 vec![
+                    // Planner attempts coercion to the target type starting with the most preferred candidate.
+                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8, Utf8)`.
+                    // If that fails, it proceeds to `(LargeUtf8, Utf8)`.
+                    // TODO: Native support Utf8View for regexp_match.
                     Exact(vec![Utf8, Utf8]),
                     Exact(vec![LargeUtf8, Utf8]),
                     Exact(vec![Utf8, Utf8, Utf8]),

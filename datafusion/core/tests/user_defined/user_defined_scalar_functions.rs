@@ -594,7 +594,7 @@ async fn deregister_udf() -> Result<()> {
     let cast2i64 = ScalarUDF::from(CastToI64UDF::new());
     let ctx = SessionContext::new();
 
-    ctx.register_udf(cast2i64.clone());
+    ctx.register_udf(cast2i64);
 
     assert!(ctx.udfs().contains("cast_to_i64"));
 

@@ -15,11 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{not_impl_err, plan_err, DFSchema, Result, TableReference};
+use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, TableFactor};
 
 mod join;
@@ -153,6 +157,53 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Ok(optimized_plan)
         }
     }
+
+    pub(crate) fn create_relation_subquery(
+        &self,
+        subquery: TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        // At this point for a syntacitally valid query the outer_from_schema is
+        // guaranteed to be set, so the `.unwrap()` call will never panic. This
+        // is the case because we only call this method for lateral table
+        // factors, and those can never be the first factor in a FROM list. This
+        // means we arrived here through the `for` loop in `plan_from_tables` or
+        // the `for` loop in `plan_table_with_joins`.
+        let old_from_schema = planner_context
+            .set_outer_from_schema(None)
+            .unwrap_or_else(|| Arc::new(DFSchema::empty()));
+        let new_query_schema = match planner_context.outer_query_schema() {
+            Some(old_query_schema) => {
+                let mut new_query_schema = old_from_schema.as_ref().clone();
+                new_query_schema.merge(old_query_schema);
+                Some(Arc::new(new_query_schema))
+            }
+            None => Some(Arc::clone(&old_from_schema)),
+        };
+        let old_query_schema = planner_context.set_outer_query_schema(new_query_schema);
+
+        let plan = self.create_relation(subquery, planner_context)?;
+        let outer_ref_columns = plan.all_out_ref_exprs();
+
+        planner_context.set_outer_query_schema(old_query_schema);
+        planner_context.set_outer_from_schema(Some(old_from_schema));
+
+        match plan {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+                subquery_alias(
+                    LogicalPlan::Subquery(Subquery {
+                        subquery: input,
+                        outer_ref_columns,
+                    }),
+                    alias,
+                )
+            }
+            plan => Ok(LogicalPlan::Subquery(Subquery {
+                subquery: Arc::new(plan),
+                outer_ref_columns,
+            })),
+        }
+    }
 }
 
 fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
@@ -163,7 +214,7 @@ fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>>
     // 2. RANK / ROW_NUMBER ... => Handled by a `WindowAggr` and its requirements.
     // 3. LIMIT => Handled by a `Sort`, so we need to search for it.
     let mut has_limit = false;
-    let new_plan = plan.clone().transform_down(|c| {
+    let new_plan = plan.transform_down(|c| {
         if let LogicalPlan::Limit(_) = c {
             has_limit = true;
             return Ok(Transformed::no(c));

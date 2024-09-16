@@ -31,7 +31,7 @@ use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     expr::find_df_window_func, Aggregate, BinaryExpr, Case, EmptyRelation, Expr,
-    ExprSchemable, LogicalPlan, Operator, Projection, Values,
+    ExprSchemable, LogicalPlan, Operator, Projection, SortExpr, Values,
 };
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 use url::Url;
@@ -42,17 +42,19 @@ use crate::variation_const::{
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 #[allow(deprecated)]
 use crate::variation_const::{
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
-    INTERVAL_YEAR_MONTH_TYPE_REF,
+    INTERVAL_YEAR_MONTH_TYPE_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::common::scalar::ScalarStructBuilder;
+use datafusion::dataframe::DataFrame;
+use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -69,6 +71,7 @@ use datafusion::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
+use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::literal::{
     IntervalDayToSecond, IntervalYearToMonth, UserDefined,
@@ -94,6 +97,13 @@ use substrait::proto::{
     AggregateFunction, Expression, NamedStruct, Plan, Rel, Type,
 };
 use substrait::proto::{FunctionArgument, SortField};
+
+// Substrait PrecisionTimestampTz indicates that the timestamp is relative to UTC, which
+// is the same as the expectation for any non-empty timezone in DF, so any non-empty timezone
+// results in correct points on the timeline, and we pick UTC as a reasonable default.
+// However, DF uses the timezone also for some arithmetic and display purposes (see e.g.
+// https://github.com/apache/arrow-rs/blob/ee5694078c86c8201549654246900a4232d531a9/arrow-cast/src/cast/mod.rs#L1749).
+const DEFAULT_TIMEZONE: &str = "UTC";
 
 pub fn name_to_op(name: &str) -> Option<Operator> {
     match name {
@@ -268,6 +278,20 @@ pub fn extract_projection(
                             DFSchema::new_with_metadata(fields, HashMap::new())?,
                         );
                         Ok(LogicalPlan::TableScan(scan))
+                    }
+                    LogicalPlan::Projection(projection) => {
+                        // create another Projection around the Projection to handle the field masking
+                        let fields: Vec<Expr> = column_indices
+                            .into_iter()
+                            .map(|i| {
+                                let (qualifier, field) =
+                                    projection.schema.qualified_field(i);
+                                let column =
+                                    Column::new(qualifier.cloned(), field.name());
+                                Expr::Column(column)
+                            })
+                            .collect();
+                        project(LogicalPlan::Projection(projection), fields)
                     }
                     _ => plan_err!("unexpected plan for table"),
                 }
@@ -632,6 +656,10 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
+                let named_struct = read.base_schema.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("No base schema provided for Named Table")
+                })?;
+
                 let table_reference = match nt.names.len() {
                     0 => {
                         return plan_err!("No table name found in NamedTable");
@@ -649,7 +677,13 @@ pub async fn from_substrait_rel(
                         table: nt.names[2].clone().into(),
                     },
                 };
-                let t = ctx.table(table_reference).await?;
+
+                let substrait_schema =
+                    from_substrait_named_struct(named_struct, extensions)?
+                        .replace_qualifier(table_reference.clone());
+
+                let t = ctx.table(table_reference.clone()).await?;
+                let t = ensure_schema_compatability(t, substrait_schema)?;
                 let t = t.into_optimized_plan()?;
                 extract_projection(t, &read.projection)
             }
@@ -663,7 +697,7 @@ pub async fn from_substrait_rel(
                 if vt.values.is_empty() {
                     return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
-                        schema,
+                        schema: DFSchemaRef::new(schema),
                     }));
                 }
 
@@ -696,7 +730,10 @@ pub async fn from_substrait_rel(
                     })
                     .collect::<Result<_>>()?;
 
-                Ok(LogicalPlan::Values(Values { schema, values }))
+                Ok(LogicalPlan::Values(Values {
+                    schema: DFSchemaRef::new(schema),
+                    values,
+                }))
             }
             Some(ReadType::LocalFiles(lf)) => {
                 fn extract_filename(name: &str) -> Option<String> {
@@ -842,6 +879,87 @@ pub async fn from_substrait_rel(
     }
 }
 
+/// Ensures that the given Substrait schema is compatible with the schema as given by DataFusion
+///
+/// This means:
+/// 1. All fields present in the Substrait schema are present in the DataFusion schema. The
+///    DataFusion schema may have MORE fields, but not the other way around.
+/// 2. All fields are compatible. See [`ensure_field_compatability`] for details
+///
+/// This function returns a DataFrame with fields adjusted if necessary in the event that the
+/// Substrait schema is a subset of the DataFusion schema.
+fn ensure_schema_compatability(
+    table: DataFrame,
+    substrait_schema: DFSchema,
+) -> Result<DataFrame> {
+    let df_schema = table.schema().to_owned().strip_qualifiers();
+    if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
+        return Ok(table);
+    }
+    let selected_columns = substrait_schema
+        .strip_qualifiers()
+        .fields()
+        .iter()
+        .map(|substrait_field| {
+            let df_field =
+                df_schema.field_with_unqualified_name(substrait_field.name())?;
+            ensure_field_compatability(df_field, substrait_field)?;
+            Ok(col(format!("\"{}\"", df_field.name())))
+        })
+        .collect::<Result<_>>()?;
+
+    table.select(selected_columns)
+}
+
+/// Ensures that the given Substrait field is compatible with the given DataFusion field
+///
+/// A field is compatible between Substrait and DataFusion if:
+/// 1. They have logically equivalent types.
+/// 2. They have the same nullability OR the Substrait field is nullable and the DataFusion fields
+///    is not nullable.
+///
+/// If a Substrait field is not nullable, the Substrait plan may be built around assuming it is not
+/// nullable. As such if DataFusion has that field as nullable the plan should be rejected.
+fn ensure_field_compatability(
+    datafusion_field: &Field,
+    substrait_field: &Field,
+) -> Result<()> {
+    if !DFSchema::datatype_is_logically_equal(
+        datafusion_field.data_type(),
+        substrait_field.data_type(),
+    ) {
+        return substrait_err!(
+            "Field '{}' in Substrait schema has a different type ({}) than the corresponding field in the table schema ({}).",
+            substrait_field.name(),
+            substrait_field.data_type(),
+            datafusion_field.data_type()
+        );
+    }
+
+    if !compatible_nullabilities(
+        datafusion_field.is_nullable(),
+        substrait_field.is_nullable(),
+    ) {
+        // TODO: from_substrait_struct_type needs to be updated to set the nullability correctly. It defaults to true for now.
+        return substrait_err!(
+            "Field '{}' is nullable in the DataFusion schema but not nullable in the Substrait schema.",
+            substrait_field.name()
+        );
+    }
+    Ok(())
+}
+
+/// Returns true if the DataFusion and Substrait nullabilities are compatible, false otherwise
+fn compatible_nullabilities(
+    datafusion_nullability: bool,
+    substrait_nullability: bool,
+) -> bool {
+    // DataFusion and Substrait have the same nullability
+    (datafusion_nullability == substrait_nullability)
+    // DataFusion is not nullable and Substrait is nullable
+     || (!datafusion_nullability && substrait_nullability)
+}
+
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
 /// conflict with the columns from the other.  
 /// Substrait doesn't currently allow specifying aliases, neither for columns nor for tables. For
@@ -877,8 +995,8 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::Left => Ok(JoinType::Left),
             join_rel::JoinType::Right => Ok(JoinType::Right),
             join_rel::JoinType::Outer => Ok(JoinType::Full),
-            join_rel::JoinType::Anti => Ok(JoinType::LeftAnti),
-            join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
+            join_rel::JoinType::LeftAnti => Ok(JoinType::LeftAnti),
+            join_rel::JoinType::LeftSemi => Ok(JoinType::LeftSemi),
             _ => plan_err!("unsupported join type {substrait_join_type:?}"),
         }
     } else {
@@ -892,8 +1010,8 @@ pub async fn from_substrait_sorts(
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
     extensions: &Extensions,
-) -> Result<Vec<Expr>> {
-    let mut sorts: Vec<Expr> = vec![];
+) -> Result<Vec<Sort>> {
+    let mut sorts: Vec<Sort> = vec![];
     for s in substrait_sorts {
         let expr =
             from_substrait_rex(ctx, s.expr.as_ref().unwrap(), input_schema, extensions)
@@ -927,11 +1045,11 @@ pub async fn from_substrait_sorts(
             None => not_impl_err!("Sort without sort kind is invalid"),
         };
         let (asc, nulls_first) = asc_nullfirst.unwrap();
-        sorts.push(Expr::Sort(Sort {
-            expr: Box::new(expr),
+        sorts.push(Sort {
+            expr,
             asc,
             nulls_first,
-        }));
+        });
     }
     Ok(sorts)
 }
@@ -978,7 +1096,7 @@ pub async fn from_substrait_agg_func(
     input_schema: &DFSchema,
     extensions: &Extensions,
     filter: Option<Box<Expr>>,
-    order_by: Option<Vec<Expr>>,
+    order_by: Option<Vec<SortExpr>>,
     distinct: bool,
 ) -> Result<Arc<Expr>> {
     let args =
@@ -1369,23 +1487,51 @@ fn from_substrait_type(
             },
             r#type::Kind::Fp32(_) => Ok(DataType::Float32),
             r#type::Kind::Fp64(_) => Ok(DataType::Float64),
-            r#type::Kind::Timestamp(ts) => match ts.type_variation_reference {
-                TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
-                    Ok(DataType::Timestamp(TimeUnit::Second, None))
+            r#type::Kind::Timestamp(ts) => {
+                // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
+                #[allow(deprecated)]
+                match ts.type_variation_reference {
+                    TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
+                        Ok(DataType::Timestamp(TimeUnit::Second, None))
+                    }
+                    TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
+                        Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
+                    }
+                    TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
+                        Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+                    }
+                    TIMESTAMP_NANO_TYPE_VARIATION_REF => {
+                        Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+                    }
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    ),
                 }
-                TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
-                    Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
-                }
-                TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
-                    Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
-                }
-                TIMESTAMP_NANO_TYPE_VARIATION_REF => {
-                    Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
-                }
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
-                ),
-            },
+            }
+            r#type::Kind::PrecisionTimestamp(pts) => {
+                let unit = match pts.precision {
+                    0 => Ok(TimeUnit::Second),
+                    3 => Ok(TimeUnit::Millisecond),
+                    6 => Ok(TimeUnit::Microsecond),
+                    9 => Ok(TimeUnit::Nanosecond),
+                    p => not_impl_err!(
+                        "Unsupported Substrait precision {p} for PrecisionTimestamp"
+                    ),
+                }?;
+                Ok(DataType::Timestamp(unit, None))
+            }
+            r#type::Kind::PrecisionTimestampTz(pts) => {
+                let unit = match pts.precision {
+                    0 => Ok(TimeUnit::Second),
+                    3 => Ok(TimeUnit::Millisecond),
+                    6 => Ok(TimeUnit::Microsecond),
+                    9 => Ok(TimeUnit::Nanosecond),
+                    p => not_impl_err!(
+                        "Unsupported Substrait precision {p} for PrecisionTimestampTz"
+                    ),
+                }?;
+                Ok(DataType::Timestamp(unit, Some(DEFAULT_TIMEZONE.into())))
+            }
             r#type::Kind::Date(date) => match date.type_variation_reference {
                 DATE_32_TYPE_VARIATION_REF => Ok(DataType::Date32),
                 DATE_64_TYPE_VARIATION_REF => Ok(DataType::Date64),
@@ -1396,6 +1542,7 @@ fn from_substrait_type(
             r#type::Kind::Binary(binary) => match binary.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Binary),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeBinary),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::BinaryView),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1406,6 +1553,7 @@ fn from_substrait_type(
             r#type::Kind::String(string) => match string.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeUtf8),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8View),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1465,22 +1613,10 @@ fn from_substrait_type(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
-            r#type::Kind::IntervalYear(i) => match i.type_variation_reference {
-                DEFAULT_TYPE_VARIATION_REF => {
-                    Ok(DataType::Interval(IntervalUnit::YearMonth))
-                }
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
-                ),
-            },
-            r#type::Kind::IntervalDay(i) => match i.type_variation_reference {
-                DEFAULT_TYPE_VARIATION_REF => {
-                    Ok(DataType::Interval(IntervalUnit::DayTime))
-                }
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
-                ),
-            },
+            r#type::Kind::IntervalYear(_) => {
+                Ok(DataType::Interval(IntervalUnit::YearMonth))
+            }
+            r#type::Kind::IntervalDay(_) => Ok(DataType::Interval(IntervalUnit::DayTime)),
             r#type::Kind::UserDefined(u) => {
                 if let Some(name) = extensions.types.get(&u.type_reference) {
                     match name.as_ref() {
@@ -1562,10 +1698,11 @@ fn next_struct_field_name(
     }
 }
 
-fn from_substrait_named_struct(
+/// Convert Substrait NamedStruct to DataFusion DFSchemaRef
+pub fn from_substrait_named_struct(
     base_schema: &NamedStruct,
     extensions: &Extensions,
-) -> Result<DFSchemaRef> {
+) -> Result<DFSchema> {
     let mut name_idx = 0;
     let fields = from_substrait_struct_type(
         base_schema.r#struct.as_ref().ok_or_else(|| {
@@ -1577,12 +1714,12 @@ fn from_substrait_named_struct(
     );
     if name_idx != base_schema.names.len() {
         return substrait_err!(
-                                "Names list must match exactly to nested schema, but found {} uses for {} names",
-                                name_idx,
-                                base_schema.names.len()
-                            );
+            "Names list must match exactly to nested schema, but found {} uses for {} names",
+            name_idx,
+            base_schema.names.len()
+        );
     }
-    Ok(DFSchemaRef::new(DFSchema::try_from(Schema::new(fields?))?))
+    DFSchema::try_from(Schema::new(fields?))
 }
 
 fn from_substrait_bound(
@@ -1676,21 +1813,59 @@ fn from_substrait_literal(
         },
         Some(LiteralType::Fp32(f)) => ScalarValue::Float32(Some(*f)),
         Some(LiteralType::Fp64(f)) => ScalarValue::Float64(Some(*f)),
-        Some(LiteralType::Timestamp(t)) => match lit.type_variation_reference {
-            TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
-                ScalarValue::TimestampSecond(Some(*t), None)
+        Some(LiteralType::Timestamp(t)) => {
+            // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
+            #[allow(deprecated)]
+            match lit.type_variation_reference {
+                TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
+                    ScalarValue::TimestampSecond(Some(*t), None)
+                }
+                TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
+                    ScalarValue::TimestampMillisecond(Some(*t), None)
+                }
+                TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
+                    ScalarValue::TimestampMicrosecond(Some(*t), None)
+                }
+                TIMESTAMP_NANO_TYPE_VARIATION_REF => {
+                    ScalarValue::TimestampNanosecond(Some(*t), None)
+                }
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
             }
-            TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
-                ScalarValue::TimestampMillisecond(Some(*t), None)
+        }
+        Some(LiteralType::PrecisionTimestamp(pt)) => match pt.precision {
+            0 => ScalarValue::TimestampSecond(Some(pt.value), None),
+            3 => ScalarValue::TimestampMillisecond(Some(pt.value), None),
+            6 => ScalarValue::TimestampMicrosecond(Some(pt.value), None),
+            9 => ScalarValue::TimestampNanosecond(Some(pt.value), None),
+            p => {
+                return not_impl_err!(
+                    "Unsupported Substrait precision {p} for PrecisionTimestamp"
+                );
             }
-            TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
-                ScalarValue::TimestampMicrosecond(Some(*t), None)
-            }
-            TIMESTAMP_NANO_TYPE_VARIATION_REF => {
-                ScalarValue::TimestampNanosecond(Some(*t), None)
-            }
-            others => {
-                return substrait_err!("Unknown type variation reference {others}");
+        },
+        Some(LiteralType::PrecisionTimestampTz(pt)) => match pt.precision {
+            0 => ScalarValue::TimestampSecond(
+                Some(pt.value),
+                Some(DEFAULT_TIMEZONE.into()),
+            ),
+            3 => ScalarValue::TimestampMillisecond(
+                Some(pt.value),
+                Some(DEFAULT_TIMEZONE.into()),
+            ),
+            6 => ScalarValue::TimestampMicrosecond(
+                Some(pt.value),
+                Some(DEFAULT_TIMEZONE.into()),
+            ),
+            9 => ScalarValue::TimestampNanosecond(
+                Some(pt.value),
+                Some(DEFAULT_TIMEZONE.into()),
+            ),
+            p => {
+                return not_impl_err!(
+                    "Unsupported Substrait precision {p} for PrecisionTimestamp"
+                );
             }
         },
         Some(LiteralType::Date(d)) => ScalarValue::Date32(Some(*d)),
@@ -1877,10 +2052,24 @@ fn from_substrait_literal(
         Some(LiteralType::IntervalDayToSecond(IntervalDayToSecond {
             days,
             seconds,
-            microseconds,
+            subseconds,
+            precision_mode,
         })) => {
-            // DF only supports millisecond precision, so we lose the micros here
-            ScalarValue::new_interval_dt(*days, (seconds * 1000) + (microseconds / 1000))
+            // DF only supports millisecond precision, so for any more granular type we lose precision
+            let milliseconds = match precision_mode {
+                Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
+                Some(PrecisionMode::Precision(0)) => *subseconds as i32 * 1000,
+                Some(PrecisionMode::Precision(3)) => *subseconds as i32,
+                Some(PrecisionMode::Precision(6)) => (subseconds / 1000) as i32,
+                Some(PrecisionMode::Precision(9)) => (subseconds / 1000 / 1000) as i32,
+                _ => {
+                    return not_impl_err!(
+                        "Unsupported Substrait interval day to second precision mode"
+                    )
+                }
+            };
+
+            ScalarValue::new_interval_dt(*days, (seconds * 1000) + milliseconds)
         }
         Some(LiteralType::IntervalYearToMonth(IntervalYearToMonth { years, months })) => {
             ScalarValue::new_interval_ym(*years, *months)
@@ -2022,21 +2211,55 @@ fn from_substrait_null(
             },
             r#type::Kind::Fp32(_) => Ok(ScalarValue::Float32(None)),
             r#type::Kind::Fp64(_) => Ok(ScalarValue::Float64(None)),
-            r#type::Kind::Timestamp(ts) => match ts.type_variation_reference {
-                TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
-                    Ok(ScalarValue::TimestampSecond(None, None))
+            r#type::Kind::Timestamp(ts) => {
+                // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
+                #[allow(deprecated)]
+                match ts.type_variation_reference {
+                    TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
+                        Ok(ScalarValue::TimestampSecond(None, None))
+                    }
+                    TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
+                        Ok(ScalarValue::TimestampMillisecond(None, None))
+                    }
+                    TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
+                        Ok(ScalarValue::TimestampMicrosecond(None, None))
+                    }
+                    TIMESTAMP_NANO_TYPE_VARIATION_REF => {
+                        Ok(ScalarValue::TimestampNanosecond(None, None))
+                    }
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {kind:?}"
+                    ),
                 }
-                TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
-                    Ok(ScalarValue::TimestampMillisecond(None, None))
-                }
-                TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
-                    Ok(ScalarValue::TimestampMicrosecond(None, None))
-                }
-                TIMESTAMP_NANO_TYPE_VARIATION_REF => {
-                    Ok(ScalarValue::TimestampNanosecond(None, None))
-                }
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {kind:?}"
+            }
+            r#type::Kind::PrecisionTimestamp(pts) => match pts.precision {
+                0 => Ok(ScalarValue::TimestampSecond(None, None)),
+                3 => Ok(ScalarValue::TimestampMillisecond(None, None)),
+                6 => Ok(ScalarValue::TimestampMicrosecond(None, None)),
+                9 => Ok(ScalarValue::TimestampNanosecond(None, None)),
+                p => not_impl_err!(
+                    "Unsupported Substrait precision {p} for PrecisionTimestamp"
+                ),
+            },
+            r#type::Kind::PrecisionTimestampTz(pts) => match pts.precision {
+                0 => Ok(ScalarValue::TimestampSecond(
+                    None,
+                    Some(DEFAULT_TIMEZONE.into()),
+                )),
+                3 => Ok(ScalarValue::TimestampMillisecond(
+                    None,
+                    Some(DEFAULT_TIMEZONE.into()),
+                )),
+                6 => Ok(ScalarValue::TimestampMicrosecond(
+                    None,
+                    Some(DEFAULT_TIMEZONE.into()),
+                )),
+                9 => Ok(ScalarValue::TimestampNanosecond(
+                    None,
+                    Some(DEFAULT_TIMEZONE.into()),
+                )),
+                p => not_impl_err!(
+                    "Unsupported Substrait precision {p} for PrecisionTimestamp"
                 ),
             },
             r#type::Kind::Date(date) => match date.type_variation_reference {

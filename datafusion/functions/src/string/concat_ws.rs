@@ -15,23 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::StringArray;
+use arrow::array::{as_largestring_array, Array, StringArray};
 use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::Utf8;
-
-use datafusion_common::cast::as_string_array;
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{lit, ColumnarValue, Expr, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
 
 use crate::string::common::*;
 use crate::string::concat::simplify_concat;
 use crate::string::concat_ws;
+use datafusion_common::cast::{as_string_array, as_string_view_array};
+use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::{lit, ColumnarValue, Expr, Volatility};
+use datafusion_expr::{ScalarUDFImpl, Signature};
 
 #[derive(Debug)]
 pub struct ConcatWsFunc {
@@ -48,7 +46,10 @@ impl ConcatWsFunc {
     pub fn new() -> Self {
         use DataType::*;
         Self {
-            signature: Signature::variadic(vec![Utf8], Volatility::Immutable),
+            signature: Signature::variadic(
+                vec![Utf8View, Utf8, LargeUtf8],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -67,13 +68,14 @@ impl ScalarUDFImpl for ConcatWsFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
         Ok(Utf8)
     }
 
     /// Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored.
     /// concat_ws(',', 'abcde', 2, NULL, 22) = 'abcde,2,22'
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        // do not accept 0 or 1 arguments.
+        // do not accept 0 arguments.
         if args.len() < 2 {
             return exec_err!(
                 "concat_ws was called with {} arguments. It requires at least 2.",
@@ -178,14 +180,44 @@ impl ScalarUDFImpl for ConcatWsFunc {
                     _ => unreachable!(),
                 },
                 ColumnarValue::Array(array) => {
-                    let string_array = as_string_array(array)?;
-                    data_size += string_array.values().len();
-                    let column = if array.is_nullable() {
-                        ColumnarValueRef::NullableArray(string_array)
-                    } else {
-                        ColumnarValueRef::NonNullableArray(string_array)
+                    match array.data_type() {
+                        DataType::Utf8 => {
+                            let string_array = as_string_array(array)?;
+
+                            data_size += string_array.values().len();
+                            let column = if array.is_nullable() {
+                                ColumnarValueRef::NullableArray(string_array)
+                            } else {
+                                ColumnarValueRef::NonNullableArray(string_array)
+                            };
+                            columns.push(column);
+                        },
+                        DataType::LargeUtf8 => {
+                            let string_array = as_largestring_array(array);
+
+                            data_size += string_array.values().len();
+                            let column = if array.is_nullable() {
+                                ColumnarValueRef::NullableLargeStringArray(string_array)
+                            } else {
+                                ColumnarValueRef::NonNullableLargeStringArray(string_array)
+                            };
+                            columns.push(column);
+                        },
+                        DataType::Utf8View => {
+                            let string_array = as_string_view_array(array)?;
+
+                            data_size += string_array.data_buffers().iter().map(|buf| buf.len()).sum::<usize>();
+                            let column = if array.is_nullable() {
+                                ColumnarValueRef::NullableStringViewArray(string_array)
+                            } else {
+                                ColumnarValueRef::NonNullableStringViewArray(string_array)
+                            };
+                            columns.push(column);
+                        },
+                        other => {
+                            return plan_err!("Input was {other} which is not a supported datatype for concat_ws function.")
+                        }
                     };
-                    columns.push(column);
                 }
             }
         }

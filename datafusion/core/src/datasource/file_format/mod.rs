@@ -45,12 +45,14 @@ use crate::physical_plan::{ExecutionPlan, Statistics};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt};
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalExpr;
 
 use async_trait::async_trait;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use file_compression_type::FileCompressionType;
 use object_store::{ObjectMeta, ObjectStore};
 use std::fmt::Debug;
+
 /// Factory for creating [`FileFormat`] instances based on session and command level options
 ///
 /// Users can provide their own `FileFormatFactory` to support arbitrary file formats
@@ -132,7 +134,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         _input: Arc<dyn ExecutionPlan>,
         _state: &SessionState,
         _conf: FileSinkConfig,
-        _order_requirements: Option<Vec<PhysicalSortRequirement>>,
+        _order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
     }
@@ -225,6 +227,51 @@ pub fn transform_schema_to_view(schema: &Schema) -> Schema {
         })
         .collect();
     Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
+}
+
+/// Coerces the file schema if the table schema uses a view type.
+pub(crate) fn coerce_file_schema_to_view_type(
+    table_schema: &Schema,
+    file_schema: &Schema,
+) -> Option<Schema> {
+    let mut transform = false;
+    let table_fields: HashMap<_, _> = table_schema
+        .fields
+        .iter()
+        .map(|f| {
+            let dt = f.data_type();
+            if dt.equals_datatype(&DataType::Utf8View) {
+                transform = true;
+            }
+            (f.name(), dt)
+        })
+        .collect();
+    if !transform {
+        return None;
+    }
+
+    let transformed_fields: Vec<Arc<Field>> = file_schema
+        .fields
+        .iter()
+        .map(
+            |field| match (table_fields.get(field.name()), field.data_type()) {
+                (Some(DataType::Utf8View), DataType::Utf8)
+                | (Some(DataType::Utf8View), DataType::LargeUtf8) => Arc::new(
+                    Field::new(field.name(), DataType::Utf8View, field.is_nullable()),
+                ),
+                (Some(DataType::BinaryView), DataType::Binary)
+                | (Some(DataType::BinaryView), DataType::LargeBinary) => Arc::new(
+                    Field::new(field.name(), DataType::BinaryView, field.is_nullable()),
+                ),
+                _ => field.clone(),
+            },
+        )
+        .collect();
+
+    Some(Schema::new_with_metadata(
+        transformed_fields,
+        file_schema.metadata.clone(),
+    ))
 }
 
 #[cfg(test)]

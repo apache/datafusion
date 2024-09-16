@@ -73,17 +73,18 @@ pub trait SchemaAdapter: Send + Sync {
     ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)>;
 }
 
-/// Creates a `SchemaMapping` that can be used to cast or map the columns
-/// from the file schema to the table schema.
+/// Maps, by casting or reordering columns from the file schema to the table
+/// schema.
 pub trait SchemaMapper: Debug + Send + Sync {
-    /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
+    /// Adapts a `RecordBatch` to match the `table_schema` using the stored
+    /// mapping and conversions.
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch>;
 
-    /// Adapts a [`RecordBatch`] that does not  have all the columns from the
+    /// Adapts a [`RecordBatch`] that does not have all the columns from the
     /// file schema.
     ///
-    /// This method is used when applying a filter to a subset of the columns during
-    /// an `ArrowPredicate`.
+    /// This method is used when applying a filter to a subset of the columns as
+    /// part of `DataFusionArrowPredicate` when `filter_pushdown` is enabled.
     ///
     /// This method is slower than `map_batch` as it looks up columns by name.
     fn map_partial_batch(
@@ -92,7 +93,7 @@ pub trait SchemaMapper: Debug + Send + Sync {
     ) -> datafusion_common::Result<RecordBatch>;
 }
 
-/// Basic implementation of [`SchemaAdapterFactory`] that maps columns by name
+/// Implementation of [`SchemaAdapterFactory`] that maps columns by name
 /// and casts columns to the expected type.
 #[derive(Clone, Debug, Default)]
 pub struct DefaultSchemaAdapterFactory {}
@@ -369,7 +370,7 @@ mod tests {
             let f1 = Field::new("id", DataType::Int32, true);
             let f2 = Field::new("extra_column", DataType::Utf8, true);
 
-            let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
+            let schema = Arc::new(Schema::new(vec![f1, f2]));
 
             let extra_column = Arc::new(StringArray::from(vec!["foo"]));
             let mut new_columns = batch.columns().to_vec();

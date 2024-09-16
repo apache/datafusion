@@ -22,6 +22,7 @@
 pub mod avro_to_arrow;
 pub mod cte_worktable;
 pub mod default_table_source;
+pub mod dynamic_file;
 pub mod empty;
 pub mod file_format;
 pub mod function;
@@ -50,38 +51,39 @@ pub use statistics::get_statistics_with_limit;
 
 use arrow_schema::{Schema, SortOptions};
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::Expr;
+use datafusion_expr::{Expr, SortExpr};
 use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
 
 fn create_ordering(
     schema: &Schema,
-    sort_order: &[Vec<Expr>],
+    sort_order: &[Vec<SortExpr>],
 ) -> Result<Vec<LexOrdering>> {
     let mut all_sort_orders = vec![];
 
     for exprs in sort_order {
         // Construct PhysicalSortExpr objects from Expr objects:
         let mut sort_exprs = vec![];
-        for expr in exprs {
-            match expr {
-                Expr::Sort(sort) => match sort.expr.as_ref() {
-                    Expr::Column(col) => match expressions::col(&col.name, schema) {
-                        Ok(expr) => {
-                            sort_exprs.push(PhysicalSortExpr {
-                                expr,
-                                options: SortOptions {
-                                    descending: !sort.asc,
-                                    nulls_first: sort.nulls_first,
-                                },
-                            });
-                        }
-                        // Cannot find expression in the projected_schema, stop iterating
-                        // since rest of the orderings are violated
-                        Err(_) => break,
+        for sort in exprs {
+            match &sort.expr {
+                Expr::Column(col) => match expressions::col(&col.name, schema) {
+                    Ok(expr) => {
+                        sort_exprs.push(PhysicalSortExpr {
+                            expr,
+                            options: SortOptions {
+                                descending: !sort.asc,
+                                nulls_first: sort.nulls_first,
+                            },
+                        });
                     }
-                    expr => return plan_err!("Expected single column references in output_ordering, got {expr}"),
+                    // Cannot find expression in the projected_schema, stop iterating
+                    // since rest of the orderings are violated
+                    Err(_) => break,
+                },
+                expr => {
+                    return plan_err!(
+                    "Expected single column references in output_ordering, got {expr}"
+                )
                 }
-                expr => return plan_err!("Expected Expr::Sort in output_ordering, but got {expr}"),
             }
         }
         if !sort_exprs.is_empty() {

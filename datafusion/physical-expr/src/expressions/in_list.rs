@@ -38,8 +38,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::hash_utils::HashValue;
 use datafusion_common::{exec_err, internal_err, not_impl_err, DFSchema, Result};
-use datafusion_expr::{ColumnarValue, Operator, Scalar};
-use datafusion_physical_expr_common::datum::compare_op_for_nested;
+use datafusion_expr::{ColumnarValue, Scalar};
+use datafusion_physical_expr_common::datum::compare_with_eq;
 
 use ahash::RandomState;
 use hashbrown::hash_map::RawEntryMut;
@@ -353,17 +353,16 @@ impl PhysicalExpr for InListExpr {
             Some(f) => f.contains(value.into_array(num_rows)?.as_ref(), self.negated)?,
             None => {
                 let value = value.into_array(num_rows)?;
+                let is_nested = value.data_type().is_nested();
                 let found = self.list.iter().map(|expr| expr.evaluate(batch)).try_fold(
                     BooleanArray::new(BooleanBuffer::new_unset(num_rows), None),
                     |result, expr| -> Result<BooleanArray> {
-                        Ok(or_kleene(
-                            &result,
-                            &compare_op_for_nested(
-                                Operator::Eq,
-                                &value,
-                                &expr?.into_array(num_rows)?,
-                            )?,
-                        )?)
+                        let rhs = compare_with_eq(
+                            &value,
+                            &expr?.into_array(num_rows)?,
+                            is_nested,
+                        )?;
+                        Ok(or_kleene(&result, &rhs)?)
                     },
                 )?;
 

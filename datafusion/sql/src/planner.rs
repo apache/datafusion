@@ -135,6 +135,9 @@ pub struct PlannerContext {
     ctes: HashMap<String, Arc<LogicalPlan>>,
     /// The query schema of the outer query plan, used to resolve the columns in subquery
     outer_query_schema: Option<DFSchemaRef>,
+    /// The joined schemas of all FROM clauses planned so far. When planning LATERAL
+    /// FROM clauses, this should become a suffix of the `outer_query_schema`.
+    outer_from_schema: Option<DFSchemaRef>,
 }
 
 impl Default for PlannerContext {
@@ -150,6 +153,7 @@ impl PlannerContext {
             prepare_param_data_types: Arc::new(vec![]),
             ctes: HashMap::new(),
             outer_query_schema: None,
+            outer_from_schema: None,
         }
     }
 
@@ -175,6 +179,29 @@ impl PlannerContext {
     ) -> Option<DFSchemaRef> {
         std::mem::swap(&mut self.outer_query_schema, &mut schema);
         schema
+    }
+
+    // return a clone of the outer FROM schema
+    pub fn outer_from_schema(&self) -> Option<Arc<DFSchema>> {
+        self.outer_from_schema.clone()
+    }
+
+    /// sets the outer FROM schema, returning the existing one, if any
+    pub fn set_outer_from_schema(
+        &mut self,
+        mut schema: Option<DFSchemaRef>,
+    ) -> Option<DFSchemaRef> {
+        std::mem::swap(&mut self.outer_from_schema, &mut schema);
+        schema
+    }
+
+    /// extends the FROM schema, returning the existing one, if any
+    pub fn extend_outer_from_schema(&mut self, schema: &DFSchemaRef) -> Result<()> {
+        self.outer_from_schema = match self.outer_from_schema.as_ref() {
+            Some(from_schema) => Some(Arc::new(from_schema.join(schema)?)),
+            None => Some(Arc::clone(schema)),
+        };
+        Ok(())
     }
 
     /// Return the types of parameters (`$1`, `$2`, etc) if known

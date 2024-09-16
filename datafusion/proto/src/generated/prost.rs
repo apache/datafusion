@@ -97,6 +97,12 @@ pub struct LogicalExprNodeCollection {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SortExprNodeCollection {
+    #[prost(message, repeated, tag = "1")]
+    pub sort_expr_nodes: ::prost::alloc::vec::Vec<SortExprNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListingTableScanNode {
     #[prost(message, optional, tag = "14")]
     pub table_name: ::core::option::Option<TableReference>,
@@ -117,7 +123,7 @@ pub struct ListingTableScanNode {
     #[prost(uint32, tag = "9")]
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
-    pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
+    pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
     #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12, 15")]
     pub file_format_type: ::core::option::Option<
         listing_table_scan_node::FileFormatType,
@@ -200,7 +206,7 @@ pub struct SortNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
-    pub expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub expr: ::prost::alloc::vec::Vec<SortExprNode>,
     /// Maximum number of highest/lowest rows to fetch; negative means no limit
     #[prost(int64, tag = "3")]
     pub fetch: i64,
@@ -233,7 +239,7 @@ pub struct HashRepartition {
     pub partition_count: u64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct EmptyRelationNode {
     #[prost(bool, tag = "1")]
     pub produce_one_row: bool,
@@ -256,7 +262,7 @@ pub struct CreateExternalTableNode {
     #[prost(string, tag = "7")]
     pub definition: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "10")]
-    pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
+    pub order_exprs: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
     #[prost(bool, tag = "11")]
     pub unbounded: bool,
     #[prost(map = "string, string", tag = "8")]
@@ -402,7 +408,7 @@ pub struct DistinctOnNode {
     #[prost(message, repeated, tag = "2")]
     pub select_expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "3")]
-    pub sort_expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub sort_expr: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(message, optional, boxed, tag = "4")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
 }
@@ -437,7 +443,7 @@ pub struct UnnestNode {
     pub options: ::core::option::Option<UnnestOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct UnnestOptions {
     #[prost(bool, tag = "1")]
     pub preserve_nulls: bool,
@@ -488,7 +494,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -521,8 +527,6 @@ pub mod logical_expr_node {
         Case(::prost::alloc::boxed::Box<super::CaseNode>),
         #[prost(message, tag = "11")]
         Cast(::prost::alloc::boxed::Box<super::CastNode>),
-        #[prost(message, tag = "12")]
-        Sort(::prost::alloc::boxed::Box<super::SortExprNode>),
         #[prost(message, tag = "13")]
         Negative(::prost::alloc::boxed::Box<super::NegativeNode>),
         #[prost(message, tag = "14")]
@@ -740,7 +744,7 @@ pub struct AggregateUdfExprNode {
     #[prost(message, optional, boxed, tag = "3")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, repeated, tag = "4")]
-    pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub order_by: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(bytes = "vec", optional, tag = "6")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
@@ -762,7 +766,7 @@ pub struct WindowExprNode {
     #[prost(message, repeated, tag = "5")]
     pub partition_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "6")]
-    pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub order_by: ::prost::alloc::vec::Vec<SortExprNode>,
     /// repeated LogicalExprNode filter = 7;
     #[prost(message, optional, tag = "8")]
     pub window_frame: ::core::option::Option<WindowFrame>,
@@ -869,8 +873,8 @@ pub struct TryCastNode {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortExprNode {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, tag = "1")]
+    pub expr: ::core::option::Option<LogicalExprNode>,
     #[prost(bool, tag = "2")]
     pub asc: bool,
     #[prost(bool, tag = "3")]
@@ -908,7 +912,7 @@ pub struct WindowFrameBound {
     pub bound_value: ::core::option::Option<super::datafusion_common::ScalarValue>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct FixedSizeBinary {
     #[prost(int32, tag = "1")]
     pub length: i32,
@@ -1030,7 +1034,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1097,6 +1101,8 @@ pub mod physical_plan_node {
         CsvSink(::prost::alloc::boxed::Box<super::CsvSinkExecNode>),
         #[prost(message, tag = "29")]
         ParquetSink(::prost::alloc::boxed::Box<super::ParquetSinkExecNode>),
+        #[prost(message, tag = "30")]
+        Unnest(::prost::alloc::boxed::Box<super::UnnestExecNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1190,6 +1196,20 @@ pub struct ParquetSinkExecNode {
     pub sink_schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, optional, tag = "4")]
     pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnnestExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(uint64, repeated, tag = "3")]
+    pub list_type_columns: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, repeated, tag = "4")]
+    pub struct_type_columns: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, optional, tag = "5")]
+    pub options: ::core::option::Option<UnnestOptions>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1462,6 +1482,8 @@ pub struct FilterExecNode {
     pub expr: ::core::option::Option<PhysicalExprNode>,
     #[prost(uint32, tag = "3")]
     pub default_filter_selectivity: u32,
+    #[prost(uint32, repeated, tag = "9")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1470,7 +1492,7 @@ pub struct FileGroup {
     pub files: ::prost::alloc::vec::Vec<PartitionedFile>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ScanLimit {
     /// wrap into a message to make it optional
     #[prost(uint32, tag = "1")]
@@ -1717,7 +1739,7 @@ pub struct MaybePhysicalSortExprs {
     pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct AggLimit {
     /// wrap into a message to make it optional
     #[prost(uint64, tag = "1")]
@@ -1813,6 +1835,8 @@ pub struct CoalesceBatchesExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(uint32, tag = "2")]
     pub target_batch_size: u32,
+    #[prost(uint32, optional, tag = "3")]
+    pub fetch: ::core::option::Option<u32>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1871,7 +1895,7 @@ pub struct JoinFilter {
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ColumnIndex {
     #[prost(uint32, tag = "1")]
     pub index: u32,
@@ -1897,7 +1921,7 @@ pub struct PartitionedFile {
     pub statistics: ::core::option::Option<super::datafusion_common::Statistics>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct FileRange {
     #[prost(int64, tag = "1")]
     pub start: i64,

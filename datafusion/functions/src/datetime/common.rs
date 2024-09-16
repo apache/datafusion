@@ -153,6 +153,31 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
         })
 }
 
+/// Accepts a string with a `chrono` format and converts it to a
+/// millisecond precision timestamp.
+///
+/// See [`chrono::format::strftime`] for the full set of supported formats.
+///
+/// Internally, this function uses the `chrono` library for the
+/// datetime parsing
+///
+/// ## Timezone / Offset Handling
+///
+/// Numerical values of timestamps are stored compared to offset UTC.
+///
+/// Any timestamp in the formatting string is handled according to the rules
+/// defined by `chrono`.
+///
+/// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
+///
+#[inline]
+pub(crate) fn string_to_timestamp_millis_formatted(s: &str, format: &str) -> Result<i64> {
+    Ok(string_to_datetime_formatted(&Utc, s, format)?
+        .naive_utc()
+        .and_utc()
+        .timestamp_millis())
+}
+
 pub(crate) fn handle<'a, O, F, S>(
     args: &'a [ColumnarValue],
     op: F,

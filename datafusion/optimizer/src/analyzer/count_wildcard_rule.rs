@@ -76,7 +76,7 @@ fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     let name_preserver = NamePreserver::new(&plan);
     plan.map_expressions(|expr| {
-        let original_name = name_preserver.save(&expr)?;
+        let original_name = name_preserver.save(&expr);
         let transformed_expr = expr.transform_up(|expr| match expr {
             Expr::WindowFunction(mut window_function)
                 if is_count_star_window_aggregate(&window_function) =>
@@ -94,7 +94,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             }
             _ => Ok(Transformed::no(expr)),
         })?;
-        transformed_expr.map_data(|data| original_name.restore(data))
+        Ok(transformed_expr.update_data(|data| original_name.restore(data)))
     })
 }
 
@@ -229,7 +229,7 @@ mod tests {
                 WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 vec![wildcard()],
             ))
-            .order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
+            .order_by(vec![Sort::new(col("a"), false, true)])
             .window_frame(WindowFrame::new_bounds(
                 WindowFrameUnits::Range,
                 WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
@@ -240,7 +240,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: count(Int64(1)) AS count(*) [count(*):Int64]\
-        \n  WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS count(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]] [a:UInt32, b:UInt32, c:UInt32, count(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING:Int64;N]\
+        \n  WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS count(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]] [a:UInt32, b:UInt32, c:UInt32, count(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING:Int64]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
     }
