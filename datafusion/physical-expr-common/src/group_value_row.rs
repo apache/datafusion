@@ -268,7 +268,6 @@ where
         // monotonically increasing, overflows were checked.
         let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
         let values = buffer.finish();
-
         match output_type {
             OutputType::Binary => {
                 // SAFETY: the offsets were constructed correctly
@@ -292,6 +291,9 @@ where
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
+        assert!(self.len() >= n);
+
+        let mut nulls_count = 0;
         let null_buffer = if self.nulls.is_empty() {
             None
         } else {
@@ -299,9 +301,19 @@ where
             let num_values = self.offsets.len() - 1;
             let mut bool_builder = BooleanBufferBuilder::new(num_values);
             bool_builder.append_n(num_values, true);
+
+            let last_offset = O::as_usize(self.offsets[n]);
+            let mut new_nulls = vec![];
             self.nulls.iter().for_each(|null_index| {
-                bool_builder.set_bit(*null_index, false);
+                if *null_index <= last_offset {
+                    nulls_count += 1;
+                    bool_builder.set_bit(*null_index, false);
+                } else {
+                    new_nulls.push(null_index - last_offset);
+                }
             });
+
+            self.nulls = new_nulls;
             Some(NullBuffer::from(bool_builder.finish()))
         };
 
@@ -321,12 +333,13 @@ where
             unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(first_n_offsets)) };
 
         // Consume first (n - nulls count) of elements since we don't push any value for null case.
-        let r = n - self.nulls.len();
+        let r = n - nulls_count;
 
         let mut remaining_buffer = BufferBuilder::new(self.buffer.len() - r);
         remaining_buffer.append_slice(&self.buffer.as_slice()[r..]);
         self.buffer.truncate(r);
         let values = self.buffer.finish();
+        self.buffer = remaining_buffer;
 
         match self.output_type {
             OutputType::Binary => {
