@@ -18,9 +18,9 @@
 //! This module defines the interface for logical nodes
 use crate::{Expr, LogicalPlan};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, collections::HashSet, fmt, sync::Arc};
-use std::cmp::Ordering;
 
 /// This defines the interface for [`LogicalPlan`] nodes that can be
 /// used to extend DataFusion with custom relational operators.
@@ -356,10 +356,10 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
     }
 
     fn dyn_ord(&self, other: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
-       other
-           .as_any()
-           .downcast_ref::<Self>()
-           .and_then(|other| self.partial_cmp(other))
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .and_then(|other| self.partial_cmp(other))
     }
 }
 

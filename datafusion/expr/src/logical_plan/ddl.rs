@@ -537,9 +537,9 @@ impl PartialOrd for CreateIndex {
 
 #[cfg(test)]
 mod test {
-    use std::cmp::Ordering;
-    use datafusion_common::{DFSchema, DFSchemaRef, TableReference};
     use crate::{CreateCatalog, DdlStatement, DropView};
+    use datafusion_common::{DFSchema, DFSchemaRef, TableReference};
+    use std::cmp::Ordering;
 
     #[test]
     fn test_partial_ord() {

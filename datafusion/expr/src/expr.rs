@@ -27,11 +27,11 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
+use crate::Volatility;
 use crate::{
     built_in_window_function, udaf, BuiltInWindowFunction, ExprSchemable, Operator,
     Signature, WindowFrame, WindowUDF,
 };
-use crate::Volatility;
 
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::tree_node::{
