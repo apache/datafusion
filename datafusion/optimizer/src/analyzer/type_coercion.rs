@@ -1816,10 +1816,14 @@ mod test {
         let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
         let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![
-                Field::new("large_list", DataType::LargeList(inner_field.clone()), true),
+                Field::new(
+                    "large_list",
+                    DataType::LargeList(Arc::clone(&inner_field)),
+                    true,
+                ),
                 Field::new(
                     "fixed_list",
-                    DataType::FixedSizeList(inner_field.clone(), 3),
+                    DataType::FixedSizeList(Arc::clone(&inner_field), 3),
                     true,
                 ),
                 Field::new("list", DataType::List(inner_field), true),
@@ -1906,10 +1910,14 @@ mod test {
         let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![
                 Field::new("boolean", DataType::Boolean, true),
-                Field::new("large_list", DataType::LargeList(inner_field.clone()), true),
+                Field::new(
+                    "large_list",
+                    DataType::LargeList(Arc::clone(&inner_field)),
+                    true,
+                ),
                 Field::new(
                     "fixed_list",
-                    DataType::FixedSizeList(inner_field.clone(), 3),
+                    DataType::FixedSizeList(Arc::clone(&inner_field), 3),
                     true,
                 ),
                 Field::new("list", DataType::List(inner_field), true),
