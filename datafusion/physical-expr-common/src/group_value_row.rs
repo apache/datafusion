@@ -100,7 +100,7 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
             Arc::new(PrimitiveArray::<T>::new(ScalarBuffer::from(first_n), Some(NullBuffer::from(first_n_nulls))))
         } else {
             let first_n = self.0.drain(0..n).collect::<Vec<_>>();
-            self.1 = vec![true; self.1.len() - n];
+            self.1.truncate(self.1.len() - n);
             Arc::new(PrimitiveArray::<T>::new(ScalarBuffer::from(first_n), None))
         }
     }
