@@ -611,14 +611,16 @@ impl DisplayAs for ParquetExec {
                     .pruning_predicate
                     .as_ref()
                     .map(|pre| {
+                        let mut guarantees = pre
+                            .literal_guarantees()
+                            .iter()
+                            .map(|item| format!("{}", item))
+                            .collect_vec();
+                        guarantees.sort();
                         format!(
                             ", pruning_predicate={}, required_guarantees=[{}]",
                             pre.predicate_expr(),
-                            pre.literal_guarantees()
-                                .iter()
-                                .map(|item| format!("{}", item))
-                                .collect_vec()
-                                .join(", ")
+                            guarantees.join(", ")
                         )
                     })
                     .unwrap_or_default();
