@@ -53,22 +53,16 @@ pub struct GroupValuesRowLike {
     /// The size of `map` in bytes
     map_size: usize,
 
-    /// The actual group by values, stored in arrow [`Row`] format.
-    /// `group_values[i]` holds the group value for group_index `i`.
-    ///
-    /// The row format is used to compare group keys quickly and store
-    /// them efficiently in memory. Quick comparison is especially
-    /// important for multi-column group keys.
-    ///
-    /// [`Row`]: arrow::row::Row
-    // group_values: Option<Rows>,
+    /// The actual group by values, stored column-wise. Compare from
+    /// the left to right, each column is stored as `ArrayRowEq`.
+    /// This is shown faster than the row format
+    group_values: Option<Vec<Box<dyn ArrayRowEq>>>,
 
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
 
     /// Random state for creating hashes
     random_state: RandomState,
-    group_values: Option<Vec<Box<dyn ArrayRowEq>>>,
 }
 
 impl GroupValuesRowLike {
@@ -177,22 +171,18 @@ impl GroupValues for GroupValuesRowLike {
                 if target_hash != *exist_hash {
                     return false;
                 }
-                // verify that the group that we are inserting with hash is
-                // actually the same key value as the group in
-                // existing_idx  (aka group_values @ row)
-                // && group_rows.row(row) == group_values.row(*group_idx)
 
-                fn compare_equal(
-                    arry_eq: &dyn ArrayRowEq,
+                fn check_row_equal(
+                    array_row: &dyn ArrayRowEq,
                     lhs_row: usize,
                     array: &ArrayRef,
                     rhs_row: usize,
                 ) -> bool {
-                    arry_eq.equal_to(lhs_row, array, rhs_row)
+                    array_row.equal_to(lhs_row, array, rhs_row)
                 }
 
                 for (i, group_val) in group_values.iter().enumerate() {
-                    if !compare_equal(group_val.as_ref(), *group_idx, &cols[i], row) {
+                    if !check_row_equal(group_val.as_ref(), *group_idx, &cols[i], row) {
                         return false;
                     }
                 }

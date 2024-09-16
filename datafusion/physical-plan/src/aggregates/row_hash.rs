@@ -618,7 +618,6 @@ impl Stream for GroupedHashAggregateStream {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         // new batch to aggregate
                         Some(Ok(batch)) => {
-                            // println!("stat");
                             let timer = elapsed_compute.timer();
                             let input_rows = batch.num_rows();
 

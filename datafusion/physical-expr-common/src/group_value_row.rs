@@ -36,6 +36,7 @@ use std::sync::Arc;
 use crate::binary_map::OutputType;
 use crate::binary_map::INITIAL_BUFFER_CAPACITY;
 
+/// Trait for group values column-wise row comparison
 pub trait ArrayRowEq: Send + Sync {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
     fn append_val(&mut self, array: &ArrayRef, row: usize);
@@ -46,10 +47,11 @@ pub trait ArrayRowEq: Send + Sync {
 }
 
 pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType>(
-    Vec<T::Native>,
-    Vec<bool>,
-    bool,
+    Vec<T::Native>, // group value
+    Vec<bool>,      // null value
+    bool, // whether the array contains at least one null, for fast non-null path
 );
+
 impl<T: ArrowPrimitiveType> Default for PrimitiveGroupValueBuilder<T> {
     fn default() -> Self {
         Self(vec![], vec![], false)
