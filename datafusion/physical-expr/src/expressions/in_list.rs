@@ -222,7 +222,6 @@ fn evaluate_list(
                     exec_err!("InList expression must evaluate to a scalar")
                 }
                 // Flatten dictionary values
-                ColumnarValue::Scalar(ScalarValue::Dictionary(_, v)) => Ok(*v),
                 ColumnarValue::Scalar(s) => Ok(s),
             })
         })
@@ -1329,98 +1328,6 @@ mod tests {
             expr,
             &schema
         );
-
-        Ok(())
-    }
-
-    #[test]
-    fn in_list_utf8_with_dict_types() -> Result<()> {
-        fn dict_lit(key_type: DataType, value: &str) -> Arc<dyn PhysicalExpr> {
-            lit(ScalarValue::Dictionary(
-                Box::new(key_type),
-                Box::new(ScalarValue::new_utf8(value.to_string())),
-            ))
-        }
-
-        fn null_dict_lit(key_type: DataType) -> Arc<dyn PhysicalExpr> {
-            lit(ScalarValue::Dictionary(
-                Box::new(key_type),
-                Box::new(ScalarValue::Utf8(None)),
-            ))
-        }
-
-        let schema = Schema::new(vec![Field::new(
-            "a",
-            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
-            true,
-        )]);
-        let a: UInt16DictionaryArray =
-            vec![Some("a"), Some("d"), None].into_iter().collect();
-        let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
-
-        // expression: "a in ("a", "b")"
-        let lists = [
-            vec![lit("a"), lit("b")],
-            vec![
-                dict_lit(DataType::Int8, "a"),
-                dict_lit(DataType::UInt16, "b"),
-            ],
-        ];
-        for list in lists.iter() {
-            in_list_raw!(
-                batch,
-                list.clone(),
-                &false,
-                vec![Some(true), Some(false), None],
-                Arc::clone(&col_a),
-                &schema
-            );
-        }
-
-        // expression: "a not in ("a", "b")"
-        for list in lists.iter() {
-            in_list_raw!(
-                batch,
-                list.clone(),
-                &true,
-                vec![Some(false), Some(true), None],
-                Arc::clone(&col_a),
-                &schema
-            );
-        }
-
-        // expression: "a in ("a", "b", null)"
-        let lists = [
-            vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))],
-            vec![
-                dict_lit(DataType::Int8, "a"),
-                dict_lit(DataType::UInt16, "b"),
-                null_dict_lit(DataType::UInt16),
-            ],
-        ];
-        for list in lists.iter() {
-            in_list_raw!(
-                batch,
-                list.clone(),
-                &false,
-                vec![Some(true), None, None],
-                Arc::clone(&col_a),
-                &schema
-            );
-        }
-
-        // expression: "a not in ("a", "b", null)"
-        for list in lists.iter() {
-            in_list_raw!(
-                batch,
-                list.clone(),
-                &true,
-                vec![Some(false), None, None],
-                Arc::clone(&col_a),
-                &schema
-            );
-        }
 
         Ok(())
     }

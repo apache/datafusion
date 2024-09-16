@@ -1372,14 +1372,8 @@ fn round_trip_scalar_values_and_data_types() {
             vec![Some(vec![Some(1), Some(2), Some(3)])],
             3,
         ))),
-        ScalarValue::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(ScalarValue::from("foo")),
-        ),
-        ScalarValue::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(ScalarValue::Utf8(None)),
-        ),
+        ScalarValue::from("foo"),
+        ScalarValue::Utf8(None),
         ScalarValue::Binary(Some(b"bar".to_vec())),
         ScalarValue::Binary(None),
         ScalarValue::LargeBinary(Some(b"bar".to_vec())),
@@ -1413,10 +1407,7 @@ fn round_trip_scalar_values_and_data_types() {
                     ),
                     false,
                 ),
-                ScalarValue::Dictionary(
-                    Box::new(DataType::UInt16),
-                    Box::new("value".into()),
-                ),
+                "value".into(),
             )
             .build()
             .unwrap(),

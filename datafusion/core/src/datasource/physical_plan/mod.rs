@@ -37,9 +37,7 @@ pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
 pub use csv::{CsvConfig, CsvExec, CsvExecBuilder, CsvOpener};
 pub use file_groups::FileGroupPartitioner;
-pub use file_scan_config::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-};
+pub use file_scan_config::{wrap_partition_type_in_dict, FileScanConfig};
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
 pub use json::{JsonOpener, NdJsonExec};
 

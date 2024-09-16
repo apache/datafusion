@@ -1636,10 +1636,7 @@ mod tests {
             partition_values: vec![
                 ScalarValue::from("2021"),
                 ScalarValue::UInt8(Some(10)),
-                ScalarValue::Dictionary(
-                    Box::new(DataType::UInt16),
-                    Box::new(ScalarValue::from("26")),
-                ),
+                ScalarValue::from("26"),
             ],
             range: None,
             statistics: None,

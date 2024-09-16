@@ -42,8 +42,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-    FileSinkConfig, ParquetExec,
+    wrap_partition_type_in_dict, FileScanConfig, FileSinkConfig, ParquetExec,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
@@ -691,8 +690,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
 async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let mut file_group =
         PartitionedFile::new("/path/to/part=0/file.parquet".to_string(), 1024);
-    file_group.partition_values =
-        vec![wrap_partition_value_in_dict(ScalarValue::Int64(Some(0)))];
+    file_group.partition_values = vec![ScalarValue::Int64(Some(0))];
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
     let scan_config = FileScanConfig {

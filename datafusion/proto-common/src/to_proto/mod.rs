@@ -624,18 +624,6 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 let val = protobuf::ScalarValue { value: Some(val) };
                 Ok(val)
             }
-
-            ScalarValue::Dictionary(index_type, val) => {
-                let value: protobuf::ScalarValue = val.as_ref().try_into()?;
-                Ok(protobuf::ScalarValue {
-                    value: Some(Value::DictionaryValue(Box::new(
-                        protobuf::ScalarDictionaryValue {
-                            index_type: Some(index_type.as_ref().try_into()?),
-                            value: Some(Box::new(value)),
-                        },
-                    ))),
-                })
-            }
         }
     }
 }

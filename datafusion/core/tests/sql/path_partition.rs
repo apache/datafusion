@@ -192,10 +192,8 @@ async fn parquet_distinct_partition_col() -> Result<()> {
 }
 
 fn extract_as_utf(v: &ScalarValue) -> Option<String> {
-    if let ScalarValue::Dictionary(_, v) = v {
-        if let ScalarValue::Utf8(v) = v.as_ref() {
-            return v.clone();
-        }
+    if let ScalarValue::Utf8(v) = v {
+        return v.clone();
     }
     None
 }

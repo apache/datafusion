@@ -503,10 +503,7 @@ pub(crate) mod tests {
         let schema_big = Arc::new(Schema::new(vec![int_field, dict_field]));
         let pred = in_list(
             Arc::new(Column::new_with_schema("id", &schema_big).unwrap()),
-            vec![lit(ScalarValue::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(ScalarValue::from("2")),
-            ))],
+            vec![lit(ScalarValue::from("2"))],
             &false,
             &schema_big,
         )
@@ -516,10 +513,7 @@ pub(crate) mod tests {
 
         let expected = in_list(
             Arc::new(Column::new_with_schema("id", &schema_small).unwrap()),
-            vec![lit(ScalarValue::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(ScalarValue::from("2")),
-            ))],
+            vec![lit(ScalarValue::from("2"))],
             &false,
             &schema_small,
         )
