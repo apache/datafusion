@@ -93,6 +93,7 @@ impl GroupValues for GroupValuesRowLike {
             None => {
                 let len = cols.len();
                 let mut v = Vec::with_capacity(len);
+
                 for f in self.schema.fields().iter() {
                     match f.data_type() {
                         &DataType::Int8 => {
