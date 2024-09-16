@@ -258,7 +258,7 @@ impl FileScanConfig {
         (projected_schema, table_stats, projected_output_ordering)
     }
 
-    #[cfg_attr(not(feature = "avro"), expect(unused))] // Only used by avro
+    #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
     pub(crate) fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()

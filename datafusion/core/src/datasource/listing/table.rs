@@ -18,19 +18,17 @@
 //! The table implementation.
 
 use std::collections::HashMap;
-use std::str::FromStr;
-use std::{any::Any, sync::Arc};
+use std::{any::Any, str::FromStr, sync::Arc};
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
-use super::PartitionedFile;
+use super::{ListingTableUrl, PartitionedFile};
 
-use super::ListingTableUrl;
-
-use crate::datasource::file_format::FilePushdownSupport;
-
-use crate::datasource::{create_ordering, get_statistics_with_limit};
 use crate::datasource::{
-    file_format::{file_compression_type::FileCompressionType, FileFormat},
+    create_ordering,
+    file_format::{
+        file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
+    },
+    get_statistics_with_limit,
     physical_plan::{FileScanConfig, FileSinkConfig},
 };
 use crate::execution::context::SessionState;
@@ -46,8 +44,9 @@ use datafusion_common::{
     config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
     SchemaExt, ToDFSchema,
 };
-use datafusion_execution::cache::cache_manager::FileStatisticsCache;
-use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+use datafusion_execution::cache::{
+    cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache,
+};
 use datafusion_physical_expr::{
     create_physical_expr, LexOrdering, PhysicalSortRequirement,
 };
