@@ -136,13 +136,9 @@ impl ScalarUDFImpl for ConcatFunc {
 
         for arg in args {
             match arg {
-                ColumnarValue::Scalar(ScalarValue::Utf8(maybe_value)) => {
-                    if let Some(s) = maybe_value {
-                        data_size += s.len() * len;
-                        columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
-                    }
-                }
-                ColumnarValue::Scalar(ScalarValue::Utf8View(maybe_value)) => {
+                ColumnarValue::Scalar(ScalarValue::Utf8(maybe_value))
+                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(maybe_value))
+                | ColumnarValue::Scalar(ScalarValue::Utf8View(maybe_value)) => {
                     if let Some(s) = maybe_value {
                         data_size += s.len() * len;
                         columns.push(ColumnarValueRef::Scalar(s.as_bytes()));

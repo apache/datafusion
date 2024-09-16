@@ -18,6 +18,8 @@
 //! [`WindowUDF`]: User Defined Window Functions
 
 use arrow::compute::SortOptions;
+use arrow::datatypes::DataType;
+use std::cmp::Ordering;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
     any::Any,
@@ -55,7 +57,7 @@ use crate::{
 /// [`create_udwf`]: crate::expr_fn::create_udwf
 /// [`simple_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
 /// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd)]
 pub struct WindowUDF {
     inner: Arc<dyn WindowUDFImpl>,
 }
@@ -388,6 +390,21 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     }
 }
 
+impl PartialEq for dyn WindowUDFImpl {
+    fn eq(&self, other: &Self) -> bool {
+        self.equals(other)
+    }
+}
+
+impl PartialOrd for dyn WindowUDFImpl {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name().partial_cmp(other.name()) {
+            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
+            cmp => cmp,
+        }
+    }
+}
+
 /// WindowUDF that adds an alias to the underlying function. It is better to
 /// implement [`WindowUDFImpl`], which supports aliases, directly if possible.
 #[derive(Debug)]
@@ -522,5 +539,98 @@ impl WindowUDFImpl for WindowUDFLegacyWrapper {
             return_type.as_ref().clone(),
             true,
         ))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{PartitionEvaluator, WindowUDF, WindowUDFImpl};
+    use arrow::datatypes::DataType;
+    use datafusion_common::Result;
+    use datafusion_expr_common::signature::{Signature, Volatility};
+    use std::any::Any;
+    use std::cmp::Ordering;
+
+    #[derive(Debug, Clone)]
+    struct AWindowUDF {
+        signature: Signature,
+    }
+
+    impl AWindowUDF {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Int32],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    /// Implement the WindowUDFImpl trait for AddOne
+    impl WindowUDFImpl for AWindowUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "a"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+            unimplemented!()
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct BWindowUDF {
+        signature: Signature,
+    }
+
+    impl BWindowUDF {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Int32],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    /// Implement the WindowUDFImpl trait for AddOne
+    impl WindowUDFImpl for BWindowUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "b"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_partial_ord() {
+        let a1 = WindowUDF::from(AWindowUDF::new());
+        let a2 = WindowUDF::from(AWindowUDF::new());
+        assert_eq!(a1.partial_cmp(&a2), Some(Ordering::Equal));
+
+        let b1 = WindowUDF::from(BWindowUDF::new());
+        assert!(a1 < b1);
+        assert!(!(a1 == b1));
     }
 }

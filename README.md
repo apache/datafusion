@@ -41,9 +41,28 @@
   <img src="./docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
 </a>
 
-Apache DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
-[Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
-in-memory format. [Python Bindings](https://github.com/apache/datafusion-python) are also available. DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
+DataFusion is an extensible query engine written in [Rust] that
+uses [Apache Arrow] as its in-memory format. DataFusion's target users are
+developers building fast and feature rich database and analytic systems,
+customized to particular workloads. See [use cases] for examples.
+
+"Out of the box," DataFusion offers [SQL] and [`Dataframe`] APIs,
+excellent [performance], built-in support for CSV, Parquet, JSON, and Avro,
+extensive customization, and a great community.
+[Python Bindings] are also available.
+
+DataFusion features a full query planner, a columnar, streaming, multi-threaded,
+vectorized execution engine, and partitioned data sources. You can
+customize DataFusion at almost all points including additional data sources,
+query languages, functions, custom operators and more.
+See the [Architecture] section for more details.
+
+[rust]: http://rustlang.org
+[apache arrow]: https://arrow.apache.org
+[use cases]: https://datafusion.apache.org/user-guide/introduction.html#use-cases
+[python bindings]: https://github.com/apache/datafusion-python
+[performance]: https://benchmark.clickhouse.com/
+[architecture]: https://datafusion.apache.org/contributor-guide/architecture.html
 
 Here are links to some important information
 
