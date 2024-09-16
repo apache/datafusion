@@ -90,7 +90,6 @@ physical_plan
 
 # When filter pushdown *is* enabled, ParquetExec can filter exactly,
 # not just metadata, so we expect to see no FilterExec
-# once https://github.com/apache/datafusion/issues/4028 is fixed
 query T
 select a from t_pushdown where b > 2 ORDER BY a;
 ----
