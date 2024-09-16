@@ -566,8 +566,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// documentation for more details on type coercion
     ///
     /// For example, if your function requires a floating point arguments, but the user calls
-    /// it like `my_func(1::int)` (aka with `1` as an integer), coerce_types could return `[DataType::Float64]`
-    /// to ensure the argument was cast to `1::double`
+    /// it like `my_func(1::int)` (i.e. with `1` as an integer), coerce_types can return `[DataType::Float64]`
+    /// to ensure the argument is converted to `1::double`
     ///
     /// # Parameters
     /// * `arg_types`: The argument types of the arguments  this function with
