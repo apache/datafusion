@@ -124,6 +124,10 @@ pub(crate) struct DefaultSchemaAdapter {
     /// associated ParquetExec
     projected_table_schema: SchemaRef,
     /// The entire table schema for the table we're using this to adapt.
+    ///
+    /// This is used to evaluate any filters pushed down into the scan
+    /// which may refer to columns that are not referred to anywhere
+    /// else in the plan.
     table_schema: SchemaRef,
 }
 
