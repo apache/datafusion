@@ -2064,14 +2064,19 @@ fn from_substrait_literal(
             // DF only supports millisecond precision, so for any more granular type we lose precision
             let milliseconds = match precision_mode {
                 Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
+                None =>
+                    if *subseconds != 0 {
+                        return substrait_err!("Cannot set subseconds field of IntervalDayToSecond without setting precision");
+                    } else {
+                        0_i32
+                    }
                 Some(PrecisionMode::Precision(0)) => *subseconds as i32 * 1000,
                 Some(PrecisionMode::Precision(3)) => *subseconds as i32,
                 Some(PrecisionMode::Precision(6)) => (subseconds / 1000) as i32,
                 Some(PrecisionMode::Precision(9)) => (subseconds / 1000 / 1000) as i32,
                 _ => {
                     return not_impl_err!(
-                        "Unsupported Substrait interval day to second precision mode"
-                    )
+                    "Unsupported Substrait interval day to second precision mode: {precision_mode:?}")
                 }
             };
 
