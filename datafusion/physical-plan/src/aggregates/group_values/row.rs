@@ -50,6 +50,37 @@ pub struct PartitionedGroupValuesRows {
     random_state: RandomState,
 }
 
+impl PartitionedGroupValuesRows {
+    pub fn try_new(schema: SchemaRef, num_partitions: usize) -> Result<Self> {
+        let row_converter = RowConverter::new(
+            schema
+                .fields()
+                .iter()
+                .map(|f| SortField::new(f.data_type().clone()))
+                .collect(),
+        )?;
+
+        let starting_rows_capacity = 1000;
+        let starting_data_capacity = 64 * starting_rows_capacity;
+        let rows_buffer =
+            row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
+
+        let mut partitions = Vec::with_capacity(num_partitions);
+        for _ in 0..num_partitions {
+            partitions.push(GroupValuesPartition::new());
+        }
+
+        Ok(Self {
+            schema,
+            row_converter,
+            partitions,
+            hashes_buffer: Default::default(),
+            rows_buffer,
+            random_state: Default::default(),
+        })
+    }
+}
+
 impl PartitionedGroupValues for PartitionedGroupValuesRows {
     fn intern(
         &mut self,
@@ -93,6 +124,10 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
         Ok(())
     }
 
+    fn num_partitions(&self) -> usize {
+        self.partitions.len()
+    }
+
     fn size(&self) -> usize {
         let partitions_size = self
             .partitions
@@ -127,7 +162,7 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
     }
 
     fn clear(&mut self) {
-        todo!()
+        // Seems unnecessary, just do nothing now
     }
 }
 
@@ -157,6 +192,14 @@ struct GroupValuesPartition {
 }
 
 impl GroupValuesPartition {
+    fn new() -> Self {
+        Self {
+            map: RawTable::with_capacity(0),
+            map_size: 0,
+            group_values: None,
+        }
+    }
+
     fn get_or_create_groups(
         &mut self,
         input_rows: &Rows,

@@ -33,7 +33,86 @@ mod bytes_view;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
-pub trait PartitionedGroupValues {
+use crate::aggregates::group_values::row::PartitionedGroupValuesRows;
+
+pub enum GroupValuesLike {
+    Single(Box<dyn GroupValues>),
+    Partitioned(Box<dyn PartitionedGroupValues>),
+}
+
+impl GroupValuesLike {
+    #[inline]
+    pub fn is_partitioned(&self) -> bool {
+        matches!(&self, GroupValuesLike::Partitioned(_))
+    }
+
+    #[inline]
+    pub fn num_partitions(&self) -> usize {
+        if let Self::Partitioned(group_values) = self {
+            group_values.len()
+        } else {
+            1
+        }
+    }
+
+    #[inline]
+    pub fn as_single(&self) -> &Box<dyn GroupValues> {
+        match self {
+            GroupValuesLike::Single(v) => v,
+            GroupValuesLike::Partitioned(_) => unreachable!(),
+        }
+    }
+
+    #[inline]
+    pub fn as_partitioned(&self) -> &Box<dyn PartitionedGroupValues> {
+        match self {
+            GroupValuesLike::Partitioned(v) => v,
+            GroupValuesLike::Single(_) => unreachable!(),
+        }
+    }
+
+    #[inline]
+    pub fn as_single_mut(&mut self) -> &mut Box<dyn GroupValues> {
+        match self {
+            GroupValuesLike::Single(v) => v,
+            GroupValuesLike::Partitioned(_) => unreachable!(),
+        }
+    }
+
+    #[inline]
+    pub fn as_partitioned_mut(&mut self) -> &mut Box<dyn PartitionedGroupValues> {
+        match self {
+            GroupValuesLike::Partitioned(v) => v,
+            GroupValuesLike::Single(_) => unreachable!(),
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        match self {
+            GroupValuesLike::Single(v) => v.len(),
+            GroupValuesLike::Partitioned(v) => v.len(),
+        }
+    }
+
+    #[inline]
+    pub fn size(&self) -> usize {
+        match self {
+            GroupValuesLike::Single(v) => v.size(),
+            GroupValuesLike::Partitioned(v) => v.size(),
+        }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            GroupValuesLike::Single(v) => v.is_empty(),
+            GroupValuesLike::Partitioned(v) => v.is_empty(),
+        }
+    }
+}
+
+pub trait PartitionedGroupValues: Send {
     /// Calculates the `groups` for each input row of `cols`
     fn intern(
         &mut self,
@@ -41,6 +120,8 @@ pub trait PartitionedGroupValues {
         part_groups: &mut Vec<Vec<usize>>,
         part_row_indices: &mut Vec<Vec<usize>>,
     ) -> Result<()>;
+
+    fn num_partitions(&self) -> usize;
 
     /// Returns the number of bytes used by this [`GroupValues`]
     fn size(&self) -> usize;
@@ -79,7 +160,17 @@ pub trait GroupValues: Send {
     fn clear_shrink(&mut self, batch: &RecordBatch);
 }
 
-pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
+pub fn new_group_values(schema: SchemaRef, partitioning_group_values: bool, num_partitions: usize) -> Result<GroupValuesLike> {
+    let group_values = if partitioning_group_values && schema.fields.len() > 1 {
+        GroupValuesLike::Partitioned(Box::new(PartitionedGroupValuesRows::try_new(schema, num_partitions)?))
+    } else {
+        GroupValuesLike::Single(new_single_group_values(schema)?)
+    };
+
+    Ok(group_values)
+}
+
+pub fn new_single_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
