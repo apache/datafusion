@@ -102,8 +102,6 @@ pub(super) fn unsigned_gcd(mut a: u64, mut b: u64) -> u64 {
     }
 
     let shift = (a | b).trailing_zeros();
-    a >>= shift;
-    b >>= shift;
     a >>= a.trailing_zeros();
     loop {
         b >>= b.trailing_zeros();
