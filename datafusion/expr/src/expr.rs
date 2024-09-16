@@ -2420,20 +2420,15 @@ mod test {
 
     #[test]
     fn test_partial_ord() {
-        // Test validates that partial ord is defined for Expr using hashes, not
+        // Test validates that partial ord is defined for Expr, not
         // intended to exhaustively test all possibilities
         let exp1 = col("a") + lit(1);
         let exp2 = col("a") + lit(2);
         let exp3 = !(col("a") + lit(2));
 
-        // Since comparisons are done using hash value of the expression
-        // expr < expr2 may return false, or true. There is no guaranteed result.
-        // The only guarantee is "<" operator should have the opposite result of ">=" operator
-        let greater_or_equal = exp1 >= exp2;
-        assert_eq!(exp1 < exp2, !greater_or_equal);
-
-        let greater_or_equal = exp3 >= exp2;
-        assert_eq!(exp3 < exp2, !greater_or_equal);
+        assert!(exp1 < exp2);
+        assert!(exp3 > exp2);
+        assert!(exp1 < exp3)
     }
 
     #[test]

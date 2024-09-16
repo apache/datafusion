@@ -534,3 +534,34 @@ impl PartialOrd for CreateIndex {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::cmp::Ordering;
+    use datafusion_common::{DFSchema, DFSchemaRef, TableReference};
+    use crate::{CreateCatalog, DdlStatement, DropView};
+
+    #[test]
+    fn test_partial_ord() {
+        let catalog = DdlStatement::CreateCatalog(CreateCatalog {
+            catalog_name: "name".to_string(),
+            if_not_exists: false,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+        let catalog_2 = DdlStatement::CreateCatalog(CreateCatalog {
+            catalog_name: "name".to_string(),
+            if_not_exists: true,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+
+        assert_eq!(catalog.partial_cmp(&catalog_2), Some(Ordering::Less));
+
+        let drop_view = DdlStatement::DropView(DropView {
+            name: TableReference::from("table"),
+            if_exists: false,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+
+        assert_eq!(drop_view.partial_cmp(&catalog), Some(Ordering::Greater));
+    }
+}

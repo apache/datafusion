@@ -3915,4 +3915,30 @@ digraph {
         let actual = format!("{}", plan.display_indent());
         assert_eq!(expected.to_string(), actual)
     }
+
+    #[test]
+    fn test_plan_partial_ord() {
+        let empty_relation = LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(DFSchema::empty()),
+        });
+
+        let describe_table = LogicalPlan::DescribeTable(DescribeTable {
+            schema: Arc::new(Schema::new(vec![
+                Field::new("foo", DataType::Int32, false),
+            ])),
+            output_schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+
+        let describe_table_clone = LogicalPlan::DescribeTable(DescribeTable {
+            schema: Arc::new(Schema::new(vec![
+                Field::new("foo", DataType::Int32, false),
+            ])),
+            output_schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+
+        assert_eq!(empty_relation.partial_cmp(&describe_table), Some(Ordering::Less));
+        assert_eq!(describe_table.partial_cmp(&empty_relation), Some(Ordering::Greater));
+        assert_eq!(describe_table.partial_cmp(&describe_table_clone), None);
+    }
 }
