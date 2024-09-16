@@ -218,7 +218,7 @@ impl ScalarUDF {
 
     /// Returns a `ScalarFunctionImplementation` that can invoke the function
     /// during execution
-    pub fn fun(&self) -> ScalarFunctionImplementation {
+    pub fn fun(&self) ->    ScalarFunctionImplementation {
         let captured = Arc::clone(&self.inner);
         Arc::new(move |args| captured.invoke(args))
     }
