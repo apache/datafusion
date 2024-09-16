@@ -1021,6 +1021,14 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (List(_), List(_)) => Some(lhs_type.clone()),
+        (LargeList(_), List(_)) => Some(lhs_type.clone()),
+        (List(_), LargeList(_)) => Some(rhs_type.clone()),
+        (LargeList(_), LargeList(_)) => Some(lhs_type.clone()),
+        (List(_), FixedSizeList(_, _)) => Some(lhs_type.clone()),
+        (FixedSizeList(_, _), List(_)) => Some(rhs_type.clone()),
+        (FixedSizeList(_, _), FixedSizeList(_, _)) => Some(lhs_type.clone()),
+        (LargeList(_), FixedSizeList(_, _)) => Some(lhs_type.clone()),
+        (FixedSizeList(_, _), LargeList(_)) => Some(rhs_type.clone()),
         _ => None,
     }
 }
@@ -1904,6 +1912,63 @@ mod tests {
             DataType::Timestamp(TimeUnit::Second, utc),
             Operator::Eq,
             DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into()))
+        );
+
+        // list
+        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        test_coercion_binary_rule!(
+            DataType::List(Arc::clone(&inner_field)),
+            DataType::List(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::List(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::List(Arc::clone(&inner_field)),
+            DataType::LargeList(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeList(Arc::clone(&inner_field)),
+            DataType::List(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeList(Arc::clone(&inner_field)),
+            DataType::LargeList(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            Operator::Eq,
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10)
+        );
+        test_coercion_binary_rule!(
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            DataType::LargeList(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeList(Arc::clone(&inner_field)),
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::List(Arc::clone(&inner_field)),
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            Operator::Eq,
+            DataType::List(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            DataType::List(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::List(Arc::clone(&inner_field))
         );
 
         // TODO add other data type
