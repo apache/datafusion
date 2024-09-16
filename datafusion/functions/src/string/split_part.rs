@@ -173,7 +173,7 @@ impl ScalarUDFImpl for SplitPartFunc {
         if is_scalar {
             // If all inputs are scalar, keep the output as scalar
             let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(|x| ColumnarValue::from(x))
+            result.map(ColumnarValue::from)
         } else {
             result.map(ColumnarValue::Array)
         }
