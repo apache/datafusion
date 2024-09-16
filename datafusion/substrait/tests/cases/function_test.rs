@@ -28,7 +28,7 @@ mod tests {
     #[tokio::test]
     async fn contains_function_test() -> Result<()> {
         let proto_plan = read_json("tests/testdata/contains_plan.substrait.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan);
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx, &proto_plan).await?;
 
         let plan_str = format!("{}", plan);
