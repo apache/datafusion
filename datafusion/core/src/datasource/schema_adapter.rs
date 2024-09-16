@@ -192,9 +192,20 @@ impl SchemaAdapter for DefaultSchemaAdapter {
 /// and any necessary type conversions that need to be applied.
 ///
 /// This needs both the projected table schema and full table schema because its different
-/// functions have different needs. The `map_batch` function is only used by the ParquetOpener to
+/// functions have different needs. The [`map_batch`] function is only used by the ParquetOpener to
 /// produce a RecordBatch which has the projected schema, since that's the schema which is supposed
-/// to come out of the execution of this query. `map_partial_batch`, however, is used to
+/// to come out of the execution of this query. [`map_partial_batch`], however, is used to create a
+/// RecordBatch with a schema that can be used for Parquet pushdown, meaning that it may contain
+/// fields which are not in the projected schema (as the fields that parquet pushdown filters
+/// operate can be completely distinct from the fields that are projected (output) out of the
+/// ParquetExec).
+///
+/// [`map_partial_batch`] uses `table_schema` to create the resulting RecordBatch (as it could be
+/// operating on any fields in the schema), while [`map_batch`] uses `projected_table_schema` (as
+/// it can only operate on the projected fields).
+///
+/// [`map_batch`]: Self::map_batch
+/// [`map_partial_batch`]: Self::map_partial_batch
 #[derive(Debug)]
 pub struct SchemaMapping {
     /// The schema of the table. This is the expected schema after conversion and it should match
@@ -251,7 +262,7 @@ impl SchemaMapper for SchemaMapping {
     /// Adapts a [`RecordBatch`]'s schema into one that has all the correct output types and only
     /// contains the fields that exist in both the file schema and table schema.
     ///
-    /// Unlike `map_batch` this method also preserves the columns that 
+    /// Unlike `map_batch` this method also preserves the columns that
     /// may not appear in the final output (`projected_table_schema`) but may
     /// appear in push down predicates
     fn map_partial_batch(
