@@ -120,7 +120,7 @@ impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
 /// needs of the [`SchemaMapping`] it creates. Read its documentation for more details
 #[derive(Clone, Debug)]
 pub(crate) struct DefaultSchemaAdapter {
-    /// The schema for the table, projected to include only the fields being projected by the
+    /// The schema for the table, projected to include only the fields being output (projected) by the
     /// associated ParquetExec
     projected_table_schema: SchemaRef,
     /// The entire table schema for the table we're using this to adapt.
