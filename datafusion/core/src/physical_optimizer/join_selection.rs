@@ -196,8 +196,6 @@ pub fn swap_hash_join(
         let mut reverted_cols =
             swap_reverting_projection(&left.schema(), &right.schema());
         if let Some(proj) = hash_join.projection.as_ref() {
-            dbg!(proj);
-            dbg!(&reverted_cols);
             reverted_cols = proj
                 .iter()
                 .map(|&col_idx| reverted_cols[col_idx].clone())
