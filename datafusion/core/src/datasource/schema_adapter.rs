@@ -116,8 +116,8 @@ impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
     }
 }
 
-// This SchemaAdapter requires both the table schema and the projected table schema because of the
-// needs of the [`SchemaMapping`] it creates. Read its documentation for more details
+/// This SchemaAdapter requires both the table schema and the projected table schema because of the
+/// needs of the [`SchemaMapping`] it creates. Read its documentation for more details
 #[derive(Clone, Debug)]
 pub(crate) struct DefaultSchemaAdapter {
     /// The schema for the table, projected to include only the fields being projected by the
