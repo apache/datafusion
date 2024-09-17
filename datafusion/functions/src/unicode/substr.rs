@@ -21,8 +21,8 @@ use std::sync::Arc;
 use crate::string::common::{make_and_append_view, StringArrayType};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
-    make_view, Array, ArrayIter, ArrayRef, AsArray, ByteView, GenericStringArray,
-    Int64Array, OffsetSizeTrait, StringViewArray,
+    Array, ArrayIter, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
+    StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
