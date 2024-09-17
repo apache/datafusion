@@ -523,7 +523,6 @@ impl OddCounter {
         #[derive(Debug, Clone)]
         struct SimpleWindowUDF {
             signature: Signature,
-            return_type: DataType,
             test_state: Arc<TestState>,
             aliases: Vec<String>,
         }
@@ -532,10 +531,8 @@ impl OddCounter {
             fn new(test_state: Arc<TestState>) -> Self {
                 let signature =
                     Signature::exact(vec![DataType::Float64], Volatility::Immutable);
-                let return_type = DataType::Int64;
                 Self {
                     signature,
-                    return_type,
                     test_state,
                     aliases: vec!["odd_counter_alias".to_string()],
                 }
@@ -556,7 +553,7 @@ impl OddCounter {
             }
 
             fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                Ok(self.return_type.clone())
+                Ok(DataType::Int64)
             }
 
             fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
@@ -568,11 +565,7 @@ impl OddCounter {
             }
 
             fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-                Ok(Field::new(
-                    field_args.name(),
-                    self.return_type.clone(),
-                    true,
-                ))
+                Ok(Field::new(field_args.name(), DataType::Int64, true))
             }
         }
 
