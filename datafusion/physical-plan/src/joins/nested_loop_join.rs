@@ -661,11 +661,13 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field};
     use arrow_array::Int32Array;
+    use arrow_schema::SortOptions;
     use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     use rstest::rstest;
 
@@ -673,19 +675,44 @@ mod tests {
         a: (&str, &Vec<i32>),
         b: (&str, &Vec<i32>),
         c: (&str, &Vec<i32>),
-        num_batches: usize,
+        rows_per_batch: Option<usize>,
+        sorted_column_names: Vec<&str>,
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
-        let rows_per_batch = batch.num_rows() / num_batches;
-        let batches = (0..num_batches)
-            .map(|i| {
-                let start = i * rows_per_batch;
-                let remaining_rows = batch.num_rows() - start;
-                batch.slice(start, rows_per_batch.min(remaining_rows))
-            })
-            .collect::<Vec<_>>();
         let schema = batch.schema();
-        Arc::new(MemoryExec::try_new(&[batches], schema, None).unwrap())
+
+        let batches = if let Some(rows_per_batch) = rows_per_batch {
+            let num_batches = (batch.num_rows() + rows_per_batch - 1) / rows_per_batch;
+            (0..num_batches)
+                .map(|i| {
+                    let start = i * rows_per_batch;
+                    let remaining_rows = batch.num_rows() - start;
+                    batch.slice(start, rows_per_batch.min(remaining_rows))
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vec![batch]
+        };
+
+        let mut exec =
+            MemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
+        if !sorted_column_names.is_empty() {
+            let mut sort_info = Vec::new();
+            for name in sorted_column_names {
+                let index = schema.index_of(name).unwrap();
+                let sort_expr = PhysicalSortExpr {
+                    expr: Arc::new(Column::new(name, index)),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                };
+                sort_info.push(sort_expr);
+            }
+            exec = exec.with_sort_information(vec![sort_info]);
+        }
+
+        Arc::new(exec)
     }
 
     fn build_left_table() -> Arc<dyn ExecutionPlan> {
@@ -693,7 +720,8 @@ mod tests {
             ("a1", &vec![5, 9, 11]),
             ("b1", &vec![5, 8, 8]),
             ("c1", &vec![50, 90, 110]),
-            1,
+            None,
+            Vec::new(),
         )
     }
 
@@ -702,7 +730,8 @@ mod tests {
             ("a2", &vec![12, 2, 10]),
             ("b2", &vec![10, 2, 10]),
             ("c2", &vec![40, 80, 100]),
-            1,
+            None,
+            Vec::new(),
         )
     }
 
@@ -1030,13 +1059,15 @@ mod tests {
             ("a1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
             ("b1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
             ("c1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
-            1,
+            None,
+            Vec::new(),
         );
         let right = build_table(
             ("a2", &vec![10, 11]),
             ("b2", &vec![12, 13]),
             ("c2", &vec![14, 15]),
-            1,
+            None,
+            Vec::new(),
         );
         let filter = prepare_join_filter();
 
@@ -1126,8 +1157,8 @@ mod tests {
         JoinFilter::new(filter_expression, column_indices, intermediate_schema)
     }
 
-    fn generate_columns(num_columns: usize, num_rows: i32) -> Vec<Vec<i32>> {
-        let column = (1..=num_rows).collect();
+    fn generate_columns(num_columns: usize, num_rows: usize) -> Vec<Vec<i32>> {
+        let column = (1..=num_rows).map(|x| x as i32).collect();
         vec![column; num_columns]
     }
 
@@ -1141,28 +1172,56 @@ mod tests {
             JoinType::RightSemi
         )]
         join_type: JoinType,
-        #[values(1, 5, 10, 30)] num_batches: usize,
+        #[values(1, 5, 10, 30)] batches_per_row: usize,
+        #[values(1, 2, 5, 10)] num_left_batches: usize,
+        #[values(1, 10, 50, 100)] num_right_batches: usize,
     ) -> Result<()> {
-        let left_columns = generate_columns(3, 20);
+        let left_columns = generate_columns(3, batches_per_row * num_left_batches);
         let left = build_table(
             ("a1", &left_columns[0]),
             ("b1", &left_columns[1]),
             ("c1", &left_columns[2]),
-            1,
+            Some(batches_per_row),
+            Vec::new(),
         );
 
-        let right_columns = generate_columns(3, 100);
+        let right_columns = generate_columns(3, batches_per_row * num_right_batches);
         let right = build_table(
             ("a2", &right_columns[0]),
             ("b2", &right_columns[1]),
             ("c2", &right_columns[2]),
-            num_batches,
+            Some(batches_per_row),
+            vec!["a2", "b2", "c2"],
         );
 
         let filter = prepare_mod_join_filter();
 
-        let nested_loop_join =
-            NestedLoopJoinExec::try_new(left, right, Some(filter), &join_type)?;
+        let nested_loop_join = Arc::new(NestedLoopJoinExec::try_new(
+            left,
+            Arc::clone(&right),
+            Some(filter),
+            &join_type,
+        )?) as Arc<dyn ExecutionPlan>;
+        assert_eq!(nested_loop_join.maintains_input_order(), vec![false, true]);
+
+        let right_column_indices = match join_type {
+            JoinType::Inner | JoinType::Right => vec![3, 4, 5],
+            JoinType::RightAnti | JoinType::RightSemi => vec![0, 1, 2],
+            _ => unreachable!(),
+        };
+
+        let right_ordering = right.output_ordering().unwrap();
+        let join_ordering = nested_loop_join.output_ordering().unwrap();
+        for (right, join) in right_ordering.iter().zip(join_ordering.iter()) {
+            let right_column = right.expr.as_any().downcast_ref::<Column>().unwrap();
+            let join_column = join.expr.as_any().downcast_ref::<Column>().unwrap();
+            assert_eq!(join_column.name(), join_column.name());
+            assert_eq!(
+                right_column_indices[right_column.index()],
+                join_column.index()
+            );
+            assert_eq!(right.options, join.options);
+        }
 
         let batches = nested_loop_join
             .execute(0, Arc::new(TaskContext::default()))?
@@ -1173,14 +1232,9 @@ mod tests {
         let mut prev_values = [i32::MIN, i32::MIN, i32::MIN];
 
         for (batch_index, batch) in batches.iter().enumerate() {
-            let right_column_indices = match join_type {
-                JoinType::Inner | JoinType::Right => vec![3, 4, 5],
-                JoinType::RightAnti | JoinType::RightSemi => vec![0, 1, 2],
-                _ => unreachable!(),
-            };
             let columns: Vec<_> = right_column_indices
-                .into_iter()
-                .map(|i| {
+                .iter()
+                .map(|&i| {
                     batch
                         .column(i)
                         .as_any()
