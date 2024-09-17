@@ -675,19 +675,19 @@ mod tests {
         a: (&str, &Vec<i32>),
         b: (&str, &Vec<i32>),
         c: (&str, &Vec<i32>),
-        rows_per_batch: Option<usize>,
+        batch_size: Option<usize>,
         sorted_column_names: Vec<&str>,
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
 
-        let batches = if let Some(rows_per_batch) = rows_per_batch {
-            let num_batches = (batch.num_rows() + rows_per_batch - 1) / rows_per_batch;
+        let batches = if let Some(batch_size) = batch_size {
+            let num_batches = batch.num_rows().div_ceil(batch_size);
             (0..num_batches)
                 .map(|i| {
-                    let start = i * rows_per_batch;
+                    let start = i * batch_size;
                     let remaining_rows = batch.num_rows() - start;
-                    batch.slice(start, rows_per_batch.min(remaining_rows))
+                    batch.slice(start, batch_size.min(remaining_rows))
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -1172,25 +1172,24 @@ mod tests {
             JoinType::RightSemi
         )]
         join_type: JoinType,
-        #[values(1, 5, 10, 30)] batches_per_row: usize,
-        #[values(1, 2, 5, 10)] num_left_batches: usize,
-        #[values(1, 10, 50, 100)] num_right_batches: usize,
+        #[values(1, 100, 1000)] left_batch_size: usize,
+        #[values(1, 100, 1000)] right_batch_size: usize,
     ) -> Result<()> {
-        let left_columns = generate_columns(3, batches_per_row * num_left_batches);
+        let left_columns = generate_columns(3, 1000);
         let left = build_table(
             ("a1", &left_columns[0]),
             ("b1", &left_columns[1]),
             ("c1", &left_columns[2]),
-            Some(batches_per_row),
+            Some(left_batch_size),
             Vec::new(),
         );
 
-        let right_columns = generate_columns(3, batches_per_row * num_right_batches);
+        let right_columns = generate_columns(3, 1000);
         let right = build_table(
             ("a2", &right_columns[0]),
             ("b2", &right_columns[1]),
             ("c2", &right_columns[2]),
-            Some(batches_per_row),
+            Some(right_batch_size),
             vec!["a2", "b2", "c2"],
         );
 
