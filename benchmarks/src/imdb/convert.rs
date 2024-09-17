@@ -55,7 +55,6 @@ impl ConvertOpt {
         for table in IMDB_TABLES {
             let start = Instant::now();
             let schema = get_imdb_table_schema(table);
-
             let input_path = format!("{input_path}/{table}.csv");
             let output_path = format!("{output_path}/{table}.parquet");
             let options = CsvReadOptions::new()
