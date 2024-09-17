@@ -42,6 +42,52 @@ use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 /// they are not as fast as a specialized `GroupsAccumulator`. This
 /// interface bridges the gap so the group by operator only operates
 /// in terms of [`Accumulator`].
+///
+/// Internally, this adapter creates a new [`Accumulator`] for each group which
+/// stores the state for that group. This both requires an allocation for each
+/// Accumulator, internal indices, as well as whatever internal allocations the
+/// Accumulator itself requires.
+///
+/// For example, a `MinAccumulator` that computes the minimum string value with
+/// a [`ScalarValue::Utf8`]. That will require at least two allocations per group
+/// (one for the `MinAccumulator` and one for the `ScalarValue::Utf8`).
+///
+/// ```text
+///                       ┌─────────────────────────────────┐
+///                       │MinAccumulator {                 │
+///                ┌─────▶│ min: ScalarValue::Utf8("A")     │───────┐
+///                │      │}                                │       │
+///                │      └─────────────────────────────────┘       └───────▶   "A"
+///    ┌─────┐     │      ┌─────────────────────────────────┐
+///    │  0  │─────┘      │MinAccumulator {                 │
+///    ├─────┤     ┌─────▶│ min: ScalarValue::Utf8("Z")     │───────────────▶   "Z"
+///    │  1  │─────┘      │}                                │
+///    └─────┘            └─────────────────────────────────┘                   ...
+///      ...                 ...
+///    ┌─────┐            ┌────────────────────────────────┐
+///    │ N-2 │            │MinAccumulator {                │
+///    ├─────┤            │  min: ScalarValue::Utf8("A")   │────────────────▶   "A"
+///    │ N-1 │─────┐      │}                               │
+///    └─────┘     │      └────────────────────────────────┘
+///                │      ┌────────────────────────────────┐        ┌───────▶   "Q"
+///                │      │MinAccumulator {                │        │
+///                └─────▶│  min: ScalarValue::Utf8("Q")   │────────┘
+///                       │}                               │
+///                       └────────────────────────────────┘
+///
+///
+///  Logical group         Current Min/Max value for that group stored
+///     number             as a ScalarValue which points to an
+///                        indivdually allocated String
+///
+///```
+///
+/// # Optimizations
+///
+/// The adapter minimizes the number of calls to [`Accumulator::update_batch`]
+/// by first collecting the input rows for each group into a contiguous array
+/// using [`compute::take`]
+///
 pub struct GroupsAccumulatorAdapter {
     factory: Box<dyn Fn() -> Result<Box<dyn Accumulator>> + Send>,
 
@@ -61,9 +107,9 @@ struct AccumulatorState {
     /// [`Accumulator`] that stores the per-group state
     accumulator: Box<dyn Accumulator>,
 
-    // scratch space: indexes in the input array that will be fed to
-    // this accumulator. Stores indexes as `u32` to match the arrow
-    // `take` kernel input.
+    /// scratch space: indexes in the input array that will be fed to
+    /// this accumulator. Stores indexes as `u32` to match the arrow
+    /// `take` kernel input.
     indices: Vec<u32>,
 }
 
