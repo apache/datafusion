@@ -142,6 +142,7 @@ main() {
                     data_tpch "10"
                     data_clickbench_1
                     data_clickbench_partitioned
+                    data_imdb
                     ;;
                 tpch)
                     data_tpch "1"
@@ -165,6 +166,9 @@ main() {
                     ;;
                 clickbench_extended)
                     data_clickbench_1
+                    ;;
+                imdb)
+                    data_imdb
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
@@ -429,6 +433,81 @@ run_clickbench_extended() {
     echo "Running clickbench (1 file) extended benchmark..."
     $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended.sql" -o "${RESULTS_FILE}"
 }
+
+# Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
+# http://homepages.cwi.nl/~boncz/job/imdb.tgz
+data_imdb() {
+    local imdb_dir="${DATA_DIR}/imdb"
+    local imdb_temp_gz="${imdb_dir}/imdb.tgz"
+    local imdb_url="https://homepages.cwi.nl/~boncz/job/imdb.tgz"
+
+   # imdb has 21 files, we just separate them into 3 groups for better readability 
+    local first_required_files=(
+        "aka_name.parquet"    
+        "aka_title.parquet"
+        "cast_info.parquet"
+        "char_name.parquet"
+        "comp_cast_type.parquet"
+        "company_name.parquet"
+        "company_type.parquet"
+    )
+
+    local second_required_files=(
+        "complete_cast.parquet"
+        "info_type.parquet"
+        "keyword.parquet"
+        "kind_type.parquet"
+        "link_type.parquet"
+        "movie_companies.parquet"
+        "movie_info.parquet"
+    )
+
+    local third_required_files=(
+        "movie_info_idx.parquet"
+        "movie_keyword.parquet"
+        "movie_link.parquet"
+        "name.parquet"
+        "person_info.parquet"
+        "role_type.parquet"
+        "title.parquet"
+    )
+
+    # Combine the three arrays into one
+    local required_files=("${first_required_files[@]}" "${second_required_files[@]}" "${third_required_files[@]}")
+    local convert_needed=false
+
+    # Create directory if it doesn't exist
+    mkdir -p "${imdb_dir}"
+
+    # Check if required files exist
+    for file in "${required_files[@]}"; do
+        if [ ! -f "${imdb_dir}/${file}" ]; then
+            convert_needed=true
+            break
+        fi
+    done
+
+    if [ "$convert_needed" = true ]; then
+        if [ ! -f "${imdb_dir}/imdb.tgz" ]; then
+            echo "Downloading IMDB dataset..."
+            
+            # Download the dataset
+            curl -o "${imdb_temp_gz}" "${imdb_url}"
+        else 
+            echo "IMDB.tgz already exists."
+
+            # Extract the dataset
+            tar -xzvf "${imdb_temp_gz}" -C "${imdb_dir}"
+            $CARGO_COMMAND --bin imdb -- convert --input ${imdb_dir} --output ${imdb_dir} --format parquet
+        fi
+        echo "IMDB dataset downloaded and extracted."
+    else
+        echo "IMDB dataset already exists and contains required parquet files."
+    fi
+}
+
+
+
 
 compare_benchmarks() {
     BASE_RESULTS_DIR="${SCRIPT_DIR}/results"
