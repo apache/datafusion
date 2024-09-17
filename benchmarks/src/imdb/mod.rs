@@ -23,10 +23,27 @@ pub use convert::ConvertOpt;
 
 // we have 21 tables in the IMDB dataset
 pub const IMDB_TABLES: &[&str] = &[
-    "aka_name", "aka_title", "cast_info", "char_name", "comp_cast_type",
-    "company_name", "company_type", "complete_cast", "info_type", "keyword",
-    "kind_type", "link_type", "movie_companies", "movie_info_idx", "movie_keyword",
-    "movie_link", "name", "role_type", "title", "movie_info", "person_info",
+    "aka_name",
+    "aka_title",
+    "cast_info",
+    "char_name",
+    "comp_cast_type",
+    "company_name",
+    "company_type",
+    "complete_cast",
+    "info_type",
+    "keyword",
+    "kind_type",
+    "link_type",
+    "movie_companies",
+    "movie_info_idx",
+    "movie_keyword",
+    "movie_link",
+    "name",
+    "role_type",
+    "title",
+    "movie_info",
+    "person_info",
 ];
 
 /// Get the schema for the IMDB dataset tables

@@ -25,8 +25,8 @@ use structopt::StructOpt;
 
 use datafusion::common::not_impl_err;
 
-use super::IMDB_TABLES;
 use super::get_imdb_table_schema;
+use super::IMDB_TABLES;
 
 #[derive(Debug, StructOpt)]
 pub struct ConvertOpt {
@@ -42,21 +42,20 @@ pub struct ConvertOpt {
     #[structopt(short = "f", long = "format")]
     file_format: String,
 
-     /// Batch size when reading CSV or Parquet files
-     #[structopt(short = "s", long = "batch-size", default_value = "8192")]
-     batch_size: usize,
+    /// Batch size when reading CSV or Parquet files
+    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
+    batch_size: usize,
 }
 
 impl ConvertOpt {
     pub async fn run(self) -> Result<()> {
-
         let input_path = self.input_path.to_str().unwrap();
         let output_path = self.output_path.to_str().unwrap();
 
         for table in IMDB_TABLES {
             let start = Instant::now();
             let schema = get_imdb_table_schema(table);
-            
+
             let input_path = format!("{input_path}/{table}.csv");
             let output_path = format!("{output_path}/{table}.parquet");
             let options = CsvReadOptions::new()
@@ -91,14 +90,16 @@ impl ConvertOpt {
                         output_path.as_str(),
                         DataFrameWriteOptions::new(),
                         None,
-                    ).await?;
+                    )
+                    .await?;
                 }
                 "parquet" => {
                     csv.write_parquet(
                         output_path.as_str(),
                         DataFrameWriteOptions::new(),
                         None,
-                    ).await?;
+                    )
+                    .await?;
                 }
                 other => {
                     return not_impl_err!("Invalid output format: {other}");
