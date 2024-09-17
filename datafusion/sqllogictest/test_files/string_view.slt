@@ -664,6 +664,19 @@ Xiangpeng Xiangpeng Xiangpeng NULL
 Raphael   Raphael   Raphael   NULL
 NULL      NULL      NULL      NULL
 
+query TTTT
+SELECT
+  arrow_typeof(BTRIM(column1_utf8view, 'foo')) AS t1,
+  arrow_typeof(BTRIM(column1_utf8view, 'A')) AS t2,
+  arrow_typeof(BTRIM(column1_utf8view)) AS t3,
+  arrow_typeof(BTRIM(column1_utf8view, NULL)) AS t4
+FROM test;
+----
+Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View
+
 ## Ensure no casts for LTRIM
 # Test LTRIM with Utf8View input
 query TT
@@ -709,6 +722,20 @@ Andrew    Andrew    Andrew    NULL  Andrew
 Xiangpeng (empty)   Xiangpeng NULL  peng
 Raphael   aphael    Raphael   NULL  Raphael
 NULL      NULL      NULL      NULL  NULL
+
+query TTTTT
+SELECT
+  arrow_typeof(LTRIM(column1_utf8view, 'foo')) AS t1,
+  arrow_typeof(LTRIM(column1_utf8view, column2_utf8view)) AS t2,
+  arrow_typeof(LTRIM(column1_utf8view)) AS t3,
+  arrow_typeof(LTRIM(column1_utf8view, NULL)) AS t4,
+  arrow_typeof(LTRIM(column1_utf8view, 'Xiang')) AS t5
+FROM test;
+----
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
 
 ## ensure no casts for RTRIM
 # Test RTRIM with Utf8View input
@@ -756,6 +783,19 @@ Xiangpeng (empty)   Xiangpeng NULL  Xia
 Raphael   Raphael   Raphael   NULL  Raphael
 NULL      NULL      NULL      NULL  NULL
 
+query TTTTT
+SELECT
+  arrow_typeof(RTRIM(column1_utf8view, 'foo')) AS t1,
+  arrow_typeof(RTRIM(column1_utf8view, column2_utf8view)) AS t2,
+  arrow_typeof(RTRIM(column1_utf8view)) AS t3,
+  arrow_typeof(RTRIM(column1_utf8view, NULL)) AS t4,
+  arrow_typeof(RTRIM(column1_utf8view, 'peng')) As t5
+FROM test;
+----
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
 
 ## Ensure no casts for CHARACTER_LENGTH
 query TT
