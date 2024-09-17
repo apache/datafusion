@@ -109,6 +109,7 @@ SELECT CASE WHEN false THEN 1 ELSE 0 END FROM foo
 0
 0
 
+# test then value type coercion
 # List(Utf8) will be casted to List(Int64)
 query ?
 SELECT CASE 1 WHEN 1 THEN ['1', '2', '3'] WHEN 2 THEN [1, 2, 3] ELSE null END;
@@ -145,17 +146,29 @@ SELECT CASE 1 WHEN 1 THEN arrow_cast([1,2,3], 'LargeList(Int64)') WHEN 2 THEN ar
 ----
 [1, 2, 3]
 
+query error DataFusion error: type_coercion
+SELECT CASE 1 WHEN 1 THEN [1,2,3] WHEN 2 THEN 'test' ELSE null END;
 
-# TODO: got arrow nested comparison error. Enable this test after the issue is fixed
-# External error: query failed: DataFusion error: Arrow error: Invalid argument error: Nested comparison: LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) == LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) (hint: use make_comparator instead)
-#query I
-#SELECT CASE [1,2,3] WHEN arrow_cast([1,2,3], 'LargeList(Int64)') THEN 1 ELSE 0 END;
-#----
-#1
+# test case when type coercion
+query I
+SELECT CASE [1,2,3] WHEN arrow_cast([1,2,3], 'LargeList(Int64)') THEN 1 ELSE 0 END;
+----
+1
 
-# TODO: got arrow nested comparison error Enable this test after the issue is fixed
-# External error: query failed: DataFusion error: Arrow error: Invalid argument error: Nested comparison: LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) == LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) (hint: use make_comparator instead)
-#query I
-#SELECT CASE arrow_cast([1,2,3], 'LargeList(Int64)') WHEN [1,2,3] THEN 1 ELSE 0 END;
-#----
-#1
+query I
+SELECT CASE [1,2,3] WHEN arrow_cast(['1','2','3'], 'LargeList(Int64)') THEN 1 ELSE 0 END;
+----
+1
+
+query I
+SELECT CASE arrow_cast([1,2,3], 'LargeList(Int64)') WHEN [1,2,3] THEN 1 ELSE 0 END;
+----
+1
+
+query I
+SELECT CASE [[1,2],[2,4]] WHEN arrow_cast([[1,2],[2,4]], 'LargeList(LargeList(Int64))') THEN 1 ELSE 0 END;
+----
+1
+
+query error DataFusion error: type_coercion
+SELECT CASE [1,2,3] WHEN 'test' THEN 1 ELSE 0 END;
