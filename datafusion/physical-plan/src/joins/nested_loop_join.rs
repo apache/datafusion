@@ -1126,7 +1126,7 @@ mod tests {
         JoinFilter::new(filter_expression, column_indices, intermediate_schema)
     }
 
-    fn generate_columns(num_columns:usize, num_rows:i32) -> Vec<Vec<i32>> {
+    fn generate_columns(num_columns: usize, num_rows: i32) -> Vec<Vec<i32>> {
         let column = (1..=num_rows).collect();
         vec![column; num_columns]
     }
@@ -1134,7 +1134,13 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn join_maintains_right_order(
-        #[values(JoinType::Inner, JoinType::Right, JoinType::RightAnti, JoinType::RightSemi)] join_type: JoinType,
+        #[values(
+            JoinType::Inner,
+            JoinType::Right,
+            JoinType::RightAnti,
+            JoinType::RightSemi
+        )]
+        join_type: JoinType,
         #[values(1, 5, 10, 30)] num_batches: usize,
     ) -> Result<()> {
         let left_columns = generate_columns(3, 20);
@@ -1155,12 +1161,8 @@ mod tests {
 
         let filter = prepare_mod_join_filter();
 
-        let nested_loop_join = NestedLoopJoinExec::try_new(
-            left,
-            right,
-            Some(filter),
-            &join_type,
-        )?;
+        let nested_loop_join =
+            NestedLoopJoinExec::try_new(left, right, Some(filter), &join_type)?;
 
         let batches = nested_loop_join
             .execute(0, Arc::new(TaskContext::default()))?
@@ -1177,7 +1179,14 @@ mod tests {
                 _ => unreachable!(),
             };
             let columns: Vec<_> = right_column_indices
-                .into_iter().map(|i| batch.column(i).as_any().downcast_ref::<Int32Array>().unwrap())
+                .into_iter()
+                .map(|i| {
+                    batch
+                        .column(i)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                })
                 .collect();
 
             for row in 0..batch.num_rows() {
@@ -1187,9 +1196,30 @@ mod tests {
                     columns[2].value(row),
                 );
 
-                assert!(current_values.0 >= prev_values.0, "batch_index: {} row: {} current.0: {}, prev.0: {}", batch_index, row, current_values.0, prev_values.0);
-                assert!(current_values.1 >= prev_values.1, "batch_index: {} row: {} current.1: {}, prev.1: {}", batch_index, row, current_values.1, prev_values.1);
-                assert!(current_values.2 >= prev_values.2, "batch_index: {} row: {} current.2: {}, prev.2: {}", batch_index, row, current_values.2, prev_values.2);
+                assert!(
+                    current_values.0 >= prev_values.0,
+                    "batch_index: {} row: {} current.0: {}, prev.0: {}",
+                    batch_index,
+                    row,
+                    current_values.0,
+                    prev_values.0
+                );
+                assert!(
+                    current_values.1 >= prev_values.1,
+                    "batch_index: {} row: {} current.1: {}, prev.1: {}",
+                    batch_index,
+                    row,
+                    current_values.1,
+                    prev_values.1
+                );
+                assert!(
+                    current_values.2 >= prev_values.2,
+                    "batch_index: {} row: {} current.2: {}, prev.2: {}",
+                    batch_index,
+                    row,
+                    current_values.2,
+                    prev_values.2
+                );
 
                 prev_values = current_values;
             }
