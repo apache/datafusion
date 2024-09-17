@@ -250,3 +250,33 @@ async fn test_parameter_invalid_types() -> Result<()> {
 );
     Ok(())
 }
+
+#[tokio::test]
+async fn test_version_function() {
+    let expected_version = format!(
+        "Apache DataFusion {}, {} on {}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::ARCH,
+        std::env::consts::OS,
+    );
+
+    let ctx = SessionContext::new();
+    let results = ctx
+        .sql("select version()")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    // since width of columns varies between platforms, we can't compare directly
+    // so we just check that the version string is present
+
+    // expect a single string column with a single row
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].num_columns(), 1);
+    let version = results[0].column(0).as_string::<i32>();
+    assert_eq!(version.len(), 1);
+
+    assert_eq!(version.value(0), expected_version);
+}

@@ -136,12 +136,10 @@ impl SortTest {
                     .sort_spill_reservation_bytes,
             );
 
-            let runtime = Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
-                    .build()
-                    .unwrap(),
-            );
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
+                .build_arc()
+                .unwrap();
             SessionContext::new_with_config_rt(session_config, runtime)
         } else {
             SessionContext::new_with_config(session_config)

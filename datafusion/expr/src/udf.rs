@@ -20,14 +20,12 @@
 use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::{
-    ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
-};
+use crate::{ColumnarValue, Expr, ScalarFunctionImplementation, Signature};
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
-use std::fmt::{self, Debug, Formatter};
+use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -73,25 +71,6 @@ impl Hash for ScalarUDF {
 }
 
 impl ScalarUDF {
-    /// Create a new ScalarUDF from low level details.
-    ///
-    /// See  [`ScalarUDFImpl`] for a more convenient way to create a
-    /// `ScalarUDF` using trait objects
-    #[deprecated(since = "34.0.0", note = "please implement ScalarUDFImpl instead")]
-    pub fn new(
-        name: &str,
-        signature: &Signature,
-        return_type: &ReturnTypeFunction,
-        fun: &ScalarFunctionImplementation,
-    ) -> Self {
-        Self::new_from_impl(ScalarUdfLegacyWrapper {
-            name: name.to_owned(),
-            signature: signature.clone(),
-            return_type: Arc::clone(return_type),
-            fun: Arc::clone(fun),
-        })
-    }
-
     /// Create a new `ScalarUDF` from a `[ScalarUDFImpl]` trait object
     ///
     /// Note this is the same as using the `From` impl (`ScalarUDF::from`)
@@ -566,8 +545,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// documentation for more details on type coercion
     ///
     /// For example, if your function requires a floating point arguments, but the user calls
-    /// it like `my_func(1::int)` (aka with `1` as an integer), coerce_types could return `[DataType::Float64]`
-    /// to ensure the argument was cast to `1::double`
+    /// it like `my_func(1::int)` (i.e. with `1` as an integer), coerce_types can return `[DataType::Float64]`
+    /// to ensure the argument is converted to `1::double`
     ///
     /// # Parameters
     /// * `arg_types`: The argument types of the arguments  this function with
@@ -717,63 +696,5 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.hash_value().hash(hasher);
         self.aliases.hash(hasher);
         hasher.finish()
-    }
-}
-
-/// Implementation of [`ScalarUDFImpl`] that wraps the function style pointers
-/// of the older API (see <https://github.com/apache/datafusion/pull/8578>
-/// for more details)
-struct ScalarUdfLegacyWrapper {
-    /// The name of the function
-    name: String,
-    /// The signature (the types of arguments that are supported)
-    signature: Signature,
-    /// Function that returns the return type given the argument types
-    return_type: ReturnTypeFunction,
-    /// actual implementation
-    ///
-    /// The fn param is the wrapped function but be aware that the function will
-    /// be passed with the slice / vec of columnar values (either scalar or array)
-    /// with the exception of zero param function, where a singular element vec
-    /// will be passed. In that case the single element is a null array to indicate
-    /// the batch's row count (so that the generative zero-argument function can know
-    /// the result array size).
-    fun: ScalarFunctionImplementation,
-}
-
-impl Debug for ScalarUdfLegacyWrapper {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("ScalarUDF")
-            .field("name", &self.name)
-            .field("signature", &self.signature)
-            .field("fun", &"<FUNC>")
-            .finish()
-    }
-}
-
-impl ScalarUDFImpl for ScalarUdfLegacyWrapper {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // Old API returns an Arc of the datatype for some reason
-        let res = (self.return_type)(arg_types)?;
-        Ok(res.as_ref().clone())
-    }
-
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        (self.fun)(args)
-    }
-
-    fn aliases(&self) -> &[String] {
-        &[]
     }
 }

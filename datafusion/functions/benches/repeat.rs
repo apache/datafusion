@@ -31,13 +31,13 @@ fn create_args<O: OffsetSizeTrait>(
     size: usize,
     str_len: usize,
     repeat_times: i64,
-    use_string_view: bool,
+    force_view_types: bool,
 ) -> Vec<ColumnarValue> {
     let number_array = Arc::new(Int64Array::from(
         (0..size).map(|_| repeat_times).collect::<Vec<_>>(),
     ));
 
-    if use_string_view {
+    if force_view_types {
         let string_array =
             Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false));
         vec![
@@ -67,7 +67,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, repeat_times, true);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_string_view [size={}, repeat_times={}]",
                 size, repeat_times
             ),
@@ -76,7 +76,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, repeat_times, false);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
@@ -85,7 +85,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i64>(size, 32, repeat_times, false);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_large_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
@@ -103,7 +103,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, repeat_times, true);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_string_view [size={}, repeat_times={}]",
                 size, repeat_times
             ),
@@ -112,7 +112,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, repeat_times, false);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
@@ -121,7 +121,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i64>(size, 32, repeat_times, false);
         group.bench_function(
-            &format!(
+            format!(
                 "repeat_large_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),

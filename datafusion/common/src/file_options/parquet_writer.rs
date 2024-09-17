@@ -175,7 +175,7 @@ impl ParquetOptions {
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
             bloom_filter_on_read: _, // reads not used for writer props
-            schema_force_string_view: _,
+            schema_force_view_types: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -441,7 +441,7 @@ mod tests {
             maximum_buffered_record_batches_per_stream: defaults
                 .maximum_buffered_record_batches_per_stream,
             bloom_filter_on_read: defaults.bloom_filter_on_read,
-            schema_force_string_view: defaults.schema_force_string_view,
+            schema_force_view_types: defaults.schema_force_view_types,
         }
     }
 
@@ -542,8 +542,7 @@ mod tests {
                 maximum_buffered_record_batches_per_stream: global_options_defaults
                     .maximum_buffered_record_batches_per_stream,
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
-                schema_force_string_view: global_options_defaults
-                    .schema_force_string_view,
+                schema_force_view_types: global_options_defaults.schema_force_view_types,
             },
             column_specific_options,
             key_value_metadata,

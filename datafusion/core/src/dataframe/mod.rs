@@ -1452,28 +1452,31 @@ impl DataFrame {
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
         let window_func_exprs = find_window_exprs(&[expr.clone()]);
 
-        let (plan, mut col_exists, window_func) = if window_func_exprs.is_empty() {
-            (self.plan, false, false)
+        let (window_fn_str, plan) = if window_func_exprs.is_empty() {
+            (None, self.plan)
         } else {
             (
+                Some(window_func_exprs[0].to_string()),
                 LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?,
-                true,
-                true,
             )
         };
 
+        let mut col_exists = false;
         let new_column = expr.alias(name);
         let mut fields: Vec<Expr> = plan
             .schema()
             .iter()
-            .map(|(qualifier, field)| {
+            .filter_map(|(qualifier, field)| {
                 if field.name() == name {
                     col_exists = true;
-                    new_column.clone()
-                } else if window_func && qualifier.is_none() {
-                    col(Column::from((qualifier, field))).alias(name)
+                    Some(new_column.clone())
                 } else {
-                    col(Column::from((qualifier, field)))
+                    let e = col(Column::from((qualifier, field)));
+                    window_fn_str
+                        .as_ref()
+                        .filter(|s| *s == &e.to_string())
+                        .is_none()
+                        .then_some(e)
                 }
             })
             .collect();
@@ -2428,7 +2431,8 @@ mod tests {
         let df: Vec<RecordBatch> = df.select(aggr_expr)?.collect().await?;
 
         assert_batches_sorted_eq!(
-            ["+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
+            [
+                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
                 "| first_value | last_val | approx_distinct | approx_median | median | max | min  | c2 | c3   |",
                 "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
                 "|             |          |                 |               |        |     |      | 1  | -85  |",
@@ -2452,7 +2456,8 @@ mod tests {
                 "| -85         | 45       | 8               | -34           | 45     | 83  | -85  | 3  | -72  |",
                 "| -85         | 65       | 17              | -17           | 65     | 83  | -101 | 5  | -101 |",
                 "| -85         | 83       | 5               | -25           | 83     | 83  | -85  | 2  | -48  |",
-                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+"],
+                "+-------------+----------+-----------------+---------------+--------+-----+------+----+------+",
+            ],
             &df
         );
 
@@ -2973,7 +2978,8 @@ mod tests {
         Ok(())
     }
 
-    // Test issue: https://github.com/apache/datafusion/issues/11982
+    // Test issues: https://github.com/apache/datafusion/issues/11982
+    // and https://github.com/apache/datafusion/issues/12425
     // Window function was creating unwanted projection when using with_column() method.
     #[tokio::test]
     async fn test_window_function_with_column() -> Result<()> {
@@ -2982,19 +2988,24 @@ mod tests {
         let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
         let func = row_number().alias("row_num");
 
-        // Should create an additional column with alias 'r' that has window func results
+        // This first `with_column` results in a column without a `qualifier`
+        let df_impl = df_impl.with_column("s", col("c2") + col("c3"))?;
+
+        // This second `with_column` should only alias `func` as `"r"`
         let df = df_impl.with_column("r", func)?.limit(0, Some(2))?;
-        assert_eq!(4, df.schema().fields().len());
+
+        df.clone().show().await?;
+        assert_eq!(5, df.schema().fields().len());
 
         let df_results = df.clone().collect().await?;
         assert_batches_sorted_eq!(
             [
-                "+----+----+-----+---+",
-                "| c1 | c2 | c3  | r |",
-                "+----+----+-----+---+",
-                "| c  | 2  | 1   | 1 |",
-                "| d  | 5  | -40 | 2 |",
-                "+----+----+-----+---+",
+                "+----+----+-----+-----+---+",
+                "| c1 | c2 | c3  | s   | r |",
+                "+----+----+-----+-----+---+",
+                "| c  | 2  | 1   | 3   | 1 |",
+                "| d  | 5  | -40 | -35 | 2 |",
+                "+----+----+-----+-----+---+",
             ],
             &df_results
         );
@@ -3277,7 +3288,7 @@ mod tests {
     #[tokio::test]
     async fn with_column_renamed_case_sensitive() -> Result<()> {
         let config =
-            SessionConfig::from_string_hash_map(std::collections::HashMap::from([(
+            SessionConfig::from_string_hash_map(&std::collections::HashMap::from([(
                 "datafusion.sql_parser.enable_ident_normalization".to_owned(),
                 "false".to_owned(),
             )]))?;
@@ -3713,8 +3724,10 @@ mod tests {
     // Test issue: https://github.com/apache/datafusion/issues/12065
     #[tokio::test]
     async fn filtered_aggr_with_param_values() -> Result<()> {
-        let cfg = SessionConfig::new()
-            .set("datafusion.sql_parser.dialect", "PostgreSQL".into());
+        let cfg = SessionConfig::new().set(
+            "datafusion.sql_parser.dialect",
+            &ScalarValue::from("PostgreSQL"),
+        );
         let ctx = SessionContext::new_with_config(cfg);
         register_aggregate_csv(&ctx, "table1").await?;
 

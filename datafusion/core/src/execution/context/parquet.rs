@@ -106,7 +106,7 @@ mod tests {
     #[tokio::test]
     async fn read_with_glob_path_issue_2465() -> Result<()> {
         let config =
-            SessionConfig::from_string_hash_map(std::collections::HashMap::from([(
+            SessionConfig::from_string_hash_map(&std::collections::HashMap::from([(
                 "datafusion.execution.listing_table_ignore_subdirectory".to_owned(),
                 "false".to_owned(),
             )]))?;

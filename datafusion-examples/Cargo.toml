@@ -72,14 +72,14 @@ log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 num_cpus = { workspace = true }
 object_store = { workspace = true, features = ["aws", "http"] }
-prost = { version = "0.12", default-features = false }
-prost-derive = { version = "0.13", default-features = false }
+prost = { workspace = true }
+prost-derive = { workspace = true }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
-tonic = "0.11"
+tonic = "0.12.1"
 url = { workspace = true }
 uuid = "1.7"
 

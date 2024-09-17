@@ -1,0 +1,72 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# --------------------------------------
+# Test `substr()` with literal arguments
+# --------------------------------------
+include ./substr_literal.slt.part
+
+# --------------------------------------
+# Setup test tables with different physical string types (Utf8/Utf8View/LargeUtf8)
+# and repeat tests in `substr_table.slt.part`
+# --------------------------------------
+statement ok
+create table test_substr_base (
+    col1 VARCHAR
+) as values ('foo'), ('hello🌏世界'), ('💩'), ('ThisIsAVeryLongASCIIString'), (''), (NULL);
+
+#
+# Run1: Utf8
+#
+statement ok
+create table test_substr as
+select arrow_cast(col1, 'Utf8') as c1 from test_substr_base;
+
+include ./substr_table.slt.part
+
+statement ok
+drop table test_substr;
+
+#
+# Run2: Utf8View
+#
+statement ok
+create table test_substr as
+select arrow_cast(col1, 'Utf8View') as c1 from test_substr_base;
+
+include ./substr_table.slt.part
+
+statement ok
+drop table test_substr;
+
+#
+# Run3: LargeUtf8
+#
+statement ok
+create table test_substr as
+select arrow_cast(col1, 'LargeUtf8') as c1 from test_substr_base;
+
+include ./substr_table.slt.part
+
+statement ok
+drop table test_substr;
+
+# --------------------------------------
+# Cleanup
+# --------------------------------------
+statement ok
+drop table test_substr_base;

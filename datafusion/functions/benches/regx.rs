@@ -18,7 +18,7 @@
 extern crate criterion;
 
 use arrow::array::builder::StringBuilder;
-use arrow::array::{ArrayRef, StringArray};
+use arrow::array::{ArrayRef, AsArray, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_functions::regex::regexplike::regexp_like;
 use datafusion_functions::regex::regexpmatch::regexp_match;
@@ -122,12 +122,12 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_replace::<i32>(&[
-                    Arc::clone(&data),
-                    Arc::clone(&regex),
-                    Arc::clone(&replacement),
-                    Arc::clone(&flags),
-                ])
+                regexp_replace::<i32, _, _>(
+                    data.as_string::<i32>(),
+                    regex.as_string::<i32>(),
+                    replacement.as_string::<i32>(),
+                    Some(&flags),
+                )
                 .expect("regexp_replace should work on valid values"),
             )
         })

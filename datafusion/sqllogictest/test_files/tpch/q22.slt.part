@@ -99,11 +99,10 @@ physical_plan
 23)--------------------AggregateExec: mode=Final, gby=[], aggr=[avg(customer.c_acctbal)]
 24)----------------------CoalescePartitionsExec
 25)------------------------AggregateExec: mode=Partial, gby=[], aggr=[avg(customer.c_acctbal)]
-26)--------------------------ProjectionExec: expr=[c_acctbal@1 as c_acctbal]
-27)----------------------------CoalesceBatchesExec: target_batch_size=8192
-28)------------------------------FilterExec: c_acctbal@1 > Some(0),15,2 AND Use substr(c_phone@0, 1, 2) IN (SET) ([Literal { value: Utf8("13") }, Literal { value: Utf8("31") }, Literal { value: Utf8("23") }, Literal { value: Utf8("29") }, Literal { value: Utf8("30") }, Literal { value: Utf8("18") }, Literal { value: Utf8("17") }])
-29)--------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-30)----------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_phone, c_acctbal], has_header=false
+26)--------------------------CoalesceBatchesExec: target_batch_size=8192
+27)----------------------------FilterExec: c_acctbal@1 > Some(0),15,2 AND Use substr(c_phone@0, 1, 2) IN (SET) ([Literal { value: Utf8("13") }, Literal { value: Utf8("31") }, Literal { value: Utf8("23") }, Literal { value: Utf8("29") }, Literal { value: Utf8("30") }, Literal { value: Utf8("18") }, Literal { value: Utf8("17") }]), projection=[c_acctbal@1]
+28)------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+29)--------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl]]}, projection=[c_phone, c_acctbal], has_header=false
 
 
 query TIR

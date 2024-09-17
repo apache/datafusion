@@ -32,7 +32,7 @@ use std::sync::Arc;
 /// key and earlier.
 ///
 /// For example, given `SUM(amt) GROUP BY id, state` if the input is
-/// sorted by `state, when a new value of `state` is seen, all groups
+/// sorted by `state`, when a new value of `state` is seen, all groups
 /// with prior values of `state` can be emitted.
 ///
 /// The state is tracked like this:

@@ -509,21 +509,20 @@ impl TestCase {
 
         let table = scenario.table();
 
-        let rt_config = RuntimeEnvBuilder::new()
+        let mut builder = RuntimeEnvBuilder::new()
             // disk manager setting controls the spilling
             .with_disk_manager(disk_manager_config)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);
 
-        let runtime = if let Some(pool) = memory_pool {
-            rt_config.with_memory_pool(pool).build().unwrap()
-        } else {
-            rt_config.build().unwrap()
+        if let Some(pool) = memory_pool {
+            builder = builder.with_memory_pool(pool);
         };
+        let runtime = builder.build_arc().unwrap();
 
         // Configure execution
         let builder = SessionStateBuilder::new()
             .with_config(config)
-            .with_runtime_env(Arc::new(runtime))
+            .with_runtime_env(runtime)
             .with_default_features();
         let builder = match scenario.rules() {
             Some(rules) => builder.with_physical_optimizer_rules(rules),

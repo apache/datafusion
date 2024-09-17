@@ -120,7 +120,7 @@ fn optimize_projections(
     match plan {
         LogicalPlan::Projection(proj) => {
             return merge_consecutive_projections(proj)?.transform_data(|proj| {
-                rewrite_projection_given_requirements(proj, config, indices)
+                rewrite_projection_given_requirements(proj, config, &indices)
             })
         }
         LogicalPlan::Aggregate(aggregate) => {
@@ -497,7 +497,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     let name_preserver = NamePreserver::new_for_projection();
     let mut original_names = vec![];
     let new_exprs = expr.into_iter().map_until_stop_and_collect(|expr| {
-        original_names.push(name_preserver.save(&expr)?);
+        original_names.push(name_preserver.save(&expr));
 
         // do not rewrite top level Aliases (rewriter will remove all aliases within exprs)
         match expr {
@@ -519,9 +519,9 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         let new_exprs = new_exprs
             .data
             .into_iter()
-            .zip(original_names.into_iter())
+            .zip(original_names)
             .map(|(expr, original_name)| original_name.restore(expr))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         Projection::try_new(new_exprs, prev_projection.input).map(Transformed::yes)
     } else {
         // not rewritten, so put the projection back together
@@ -754,7 +754,7 @@ fn add_projection_on_top_if_helpful(
 fn rewrite_projection_given_requirements(
     proj: Projection,
     config: &dyn OptimizerConfig,
-    indices: RequiredIndicies,
+    indices: &RequiredIndicies,
 ) -> Result<Transformed<LogicalPlan>> {
     let Projection { expr, input, .. } = proj;
 

@@ -18,6 +18,7 @@
 //! Module containing helper methods/traits related to enabling
 //! dividing input stream into multiple output files at execution time
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use std::sync::Arc;
@@ -31,7 +32,11 @@ use arrow_array::builder::UInt64Builder;
 use arrow_array::cast::AsArray;
 use arrow_array::{downcast_dictionary_array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Schema};
-use datafusion_common::cast::as_string_array;
+use chrono::NaiveDate;
+use datafusion_common::cast::{
+    as_boolean_array, as_date32_array, as_date64_array, as_int32_array, as_int64_array,
+    as_string_array, as_string_view_array,
+};
 use datafusion_common::{exec_datafusion_err, DataFusionError};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -320,8 +325,10 @@ async fn hive_style_partitions_demuxer(
 fn compute_partition_keys_by_row<'a>(
     rb: &'a RecordBatch,
     partition_by: &'a [(String, DataType)],
-) -> Result<Vec<Vec<&'a str>>> {
+) -> Result<Vec<Vec<Cow<'a, str>>>> {
     let mut all_partition_values = vec![];
+
+    const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 
     // For the purposes of writing partitioned data, we can rely on schema inference
     // to determine the type of the partition cols in order to provide a more ergonomic
@@ -342,7 +349,59 @@ fn compute_partition_keys_by_row<'a>(
             DataType::Utf8 => {
                 let array = as_string_array(col_array)?;
                 for i in 0..rb.num_rows() {
-                    partition_values.push(array.value(i));
+                    partition_values.push(Cow::from(array.value(i)));
+                }
+            }
+            DataType::Utf8View => {
+                let array = as_string_view_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i)));
+                }
+            }
+            DataType::Boolean => {
+                let array = as_boolean_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::Date32 => {
+                let array = as_date32_array(col_array)?;
+                // ISO-8601/RFC3339 format - yyyy-mm-dd
+                let format = "%Y-%m-%d";
+                for i in 0..rb.num_rows() {
+                    let date = NaiveDate::from_num_days_from_ce_opt(
+                        EPOCH_DAYS_FROM_CE + array.value(i),
+                    )
+                    .unwrap()
+                    .format(format)
+                    .to_string();
+                    partition_values.push(Cow::from(date));
+                }
+            }
+            DataType::Date64 => {
+                let array = as_date64_array(col_array)?;
+                // ISO-8601/RFC3339 format - yyyy-mm-dd
+                let format = "%Y-%m-%d";
+                for i in 0..rb.num_rows() {
+                    let date = NaiveDate::from_num_days_from_ce_opt(
+                        EPOCH_DAYS_FROM_CE + (array.value(i) / 86_400_000) as i32,
+                    )
+                    .unwrap()
+                    .format(format)
+                    .to_string();
+                    partition_values.push(Cow::from(date));
+                }
+            }
+            DataType::Int32 => {
+                let array = as_int32_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
+                }
+            }
+            DataType::Int64 => {
+                let array = as_int64_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i).to_string()));
                 }
             }
             DataType::Dictionary(_, _) => {
@@ -354,7 +413,7 @@ fn compute_partition_keys_by_row<'a>(
 
                         for val in array.values() {
                             partition_values.push(
-                                val.ok_or(exec_datafusion_err!("Cannot partition by null value for column {}", col))?
+                                Cow::from(val.ok_or(exec_datafusion_err!("Cannot partition by null value for column {}", col))?),
                             );
                         }
                     },
@@ -377,13 +436,13 @@ fn compute_partition_keys_by_row<'a>(
 
 fn compute_take_arrays(
     rb: &RecordBatch,
-    all_partition_values: Vec<Vec<&str>>,
+    all_partition_values: Vec<Vec<Cow<str>>>,
 ) -> HashMap<Vec<String>, UInt64Builder> {
     let mut take_map = HashMap::new();
     for i in 0..rb.num_rows() {
         let mut part_key = vec![];
         for vals in all_partition_values.iter() {
-            part_key.push(vals[i].to_owned());
+            part_key.push(vals[i].clone().into());
         }
         let builder = take_map.entry(part_key).or_insert(UInt64Builder::new());
         builder.append_value(i as u64);

@@ -20,7 +20,8 @@ use arrow::array::{make_comparator, ArrayRef, Datum};
 use arrow::buffer::NullBuffer;
 use arrow::compute::SortOptions;
 use arrow::error::ArrowError;
-use datafusion_common::internal_err;
+use datafusion_common::DataFusionError;
+use datafusion_common::{arrow_datafusion_err, internal_err};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::operator::Operator;
@@ -84,6 +85,19 @@ pub fn apply_cmp_for_nested(
         })
     } else {
         internal_err!("invalid operator for nested")
+    }
+}
+
+/// Compare with eq with either nested or non-nested
+pub fn compare_with_eq(
+    lhs: &dyn Datum,
+    rhs: &dyn Datum,
+    is_nested: bool,
+) -> Result<BooleanArray> {
+    if is_nested {
+        compare_op_for_nested(Operator::Eq, lhs, rhs)
+    } else {
+        arrow::compute::kernels::cmp::eq(lhs, rhs).map_err(|e| arrow_datafusion_err!(e))
     }
 }
 

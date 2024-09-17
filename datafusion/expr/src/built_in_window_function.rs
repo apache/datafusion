@@ -38,7 +38,7 @@ impl fmt::Display for BuiltInWindowFunction {
 /// A [window function] built in to DataFusion
 ///
 /// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum BuiltInWindowFunction {
     /// rank of the current row with gaps; same as row_number of its first peer
     Rank,

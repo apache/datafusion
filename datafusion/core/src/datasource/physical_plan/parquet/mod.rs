@@ -685,10 +685,12 @@ impl ExecutionPlan for ParquetExec {
         partition_index: usize,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let projection = match self.base_config.file_column_projection_indices() {
-            Some(proj) => proj,
-            None => (0..self.base_config.file_schema.fields().len()).collect(),
-        };
+        let projection = self
+            .base_config
+            .file_column_projection_indices()
+            .unwrap_or_else(|| {
+                (0..self.base_config.file_schema.fields().len()).collect()
+            });
 
         let parquet_file_reader_factory = self
             .parquet_file_reader_factory
@@ -698,8 +700,7 @@ impl ExecutionPlan for ParquetExec {
                 ctx.runtime_env()
                     .object_store(&self.base_config.object_store_url)
                     .map(|store| {
-                        Arc::new(DefaultParquetFileReaderFactory::new(store))
-                            as Arc<dyn ParquetFileReaderFactory>
+                        Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
                     })
             })?;
 
@@ -725,10 +726,6 @@ impl ExecutionPlan for ParquetExec {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             schema_adapter_factory,
-            schema_force_string_view: self
-                .table_parquet_options
-                .global
-                .schema_force_string_view,
         };
 
         let stream =
@@ -2077,6 +2074,36 @@ mod tests {
         write_file(&path);
         let ctx = SessionContext::new();
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        ctx.register_listing_table("base_table", path, opt, None, None)
+            .await
+            .unwrap();
+        let sql = "select * from base_table where name='test02'";
+        let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+        assert_eq!(batch.len(), 1);
+        let expected = [
+            "+---------------------+----+--------+",
+            "| struct              | id | name   |",
+            "+---------------------+----+--------+",
+            "| {id: 4, name: aaa2} | 2  | test02 |",
+            "+---------------------+----+--------+",
+        ];
+        crate::assert_batches_eq!(expected, &batch);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_struct_filter_parquet_with_view_types() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().to_str().unwrap().to_string() + "/test.parquet";
+        write_file(&path);
+
+        let ctx = SessionContext::new();
+
+        let mut options = TableParquetOptions::default();
+        options.global.schema_force_view_types = true;
+        let opt =
+            ListingOptions::new(Arc::new(ParquetFormat::default().with_options(options)));
+
         ctx.register_listing_table("base_table", path, opt, None, None)
             .await
             .unwrap();

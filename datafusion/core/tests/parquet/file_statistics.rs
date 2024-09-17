@@ -197,12 +197,11 @@ fn get_cache_runtime_state() -> (
         .with_files_statistics_cache(Some(file_static_cache.clone()))
         .with_list_files_cache(Some(list_file_cache.clone()));
 
-    let rt = Arc::new(
-        RuntimeEnvBuilder::new()
-            .with_cache_manager(cache_config)
-            .build()
-            .expect("could not build runtime environment"),
-    );
+    let rt = RuntimeEnvBuilder::new()
+        .with_cache_manager(cache_config)
+        .build_arc()
+        .expect("could not build runtime environment");
+
     let state = SessionContext::new_with_config_rt(SessionConfig::default(), rt).state();
 
     (file_static_cache, list_file_cache, state)

@@ -183,7 +183,7 @@ fn take_optimizable_min(
                 // MIN/MAX with 0 rows is always null
                 if is_min(agg_expr) {
                     if let Ok(min_data_type) =
-                        ScalarValue::try_from(agg_expr.field().unwrap().data_type())
+                        ScalarValue::try_from(agg_expr.field().data_type())
                     {
                         return Some((min_data_type, agg_expr.name().to_string()));
                     }
@@ -229,7 +229,7 @@ fn take_optimizable_max(
                 // MIN/MAX with 0 rows is always null
                 if is_max(agg_expr) {
                     if let Ok(max_data_type) =
-                        ScalarValue::try_from(agg_expr.field().unwrap().data_type())
+                        ScalarValue::try_from(agg_expr.field().data_type())
                     {
                         return Some((max_data_type, agg_expr.name().to_string()));
                     }

@@ -673,11 +673,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_overallocation() -> Result<()> {
-        let runtime = Arc::new(
-            RuntimeEnvBuilder::new()
-                .with_memory_limit(100, 1.0)
-                .build()?,
-        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(100, 1.0)
+            .build_arc()?;
         let task_ctx = TaskContext::default().with_runtime(runtime);
         let task_ctx = Arc::new(task_ctx);
 

@@ -126,7 +126,7 @@ pub trait OptimizerConfig {
     fn query_execution_start_time(&self) -> DateTime<Utc>;
 
     /// Return alias generator used to generate unique aliases for subqueries
-    fn alias_generator(&self) -> Arc<AliasGenerator>;
+    fn alias_generator(&self) -> &Arc<AliasGenerator>;
 
     fn options(&self) -> &ConfigOptions;
 
@@ -204,8 +204,8 @@ impl OptimizerConfig for OptimizerContext {
         self.query_execution_start_time
     }
 
-    fn alias_generator(&self) -> Arc<AliasGenerator> {
-        Arc::clone(&self.alias_generator)
+    fn alias_generator(&self) -> &Arc<AliasGenerator> {
+        &self.alias_generator
     }
 
     fn options(&self) -> &ConfigOptions {

@@ -126,10 +126,14 @@ impl From<LimitExec> for Arc<dyn ExecutionPlan> {
 /// The helper takes an `ExecutionPlan` and a global (algorithm) state which is
 /// an instance of `GlobalRequirements` and modifies these parameters while
 /// checking if the limits can be pushed down or not.
+///
+/// If a limit is encountered, a [`TreeNodeRecursion::Stop`] is returned. Otherwise,
+/// return a [`TreeNodeRecursion::Continue`].
 pub fn pushdown_limit_helper(
     mut pushdown_plan: Arc<dyn ExecutionPlan>,
     mut global_state: GlobalRequirements,
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
+    // Extract limit, if exist, and return child inputs.
     if let Some(limit_exec) = extract_limit(&pushdown_plan) {
         // If we have fetch/skip info in the global state already, we need to
         // decide which one to continue with:
@@ -199,10 +203,17 @@ pub fn pushdown_limit_helper(
             // This plan is combining input partitions, so we need to add the
             // fetch info to plan if possible. If not, we must add a `LimitExec`
             // with the information from the global state.
+            let mut new_plan = plan_with_fetch;
+            // Execution plans can't (yet) handle skip, so if we have one,
+            // we still need to add a global limit
+            if global_state.skip > 0 {
+                new_plan =
+                    add_global_limit(new_plan, global_state.skip, global_state.fetch);
+            }
             global_state.fetch = skip_and_fetch;
             global_state.skip = 0;
             global_state.satisfied = true;
-            Ok((Transformed::yes(plan_with_fetch), global_state))
+            Ok((Transformed::yes(new_plan), global_state))
         } else if global_state.satisfied {
             // If the plan is already satisfied, do not add a limit:
             Ok((Transformed::no(pushdown_plan), global_state))
@@ -256,13 +267,17 @@ pub(crate) fn pushdown_limits(
     pushdown_plan: Arc<dyn ExecutionPlan>,
     global_state: GlobalRequirements,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    // Call pushdown_limit_helper.
+    // This will either extract the limit node (returning the child), or apply the limit pushdown.
     let (mut new_node, mut global_state) =
         pushdown_limit_helper(pushdown_plan, global_state)?;
 
+    // While limits exist, continue combining the global_state.
     while new_node.tnr == TreeNodeRecursion::Stop {
         (new_node, global_state) = pushdown_limit_helper(new_node.data, global_state)?;
     }
 
+    // Apply pushdown limits in children
     let children = new_node.data.children();
     let new_children = children
         .into_iter()
@@ -270,7 +285,6 @@ pub(crate) fn pushdown_limits(
             pushdown_limits(Arc::<dyn ExecutionPlan>::clone(child), global_state.clone())
         })
         .collect::<Result<_>>()?;
-
     new_node.data.with_new_children(new_children)
 }
 

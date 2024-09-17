@@ -522,17 +522,16 @@ physical_plan
 10)------------------CoalesceBatchesExec: target_batch_size=2
 11)--------------------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
 12)----------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
-13)------------------------ProjectionExec: expr=[c1@0 as c1]
-14)--------------------------CoalesceBatchesExec: target_batch_size=2
-15)----------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
-16)------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-17)--------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
-18)------ProjectionExec: expr=[1 as cnt]
-19)--------PlaceholderRowExec
-20)------ProjectionExec: expr=[LEAD(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
-21)--------BoundedWindowAggExec: wdw=[LEAD(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "LEAD(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
-22)----------ProjectionExec: expr=[1 as c1]
-23)------------PlaceholderRowExec
+13)------------------------CoalesceBatchesExec: target_batch_size=2
+14)--------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
+15)----------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+16)------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
+17)------ProjectionExec: expr=[1 as cnt]
+18)--------PlaceholderRowExec
+19)------ProjectionExec: expr=[LEAD(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
+20)--------BoundedWindowAggExec: wdw=[LEAD(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "LEAD(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
+21)----------ProjectionExec: expr=[1 as c1]
+22)------------PlaceholderRowExec
 
 
 ########

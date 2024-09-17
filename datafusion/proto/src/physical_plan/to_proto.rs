@@ -49,7 +49,7 @@ use crate::protobuf::{
 use super::PhysicalExtensionCodec;
 
 pub fn serialize_physical_aggr_expr(
-    aggr_expr: Arc<AggregateFunctionExpr>,
+    aggr_expr: AggregateFunctionExpr,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
     let expressions = serialize_physical_exprs(&aggr_expr.expressions(), codec)?;
@@ -171,7 +171,7 @@ pub fn serialize_physical_window_expr(
         expr.downcast_ref::<PlainAggregateWindowExpr>()
     {
         serialize_physical_window_aggr_expr(
-            plain_aggr_window_expr.get_aggregate_expr().as_ref(),
+            plain_aggr_window_expr.get_aggregate_expr(),
             window_frame,
             codec,
         )?
@@ -179,7 +179,7 @@ pub fn serialize_physical_window_expr(
         expr.downcast_ref::<SlidingAggregateWindowExpr>()
     {
         serialize_physical_window_aggr_expr(
-            sliding_aggr_window_expr.get_aggregate_expr().as_ref(),
+            sliding_aggr_window_expr.get_aggregate_expr(),
             window_frame,
             codec,
         )?

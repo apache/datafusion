@@ -43,7 +43,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         self.parse_sql_number(&n, true)
                     }
                     SQLExpr::Interval(interval) => {
-                        self.sql_interval_to_expr(true, interval, schema, planner_context)
+                        self.sql_interval_to_expr(true, interval)
                     }
                     // not a literal, apply negative operator on expression
                     _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(

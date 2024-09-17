@@ -41,7 +41,7 @@ use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
 /// See comments on [`WindowExpr`] for more details.
 #[derive(Debug)]
 pub struct PlainAggregateWindowExpr {
-    aggregate: Arc<AggregateFunctionExpr>,
+    aggregate: AggregateFunctionExpr,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
@@ -50,7 +50,7 @@ pub struct PlainAggregateWindowExpr {
 impl PlainAggregateWindowExpr {
     /// Create a new aggregate window function expression
     pub fn new(
-        aggregate: Arc<AggregateFunctionExpr>,
+        aggregate: AggregateFunctionExpr,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
         window_frame: Arc<WindowFrame>,
@@ -64,7 +64,7 @@ impl PlainAggregateWindowExpr {
     }
 
     /// Get aggregate expr of AggregateWindowExpr
-    pub fn get_aggregate_expr(&self) -> &Arc<AggregateFunctionExpr> {
+    pub fn get_aggregate_expr(&self) -> &AggregateFunctionExpr {
         &self.aggregate
     }
 }
@@ -79,7 +79,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        self.aggregate.field()
+        Ok(self.aggregate.field())
     }
 
     fn name(&self) -> &str {
@@ -177,7 +177,7 @@ impl AggregateWindowExpr for PlainAggregateWindowExpr {
     ) -> Result<ScalarValue> {
         if cur_range.start == cur_range.end {
             self.aggregate
-                .default_value(self.aggregate.field()?.data_type())
+                .default_value(self.aggregate.field().data_type())
         } else {
             // Accumulate any new rows that have entered the window:
             let update_bound = cur_range.end - last_range.end;

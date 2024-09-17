@@ -1,2 +1,0 @@
-c_custkey,c_name,c_address,c_nationkey,c_phone,c_acctbal,c_mktsegment,c_comment
-1,Customer#000000001,Address1,1,123-456-7890,5000.00,BUILDING,No comment

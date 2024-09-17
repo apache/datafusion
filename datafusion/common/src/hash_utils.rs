@@ -245,6 +245,8 @@ fn hash_struct_array(
     Ok(())
 }
 
+// only adding this `cfg` b/c this function is only used with this `cfg`
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_map_array(
     array: &MapArray,
     random_state: &RandomState,

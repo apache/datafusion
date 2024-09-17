@@ -26,12 +26,12 @@ official Apache DataFusion releases are provided as source artifacts.
 
 ## Releases
 
-The latest source release is [37.0.0][source-link] ([asc][asc-link],
+The latest source release is [41.0.0][source-link] ([asc][asc-link],
 [sha512][sha512-link]).
 
-[source-link]: https://www.apache.org/dyn/closer.lua/arrow/arrow-datafusion-37.0.0/apache-arrow-datafusion-37.0.0.tar.gz?action=download
-[asc-link]: https://downloads.apache.org/arrow/arrow-datafusion-37.0.0/apache-arrow-datafusion-37.0.0.tar.gz.asc
-[sha512-link]: https://downloads.apache.org/arrow/arrow-datafusion-37.0.0/apache-arrow-datafusion-37.0.0.tar.gz.sha512
+[source-link]: https://www.apache.org/dyn/closer.lua/datafusion/datafusion-41.0.0/apache-datafusion-41.0.0.tar.gz?action=download
+[asc-link]: https://downloads.apache.org/datafusion/datafusion-41.0.0/apache-datafusion-41.0.0.tar.gz.asc
+[sha512-link]: https://downloads.apache.org/datafusion/datafusion-41.0.0/apache-datafusion-41.0.0.tar.gz.sha512
 
 For previous releases, please check the [archive](https://archive.apache.org/dist/datafusion/).
 

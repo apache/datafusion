@@ -268,8 +268,8 @@ pub(crate) fn value_to_string(value: &Value) -> Option<String> {
         Value::DollarQuotedString(s) => Some(s.to_string()),
         Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
         Value::UnicodeStringLiteral(s) => Some(s.to_string()),
+        Value::EscapedStringLiteral(s) => Some(s.to_string()),
         Value::DoubleQuotedString(_)
-        | Value::EscapedStringLiteral(_)
         | Value::NationalStringLiteral(_)
         | Value::SingleQuotedByteStringLiteral(_)
         | Value::DoubleQuotedByteStringLiteral(_)

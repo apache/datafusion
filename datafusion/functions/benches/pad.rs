@@ -67,11 +67,11 @@ where
 fn create_args<O: OffsetSizeTrait>(
     size: usize,
     str_len: usize,
-    use_string_view: bool,
+    force_view_types: bool,
 ) -> Vec<ColumnarValue> {
     let length_array = Arc::new(create_primitive_array::<Int64Type>(size, 0.0, str_len));
 
-    if !use_string_view {
+    if !force_view_types {
         let string_array =
             Arc::new(create_string_array_with_len::<O>(size, 0.1, str_len));
         let fill_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, str_len));

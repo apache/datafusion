@@ -2900,12 +2900,10 @@ mod tests {
         ];
 
         // Disable DiskManager to prevent spilling
-        let runtime = Arc::new(
-            RuntimeEnvBuilder::new()
-                .with_memory_limit(100, 1.0)
-                .with_disk_manager(DiskManagerConfig::Disabled)
-                .build()?,
-        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(100, 1.0)
+            .with_disk_manager(DiskManagerConfig::Disabled)
+            .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
         for join_type in join_types {
@@ -2987,12 +2985,10 @@ mod tests {
         ];
 
         // Disable DiskManager to prevent spilling
-        let runtime = Arc::new(
-            RuntimeEnvBuilder::new()
-                .with_memory_limit(100, 1.0)
-                .with_disk_manager(DiskManagerConfig::Disabled)
-                .build()?,
-        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(100, 1.0)
+            .with_disk_manager(DiskManagerConfig::Disabled)
+            .build_arc()?;
         let session_config = SessionConfig::default().with_batch_size(50);
 
         for join_type in join_types {
@@ -3052,12 +3048,10 @@ mod tests {
         ];
 
         // Enable DiskManager to allow spilling
-        let runtime = Arc::new(
-            RuntimeEnvBuilder::new()
-                .with_memory_limit(100, 1.0)
-                .with_disk_manager(DiskManagerConfig::NewOs)
-                .build()?,
-        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(100, 1.0)
+            .with_disk_manager(DiskManagerConfig::NewOs)
+            .build_arc()?;
 
         for batch_size in [1, 50] {
             let session_config = SessionConfig::default().with_batch_size(batch_size);
@@ -3162,12 +3156,10 @@ mod tests {
         ];
 
         // Enable DiskManager to allow spilling
-        let runtime = Arc::new(
-            RuntimeEnvBuilder::new()
-                .with_memory_limit(500, 1.0)
-                .with_disk_manager(DiskManagerConfig::NewOs)
-                .build()?,
-        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(500, 1.0)
+            .with_disk_manager(DiskManagerConfig::NewOs)
+            .build_arc()?;
 
         for batch_size in [1, 50] {
             let session_config = SessionConfig::default().with_batch_size(batch_size);

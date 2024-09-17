@@ -66,7 +66,7 @@ macro_rules! export_functions {
 }
 
 /// Creates a singleton `ScalarUDF` of the `$UDF` function named `$GNAME` and a
-/// function named `$NAME` which returns that function named $NAME.
+/// function named `$NAME` which returns that singleton.
 ///
 /// This is used to ensure creating the list of `ScalarUDF` only happens once.
 macro_rules! make_udf_function {
@@ -75,7 +75,7 @@ macro_rules! make_udf_function {
         static $GNAME: std::sync::OnceLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
             std::sync::OnceLock::new();
 
-        #[doc = "Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) for "]
+        #[doc = "Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation "]
         #[doc = stringify!($UDF)]
         pub fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
             $GNAME

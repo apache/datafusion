@@ -252,6 +252,7 @@ last_value(expression [ORDER BY expression])
 - [regr_sxx](#regr_sxx)
 - [regr_syy](#regr_syy)
 - [regr_sxy](#regr_sxy)
+- [kurtosis_pop](#kurtosis_pop)
 
 ### `corr`
 
@@ -525,6 +526,19 @@ regr_sxy(expression_y, expression_x)
 - **expression_y**: Dependent variable.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 - **expression_x**: Independent variable.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `kurtosis_pop`
+
+Computes the excess kurtosis (Fisher’s definition) without bias correction.
+
+```
+kurtois_pop(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ## Approximate

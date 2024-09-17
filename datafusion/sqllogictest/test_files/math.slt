@@ -673,7 +673,7 @@ query error DataFusion error: Arrow error: Compute error: Signed integer overflo
 select lcm(2, 9223372036854775803);
 
 
-query error DataFusion error: Arrow error: Compute error: Overflow happened on: 2107754225 \^ 1221660777
+query error DataFusion error: Arrow error: Arithmetic overflow: Overflow happened on: 2107754225 \^ 1221660777
 select power(2107754225, 1221660777);
 
 # factorial overflow

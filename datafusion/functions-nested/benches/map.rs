@@ -23,6 +23,7 @@ use arrow_schema::{DataType, Field};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::prelude::ThreadRng;
 use rand::Rng;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::ScalarValue;
@@ -32,19 +33,22 @@ use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_nested::planner::NestedFunctionPlanner;
 
 fn keys(rng: &mut ThreadRng) -> Vec<String> {
-    let mut keys = vec![];
-    for _ in 0..1000 {
-        keys.push(rng.gen_range(0..9999).to_string());
+    let mut keys = HashSet::with_capacity(1000);
+
+    while keys.len() < 1000 {
+        keys.insert(rng.gen_range(0..10000).to_string());
     }
-    keys
+
+    keys.into_iter().collect()
 }
 
 fn values(rng: &mut ThreadRng) -> Vec<i32> {
-    let mut values = vec![];
-    for _ in 0..1000 {
-        values.push(rng.gen_range(0..9999));
+    let mut values = HashSet::with_capacity(1000);
+
+    while values.len() < 1000 {
+        values.insert(rng.gen_range(0..10000));
     }
-    values
+    values.into_iter().collect()
 }
 
 fn criterion_benchmark(c: &mut Criterion) {

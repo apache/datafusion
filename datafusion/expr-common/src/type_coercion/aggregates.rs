@@ -128,9 +128,11 @@ pub fn check_arg_count(
                 );
             }
         }
-        TypeSignature::UserDefined | TypeSignature::Numeric(_) => {
+        TypeSignature::UserDefined
+        | TypeSignature::Numeric(_)
+        | TypeSignature::Coercible(_) => {
             // User-defined signature is validated in `coerce_types`
-            // Numreic signature is validated in `get_valid_types`
+            // Numeric and Coercible signature is validated in `get_valid_types`
         }
         _ => {
             return internal_err!(

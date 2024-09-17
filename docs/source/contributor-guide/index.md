@@ -34,6 +34,10 @@ community as well as get more familiar with Rust and the relevant codebases.
 
 You can find a curated [good-first-issue] list to help you get started.
 
+[good-first-issue]: https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
+
+### Open Contribution and Assigning tickets
+
 DataFusion is an open contribution project, and thus there is no particular
 project imposed deadline for completing any issue or any restriction on who can
 work on an issue, nor how many people can work on an issue at the same time.
@@ -54,13 +58,27 @@ unable to make progress you should unassign the issue by using the `unassign me`
 link at the top of the issue page (and ask for help if are stuck) so that
 someone else can get involved in the work.
 
+### File Tickets to Discuss New Features
+
 If you plan to work on a new feature that doesn't have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
 helps avoid wasted effort by determining early if the feature is a good fit for
-DataFusion before too much time is invested. It also often helps to discuss your
-ideas with the community to get feedback on implementation.
+DataFusion before too much time is invested. Discussion on a ticket can help
+gather feedback from the community and is likely easier to discuss than a 1000
+line PR.
 
-[good-first-issue]: https://github.com/apache/datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
+If you open a ticket and it doesn't get any response, you can try `@`-mentioning
+recently active community members in the ticket to get their attention.
+
+### What Features are Good Fits for DataFusion?
+
+DataFusion is designed to highly extensible, and many features can be implemented
+as extensions without changing the core of DataFusion.
+
+We are [working on criteria for what features are good fits for DataFusion], and
+will update this section when we have more to share.
+
+[working on criteria for what features are good fits for datafusion]: https://github.com/apache/datafusion/issues/12357
 
 # Developer's guide
 
@@ -88,7 +106,7 @@ committer who approved your PR to help remind them to merge it.
 
 ## Creating Pull Requests
 
-We recommend splitting your contributions into multiple smaller focused PRs rather than large PRs (500+ lines) because:
+When possible, we recommend splitting your contributions into multiple smaller focused PRs rather than large PRs (500+ lines) because:
 
 1. The PR is more likely to be reviewed quickly -- our reviewers struggle to find the contiguous time needed to review large PRs.
 2. The PR discussions tend to be more focused and less likely to get lost among several different threads.
@@ -96,26 +114,52 @@ We recommend splitting your contributions into multiple smaller focused PRs rath
 
 If you are concerned that a larger design will be lost in a string of small PRs, creating a large draft PR that shows how they all work together can help.
 
-Note all commits in a PR are squashed when merged to the `main` branch so there is one commit per PR.
+Note all commits in a PR are squashed when merged to the `main` branch so there is one commit per PR after merge.
 
 # Reviewing Pull Requests
 
 Some helpful links:
 
-- [PRs Waiting for Review]
-- [Approved PRs Waiting for Merge]
+- [PRs Waiting for Review] on GitHub
+- [Approved PRs Waiting for Merge] on GitHub
 
 [prs waiting for review]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+-review%3Aapproved+-is%3Adraft+
 [approved prs waiting for merge]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+review%3Aapproved+-is%3Adraft
 
-When reviewing PRs, please remember our primary goal is to improve DataFusion and its community together. PR feedback should be constructive with the aim to help improve the code as well as the understanding of the contributor.
+When reviewing PRs, our primary goal is to improve DataFusion and its community together. PR feedback should be constructive with the aim to help improve the code as well as the understanding of the contributor.
 
 Please ensure any issues you raise contains a rationale and suggested alternative -- it is frustrating to be told "don't do it this way" without any clear reason or alternate provided.
 
 Some things to specifically check:
 
-1. Is the feature or fix covered sufficiently with tests (see `Test Organization` below)?
+1. Is the feature or fix covered sufficiently with tests (see the [Testing](testing.md) section)?
 2. Is the code clear, and fits the style of the existing codebase?
+
+## Performance Improvements
+
+Performance improvements are always welcome: performance is a key DataFusion
+feature.
+
+In general, the performance improvement from a change should be "enough" to
+justify any added code complexity. How much is "enough" is a judgement made by
+the committers, but generally means that the improvement should be noticeable in
+a real-world scenario and is greater than the noise of the benchmarking system.
+
+To help committers evaluate the potential improvement, performance PRs should
+in general be accompanied by benchmark results that demonstrate the improvement.
+
+The best way to demonstrate a performance improvement is with the existing
+benchmarks:
+
+- [System level SQL Benchmarks](https://github.com/apache/datafusion/tree/main/benchmarks)
+- Microbenchmarks such as those in [functions/benches](https://github.com/apache/datafusion/tree/main/datafusion/functions/benches)
+
+If there is no suitable existing benchmark, you can create a new one. It helps
+to isolate the effects of your change by creating a separate PR with the
+benchmark, and then a PR with the code change that improves the benchmark.
+
+[system level sql benchmarks]: https://github.com/apache/datafusion/tree/main/benchmarks
+[functions/benches]: https://github.com/apache/datafusion/tree/main/datafusion/functions/benches
 
 ## "Major" and "Minor" PRs
 

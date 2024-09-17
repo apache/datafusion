@@ -30,11 +30,9 @@ use datafusion_common_runtime::SpawnedTask;
 
 const TEST_DIRECTORY: &str = "test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
-const STACK_SIZE: usize = 2 * 1024 * 1024 + 512 * 1024; // 2.5 MBs, the default 2 MBs is currently too small
 
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
-        .thread_stack_size(STACK_SIZE)
         .enable_all()
         .build()
         .unwrap()

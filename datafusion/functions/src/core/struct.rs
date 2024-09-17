@@ -29,23 +29,23 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("struct requires at least one argument");
     }
 
-    let vec: Vec<_> = args
+    let fields = args
         .iter()
         .enumerate()
         .map(|(i, arg)| {
             let field_name = format!("c{i}");
-            Ok((
-                Arc::new(Field::new(
-                    field_name.as_str(),
-                    arg.data_type().clone(),
-                    true,
-                )),
-                Arc::clone(arg),
-            ))
+            Ok(Arc::new(Field::new(
+                field_name.as_str(),
+                arg.data_type().clone(),
+                true,
+            )))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?
+        .into();
 
-    Ok(Arc::new(StructArray::from(vec)))
+    let arrays = args.to_vec();
+
+    Ok(Arc::new(StructArray::new(fields, arrays, None)))
 }
 
 /// put values in a struct array.
@@ -53,6 +53,7 @@ fn struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays = ColumnarValue::values_to_arrays(args)?;
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
 }
+
 #[derive(Debug)]
 pub struct StructFunc {
     signature: Signature,
@@ -95,50 +96,5 @@ impl ScalarUDFImpl for StructFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         struct_expr(args)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::array::Int64Array;
-    use datafusion_common::cast::as_struct_array;
-    use datafusion_common::ScalarValue;
-
-    #[test]
-    fn test_struct() {
-        // struct(1, 2, 3) = {"c0": 1, "c1": 2, "c2": 3}
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-        ];
-        let struc = struct_expr(&args)
-            .expect("failed to initialize function struct")
-            .into_array(1)
-            .expect("Failed to convert to array");
-        let result =
-            as_struct_array(&struc).expect("failed to initialize function struct");
-        assert_eq!(
-            &Int64Array::from(vec![1]),
-            Arc::clone(result.column_by_name("c0").unwrap())
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-        );
-        assert_eq!(
-            &Int64Array::from(vec![2]),
-            Arc::clone(result.column_by_name("c1").unwrap())
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-        );
-        assert_eq!(
-            &Int64Array::from(vec![3]),
-            Arc::clone(result.column_by_name("c2").unwrap())
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-        );
     }
 }

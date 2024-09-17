@@ -459,7 +459,11 @@ compare_integer!(u8, u16, u32, u64);
 compare_integer!(IntervalDayTime, IntervalMonthDayNano);
 compare_float!(f16, f32, f64);
 
-pub fn new_heap(limit: usize, desc: bool, vt: DataType) -> Result<Box<dyn ArrowHeap>> {
+pub fn new_heap(
+    limit: usize,
+    desc: bool,
+    vt: DataType,
+) -> Result<Box<dyn ArrowHeap + Send>> {
     macro_rules! downcast_helper {
         ($vt:ty, $d:ident) => {
             return Ok(Box::new(PrimitiveHeap::<$vt>::new(limit, desc, vt)))

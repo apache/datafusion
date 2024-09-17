@@ -21,12 +21,12 @@ use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::{Datum, GenericListArray, Scalar};
+use arrow_buffer::BooleanBuffer;
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Operator, ScalarUDFImpl, Signature, Volatility};
-
-use datafusion_physical_expr_common::datum::compare_op_for_nested;
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
 use crate::utils::make_scalar_function;
@@ -96,44 +96,33 @@ impl ScalarUDFImpl for ArrayHas {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        // Always return null if the second argumet is null
-        // i.e. array_has(array, null) -> null
-        if let ColumnarValue::Scalar(s) = &args[1] {
-            if s.is_null() {
-                return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+        match &args[1] {
+            ColumnarValue::Array(array_needle) => {
+                // the needle is already an array, convert the haystack to an array of the same length
+                let haystack = args[0].to_owned().into_array(array_needle.len())?;
+                let array = array_has_inner_for_array(&haystack, array_needle)?;
+                Ok(ColumnarValue::Array(array))
             }
-        }
+            ColumnarValue::Scalar(scalar_needle) => {
+                // Always return null if the second argument is null
+                // i.e. array_has(array, null) -> null
+                if scalar_needle.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+                }
 
-        // first, identify if any of the arguments is an Array. If yes, store its `len`,
-        // as any scalar will need to be converted to an array of len `len`.
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
-
-        let is_scalar = len.is_none();
-
-        let result = match args[1] {
-            ColumnarValue::Array(_) => {
-                let args = ColumnarValue::values_to_arrays(args)?;
-                array_has_inner_for_array(&args[0], &args[1])
-            }
-            ColumnarValue::Scalar(_) => {
+                // since the needle is a scalar, convert it to an array of size 1
                 let haystack = args[0].to_owned().into_array(1)?;
-                let needle = args[1].to_owned().into_array(1)?;
+                let needle = scalar_needle.to_array_of_size(1)?;
                 let needle = Scalar::new(needle);
-                array_has_inner_for_scalar(&haystack, &needle)
+                let array = array_has_inner_for_scalar(&haystack, &needle)?;
+                if let ColumnarValue::Scalar(_) = &args[0] {
+                    // If both inputs are scalar, keeps output as scalar
+                    let scalar_value = ScalarValue::try_from_array(&array, 0)?;
+                    Ok(ColumnarValue::Scalar(scalar_value))
+                } else {
+                    Ok(ColumnarValue::Array(array))
+                }
             }
-        };
-
-        if is_scalar {
-            // If all inputs are scalar, keeps output as scalar
-            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(ColumnarValue::Scalar)
-        } else {
-            result.map(ColumnarValue::Array)
         }
     }
 
@@ -180,8 +169,9 @@ fn array_has_dispatch_for_array<O: OffsetSizeTrait>(
             continue;
         }
         let arr = arr.unwrap();
+        let is_nested = arr.data_type().is_nested();
         let needle_row = Scalar::new(needle.slice(i, 1));
-        let eq_array = compare_op_for_nested(Operator::Eq, &arr, &needle_row)?;
+        let eq_array = compare_with_eq(&arr, &needle_row, is_nested)?;
         let is_contained = eq_array.true_count() > 0;
         boolean_builder.append_value(is_contained)
     }
@@ -195,13 +185,17 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let haystack = as_generic_list_array::<O>(haystack)?;
     let values = haystack.values();
+    let is_nested = values.data_type().is_nested();
     let offsets = haystack.value_offsets();
     // If first argument is empty list (second argument is non-null), return false
     // i.e. array_has([], non-null element) -> false
     if values.len() == 0 {
-        return Ok(Arc::new(BooleanArray::from(vec![Some(false)])));
+        return Ok(Arc::new(BooleanArray::new(
+            BooleanBuffer::new_unset(haystack.len()),
+            None,
+        )));
     }
-    let eq_array = compare_op_for_nested(Operator::Eq, values, needle)?;
+    let eq_array = compare_with_eq(values, needle, is_nested)?;
     let mut final_contained = vec![None; haystack.len()];
     for (i, offset) in offsets.windows(2).enumerate() {
         let start = offset[0].to_usize().unwrap();
@@ -213,10 +207,9 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
         }
         let sliced_array = eq_array.slice(start, length);
         // For nested list, check number of nulls
-        if sliced_array.null_count() == length {
-            continue;
+        if sliced_array.null_count() != length {
+            final_contained[i] = Some(sliced_array.true_count() > 0);
         }
-        final_contained[i] = Some(sliced_array.true_count() > 0);
     }
 
     Ok(Arc::new(BooleanArray::from(final_contained)))

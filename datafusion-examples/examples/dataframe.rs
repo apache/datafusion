@@ -64,6 +64,12 @@ async fn main() -> Result<()> {
         .await?;
     parquet_df.describe().await.unwrap().show().await?;
 
+    let dyn_ctx = ctx.enable_url_table();
+    let df = dyn_ctx
+        .sql(&format!("SELECT * FROM '{}'", file_path.to_str().unwrap()))
+        .await?;
+    df.show().await?;
+
     Ok(())
 }
 

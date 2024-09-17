@@ -50,6 +50,11 @@ id7 value7
 id8 value8
 id9 value9
 
+# Ensure that local files can not be read by default (a potential security issue)
+# (url table is only supported when DynamicFileCatalog is enabled)
+statement error DataFusion error: Error during planning: table 'datafusion.public.../core/tests/data/quote.csv' not found
+select * from '../core/tests/data/quote.csv';
+
 query TT
 select * from csv_with_escape;
 ----
@@ -336,3 +341,24 @@ id message
 05)good test
 4 unquoted
 value end
+
+statement ok
+CREATE EXTERNAL TABLE stored_table_with_cr_terminator (
+col1 TEXT,
+col2 TEXT
+) STORED AS CSV
+LOCATION '../core/tests/data/cr_terminator.csv'
+OPTIONS ('format.terminator' E'\r', 'format.has_header' 'true');
+
+# TODO: It should be passed but got the error: External error: query failed: DataFusion error: Object Store error: Generic LocalFileSystem error: Requested range was invalid
+# See the issue: https://github.com/apache/datafusion/issues/12328
+# query TT
+# select * from stored_table_with_cr_terminator;
+# ----
+# id0 value0
+# id1 value1
+# id2 value2
+# id3 value3
+
+statement ok
+drop table stored_table_with_cr_terminator;

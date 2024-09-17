@@ -92,6 +92,9 @@ pub mod macros;
 pub mod string;
 make_stub_package!(string, "string_expressions");
 
+#[cfg(feature = "string_expressions")]
+mod regexp_common;
+
 /// Core datafusion expressions
 /// Enabled via feature flag `core_expressions`
 #[cfg(feature = "core_expressions")]

@@ -46,6 +46,51 @@ P1m1e1
 p1m1e1
 p2m1e1
 
+# REGEX
+query T rowsort
+SELECT s FROM test WHERE s ~ 'p[12].*';
+----
+p1
+p1e1
+p1m1e1
+p2
+p2e1
+p2m1e1
+
+# REGEX nocase
+query T rowsort
+SELECT s FROM test WHERE s ~* 'p[12].*';
+----
+P1
+P1e1
+P1m1e1
+p1
+p1e1
+p1m1e1
+p2
+p2e1
+p2m1e1
+
+# SIMILAR TO
+query T rowsort
+SELECT s FROM test WHERE s SIMILAR TO 'p[12].*';
+----
+p1
+p1e1
+p1m1e1
+p2
+p2e1
+p2m1e1
+
+# NOT SIMILAR TO
+query T rowsort
+SELECT s FROM test WHERE s NOT SIMILAR TO 'p[12].*';
+----
+P1
+P1e1
+P1m1e1
+e1
+
 # NOT LIKE
 query T rowsort
 SELECT s FROM test WHERE s NOT LIKE 'p1%';

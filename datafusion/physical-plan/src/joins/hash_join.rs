@@ -68,8 +68,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::expressions::UnKnownColumn;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
+use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use datafusion_expr::Operator;
@@ -528,24 +527,12 @@ impl HashJoinExec {
 
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
-            let projection_exprs = project_index_to_exprs(projection, &schema);
             // construct a map from the input expressions to the output expression of the Projection
             let projection_mapping =
-                ProjectionMapping::try_new(&projection_exprs, &schema)?;
+                ProjectionMapping::from_indices(projection, &schema)?;
             let out_schema = project_schema(&schema, Some(projection))?;
-            if let Partitioning::Hash(exprs, part) = output_partitioning {
-                let normalized_exprs = exprs
-                    .iter()
-                    .map(|expr| {
-                        eq_properties
-                            .project_expr(expr, &projection_mapping)
-                            .unwrap_or_else(|| {
-                                Arc::new(UnKnownColumn::new(&expr.to_string()))
-                            })
-                    })
-                    .collect();
-                output_partitioning = Partitioning::Hash(normalized_exprs, part);
-            }
+            output_partitioning =
+                output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
         Ok(PlanProperties::new(
@@ -596,25 +583,6 @@ impl DisplayAs for HashJoinExec {
             }
         }
     }
-}
-
-fn project_index_to_exprs(
-    projection_index: &[usize],
-    schema: &SchemaRef,
-) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
-    projection_index
-        .iter()
-        .map(|index| {
-            let field = schema.field(*index);
-            (
-                Arc::new(datafusion_physical_expr::expressions::Column::new(
-                    field.name(),
-                    *index,
-                )) as Arc<dyn PhysicalExpr>,
-                field.name().to_owned(),
-            )
-        })
-        .collect::<Vec<_>>()
 }
 
 impl ExecutionPlan for HashJoinExec {
@@ -1575,6 +1543,7 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+    use datafusion_physical_expr::PhysicalExpr;
 
     use hashbrown::raw::RawTable;
     use rstest::*;
@@ -3798,11 +3767,9 @@ mod tests {
         ];
 
         for join_type in join_types {
-            let runtime = Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_limit(100, 1.0)
-                    .build()?,
-            );
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(100, 1.0)
+                .build_arc()?;
             let task_ctx = TaskContext::default().with_runtime(runtime);
             let task_ctx = Arc::new(task_ctx);
 
@@ -3874,11 +3841,9 @@ mod tests {
         ];
 
         for join_type in join_types {
-            let runtime = Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_limit(100, 1.0)
-                    .build()?,
-            );
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(100, 1.0)
+                .build_arc()?;
             let session_config = SessionConfig::default().with_batch_size(50);
             let task_ctx = TaskContext::default()
                 .with_session_config(session_config)

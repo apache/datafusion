@@ -212,8 +212,8 @@ impl Eq for dyn UserDefinedLogicalNode {}
 /// This trait facilitates implementation of the [`UserDefinedLogicalNode`].
 ///
 /// See the example in
-/// [user_defined_plan.rs](../../tests/user_defined_plan.rs) for an
-/// example of how to use this extension API.
+/// [user_defined_plan.rs](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/user_defined/user_defined_plan.rs)
+/// file for an example of how to use this extension API.
 pub trait UserDefinedLogicalNodeCore:
     fmt::Debug + Eq + Hash + Sized + Send + Sync + 'static
 {

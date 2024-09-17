@@ -2082,15 +2082,14 @@ physical_plan
 01)ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id]
 02)--NestedLoopJoinExec: join_type=Inner, filter=t1_id@0 > t2_id@1
 03)----CoalescePartitionsExec
-04)------ProjectionExec: expr=[t2_id@0 as t2_id]
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------FilterExec: t2_int@1 > 1
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------MemoryExec: partitions=1, partition_sizes=[1]
-09)----CoalesceBatchesExec: target_batch_size=2
-10)------FilterExec: t1_id@0 > 10
-11)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)----------MemoryExec: partitions=1, partition_sizes=[1]
+04)------CoalesceBatchesExec: target_batch_size=2
+05)--------FilterExec: t2_int@1 > 1, projection=[t2_id@0]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------MemoryExec: partitions=1, partition_sizes=[1]
+08)----CoalesceBatchesExec: target_batch_size=2
+09)------FilterExec: t1_id@0 > 10
+10)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)----------MemoryExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT join_t1.t1_id, join_t2.t2_id
@@ -4143,10 +4142,9 @@ physical_plan
 04)------CoalesceBatchesExec: target_batch_size=3
 05)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@3, currency_from@1)], filter=ts@0 >= ts@1, projection=[ts@0, sn@1, amount@2, currency@3, rate@6]
 06)----------MemoryExec: partitions=1, partition_sizes=[0]
-07)----------ProjectionExec: expr=[ts@0 as ts, currency_from@1 as currency_from, rate@3 as rate]
-08)------------CoalesceBatchesExec: target_batch_size=3
-09)--------------FilterExec: currency_to@2 = USD
-10)----------------MemoryExec: partitions=1, partition_sizes=[0]
+07)----------CoalesceBatchesExec: target_batch_size=3
+08)------------FilterExec: currency_to@2 = USD, projection=[ts@0, currency_from@1, rate@3]
+09)--------------MemoryExec: partitions=1, partition_sizes=[0]
 
 statement ok
 DROP TABLE sales_global;

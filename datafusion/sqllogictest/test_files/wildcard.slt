@@ -108,6 +108,31 @@ SELECT t1.*, tb2.* FROM t1 JOIN t2 tb2 ON t2_id = t1_id ORDER BY t1_id
 statement error Error during planning: Invalid qualifier agg
 SELECT agg.* FROM aggregate_simple ORDER BY c1
 
+# select_upper_case_qualified_wildcard
+query ITI
+SELECT PUBLIC.t1.* FROM PUBLIC.t1
+----
+11 a 1
+22 b 2
+33 c 3
+44 d 4
+
+query ITI
+SELECT PUBLIC.t1.* FROM public.t1
+----
+11 a 1
+22 b 2
+33 c 3
+44 d 4
+
+query ITI
+SELECT public.t1.* FROM PUBLIC.t1
+----
+11 a 1
+22 b 2
+33 c 3
+44 d 4
+
 ########
 # Clean up after the test
 ########

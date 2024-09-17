@@ -17,7 +17,7 @@
 
 /// TODO: Move this to functions-aggregate module
 /// Enum used for differentiating population and sample for statistical functions
-#[derive(Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum StatsType {
     /// Population
     Population,

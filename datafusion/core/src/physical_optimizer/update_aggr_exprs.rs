@@ -118,7 +118,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
 ///
 /// # Parameters
 ///
-/// * `aggr_exprs` - A vector of `Arc<AggregateFunctionExpr>` representing the
+/// * `aggr_exprs` - A vector of `AggregateFunctionExpr` representing the
 ///   aggregate expressions to be optimized.
 /// * `prefix_requirement` - An array slice representing the ordering
 ///   requirements preceding the aggregate expressions.
@@ -131,10 +131,10 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
 /// successfully. Any errors occurring during the conversion process are
 /// passed through.
 fn try_convert_aggregate_if_better(
-    aggr_exprs: Vec<Arc<AggregateFunctionExpr>>,
+    aggr_exprs: Vec<AggregateFunctionExpr>,
     prefix_requirement: &[PhysicalSortRequirement],
     eq_properties: &EquivalenceProperties,
-) -> Result<Vec<Arc<AggregateFunctionExpr>>> {
+) -> Result<Vec<AggregateFunctionExpr>> {
     aggr_exprs
         .into_iter()
         .map(|aggr_expr| {

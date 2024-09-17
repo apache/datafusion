@@ -1685,6 +1685,9 @@ SELECT i + i FROM test WHERE i > 2;
 ----
 6
 
+statement ok
+DROP TABLE test;
+
 query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from 'I AM NOT A TIMESTAMP': error parsing date
 SELECT to_timestamp('I AM NOT A TIMESTAMP');
 
@@ -1741,3 +1744,15 @@ select a from t;
 
 statement ok
 set datafusion.optimizer.max_passes=3;
+
+# Test issue: https://github.com/apache/datafusion/issues/12183
+statement ok
+CREATE TABLE test(a BIGINT) AS VALUES (1);
+
+query I
+SELECT "test.a" FROM (SELECT a AS "test.a" FROM test)
+----
+1
+
+statement ok
+DROP TABLE test;

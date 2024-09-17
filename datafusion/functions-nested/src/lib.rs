@@ -44,6 +44,8 @@ pub mod length;
 pub mod make_array;
 pub mod map;
 pub mod map_extract;
+pub mod map_keys;
+pub mod map_values;
 pub mod planner;
 pub mod position;
 pub mod range;
@@ -77,6 +79,7 @@ pub mod expr_fn {
     pub use super::distance::array_distance;
     pub use super::empty::array_empty;
     pub use super::except::array_except;
+    pub use super::extract::array_any_value;
     pub use super::extract::array_element;
     pub use super::extract::array_pop_back;
     pub use super::extract::array_pop_front;
@@ -85,6 +88,8 @@ pub mod expr_fn {
     pub use super::length::array_length;
     pub use super::make_array::make_array;
     pub use super::map_extract::map_extract;
+    pub use super::map_keys::map_keys;
+    pub use super::map_values::map_values;
     pub use super::position::array_position;
     pub use super::position::array_positions;
     pub use super::range::gen_series;
@@ -124,6 +129,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         extract::array_pop_back_udf(),
         extract::array_pop_front_udf(),
         extract::array_slice_udf(),
+        extract::array_any_value_udf(),
         make_array::make_array_udf(),
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),
@@ -149,6 +155,8 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         replace::array_replace_udf(),
         map::map_udf(),
         map_extract::map_extract_udf(),
+        map_keys::map_keys_udf(),
+        map_values::map_values_udf(),
     ]
 }
 

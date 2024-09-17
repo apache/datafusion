@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front and array_pop_back functions.
+//! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front, array_pop_back, and array_any_value functions.
 
 use arrow::array::Array;
 use arrow::array::ArrayRef;
@@ -67,6 +67,14 @@ make_udf_expr_and_func!(
     array,
     "returns the array without the last element.",
     array_pop_back_udf
+);
+
+make_udf_expr_and_func!(
+    ArrayAnyValue,
+    array_any_value,
+    array,
+    "returns the first non-null element in the array.",
+    array_any_value_udf
 );
 
 #[derive(Debug)]
@@ -686,4 +694,116 @@ where
             .collect::<Vec<i64>>(),
     );
     general_array_slice::<O>(array, &from_array, &to_array, None)
+}
+
+#[derive(Debug)]
+pub(super) struct ArrayAnyValue {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArrayAnyValue {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::array(Volatility::Immutable),
+            aliases: vec![String::from("list_any_value")],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayAnyValue {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_any_value"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            List(field)
+            | LargeList(field)
+            | FixedSizeList(field, _) => Ok(field.data_type().clone()),
+            _ => plan_err!(
+                "array_any_value can only accept List, LargeList or FixedSizeList as the argument"
+            ),
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        make_scalar_function(array_any_value_inner)(args)
+    }
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+}
+
+fn array_any_value_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("array_any_value expects one argument");
+    }
+
+    match &args[0].data_type() {
+        List(_) => {
+            let array = as_list_array(&args[0])?;
+            general_array_any_value::<i32>(array)
+        }
+        LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            general_array_any_value::<i64>(array)
+        }
+        data_type => exec_err!("array_any_value does not support type: {:?}", data_type),
+    }
+}
+
+fn general_array_any_value<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(array.len());
+
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        let start = offset_window[0];
+        let end = offset_window[1];
+        let len = end - start;
+
+        // array is null
+        if len == O::usize_as(0) {
+            mutable.extend_nulls(1);
+            continue;
+        }
+
+        let row_value = array.value(row_index);
+        match row_value.nulls() {
+            Some(row_nulls_buffer) => {
+                // nulls are present in the array so try to take the first valid element
+                if let Some(first_non_null_index) =
+                    row_nulls_buffer.valid_indices().next()
+                {
+                    let index = start.as_usize() + first_non_null_index;
+                    mutable.extend(0, index, index + 1)
+                } else {
+                    // all the elements in the array are null
+                    mutable.extend_nulls(1);
+                }
+            }
+            None => {
+                // no nulls are present in the array so take the first element
+                let index = start.as_usize();
+                mutable.extend(0, index, index + 1);
+            }
+        }
+    }
+
+    let data = mutable.freeze();
+    Ok(arrow::array::make_array(data))
 }
