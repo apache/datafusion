@@ -1170,7 +1170,7 @@ mod tests {
             .await?;
 
         // Make sure that the order of the right side is maintained
-        let mut prev_values = (i32::MIN, i32::MIN, i32::MIN);
+        let mut prev_values = [i32::MIN, i32::MIN, i32::MIN];
 
         for (batch_index, batch) in batches.iter().enumerate() {
             let right_column_indices = match join_type {
@@ -1190,37 +1190,22 @@ mod tests {
                 .collect();
 
             for row in 0..batch.num_rows() {
-                let current_values = (
+                let current_values = [
                     columns[0].value(row),
                     columns[1].value(row),
                     columns[2].value(row),
-                );
-
+                ];
                 assert!(
-                    current_values.0 >= prev_values.0,
-                    "batch_index: {} row: {} current.0: {}, prev.0: {}",
+                    current_values
+                        .into_iter()
+                        .zip(prev_values)
+                        .all(|(current, prev)| current >= prev),
+                    "batch_index: {} row: {} current: {:?}, prev: {:?}",
                     batch_index,
                     row,
-                    current_values.0,
-                    prev_values.0
+                    current_values,
+                    prev_values
                 );
-                assert!(
-                    current_values.1 >= prev_values.1,
-                    "batch_index: {} row: {} current.1: {}, prev.1: {}",
-                    batch_index,
-                    row,
-                    current_values.1,
-                    prev_values.1
-                );
-                assert!(
-                    current_values.2 >= prev_values.2,
-                    "batch_index: {} row: {} current.2: {}, prev.2: {}",
-                    batch_index,
-                    row,
-                    current_values.2,
-                    prev_values.2
-                );
-
                 prev_values = current_values;
             }
         }
