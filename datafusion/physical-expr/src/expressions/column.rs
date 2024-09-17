@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Column expression
+//! Physical column reference: [`Column`]
 
 use std::any::Any;
 use std::hash::{Hash, Hasher};
@@ -33,14 +33,48 @@ use datafusion_expr::ColumnarValue;
 use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 
 /// Represents the column at a given index in a RecordBatch
+///
+/// This is a physical expression that represents a column at a given index in an
+/// arrow [`Schema`] / [`RecordBatch`].
+///
+/// Unlike the [logical `Expr::Column`], this expression is always resolved by schema index,
+/// even though it does have a name. This is because the physical plan is always
+/// resolved to a specific schema and there is no concept of "relation"
+///
+/// # Example:
+///  If the schema is `a`, `b`, `c` the `Column` for `b` would be represented by
+///  index 1, since `b` is the second colum in the schema.
+///
+/// ```
+/// # use datafusion_physical_expr::expressions::Column;
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// // Schema with columns a, b, c
+/// let schema = Schema::new(vec![
+///    Field::new("a", DataType::Int32, false),
+///    Field::new("b", DataType::Int32, false),
+///    Field::new("c", DataType::Int32, false),
+/// ]);
+///
+/// // reference to column b is index 1
+/// let column_b = Column::new_with_schema("b", &schema).unwrap();
+/// assert_eq!(column_b.index(), 1);
+///
+/// // reference to column c is index 2
+/// let column_c = Column::new_with_schema("c", &schema).unwrap();
+/// assert_eq!(column_c.index(), 2);
+/// ```
+/// [logical `Expr::Column`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html#variant.Column
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct Column {
+    /// The name of the column (used for debugging and display purposes)
     name: String,
+    /// The index of the column in its schema
     index: usize,
 }
 
 impl Column {
-    /// Create a new column expression
+    /// Create a new column expression which references the
+    /// column with the given index in the schema.
     pub fn new(name: &str, index: usize) -> Self {
         Self {
             name: name.to_owned(),
@@ -48,17 +82,18 @@ impl Column {
         }
     }
 
-    /// Create a new column expression based on column name and schema
+    /// Create a new column expression which references the
+    /// column with the given name in the schema
     pub fn new_with_schema(name: &str, schema: &Schema) -> Result<Self> {
         Ok(Column::new(name, schema.index_of(name)?))
     }
 
-    /// Get the column name
+    /// Get the column's name
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Get the column index
+    /// Get the column's schema index
     pub fn index(&self) -> usize {
         self.index
     }
@@ -128,7 +163,10 @@ impl Column {
             internal_err!(
                 "PhysicalExpr Column references column '{}' at index {} (zero-based) but input schema only has {} columns: {:?}",
                 self.name,
-                self.index, input_schema.fields.len(), input_schema.fields().iter().map(|f| f.name().clone()).collect::<Vec<String>>())
+                self.index,
+                input_schema.fields.len(),
+                input_schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>()
+            )
         }
     }
 }

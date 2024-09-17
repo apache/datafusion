@@ -43,7 +43,7 @@ pub fn suggest_valid_function(
     input_function_name: &str,
     is_window_func: bool,
     ctx: &dyn ContextProvider,
-) -> String {
+) -> Result<String> {
     let valid_funcs = if is_window_func {
         // All aggregate functions and builtin window functions
         let mut funcs = Vec::new();
@@ -66,8 +66,8 @@ pub fn suggest_valid_function(
 }
 
 /// Find the closest matching string to the target string in the candidates list, using edit distance(case insensitive)
-/// Input `candidates` must not be empty otherwise it will panic
-fn find_closest_match(candidates: Vec<String>, target: &str) -> String {
+/// Input `candidates` must not be empty otherwise an error is returned.
+fn find_closest_match(candidates: Vec<String>, target: &str) -> Result<String> {
     let target = target.to_lowercase();
     candidates
         .into_iter()
@@ -77,7 +77,9 @@ fn find_closest_match(candidates: Vec<String>, target: &str) -> String {
                 &target,
             )
         })
-        .expect("No candidates provided.") // Panic if `candidates` argument is empty
+        .ok_or_else(|| {
+            internal_datafusion_err!("No functions registered with this context.")
+        })
 }
 
 /// Arguments to for a function call extracted from the SQL AST
@@ -354,7 +356,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Could not find the relevant function, so return an error
         let suggested_func_name =
-            suggest_valid_function(&name, is_function_window, self.context_provider);
+            suggest_valid_function(&name, is_function_window, self.context_provider)?;
         plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
     }
 

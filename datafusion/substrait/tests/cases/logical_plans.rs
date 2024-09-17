@@ -37,7 +37,7 @@ mod tests {
         // ./isthmus-cli/build/graal/isthmus --create "create table data (d boolean)" "select not d from data"
         let proto_plan =
             read_json("tests/testdata/test_plans/select_not_bool.substrait.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan);
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx, &proto_plan).await?;
 
         assert_eq!(
@@ -62,7 +62,7 @@ mod tests {
         // ./isthmus-cli/build/graal/isthmus --create "create table data (d int, part int, ord int)" "select sum(d) OVER (PARTITION BY part ORDER BY ord ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) AS lead_expr from data"
         let proto_plan =
             read_json("tests/testdata/test_plans/select_window.substrait.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan);
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx, &proto_plan).await?;
 
         assert_eq!(
@@ -81,7 +81,7 @@ mod tests {
         // This test confirms that reading a plan with non-nullable lists works as expected.
         let proto_plan =
             read_json("tests/testdata/test_plans/non_nullable_lists.substrait.json");
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan);
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx, &proto_plan).await?;
 
         assert_eq!(format!("{}", &plan), "Values: (List([1, 2]))");

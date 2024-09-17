@@ -429,7 +429,7 @@ impl DefaultPhysicalPlanner {
         Ok(Some(plan))
     }
 
-    /// Given a single LogicalPlan node, map it to it's physical ExecutionPlan counterpart.
+    /// Given a single LogicalPlan node, map it to its physical ExecutionPlan counterpart.
     async fn map_logical_node_to_physical(
         &self,
         node: &LogicalPlan,

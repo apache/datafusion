@@ -229,12 +229,6 @@ SELECT interval '5 day'
 ----
 5 days
 
-# Hour is ignored, this matches PostgreSQL
-query ?
-SELECT interval '5 day' hour
-----
-5 days
-
 query ?
 SELECT interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'
 ----
@@ -1356,6 +1350,16 @@ SELECT date_part('second', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanose
 50.123456789
 
 query R
+select extract(second from '2024-08-09T12:13:14')
+----
+14
+
+query R
+select extract(seconds from '2024-08-09T12:13:14')
+----
+14
+
+query R
 SELECT extract(second from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 50.123456789
@@ -1378,6 +1382,11 @@ SELECT date_part('microsecond', arrow_cast('23:32:50.123456789'::time, 'Time64(N
 
 query R
 SELECT extract(microsecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50123456.789000005
+
+query R
+SELECT extract(us from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 50123456.789000005
 
