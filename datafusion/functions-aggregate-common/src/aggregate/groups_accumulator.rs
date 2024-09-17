@@ -367,7 +367,7 @@ impl<T> VecAllocExt for Vec<T> {
     }
 }
 
-fn get_filter_at_indices(
+pub fn get_filter_at_indices(
     opt_filter: Option<&BooleanArray>,
     indices: &PrimitiveArray<UInt32Type>,
 ) -> Result<Option<ArrayRef>> {

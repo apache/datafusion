@@ -21,9 +21,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use crate::aggregates::group_values::{
-    new_group_values, GroupValuesLike,
-};
+use crate::aggregates::group_values::{new_group_values, GroupValuesLike};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
@@ -37,8 +35,8 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
-use arrow::array::*;
 use arrow::datatypes::SchemaRef;
+use arrow::array::*;
 use arrow_schema::SortOptions;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -793,62 +791,14 @@ impl GroupedHashAggregateStream {
             evaluate_optional(&self.filter_expressions, &batch)?
         };
 
-        {
-            let group_values = self.group_values.as_single_mut();
-            for group_cols in &group_by_values {
-                // calculate the group indices for each input row
-                let starting_num_groups = group_values.len();
-                group_values.intern(group_cols, &mut self.current_group_indices[0])?;
-                let group_indices = &self.current_group_indices[0];
-
-                // Update ordering information if necessary
-                let total_num_groups = group_values.len();
-                if total_num_groups > starting_num_groups {
-                    self.group_ordering.new_groups(
-                        group_cols,
-                        group_indices,
-                        total_num_groups,
-                    )?;
-                }
-
-                // Gather the inputs to call the actual accumulator
-                let t = self.accumulators[0]
-                    .iter_mut()
-                    .zip(input_values.iter())
-                    .zip(filter_values.iter());
-
-                for ((acc, values), opt_filter) in t {
-                    let opt_filter =
-                        opt_filter.as_ref().map(|filter| filter.as_boolean());
-
-                    // Call the appropriate method on each aggregator with
-                    // the entire input row and the relevant group indexes
-                    match self.mode {
-                        AggregateMode::Partial
-                        | AggregateMode::Single
-                        | AggregateMode::SinglePartitioned
-                            if !self.spill_state.is_stream_merging =>
-                        {
-                            acc.update_batch(
-                                values,
-                                group_indices,
-                                opt_filter,
-                                total_num_groups,
-                            )?;
-                        }
-                        _ => {
-                            // if aggregation is over intermediate states,
-                            // use merge
-                            acc.merge_batch(
-                                values,
-                                group_indices,
-                                opt_filter,
-                                total_num_groups,
-                            )?;
-                        }
-                    }
-                }
-            }
+        if !self.group_values.is_partitioned() {
+            self.group_aggregate_batch_single(
+                &group_by_values,
+                &input_values,
+                &filter_values,
+            )?;
+        } else {
+            self.group_aggregate_batch_partitioned()?;
         }
 
         match self.update_memory_reservation() {
@@ -861,6 +811,123 @@ impl GroupedHashAggregateStream {
             }
             other => other,
         }
+    }
+
+    fn group_aggregate_batch_partitioned(&self) -> Result<()> {
+        todo!()
+        // assert!(self.mode == AggregateMode::Partial && matches!(self.group_ordering, GroupOrdering::None));
+
+        // let group_values = self.group_values.as_partitioned_mut();
+        // for group_cols in &group_by_values {
+        //     // calculate the group indices for each input row
+        //     let starting_num_groups = group_values.len();
+        //     group_values.intern(group_cols, &mut self.current_group_indices, &mut self.current_row_indices)?;
+        //     let group_indices = &self.current_group_indices[0];
+
+        //     // Gather the inputs to call the actual accumulator
+        //     let t = self.accumulators[0]
+        //         .iter_mut()
+        //         .zip(input_values.iter())
+        //         .zip(filter_values.iter());
+
+        //     for ((acc, values), opt_filter) in t {
+        //         let opt_filter =
+        //             opt_filter.as_ref().map(|filter| filter.as_boolean());
+
+        //         // Call the appropriate method on each aggregator with
+        //         // the entire input row and the relevant group indexes
+        //         match self.mode {
+        //             AggregateMode::Partial
+        //             | AggregateMode::Single
+        //             | AggregateMode::SinglePartitioned
+        //                 if !self.spill_state.is_stream_merging =>
+        //             {
+        //                 acc.update_batch(
+        //                     values,
+        //                     group_indices,
+        //                     opt_filter,
+        //                     total_num_groups,
+        //                 )?;
+        //             }
+        //             _ => {
+        //                 // if aggregation is over intermediate states,
+        //                 // use merge
+        //                 acc.merge_batch(
+        //                     values,
+        //                     group_indices,
+        //                     opt_filter,
+        //                     total_num_groups,
+        //                 )?;
+        //             }
+        //         }
+        //     }
+        // }
+
+        // Ok(())
+    }
+
+    fn group_aggregate_batch_single(
+        &mut self,
+        group_by_values: &[Vec<ArrayRef>],
+        input_values: &[Vec<ArrayRef>],
+        filter_values: &[Option<ArrayRef>],
+    ) -> Result<()> {
+        let group_values = self.group_values.as_single_mut();
+        for group_cols in group_by_values {
+            // calculate the group indices for each input row
+            let starting_num_groups = group_values.len();
+            group_values.intern(group_cols, &mut self.current_group_indices[0])?;
+            let group_indices = &self.current_group_indices[0];
+
+            // Update ordering information if necessary
+            let total_num_groups = group_values.len();
+            if total_num_groups > starting_num_groups {
+                self.group_ordering.new_groups(
+                    group_cols,
+                    group_indices,
+                    total_num_groups,
+                )?;
+            }
+
+            // Gather the inputs to call the actual accumulator
+            let t = self.accumulators[0]
+                .iter_mut()
+                .zip(input_values.iter())
+                .zip(filter_values.iter());
+
+            for ((acc, values), opt_filter) in t {
+                let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
+
+                // Call the appropriate method on each aggregator with
+                // the entire input row and the relevant group indexes
+                match self.mode {
+                    AggregateMode::Partial
+                    | AggregateMode::Single
+                    | AggregateMode::SinglePartitioned
+                        if !self.spill_state.is_stream_merging =>
+                    {
+                        acc.update_batch(
+                            values,
+                            group_indices,
+                            opt_filter,
+                            total_num_groups,
+                        )?;
+                    }
+                    _ => {
+                        // if aggregation is over intermediate states,
+                        // use merge
+                        acc.merge_batch(
+                            values,
+                            group_indices,
+                            opt_filter,
+                            total_num_groups,
+                        )?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn update_memory_reservation(&mut self) -> Result<()> {
@@ -1093,8 +1160,7 @@ impl GroupedHashAggregateStream {
             internal_datafusion_err!("group_values expected to have at least one element")
         })?;
 
-        let iter = self
-            .accumulators[0]
+        let iter = self.accumulators[0]
             .iter()
             .zip(input_values.iter())
             .zip(filter_values.iter());
@@ -1109,3 +1175,24 @@ impl GroupedHashAggregateStream {
         Ok(states_batch)
     }
 }
+
+// /// ```text
+// /// ┌─────┐           ┌─────┐            ┌─────┐
+// /// │true │           │NULL │            │NULL │
+// /// │true │    │      │true │            │true │
+// /// │true │ ───┼───   │false│  ────────▶ │false│       filtered_nulls
+// /// │false│    │      │NULL │            │false│
+// /// │false│           │true │            │false│
+// /// └─────┘           └─────┘            └─────┘
+// /// array           opt_filter           output
+// ///  .nulls()
+// ///
+// /// false = NULL    true  = pass          false = NULL       Meanings
+// /// true  = valid   false = filter        true  = valid
+// ///                 NULL  = filter
+// /// ```
+// ///
+// /// [`GroupsAccumulator::convert_to_state`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
+// fn create_partitioned_filter() {
+//     BooleanBufferBuilder
+// }
