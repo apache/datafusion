@@ -239,15 +239,15 @@ where
 ///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "smooth_it" }
 ///    fn signature(&self) -> &Signature { &self.signature }
-///    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-///      if !matches!(args.get(0), Some(&DataType::Int32)) {
-///        return plan_err!("smooth_it only accepts Int32 arguments");
-///      }
-///      Ok(DataType::Int32)
-///    }
 ///    // The actual implementation would add one to the argument
 ///    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
-///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> { unimplemented!() }
+///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+///      if let Some(DataType::Int32) = field_args.get_input_type(0) {
+///        Ok(Field::new(field_args.name(), DataType::Int32, false))
+///      } else {
+///        plan_err!("smooth_it only accepts Int32 arguments")
+///      }
+///    }
 /// }
 ///
 /// // Create a new WindowUDF from the implementation
