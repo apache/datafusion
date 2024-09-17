@@ -91,7 +91,7 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
         // non-null fast path
-        if !self.nullable  || !array.is_null(row) {
+        if !self.nullable || !array.is_null(row) {
             let elem = array.as_primitive::<T>().value(row);
             self.group_values.push(elem);
             self.nulls.push(true);
