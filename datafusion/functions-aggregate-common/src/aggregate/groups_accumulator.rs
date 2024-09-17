@@ -221,8 +221,11 @@ impl GroupsAccumulatorAdapter {
             let state = &mut self.states[group_idx];
             sizes_pre += state.size();
 
-            let values_to_accumulate =
-                slice_and_maybe_filter(&values, opt_filter.as_ref(), offsets)?;
+            let values_to_accumulate = slice_and_maybe_filter(
+                &values,
+                opt_filter.as_ref().map(|f| f.as_boolean()),
+                offsets,
+            )?;
             (f)(state.accumulator.as_mut(), &values_to_accumulate)?;
 
             // clear out the state so they are empty for next
@@ -304,6 +307,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         result
     }
 
+    // filtered_null_mask(opt_filter, &values);
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let vec_size_pre = self.states.allocated_size();
         let states = emit_to.take_needed(&mut self.states);
@@ -361,6 +365,46 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
     fn size(&self) -> usize {
         self.allocation_bytes
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let num_rows = values[0].len();
+
+        // Each row has its respective group
+        let mut results = vec![];
+        for row_idx in 0..num_rows {
+            // Create the empty accumulator for converting
+            let mut converted_accumulator = (self.factory)()?;
+
+            // Convert row to states
+            let values_to_accumulate =
+                slice_and_maybe_filter(values, opt_filter, &[row_idx, row_idx + 1])?;
+            converted_accumulator.update_batch(&values_to_accumulate)?;
+            let states = converted_accumulator.state()?;
+
+            // Resize results to have enough columns according to the converted states
+            results.resize_with(states.len(), || Vec::with_capacity(num_rows));
+
+            // Add the states to results
+            for (idx, state_val) in states.into_iter().enumerate() {
+                results[idx].push(state_val);
+            }
+        }
+
+        let arrays = results
+            .into_iter()
+            .map(ScalarValue::iter_to_array)
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(arrays)
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 }
 
@@ -707,7 +751,7 @@ fn get_filter_at_indices(
 // Copied from physical-plan
 pub(crate) fn slice_and_maybe_filter(
     aggr_array: &[ArrayRef],
-    filter_opt: Option<&ArrayRef>,
+    filter_opt: Option<&BooleanArray>,
     offsets: &[usize],
 ) -> Result<Vec<ArrayRef>> {
     let (offset, length) = (offsets[0], offsets[1] - offsets[0]);
@@ -717,13 +761,12 @@ pub(crate) fn slice_and_maybe_filter(
         .collect();
 
     if let Some(f) = filter_opt {
-        let filter_array = f.slice(offset, length);
-        let filter_array = filter_array.as_boolean();
+        let filter = f.slice(offset, length);
 
         sliced_arrays
             .iter()
             .map(|array| {
-                compute::filter(array, filter_array).map_err(|e| arrow_datafusion_err!(e))
+                compute::filter(&array, &filter).map_err(|e| arrow_datafusion_err!(e))
             })
             .collect()
     } else {

@@ -18,6 +18,7 @@
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
 use std::any::Any;
+use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
@@ -68,7 +69,7 @@ use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 /// [`create_udaf`]: crate::expr_fn::create_udaf
 /// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
 /// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd)]
 pub struct AggregateUDF {
     inner: Arc<dyn AggregateUDFImpl>,
 }
@@ -584,6 +585,24 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     }
 }
 
+impl PartialEq for dyn AggregateUDFImpl {
+    fn eq(&self, other: &Self) -> bool {
+        self.equals(other)
+    }
+}
+
+// manual implementation of `PartialOrd`
+// There might be some wackiness with it, but this is based on the impl of eq for AggregateUDFImpl
+// https://users.rust-lang.org/t/how-to-compare-two-trait-objects-for-equality/88063/5
+impl PartialOrd for dyn AggregateUDFImpl {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name().partial_cmp(other.name()) {
+            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
+            cmp => cmp,
+        }
+    }
+}
+
 pub enum ReversedUDAF {
     /// The expression is the same as the original expression, like SUM, COUNT
     Identical,
@@ -756,5 +775,113 @@ impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         (self.accumulator)(acc_args)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{AggregateUDF, AggregateUDFImpl};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::Result;
+    use datafusion_expr_common::accumulator::Accumulator;
+    use datafusion_expr_common::signature::{Signature, Volatility};
+    use datafusion_functions_aggregate_common::accumulator::{
+        AccumulatorArgs, StateFieldsArgs,
+    };
+    use std::any::Any;
+    use std::cmp::Ordering;
+
+    #[derive(Debug, Clone)]
+    struct AMeanUdf {
+        signature: Signature,
+    }
+
+    impl AMeanUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for AMeanUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "a"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!()
+        }
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+            unimplemented!()
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct BMeanUdf {
+        signature: Signature,
+    }
+    impl BMeanUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for BMeanUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "b"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!()
+        }
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_partial_ord() {
+        // Test validates that partial ord is defined for AggregateUDF using the name and signature,
+        // not intended to exhaustively test all possibilities
+        let a1 = AggregateUDF::from(AMeanUdf::new());
+        let a2 = AggregateUDF::from(AMeanUdf::new());
+        assert_eq!(a1.partial_cmp(&a2), Some(Ordering::Equal));
+
+        let b1 = AggregateUDF::from(BMeanUdf::new());
+        assert!(a1 < b1);
+        assert!(!(a1 == b1));
     }
 }

@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-cli"
 description = "Command Line Client for DataFusion query engine."
-version = "41.0.0"
+version = "42.0.0"
 authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
 edition = "2021"
 keywords = ["arrow", "datafusion", "query", "sql"]
@@ -42,7 +42,7 @@ aws-sdk-sts = "=1.39.0"
 # end pin aws-sdk crates
 aws-credential-types = "1.2.0"
 clap = { version = "4.5.16", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "41.0.0", features = [
+datafusion = { path = "../datafusion/core", version = "42.0.0", features = [
     "avro",
     "crypto_expressions",
     "datetime_expressions",
@@ -52,15 +52,15 @@ datafusion = { path = "../datafusion/core", version = "41.0.0", features = [
     "unicode_expressions",
     "compression",
 ] }
-dirs = "4.0.0"
-env_logger = "0.9"
+dirs = "5.0.1"
+env_logger = "0.11"
 futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { version = "0.11.0", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
 parquet = { version = "53.0.0", default-features = false }
 regex = "1.8"
-rustyline = "11.0"
+rustyline = "14.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
 url = "2.2"
 
@@ -68,4 +68,4 @@ url = "2.2"
 assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
-rstest = "0.17"
+rstest = "0.22"
