@@ -75,14 +75,7 @@ pub fn schema_add_window_field(
         .map(|e| Arc::clone(e).as_ref().nullable(schema))
         .collect::<Result<Vec<_>>>()?;
     let window_expr_return_type =
-        if let WindowFunctionDefinition::WindowUDF(udwf) = window_fn {
-            let field_args = WindowUDFFieldArgs::new(&data_types, fn_name);
-
-            udwf.field(field_args)
-                .map(|field| field.data_type().clone())?
-        } else {
-            window_fn.return_type(&data_types, &nullability)?
-        };
+        window_fn.return_type(&data_types, &nullability, fn_name)?;
     let mut window_fields = schema
         .fields()
         .iter()

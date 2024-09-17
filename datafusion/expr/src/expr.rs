@@ -40,6 +40,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
     NullTreatment, RenameSelectItem, ReplaceSelectElement,
@@ -706,6 +707,7 @@ impl WindowFunctionDefinition {
         &self,
         input_expr_types: &[DataType],
         _input_expr_nullable: &[bool],
+        display_name: &str,
     ) -> Result<DataType> {
         match self {
             WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
@@ -714,12 +716,9 @@ impl WindowFunctionDefinition {
             WindowFunctionDefinition::AggregateUDF(fun) => {
                 fun.return_type(input_expr_types)
             }
-            WindowFunctionDefinition::WindowUDF(_) => {
-                // To get the return data type of the result from
-                // evaluating the user-defined window function instead
-                // use the `WindowUDF::field` trait method.
-                unreachable!()
-            }
+            WindowFunctionDefinition::WindowUDF(fun) => fun
+                .field(WindowUDFFieldArgs::new(input_expr_types, display_name))
+                .map(|field| field.data_type().clone()),
         }
     }
 
@@ -2558,10 +2557,10 @@ mod test {
     #[test]
     fn test_first_value_return_type() -> Result<()> {
         let fun = find_df_window_func("first_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::UInt64], &[true])?;
+        let observed = fun.return_type(&[DataType::UInt64], &[true], "")?;
         assert_eq!(DataType::UInt64, observed);
 
         Ok(())
@@ -2570,10 +2569,10 @@ mod test {
     #[test]
     fn test_last_value_return_type() -> Result<()> {
         let fun = find_df_window_func("last_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64], &[true])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2582,10 +2581,10 @@ mod test {
     #[test]
     fn test_lead_return_type() -> Result<()> {
         let fun = find_df_window_func("lead").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64], &[true])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2594,10 +2593,10 @@ mod test {
     #[test]
     fn test_lag_return_type() -> Result<()> {
         let fun = find_df_window_func("lag").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64], &[true])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2607,11 +2606,11 @@ mod test {
     fn test_nth_value_return_type() -> Result<()> {
         let fun = find_df_window_func("nth_value").unwrap();
         let observed =
-            fun.return_type(&[DataType::Utf8, DataType::UInt64], &[true, true])?;
+            fun.return_type(&[DataType::Utf8, DataType::UInt64], &[true, true], "")?;
         assert_eq!(DataType::Utf8, observed);
 
         let observed =
-            fun.return_type(&[DataType::Float64, DataType::UInt64], &[true, true])?;
+            fun.return_type(&[DataType::Float64, DataType::UInt64], &[true, true], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2620,7 +2619,7 @@ mod test {
     #[test]
     fn test_percent_rank_return_type() -> Result<()> {
         let fun = find_df_window_func("percent_rank").unwrap();
-        let observed = fun.return_type(&[], &[])?;
+        let observed = fun.return_type(&[], &[], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2629,7 +2628,7 @@ mod test {
     #[test]
     fn test_cume_dist_return_type() -> Result<()> {
         let fun = find_df_window_func("cume_dist").unwrap();
-        let observed = fun.return_type(&[], &[])?;
+        let observed = fun.return_type(&[], &[], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2638,7 +2637,7 @@ mod test {
     #[test]
     fn test_ntile_return_type() -> Result<()> {
         let fun = find_df_window_func("ntile").unwrap();
-        let observed = fun.return_type(&[DataType::Int16], &[true])?;
+        let observed = fun.return_type(&[DataType::Int16], &[true], "")?;
         assert_eq!(DataType::UInt64, observed);
 
         Ok(())
