@@ -52,6 +52,7 @@ use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{case, is_null, lit, SortExpr};
 use datafusion_expr::{
     utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
@@ -66,8 +67,9 @@ use datafusion_catalog::Session;
 /// Contains options that control how data is
 /// written out from a DataFrame
 pub struct DataFrameWriteOptions {
-    /// Controls if existing data should be overwritten
-    overwrite: bool,
+    /// Controls how new data should be written to the table, determining whether
+    /// to append, overwrite, or replace existing data.
+    insert_op: InsertOp,
     /// Controls if all partitions should be coalesced into a single output file
     /// Generally will have slower performance when set to true.
     single_file_output: bool,
@@ -80,14 +82,15 @@ impl DataFrameWriteOptions {
     /// Create a new DataFrameWriteOptions with default values
     pub fn new() -> Self {
         DataFrameWriteOptions {
-            overwrite: false,
+            insert_op: InsertOp::Append,
             single_file_output: false,
             partition_by: vec![],
         }
     }
-    /// Set the overwrite option to true or false
-    pub fn with_overwrite(mut self, overwrite: bool) -> Self {
-        self.overwrite = overwrite;
+
+    /// Set the insert operation
+    pub fn with_insert_operation(mut self, insert_op: InsertOp) -> Self {
+        self.insert_op = insert_op;
         self
     }
 
@@ -1328,7 +1331,7 @@ impl DataFrame {
             self.plan,
             table_name.to_owned(),
             &arrow_schema,
-            write_options.overwrite,
+            write_options.insert_op,
         )?
         .build()?;
 
@@ -1369,10 +1372,11 @@ impl DataFrame {
         options: DataFrameWriteOptions,
         writer_options: Option<CsvOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
-        if options.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented for DataFrame::write_csv.".to_owned(),
-            ));
+        if options.insert_op != InsertOp::Append {
+            return Err(DataFusionError::NotImplemented(format!(
+                "{} is not implemented for DataFrame::write_csv.",
+                options.insert_op
+            )));
         }
 
         let format = if let Some(csv_opts) = writer_options {
@@ -1429,10 +1433,11 @@ impl DataFrame {
         options: DataFrameWriteOptions,
         writer_options: Option<JsonOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
-        if options.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented for DataFrame::write_json.".to_owned(),
-            ));
+        if options.insert_op != InsertOp::Append {
+            return Err(DataFusionError::NotImplemented(format!(
+                "{} is not implemented for DataFrame::write_json.",
+                options.insert_op
+            )));
         }
 
         let format = if let Some(json_opts) = writer_options {

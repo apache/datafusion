@@ -27,6 +27,7 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion_expr::dml::InsertOp;
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::min_max::max_udaf;
@@ -1141,7 +1142,7 @@ fn roundtrip_json_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        overwrite: true,
+        insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
     };
     let data_sink = Arc::new(JsonSink::new(
@@ -1177,7 +1178,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        overwrite: true,
+        insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
     };
     let data_sink = Arc::new(CsvSink::new(
@@ -1236,7 +1237,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        overwrite: true,
+        insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
     };
     let data_sink = Arc::new(ParquetSink::new(

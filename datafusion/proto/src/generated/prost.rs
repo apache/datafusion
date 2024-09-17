@@ -1029,10 +1029,10 @@ pub struct FileSinkConfig {
     pub output_schema: ::core::option::Option<super::datafusion_common::Schema>,
     #[prost(message, repeated, tag = "5")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
-    #[prost(bool, tag = "8")]
-    pub overwrite: bool,
     #[prost(bool, tag = "9")]
     pub keep_partition_by_columns: bool,
+    #[prost(enumeration = "InsertOp", tag = "10")]
+    pub insert_op: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JsonSink {
@@ -1903,6 +1903,35 @@ impl DateUnit {
         match value {
             "Day" => Some(Self::Day),
             "DateMillisecond" => Some(Self::DateMillisecond),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum InsertOp {
+    Append = 0,
+    Overwrite = 1,
+    Replace = 2,
+}
+impl InsertOp {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            InsertOp::Append => "Append",
+            InsertOp::Overwrite => "Overwrite",
+            InsertOp::Replace => "Replace",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "Append" => Some(Self::Append),
+            "Overwrite" => Some(Self::Overwrite),
+            "Replace" => Some(Self::Replace),
             _ => None,
         }
     }

@@ -24,6 +24,7 @@ use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, Constraints, Statistics};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
     CreateExternalTable, Expr, LogicalPlan, TableProviderFilterPushDown, TableType,
 };
@@ -272,7 +273,7 @@ pub trait TableProvider: Sync + Send {
         &self,
         _state: &dyn Session,
         _input: Arc<dyn ExecutionPlan>,
-        _overwrite: bool,
+        _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Insert into not implemented for this table")
     }

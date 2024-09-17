@@ -54,6 +54,8 @@ use datafusion_common::{
     TableReference, ToDFSchema, UnnestOptions,
 };
 
+use super::dml::InsertOp;
+
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
 
@@ -303,20 +305,14 @@ impl LogicalPlanBuilder {
         input: LogicalPlan,
         table_name: impl Into<TableReference>,
         table_schema: &Schema,
-        overwrite: bool,
+        insert_op: InsertOp,
     ) -> Result<Self> {
         let table_schema = table_schema.clone().to_dfschema_ref()?;
-
-        let op = if overwrite {
-            WriteOp::InsertOverwrite
-        } else {
-            WriteOp::InsertInto
-        };
 
         Ok(Self::new(LogicalPlan::Dml(DmlStatement::new(
             table_name.into(),
             table_schema,
-            op,
+            WriteOp::Insert(insert_op),
             Arc::new(input),
         ))))
     }

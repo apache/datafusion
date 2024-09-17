@@ -146,8 +146,7 @@ impl PartialOrd for DmlStatement {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum WriteOp {
-    InsertOverwrite,
-    InsertInto,
+    Insert(InsertOp),
     Delete,
     Update,
     Ctas,
@@ -157,8 +156,7 @@ impl WriteOp {
     /// Return a descriptive name of this [`WriteOp`]
     pub fn name(&self) -> &str {
         match self {
-            WriteOp::InsertOverwrite => "Insert Overwrite",
-            WriteOp::InsertInto => "Insert Into",
+            WriteOp::Insert(insert) => insert.name(),
             WriteOp::Delete => "Delete",
             WriteOp::Update => "Update",
             WriteOp::Ctas => "Ctas",
@@ -167,6 +165,37 @@ impl WriteOp {
 }
 
 impl Display for WriteOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+pub enum InsertOp {
+    /// Appends new rows to the existing table without modifying any
+    /// existing rows. This corresponds to the SQL `INSERT INTO` query.
+    Append,
+    /// Overwrites all existing rows in the table with the new rows.
+    /// This corresponds to the SQL `INSERT OVERWRITE` query.
+    Overwrite,
+    /// If any existing rows collides with the inserted rows (typically based
+    /// on a unique key or primary key), those existing rows are replaced.
+    /// This corresponds to the SQL `REPLACE INTO` query and its equivalents.
+    Replace,
+}
+
+impl InsertOp {
+    /// Return a descriptive name of this [`InsertOp`]
+    pub fn name(&self) -> &str {
+        match self {
+            InsertOp::Append => "Insert Into",
+            InsertOp::Overwrite => "Insert Overwrite",
+            InsertOp::Replace => "Replace Into",
+        }
+    }
+}
+
+impl Display for InsertOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())
     }
