@@ -456,6 +456,15 @@ impl ExprSchemable for Expr {
 }
 
 impl Expr {
+    /// Common method for window functions that applies type coercion
+    /// to all arguments of the window function to check if it matches
+    /// its signature.
+    ///
+    /// If successful, this method returns the data type and
+    /// nullability of the window function's result.
+    ///
+    /// Otherwise, returns an error if there's a type mismatch between
+    /// the window function's signature and the provided arguments.
     fn data_type_and_nullable_with_window_function(
         &self,
         schema: &dyn ExprSchema,
