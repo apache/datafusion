@@ -17,7 +17,7 @@
 
 use crate::unparser::utils::unproject_agg_exprs;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DataFusionError, Result, TableReference,
+    internal_err, not_impl_err, Column, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{
     expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
@@ -32,7 +32,7 @@ use super::{
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
     rewrite::{
-        inject_column_aliases, normalize_union_schema,
+        inject_column_aliases_into_subquery, normalize_union_schema,
         rewrite_plan_for_sort_on_non_projected_fields,
         subquery_alias_inner_query_and_columns,
     },
@@ -475,15 +475,17 @@ impl Unparser<'_> {
                 if !columns.is_empty()
                     && !self.dialect.supports_column_alias_in_table_alias()
                 {
-                    // if columns are returned then the plan corresponds to a projection
-                    let LogicalPlan::Projection(inner_p) = plan else {
-                        return plan_err!(
-                            "Inner projection for subquery alias is expected"
-                        );
-                    };
-
                     // Instead of specifying column aliases as part of the outer table, inject them directly into the inner projection
-                    let rewritten_plan = inject_column_aliases(&inner_p, columns);
+                    let rewritten_plan =
+                        match inject_column_aliases_into_subquery(plan, columns) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                return internal_err!(
+                                    "Failed to transform SubqueryAlias plan: {e}"
+                                )
+                            }
+                        };
+
                     columns = vec![];
 
                     self.select_to_sql_recursively(
