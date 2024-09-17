@@ -4889,7 +4889,7 @@ ORDER BY rn;
 1 a 1
 2 b 2
 1 a 3
-3 (empty) 4
+3 NULL 4
 NULL a4 5
 
 statement ok

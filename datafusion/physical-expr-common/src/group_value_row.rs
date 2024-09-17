@@ -302,14 +302,18 @@ where
             let mut bool_builder = BooleanBufferBuilder::new(num_values);
             bool_builder.append_n(num_values, true);
 
-            let last_offset = O::as_usize(self.offsets[n]);
+            let nth_offset = O::as_usize(self.offsets[n]);
+            // Given offsets [0, 1, 2, 2], we could know that the 3rd index is null since the offset diff is 0
+            let is_nth_offset_null = O::as_usize(self.offsets[n - 1]) == nth_offset;
             let mut new_nulls = vec![];
             self.nulls.iter().for_each(|null_index| {
-                if *null_index <= last_offset {
+                if *null_index < nth_offset
+                    || (*null_index == nth_offset && is_nth_offset_null)
+                {
                     nulls_count += 1;
                     bool_builder.set_bit(*null_index, false);
                 } else {
-                    new_nulls.push(null_index - last_offset);
+                    new_nulls.push(null_index - nth_offset);
                 }
             });
 
