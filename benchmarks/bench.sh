@@ -493,6 +493,10 @@ data_imdb() {
             
             # Download the dataset
             curl -o "${imdb_temp_gz}" "${imdb_url}"
+            
+            # Extract the dataset
+            tar -xzvf "${imdb_temp_gz}" -C "${imdb_dir}"
+            $CARGO_COMMAND --bin imdb -- convert --input ${imdb_dir} --output ${imdb_dir} --format parquet
         else 
             echo "IMDB.tgz already exists."
 
