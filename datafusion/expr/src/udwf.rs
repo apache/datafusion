@@ -161,14 +161,6 @@ impl WindowUDF {
         self.inner.signature()
     }
 
-    /// Return the type of the function given its input types
-    ///
-    /// See [`WindowUDFImpl::return_type`] for more details.
-    #[allow(deprecated)]
-    pub fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(args)
-    }
-
     /// Do the function rewrite
     ///
     /// See [`WindowUDFImpl::simplify`] for more details.
@@ -283,14 +275,6 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// Returns the function's [`Signature`] for information about what input
     /// types are accepted and the function's Volatility.
     fn signature(&self) -> &Signature;
-
-    /// What [`DataType`] will be returned by this function, given the types of
-    /// the arguments
-    #[deprecated(
-        since = "41.0.0",
-        note = "Use `field` instead to define the final result of evaluating this user-defined window function."
-    )]
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
     /// Invoke the function, returning the [`PartitionEvaluator`] instance
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
@@ -437,11 +421,6 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.signature()
     }
 
-    #[allow(deprecated)]
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(arg_types)
-    }
-
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         self.inner.partition_evaluator()
     }
@@ -520,12 +499,6 @@ impl WindowUDFImpl for WindowUDFLegacyWrapper {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // Old API returns an Arc of the datatype for some reason
-        let res = (self.return_type)(arg_types)?;
-        Ok(res.as_ref().clone())
-    }
-
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         (self.partition_evaluator_factory)()
     }
@@ -579,9 +552,6 @@ mod test {
         fn signature(&self) -> &Signature {
             &self.signature
         }
-        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-            unimplemented!()
-        }
         fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
@@ -617,9 +587,6 @@ mod test {
         }
         fn signature(&self) -> &Signature {
             &self.signature
-        }
-        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-            unimplemented!()
         }
         fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()

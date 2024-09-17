@@ -72,11 +72,6 @@ impl WindowUDFImpl for SmoothItUdf {
         &self.signature
     }
 
-    /// What is the type of value that will be returned by this function.
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Float64)
-    }
-
     /// Create a `PartitionEvaluator` to evaluate this function on a new
     /// partition.
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {

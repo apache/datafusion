@@ -552,10 +552,6 @@ impl OddCounter {
                 &self.signature
             }
 
-            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                Ok(DataType::Int64)
-            }
-
             fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
                 Ok(Box::new(OddCounter::new(Arc::clone(&self.test_state))))
             }

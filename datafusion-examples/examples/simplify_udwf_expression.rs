@@ -60,10 +60,6 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Float64)
-    }
-
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         todo!()
     }
