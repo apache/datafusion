@@ -71,3 +71,7 @@ name = "case_when"
 [[bench]]
 harness = false
 name = "is_null"
+
+[[bench]]
+harness = false
+name = "scalar_regex_match"
