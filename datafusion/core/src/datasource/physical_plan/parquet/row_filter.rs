@@ -76,7 +76,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{arrow_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::utils::reassign_predicate_columns;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
@@ -237,12 +237,6 @@ struct FilterCandidateBuilder<'a> {
     /// The schema of the table (merged schema) -- columns may be in different
     /// order than in the file and have columns that are not in the file schema
     table_schema: &'a Schema,
-    required_column_indices: BTreeSet<usize>,
-    /// Does the expression require any non-primitive columns (like structs)?
-    non_primitive_columns: bool,
-    /// Does the expression reference any columns that are in the table
-    /// schema but not in the file schema?
-    projected_columns: bool,
 }
 
 impl<'a> FilterCandidateBuilder<'a> {
@@ -255,9 +249,6 @@ impl<'a> FilterCandidateBuilder<'a> {
             expr,
             file_schema,
             table_schema,
-            required_column_indices: BTreeSet::default(),
-            non_primitive_columns: false,
-            projected_columns: false,
         }
     }
 
@@ -268,53 +259,87 @@ impl<'a> FilterCandidateBuilder<'a> {
     /// * `Ok(Some(candidate))` if the expression can be used as an ArrowFilter
     /// * `Ok(None)` if the expression cannot be used as an ArrowFilter
     /// * `Err(e)` if an error occurs while building the candidate
-    pub fn build(
-        mut self,
-        metadata: &ParquetMetaData,
-    ) -> Result<Option<FilterCandidate>> {
-        let expr = self.expr.clone().rewrite(&mut self).data()?;
+    pub fn build(self, metadata: &ParquetMetaData) -> Result<Option<FilterCandidate>> {
+        let Some((required_indices, rewritten_expr)) =
+            pushdown_columns(self.expr, self.file_schema, self.table_schema)?
+        else {
+            return Ok(None);
+        };
 
-        if self.non_primitive_columns || self.projected_columns {
-            Ok(None)
-        } else {
-            let required_bytes =
-                size_of_columns(&self.required_column_indices, metadata)?;
-            let can_use_index = columns_sorted(&self.required_column_indices, metadata)?;
+        let required_bytes = size_of_columns(&required_indices, metadata)?;
+        let can_use_index = columns_sorted(&required_indices, metadata)?;
 
-            Ok(Some(FilterCandidate {
-                expr,
-                required_bytes,
-                can_use_index,
-                projection: self.required_column_indices.into_iter().collect(),
-            }))
-        }
+        Ok(Some(FilterCandidate {
+            expr: rewritten_expr,
+            required_bytes,
+            can_use_index,
+            projection: required_indices.into_iter().collect(),
+        }))
     }
 }
 
-/// Implement the `TreeNodeRewriter` trait for `FilterCandidateBuilder` that
-/// walks the expression tree and rewrites it in preparation of becoming
-/// `FilterCandidate`.
-impl<'a> TreeNodeRewriter for FilterCandidateBuilder<'a> {
+// a struct that implements TreeNodeRewriter to traverse a PhysicalExpr tree structure to determine
+// if any column references in the expression would prevent it from being predicate-pushed-down.
+// if non_primitive_columns || projected_columns, it can't be pushed down.
+// can't be reused between calls to `rewrite`; each construction must be used only once.
+struct PushdownChecker<'schema> {
+    /// Does the expression require any non-primitive columns (like structs)?
+    non_primitive_columns: bool,
+    /// Does the expression reference any columns that are in the table
+    /// schema but not in the file schema?
+    projected_columns: bool,
+    // the indices of all the columns found within the given expression which exist inside the given
+    // [`file_schema`]
+    required_column_indices: BTreeSet<usize>,
+    file_schema: &'schema Schema,
+    table_schema: &'schema Schema,
+}
+
+impl<'schema> PushdownChecker<'schema> {
+    fn new(file_schema: &'schema Schema, table_schema: &'schema Schema) -> Self {
+        Self {
+            non_primitive_columns: false,
+            projected_columns: false,
+            required_column_indices: BTreeSet::default(),
+            file_schema,
+            table_schema,
+        }
+    }
+
+    fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
+        if let Ok(idx) = self.file_schema.index_of(column_name) {
+            self.required_column_indices.insert(idx);
+
+            if DataType::is_nested(self.file_schema.field(idx).data_type()) {
+                self.non_primitive_columns = true;
+                return Some(TreeNodeRecursion::Jump);
+            }
+        } else if self.table_schema.index_of(column_name).is_err() {
+            // If the column does not exist in the (un-projected) table schema then
+            // it must be a projected column.
+            self.projected_columns = true;
+            return Some(TreeNodeRecursion::Jump);
+        }
+
+        None
+    }
+
+    #[inline]
+    fn prevents_pushdown(&self) -> bool {
+        self.non_primitive_columns || self.projected_columns
+    }
+}
+
+impl<'schema> TreeNodeRewriter for PushdownChecker<'schema> {
     type Node = Arc<dyn PhysicalExpr>;
 
-    /// Called before visiting each child
     fn f_down(
         &mut self,
         node: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         if let Some(column) = node.as_any().downcast_ref::<Column>() {
-            if let Ok(idx) = self.file_schema.index_of(column.name()) {
-                self.required_column_indices.insert(idx);
-
-                if DataType::is_nested(self.file_schema.field(idx).data_type()) {
-                    self.non_primitive_columns = true;
-                    return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
-                }
-            } else if self.table_schema.index_of(column.name()).is_err() {
-                // If the column does not exist in the (un-projected) table schema then
-                // it must be a projected column.
-                self.projected_columns = true;
-                return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
+            if let Some(recursion) = self.check_single_column(column.name()) {
+                return Ok(Transformed::new(node, false, recursion));
             }
         }
 
@@ -322,34 +347,98 @@ impl<'a> TreeNodeRewriter for FilterCandidateBuilder<'a> {
     }
 
     /// After visiting all children, rewrite column references to nulls if
-    /// they are not in the file schema
+    /// they are not in the file schema.
+    /// We do this because they won't be relevant if they're not in the file schema, since that's
+    /// the only thing we're dealing with here as this is only used for the parquet pushdown during
+    /// scanning
     fn f_up(
         &mut self,
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        // if the expression is a column, is it in the file schema?
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            // if the expression is a column, is it in the file schema?
             if self.file_schema.field_with_name(column.name()).is_err() {
-                // Replace the column reference with a NULL (using the type from the table schema)
-                // e.g. `column = 'foo'` is rewritten be transformed to `NULL = 'foo'`
-                //
-                // See comments on `FilterCandidateBuilder` for more information
-                return match self.table_schema.field_with_name(column.name()) {
-                    Ok(field) => {
-                        // return the null value corresponding to the data type
+                return self
+                    .table_schema
+                    .field_with_name(column.name())
+                    .and_then(|field| {
+                        // Replace the column reference with a NULL (using the type from the table schema)
+                        // e.g. `column = 'foo'` is rewritten be transformed to `NULL = 'foo'`
+                        //
+                        // See comments on `FilterCandidateBuilder` for more information
                         let null_value = ScalarValue::try_from(field.data_type())?;
-                        Ok(Transformed::yes(Arc::new(Literal::new(null_value))))
-                    }
-                    Err(e) => {
-                        // If the column is not in the table schema, should throw the error
-                        arrow_err!(e)
-                    }
-                };
+                        Ok(Transformed::yes(Arc::new(Literal::new(null_value)) as _))
+                    })
+                    // If the column is not in the table schema, should throw the error
+                    .map_err(|e| arrow_datafusion_err!(e));
             }
         }
 
         Ok(Transformed::no(expr))
     }
+}
+
+type ProjectionAndExpr = (BTreeSet<usize>, Arc<dyn PhysicalExpr>);
+
+// Checks if a given expression can be pushed down into `ParquetExec` as opposed to being evaluated
+// post-parquet-scan in a `FilterExec`. If it can be pushed down, this returns returns all the
+// columns in the given expression so that they can be used in the parquet scanning, along with the
+// expression rewritten as defined in [`PushdownChecker::f_up`]
+fn pushdown_columns(
+    expr: Arc<dyn PhysicalExpr>,
+    file_schema: &Schema,
+    table_schema: &Schema,
+) -> Result<Option<ProjectionAndExpr>> {
+    let mut checker = PushdownChecker::new(file_schema, table_schema);
+
+    let expr = expr.rewrite(&mut checker).data()?;
+
+    Ok((!checker.prevents_pushdown()).then_some((checker.required_column_indices, expr)))
+}
+
+/// creates a PushdownChecker for a single use to check a given column with the given schemes. Used
+/// to check preemptively if a column name would prevent pushdowning.
+/// effectively does the inverse of [`pushdown_columns`] does, but with a single given column
+/// (instead of traversing the entire tree to determine this)
+fn would_column_prevent_pushdown(
+    column_name: &str,
+    file_schema: &Schema,
+    table_schema: &Schema,
+) -> bool {
+    let mut checker = PushdownChecker::new(file_schema, table_schema);
+
+    // the return of this is only used for [`PushdownChecker::f_down()`], so we can safely ignore
+    // it here. I'm just verifying we know the return type of this so nobody accidentally changes
+    // the return type of this fn and it gets implicitly ignored here.
+    let _: Option<TreeNodeRecursion> = checker.check_single_column(column_name);
+
+    // and then return a value based on the state of the checker
+    checker.prevents_pushdown()
+}
+
+/// Recurses through expr as a trea, finds all `column`s, and checks if any of them would prevent
+/// this expression from being predicate pushed down. If any of them would, this returns false.
+/// Otherwise, true.
+pub fn can_expr_be_pushed_down_with_schemas(
+    expr: &datafusion_expr::Expr,
+    file_schema: &Schema,
+    table_schema: &Schema,
+) -> bool {
+    let mut can_be_pushed = true;
+    expr.apply(|expr| match expr {
+        datafusion_expr::Expr::Column(column) => {
+            can_be_pushed &=
+                !would_column_prevent_pushdown(column.name(), file_schema, table_schema);
+            Ok(if can_be_pushed {
+                TreeNodeRecursion::Jump
+            } else {
+                TreeNodeRecursion::Stop
+            })
+        }
+        _ => Ok(TreeNodeRecursion::Continue),
+    })
+    .unwrap(); // we never return an Err, so we can safely unwrap this
+    can_be_pushed
 }
 
 /// Computes the projection required to go from the file's schema order to the projected
@@ -444,11 +533,13 @@ pub fn build_row_filter(
     // Determine which conjuncts can be evaluated as ArrowPredicates, if any
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
-        .flat_map(|expr| {
+        .map(|expr| {
             FilterCandidateBuilder::new(expr.clone(), file_schema, table_schema)
                 .build(metadata)
-                .unwrap_or_default()
         })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
         .collect();
 
     // no candidates
@@ -485,11 +576,12 @@ pub fn build_row_filter(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::datasource::schema_adapter::DefaultSchemaAdapterFactory;
-    use crate::datasource::schema_adapter::SchemaAdapterFactory;
+    use crate::datasource::schema_adapter::{
+        DefaultSchemaAdapterFactory, SchemaAdapterFactory,
+    };
 
     use arrow::datatypes::Field;
-    use arrow_schema::TimeUnit::Nanosecond;
+    use arrow_schema::{Fields, TimeUnit::Nanosecond};
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::{Count, Time};
@@ -583,8 +675,9 @@ mod test {
             false,
         )]);
 
+        let table_ref = Arc::new(table_schema.clone());
         let schema_adapter =
-            DefaultSchemaAdapterFactory {}.create(Arc::new(table_schema.clone()));
+            DefaultSchemaAdapterFactory.create(Arc::clone(&table_ref), table_ref);
         let (schema_mapping, _) = schema_adapter
             .map_schema(&file_schema)
             .expect("creating schema mapping");
@@ -660,5 +753,88 @@ mod test {
             let remapped: Vec<_> = remap.iter().map(|r| file_order[*r]).collect();
             assert_eq!(projection, remapped)
         }
+    }
+
+    #[test]
+    fn nested_data_structures_prevent_pushdown() {
+        let table_schema = get_basic_table_schema();
+
+        let file_schema = Schema::new(vec![Field::new(
+            "list_col",
+            DataType::Struct(Fields::empty()),
+            true,
+        )]);
+
+        let expr = col("list_col").is_not_null();
+
+        assert!(!can_expr_be_pushed_down_with_schemas(
+            &expr,
+            &file_schema,
+            &table_schema
+        ));
+    }
+
+    #[test]
+    fn projected_columns_prevent_pushdown() {
+        let table_schema = get_basic_table_schema();
+
+        let file_schema =
+            Schema::new(vec![Field::new("existing_col", DataType::Int64, true)]);
+
+        let expr = col("nonexistent_column").is_null();
+
+        assert!(!can_expr_be_pushed_down_with_schemas(
+            &expr,
+            &file_schema,
+            &table_schema
+        ));
+    }
+
+    #[test]
+    fn basic_expr_doesnt_prevent_pushdown() {
+        let table_schema = get_basic_table_schema();
+
+        let file_schema = Schema::new(vec![Field::new("str_col", DataType::Utf8, true)]);
+
+        let expr = col("str_col").is_null();
+
+        assert!(can_expr_be_pushed_down_with_schemas(
+            &expr,
+            &file_schema,
+            &table_schema
+        ));
+    }
+
+    #[test]
+    fn complex_expr_doesnt_prevent_pushdown() {
+        let table_schema = get_basic_table_schema();
+
+        let file_schema = Schema::new(vec![
+            Field::new("str_col", DataType::Utf8, true),
+            Field::new("int_col", DataType::UInt64, true),
+        ]);
+
+        let expr = col("str_col")
+            .is_not_null()
+            .or(col("int_col").gt(Expr::Literal(ScalarValue::UInt64(Some(5)))));
+
+        assert!(can_expr_be_pushed_down_with_schemas(
+            &expr,
+            &file_schema,
+            &table_schema
+        ));
+    }
+
+    fn get_basic_table_schema() -> Schema {
+        let testdata = crate::test_util::parquet_test_data();
+        let file = std::fs::File::open(format!("{testdata}/alltypes_plain.parquet"))
+            .expect("opening file");
+
+        let reader = SerializedFileReader::new(file).expect("creating reader");
+
+        let metadata = reader.metadata();
+
+        parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
+            .expect("parsing schema")
     }
 }

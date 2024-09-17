@@ -26,7 +26,7 @@ use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
 use super::{
     coerce_file_schema_to_view_type, transform_schema_to_view, FileFormat,
-    FileFormatFactory, FileScanConfig,
+    FileFormatFactory, FilePushdownSupport, FileScanConfig,
 };
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
@@ -53,6 +53,7 @@ use datafusion_common::{
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::MetricsSet;
@@ -78,7 +79,9 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 
-use crate::datasource::physical_plan::parquet::ParquetExecBuilder;
+use crate::datasource::physical_plan::parquet::{
+    can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
+};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
@@ -413,6 +416,27 @@ impl FileFormat for ParquetFormat {
             sink_schema,
             order_requirements,
         )) as _)
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        file_schema: &Schema,
+        table_schema: &Schema,
+        filters: &[&Expr],
+    ) -> Result<FilePushdownSupport> {
+        if !self.options().global.pushdown_filters {
+            return Ok(FilePushdownSupport::NoSupport);
+        }
+
+        let all_supported = filters.iter().all(|filter| {
+            can_expr_be_pushed_down_with_schemas(filter, file_schema, table_schema)
+        });
+
+        Ok(if all_supported {
+            FilePushdownSupport::Supported
+        } else {
+            FilePushdownSupport::NotSupportedForFilter
+        })
     }
 }
 
