@@ -676,7 +676,7 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
 
     let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
         vec![col("c1")],
-        vec![col("c2")],
+        vec![col("c2")] ,
         vec![col("c1"), col("c2")],
     ]));
 

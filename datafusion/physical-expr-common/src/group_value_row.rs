@@ -91,17 +91,15 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
         // non-null fast path
-        if !self.nullable || !self.has_null {
-        } else if array.is_null(row) {
+        if !self.nullable  || !array.is_null(row) {
+            let elem = array.as_primitive::<T>().value(row);
+            self.group_values.push(elem);
+            self.nulls.push(true);
+        } else {
             self.group_values.push(T::default_value());
             self.nulls.push(false);
             self.has_null = true;
-            return;
         }
-
-        let elem = array.as_primitive::<T>().value(row);
-        self.group_values.push(elem);
-        self.nulls.push(true);
     }
 
     fn len(&self) -> usize {
@@ -113,7 +111,7 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
-        if self.nullable && self.has_null {
+        if self.has_null {
             Arc::new(PrimitiveArray::<T>::new(
                 ScalarBuffer::from(self.group_values),
                 Some(NullBuffer::from(self.nulls)),
@@ -127,7 +125,7 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
-        if self.nullable && self.has_null {
+        if self.has_null {
             let first_n = self.group_values.drain(0..n).collect::<Vec<_>>();
             let first_n_nulls = self.nulls.drain(0..n).collect::<Vec<_>>();
             Arc::new(PrimitiveArray::<T>::new(
