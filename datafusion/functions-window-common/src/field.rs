@@ -23,7 +23,6 @@ pub struct WindowUDFFieldArgs<'a> {
     /// The data types corresponding to the arguments to the
     /// user-defined window function.
     input_types: &'a [DataType],
-    ///
     /// The display name of the user-defined window function.
     display_name: &'a str,
 }
