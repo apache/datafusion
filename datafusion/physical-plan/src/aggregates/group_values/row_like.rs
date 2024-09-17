@@ -89,53 +89,65 @@ impl GroupValues for GroupValuesRowLike {
                 let mut v = Vec::with_capacity(len);
 
                 for f in self.schema.fields().iter() {
+                    let nullable = f.is_nullable();
                     match f.data_type() {
                         &DataType::Int8 => {
-                            let b = PrimitiveGroupValueBuilder::<Int8Type>::default();
+                            let b = PrimitiveGroupValueBuilder::<Int8Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int16 => {
-                            let b = PrimitiveGroupValueBuilder::<Int16Type>::default();
+                            let b =
+                                PrimitiveGroupValueBuilder::<Int16Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int32 => {
-                            let b = PrimitiveGroupValueBuilder::<Int32Type>::default();
+                            let b =
+                                PrimitiveGroupValueBuilder::<Int32Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Int64 => {
-                            let b = PrimitiveGroupValueBuilder::<Int64Type>::default();
+                            let b =
+                                PrimitiveGroupValueBuilder::<Int64Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt8 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt8Type>::default();
+                            let b =
+                                PrimitiveGroupValueBuilder::<UInt8Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt16 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt16Type>::default();
+                            let b =
+                                PrimitiveGroupValueBuilder::<UInt16Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt32 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt32Type>::default();
+                            let b =
+                                PrimitiveGroupValueBuilder::<UInt32Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::UInt64 => {
-                            let b = PrimitiveGroupValueBuilder::<UInt64Type>::default();
+                            let b =
+                                PrimitiveGroupValueBuilder::<UInt64Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Float32 => {
-                            let b = PrimitiveGroupValueBuilder::<Float32Type>::default();
+                            let b =
+                                PrimitiveGroupValueBuilder::<Float32Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Float64 => {
-                            let b = PrimitiveGroupValueBuilder::<Float64Type>::default();
+                            let b =
+                                PrimitiveGroupValueBuilder::<Float64Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Date32 => {
-                            let b = PrimitiveGroupValueBuilder::<Date32Type>::default();
+                            let b =
+                                PrimitiveGroupValueBuilder::<Date32Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Date64 => {
-                            let b = PrimitiveGroupValueBuilder::<Date64Type>::default();
+                            let b =
+                                PrimitiveGroupValueBuilder::<Date64Type>::new(nullable);
                             v.push(Box::new(b) as _)
                         }
                         &DataType::Utf8 => {

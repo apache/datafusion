@@ -32,6 +32,7 @@ use arrow::datatypes::GenericBinaryType;
 use arrow::datatypes::GenericStringType;
 
 use std::sync::Arc;
+use std::vec;
 
 use crate::binary_map::OutputType;
 use crate::binary_map::INITIAL_BUFFER_CAPACITY;
@@ -46,45 +47,65 @@ pub trait ArrayRowEq: Send + Sync {
     fn take_n(&mut self, n: usize) -> ArrayRef;
 }
 
-pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType>(
-    Vec<T::Native>, // group value
-    Vec<bool>,      // null value
-    bool, // whether the array contains at least one null, for fast non-null path
-);
+pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType> {
+    group_values: Vec<T::Native>,
+    nulls: Vec<bool>,
+    // whether the array contains at least one null, for fast non-null path
+    has_null: bool,
+    nullable: bool,
+}
 
-impl<T: ArrowPrimitiveType> Default for PrimitiveGroupValueBuilder<T> {
-    fn default() -> Self {
-        Self(vec![], vec![], false)
+impl<T> PrimitiveGroupValueBuilder<T>
+where
+    T: ArrowPrimitiveType,
+{
+    pub fn new(nullable: bool) -> Self {
+        Self {
+            group_values: vec![],
+            nulls: vec![],
+            has_null: false,
+            nullable,
+        }
     }
 }
 
 impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
-        if self.1[lhs_row] {
+        // non-null fast path
+        if !self.nullable || !self.has_null {
+            return self.group_values[lhs_row]
+                == array.as_primitive::<T>().value(rhs_row);
+        }
+
+        if self.nulls[lhs_row] {
             if array.is_null(rhs_row) {
                 return false;
             }
 
-            return self.0[lhs_row] == array.as_primitive::<T>().value(rhs_row);
+            return self.group_values[lhs_row]
+                == array.as_primitive::<T>().value(rhs_row);
         }
 
         array.is_null(rhs_row)
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
-        if array.is_null(row) {
-            self.0.push(T::default_value());
-            self.1.push(false);
-            self.2 = true;
-        } else {
-            let elem = array.as_primitive::<T>().value(row);
-            self.0.push(elem);
-            self.1.push(true);
+        // non-null fast path
+        if !self.nullable || !self.has_null {
+        } else if array.is_null(row) {
+            self.group_values.push(T::default_value());
+            self.nulls.push(false);
+            self.has_null = true;
+            return;
         }
+
+        let elem = array.as_primitive::<T>().value(row);
+        self.group_values.push(elem);
+        self.nulls.push(true);
     }
 
     fn len(&self) -> usize {
-        self.0.len()
+        self.group_values.len()
     }
 
     fn is_empty(&self) -> bool {
@@ -92,27 +113,30 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
-        if self.2 {
+        if self.nullable && self.has_null {
             Arc::new(PrimitiveArray::<T>::new(
-                ScalarBuffer::from(self.0),
-                Some(NullBuffer::from(self.1)),
+                ScalarBuffer::from(self.group_values),
+                Some(NullBuffer::from(self.nulls)),
             ))
         } else {
-            Arc::new(PrimitiveArray::<T>::new(ScalarBuffer::from(self.0), None))
+            Arc::new(PrimitiveArray::<T>::new(
+                ScalarBuffer::from(self.group_values),
+                None,
+            ))
         }
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
-        if self.2 {
-            let first_n = self.0.drain(0..n).collect::<Vec<_>>();
-            let first_n_nulls = self.1.drain(0..n).collect::<Vec<_>>();
+        if self.nullable && self.has_null {
+            let first_n = self.group_values.drain(0..n).collect::<Vec<_>>();
+            let first_n_nulls = self.nulls.drain(0..n).collect::<Vec<_>>();
             Arc::new(PrimitiveArray::<T>::new(
                 ScalarBuffer::from(first_n),
                 Some(NullBuffer::from(first_n_nulls)),
             ))
         } else {
-            let first_n = self.0.drain(0..n).collect::<Vec<_>>();
-            self.1.truncate(self.1.len() - n);
+            let first_n = self.group_values.drain(0..n).collect::<Vec<_>>();
+            self.nulls.truncate(self.nulls.len() - n);
             Arc::new(PrimitiveArray::<T>::new(ScalarBuffer::from(first_n), None))
         }
     }

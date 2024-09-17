@@ -117,8 +117,12 @@ fn has_row_like_feature(data_type: &DataType) -> bool {
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
+            | DataType::Float32
+            | DataType::Float64
             | DataType::Utf8
             | DataType::LargeUtf8
+            | DataType::Binary
+            | DataType::LargeBinary
             | DataType::Date32
             | DataType::Date64
     )
