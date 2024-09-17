@@ -34,6 +34,7 @@ const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .thread_stack_size(8 * 1024 * 1024)
         .build()
         .unwrap()
         .block_on(run_tests())
