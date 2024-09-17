@@ -41,7 +41,7 @@ pub struct CommonOpt {
     /// If true, will use StringView/BinaryViewArray instead of String/BinaryArray
     /// when reading ParquetFiles
     #[structopt(long)]
-    pub string_view: bool,
+    pub force_view_types: bool,
 }
 
 impl CommonOpt {

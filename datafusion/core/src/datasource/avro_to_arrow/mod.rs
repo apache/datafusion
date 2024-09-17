@@ -30,6 +30,8 @@ use crate::arrow::datatypes::Schema;
 use crate::error::Result;
 #[cfg(feature = "avro")]
 pub use reader::{Reader, ReaderBuilder};
+#[cfg(feature = "avro")]
+pub use schema::to_arrow_schema;
 use std::io::Read;
 
 #[cfg(feature = "avro")]

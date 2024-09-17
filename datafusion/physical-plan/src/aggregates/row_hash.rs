@@ -27,11 +27,10 @@ use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
     PhysicalGroupBy,
 };
-use crate::common::IPCWriter;
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge;
-use crate::spill::read_spill_as_stream;
+use crate::spill::{read_spill_as_stream, spill_record_batch_by_size};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -905,19 +904,13 @@ impl GroupedHashAggregateStream {
         let emit = self.emit(EmitTo::All, true)?;
         let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
         let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
-        let mut writer = IPCWriter::new(spillfile.path(), &emit.schema())?;
         // TODO: slice large `sorted` and write to multiple files in parallel
-        let mut offset = 0;
-        let total_rows = sorted.num_rows();
-
-        while offset < total_rows {
-            let length = std::cmp::min(total_rows - offset, self.batch_size);
-            let batch = sorted.slice(offset, length);
-            offset += batch.num_rows();
-            writer.write(&batch)?;
-        }
-
-        writer.finish()?;
+        spill_record_batch_by_size(
+            &sorted,
+            spillfile.path().into(),
+            sorted.schema(),
+            self.batch_size,
+        )?;
         self.spill_state.spills.push(spillfile);
         Ok(())
     }

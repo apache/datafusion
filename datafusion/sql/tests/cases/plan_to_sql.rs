@@ -495,11 +495,17 @@ fn test_table_references_in_plan_to_sql() {
         assert_eq!(format!("{}", sql), expected_sql)
     }
 
-    test("catalog.schema.table", "SELECT catalog.\"schema\".\"table\".id, catalog.\"schema\".\"table\".\"value\" FROM catalog.\"schema\".\"table\"");
-    test("schema.table", "SELECT \"schema\".\"table\".id, \"schema\".\"table\".\"value\" FROM \"schema\".\"table\"");
+    test(
+        "catalog.schema.table",
+        r#"SELECT "catalog"."schema"."table".id, "catalog"."schema"."table"."value" FROM "catalog"."schema"."table""#,
+    );
+    test(
+        "schema.table",
+        r#"SELECT "schema"."table".id, "schema"."table"."value" FROM "schema"."table""#,
+    );
     test(
         "table",
-        "SELECT \"table\".id, \"table\".\"value\" FROM \"table\"",
+        r#"SELECT "table".id, "table"."value" FROM "table""#,
     );
 }
 
@@ -521,10 +527,10 @@ fn test_table_scan_with_no_projection_in_plan_to_sql() {
 
     test(
         "catalog.schema.table",
-        "SELECT * FROM catalog.\"schema\".\"table\"",
+        r#"SELECT * FROM "catalog"."schema"."table""#,
     );
-    test("schema.table", "SELECT * FROM \"schema\".\"table\"");
-    test("table", "SELECT * FROM \"table\"");
+    test("schema.table", r#"SELECT * FROM "schema"."table""#);
+    test("table", r#"SELECT * FROM "table""#);
 }
 
 #[test]
@@ -699,19 +705,19 @@ fn test_table_scan_pushdown() -> Result<()> {
         "SELECT * FROM t1 WHERE ((t1.id > 1) AND (t1.age < 2))"
     );
 
-    // TODO: support filters for table scan with alias. Enable this test after #12368 issue is fixed
-    // see the issue: https://github.com/apache/datafusion/issues/12368
-    // let table_scan_with_filter_alias = table_scan_with_filters(
-    //     Some("t1"),
-    //     &schema,
-    //     None,
-    //     vec![col("id").gt(col("age"))],
-    // )?.alias("ta")?.build()?;
-    // let table_scan_with_filter_alias = plan_to_sql(&table_scan_with_filter_alias)?;
-    // assert_eq!(
-    //     format!("{}", table_scan_with_filter_alias),
-    //     "SELECT * FROM t1 AS ta WHERE (ta.id > ta.age)"
-    // );
+    let table_scan_with_filter_alias = table_scan_with_filters(
+        Some("t1"),
+        &schema,
+        None,
+        vec![col("id").gt(col("age"))],
+    )?
+    .alias("ta")?
+    .build()?;
+    let table_scan_with_filter_alias = plan_to_sql(&table_scan_with_filter_alias)?;
+    assert_eq!(
+        format!("{}", table_scan_with_filter_alias),
+        "SELECT * FROM t1 AS ta WHERE (ta.id > ta.age)"
+    );
 
     let table_scan_with_projection_and_filter = table_scan_with_filters(
         Some("t1"),

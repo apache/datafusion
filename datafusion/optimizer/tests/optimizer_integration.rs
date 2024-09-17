@@ -177,15 +177,12 @@ fn intersect() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected =
         "LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n  Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
-    \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n      Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
-    \n        Filter: test.col_int32 IS NOT NULL AND test.col_utf8 IS NOT NULL\
-    \n          TableScan: test projection=[col_int32, col_utf8]\
-    \n      Filter: test.col_int32 IS NOT NULL AND test.col_utf8 IS NOT NULL\
-    \n        TableScan: test projection=[col_int32, col_utf8]\
-    \n  Filter: test.col_int32 IS NOT NULL AND test.col_utf8 IS NOT NULL\
-    \n    TableScan: test projection=[col_int32, col_utf8]";
+        \n  Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
+        \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
+        \n      Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
+        \n        TableScan: test projection=[col_int32, col_utf8]\
+        \n      TableScan: test projection=[col_int32, col_utf8]\
+        \n  TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
@@ -281,11 +278,9 @@ fn test_same_name_but_not_ambiguous() {
     let expected = "LeftSemi Join: t1.col_int32 = t2.col_int32\
     \n  Aggregate: groupBy=[[t1.col_int32]], aggr=[[]]\
     \n    SubqueryAlias: t1\
-    \n      Filter: test.col_int32 IS NOT NULL\
-    \n        TableScan: test projection=[col_int32]\
+    \n      TableScan: test projection=[col_int32]\
     \n  SubqueryAlias: t2\
-    \n    Filter: test.col_int32 IS NOT NULL\
-    \n      TableScan: test projection=[col_int32]";
+    \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan}"));
 }
 
@@ -363,6 +358,31 @@ fn select_wildcard_with_repeated_column_but_is_aliased() {
     let expected = "Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64, test.col_ts_nano_none, test.col_ts_nano_utc, test.col_int32 AS col_32\
     \n  TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]";
 
+    assert_eq!(expected, format!("{plan}"));
+}
+
+#[test]
+fn select_correlated_predicate_subquery_with_uppercase_ident() {
+    let sql = r#"
+        SELECT *
+        FROM
+            test
+        WHERE
+            EXISTS (
+                SELECT 1
+                FROM (SELECT col_int32 as "COL_INT32", col_uint32 as "COL_UINT32" FROM test) "T1"
+                WHERE "T1"."COL_INT32" = test.col_int32
+            )
+    "#;
+    let plan = test_sql(sql).unwrap();
+    let expected = "LeftSemi Join: test.col_int32 = __correlated_sq_1.COL_INT32\
+    \n  Filter: test.col_int32 IS NOT NULL\
+    \n    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
+    \n  SubqueryAlias: __correlated_sq_1\
+    \n    SubqueryAlias: T1\
+    \n      Projection: test.col_int32 AS COL_INT32\
+    \n        Filter: test.col_int32 IS NOT NULL\
+    \n          TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan}"));
 }
 

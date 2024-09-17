@@ -313,13 +313,6 @@ impl SessionContext {
     }
 
     /// Creates a new `SessionContext` using the provided
-    /// [`SessionConfig`] and a new [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionContext::new_with_config")]
-    pub fn with_config(config: SessionConfig) -> Self {
-        Self::new_with_config(config)
-    }
-
-    /// Creates a new `SessionContext` using the provided
     /// [`SessionConfig`] and a [`RuntimeEnv`].
     ///
     /// # Resource Limits
@@ -339,13 +332,6 @@ impl SessionContext {
             .with_default_features()
             .build();
         Self::new_with_state(state)
-    }
-
-    /// Creates a new `SessionContext` using the provided
-    /// [`SessionConfig`] and a [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt")]
-    pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        Self::new_with_config_rt(config, runtime)
     }
 
     /// Creates a new `SessionContext` using the provided [`SessionState`]
@@ -404,11 +390,6 @@ impl SessionContext {
         ctx
     }
 
-    /// Creates a new `SessionContext` using the provided [`SessionState`]
-    #[deprecated(since = "32.0.0", note = "Use SessionContext::new_with_state")]
-    pub fn with_state(state: SessionState) -> Self {
-        Self::new_with_state(state)
-    }
     /// Returns the time this `SessionContext` was created
     pub fn session_start_time(&self) -> DateTime<Utc> {
         self.session_start_time
