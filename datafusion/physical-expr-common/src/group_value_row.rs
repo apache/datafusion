@@ -125,7 +125,6 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
-        println!("go");
         if self.has_null {
             let first_n = self.group_values.drain(0..n).collect::<Vec<_>>();
             let first_n_nulls = self.nulls.drain(0..n).collect::<Vec<_>>();
