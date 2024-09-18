@@ -56,8 +56,31 @@ impl EmitTo {
     }
 }
 
-/// `GroupAccumulator` implements a single aggregate (e.g. AVG) and
+/// `GroupsAccumulator` implements a single aggregate (e.g. AVG) and
 /// stores the state for *all* groups internally.
+///
+/// Logically, a [`GroupsAccumulator`] stores a mapping from each group index to
+/// the state of the aggregate for that group. For example an implementation for
+/// `min` might look like
+///
+/// ```text
+///    ┌─────┐
+///    │  0  │───────────▶   100
+///    ├─────┤
+///    │  1  │───────────▶   200
+///    └─────┘
+///      ...                 ...
+///    ┌─────┐
+///    │ N-2 │───────────▶    50
+///    ├─────┤
+///    │ N-1 │───────────▶   200
+///    └─────┘
+///
+///
+///  Logical group      Current Min
+///     number          value for that
+///                     group
+/// ```
 ///
 /// # Notes on Implementing `GroupAccumulator`
 ///

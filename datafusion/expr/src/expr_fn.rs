@@ -391,11 +391,10 @@ pub fn unnest(expr: Expr) -> Expr {
 pub fn create_udf(
     name: &str,
     input_types: Vec<DataType>,
-    return_type: Arc<DataType>,
+    return_type: DataType,
     volatility: Volatility,
     fun: ScalarFunctionImplementation,
 ) -> ScalarUDF {
-    let return_type = Arc::unwrap_or_clone(return_type);
     ScalarUDF::from(SimpleScalarUDF::new(
         name,
         input_types,

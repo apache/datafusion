@@ -359,7 +359,7 @@ fn create_example_udf() -> ScalarUDF {
         // Expects two f64 values:
         vec![DataType::Float64, DataType::Float64],
         // Returns an f64 value:
-        Arc::new(DataType::Float64),
+        DataType::Float64,
         Volatility::Immutable,
         adder,
     )
