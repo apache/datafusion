@@ -25,34 +25,44 @@ The section contains examples how to perform CPU profiling for Apache DataFusion
 
 ### Building a flamegraph
 
-- [cargo-flamegraph](https://github.com/flamegraph-rs/flamegraph)
+[Video: how to CPU profile DataFusion with a Flamegraph](https://youtu.be/2z11xtYw_xs)
 
-Test:
+A flamegraph is a visual representation of which functions are being run
+You can create flamegraphs in many ways; The instructions below are for
+[cargo-flamegraph](https://github.com/flamegraph-rs/flamegraph) which results
+in images such as this:
+
+![Flamegraph](../_static/images/flamegraph.svg)
+
+To create a flamegraph, you need to install the `flamegraph` tool:
+
+```shell
+cargo install flamegraph
+```
+
+Then you can run the flamegraph tool with the `--` separator to pass arguments
+to the binary you want to profile.
+
+Example: Flamegraph for `datafusion-cli` executing `q28.sql`. Note this
+must be run as root on Mac OSx to access DTrace.
+
+```shell
+sudo flamegraph -- datafusion-cli -f q28.sq
+```
+
+You can also invoke the flamegraph tool with `cargo` to profile a specific test or benchmark.
+
+Example: Flamegraph for a specific test:
 
 ```bash
 CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph --root --unit-test datafusion  -- dataframe::tests::test_array_agg
 ```
 
-Benchmark:
+Example: Flamegraph for a benchmark
 
 ```bash
 CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph --root --bench sql_planner -- --bench
 ```
-
-Open `flamegraph.svg` file with the browser
-
-- dtrace with DataFusion CLI
-
-```bash
-git clone https://github.com/brendangregg/FlameGraph.git /tmp/fg
-cd datafusion-cli
-CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release
-echo "select * from table;" >> test.sql
-sudo dtrace -c './target/debug/datafusion-cli -f test.sql' -o out.stacks -n 'profile-997 /execname == "datafusion-cli"/ { @[ustack(100)] = count(); }'
-/tmp/fg/FlameGraph/stackcollapse.pl out.stacks | /tmp/fg/FlameGraph/flamegraph.pl > flamegraph.svg
-```
-
-Open `flamegraph.svg` file with the browser
 
 ### CPU profiling with XCode Instruments
 
