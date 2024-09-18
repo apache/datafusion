@@ -116,7 +116,7 @@ impl Serializeable for Expr {
                 Ok(Arc::new(create_udf(
                     name,
                     vec![],
-                    Arc::new(arrow::datatypes::DataType::Null),
+                    arrow::datatypes::DataType::Null,
                     Volatility::Immutable,
                     Arc::new(|_| unimplemented!()),
                 )))

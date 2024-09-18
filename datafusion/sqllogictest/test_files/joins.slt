@@ -2136,10 +2136,10 @@ FROM (select t1_id from join_t1 where join_t1.t1_id > 22) as join_t1
 RIGHT JOIN (select t2_id from join_t2 where join_t2.t2_id > 11) as join_t2
         ON join_t1.t1_id < join_t2.t2_id
 ----
+NULL 22
 33 44
 33 55
 44 55
-NULL 22
 
 #####
 # Configuration teardown

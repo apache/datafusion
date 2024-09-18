@@ -171,3 +171,8 @@ required-features = ["unicode_expressions"]
 harness = false
 name = "character_length"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "strpos"
+required-features = ["unicode_expressions"]

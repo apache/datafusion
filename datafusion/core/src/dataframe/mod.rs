@@ -2772,7 +2772,7 @@ mod tests {
         ctx.register_udf(create_udf(
             "my_fn",
             vec![DataType::Float64],
-            Arc::new(DataType::Float64),
+            DataType::Float64,
             Volatility::Immutable,
             my_fn,
         ));

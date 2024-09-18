@@ -197,6 +197,7 @@ impl ScalarUDF {
 
     /// Returns a `ScalarFunctionImplementation` that can invoke the function
     /// during execution
+    #[deprecated(since = "42.0.0", note = "Use `invoke` or `invoke_no_args` instead")]
     pub fn fun(&self) -> ScalarFunctionImplementation {
         let captured = Arc::clone(&self.inner);
         Arc::new(move |args| captured.invoke(args))

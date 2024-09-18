@@ -31,8 +31,7 @@ use datafusion_common::{not_impl_err, Result};
 
 use crate::expr::WindowFunction;
 use crate::{
-    function::WindowFunctionSimplification, Expr, PartitionEvaluator,
-    PartitionEvaluatorFactory, ReturnTypeFunction, Signature,
+    function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
 };
 
 /// Logical representation of a user-defined window function (UDWF)
@@ -81,25 +80,6 @@ impl Hash for WindowUDF {
 }
 
 impl WindowUDF {
-    /// Create a new WindowUDF from low level details.
-    ///
-    /// See [`WindowUDFImpl`] for a more convenient way to create a
-    /// `WindowUDF` using trait objects
-    #[deprecated(since = "34.0.0", note = "please implement WindowUDFImpl instead")]
-    pub fn new(
-        name: &str,
-        signature: &Signature,
-        return_type: &ReturnTypeFunction,
-        partition_evaluator_factory: &PartitionEvaluatorFactory,
-    ) -> Self {
-        Self::new_from_impl(WindowUDFLegacyWrapper {
-            name: name.to_owned(),
-            signature: signature.clone(),
-            return_type: Arc::clone(return_type),
-            partition_evaluator_factory: Arc::clone(partition_evaluator_factory),
-        })
-    }
-
     /// Create a new `WindowUDF` from a `[WindowUDFImpl]` trait object
     ///
     /// Note this is the same as using the `From` impl (`WindowUDF::from`)
@@ -475,55 +455,6 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
-    }
-}
-
-/// Implementation of [`WindowUDFImpl`] that wraps the function style pointers
-/// of the older API (see <https://github.com/apache/datafusion/pull/8719>
-/// for more details)
-pub struct WindowUDFLegacyWrapper {
-    /// name
-    name: String,
-    /// signature
-    signature: Signature,
-    /// Return type
-    return_type: ReturnTypeFunction,
-    /// Return the partition evaluator
-    partition_evaluator_factory: PartitionEvaluatorFactory,
-}
-
-impl Debug for WindowUDFLegacyWrapper {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("WindowUDF")
-            .field("name", &self.name)
-            .field("signature", &self.signature)
-            .field("return_type", &"<func>")
-            .field("partition_evaluator_factory", &"<func>")
-            .finish_non_exhaustive()
-    }
-}
-
-impl WindowUDFImpl for WindowUDFLegacyWrapper {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // Old API returns an Arc of the datatype for some reason
-        let res = (self.return_type)(arg_types)?;
-        Ok(res.as_ref().clone())
-    }
-
-    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        (self.partition_evaluator_factory)()
     }
 }
 

@@ -258,8 +258,36 @@ pub(super) fn subquery_alias_inner_query_and_columns(
     (outer_projections.input.as_ref(), columns)
 }
 
-/// Injects column aliases into the projection of a logical plan by wrapping `Expr::Column` expressions
-/// with `Expr::Alias` using the provided list of aliases. Non-column expressions are left unchanged.
+/// Injects column aliases into a subquery's logical plan. The function searches for a `Projection`
+/// within the given plan, which may be wrapped by other operators (e.g., LIMIT, SORT).
+/// If the top-level plan is a `Projection`, it directly injects the column aliases.
+/// Otherwise, it iterates through the plan's children to locate and transform the `Projection`.
+///
+/// Example:
+/// - `SELECT col1, col2 FROM table LIMIT 10` plan with aliases `["alias_1", "some_alias_2"]` will be transformed to
+/// - `SELECT col1 AS alias_1, col2 AS some_alias_2 FROM table LIMIT 10`
+pub(super) fn inject_column_aliases_into_subquery(
+    plan: LogicalPlan,
+    aliases: Vec<Ident>,
+) -> Result<LogicalPlan> {
+    match &plan {
+        LogicalPlan::Projection(inner_p) => Ok(inject_column_aliases(inner_p, aliases)),
+        _ => {
+            // projection is wrapped by other operator (LIMIT, SORT, etc), iterate through the plan to find it
+            plan.map_children(|child| {
+                if let LogicalPlan::Projection(p) = &child {
+                    Ok(Transformed::yes(inject_column_aliases(p, aliases.clone())))
+                } else {
+                    Ok(Transformed::no(child))
+                }
+            })
+            .map(|plan| plan.data)
+        }
+    }
+}
+
+/// Injects column aliases into the projection of a logical plan by wrapping expressions
+/// with `Expr::Alias` using the provided list of aliases.
 ///
 /// Example:
 /// - `SELECT col1, col2 FROM table` with aliases `["alias_1", "some_alias_2"]` will be transformed to
@@ -274,16 +302,17 @@ pub(super) fn inject_column_aliases(
         .expr
         .into_iter()
         .zip(aliases)
-        .map(|(expr, col_alias)| match expr {
-            Expr::Column(col) => {
-                let relation = col.relation.clone();
-                Expr::Alias(Alias {
-                    expr: Box::new(Expr::Column(col)),
-                    relation,
-                    name: col_alias.value,
-                })
-            }
-            _ => expr,
+        .map(|(expr, col_alias)| {
+            let relation = match &expr {
+                Expr::Column(col) => col.relation.clone(),
+                _ => None,
+            };
+
+            Expr::Alias(Alias {
+                expr: Box::new(expr.clone()),
+                relation,
+                name: col_alias.value,
+            })
         })
         .collect::<Vec<_>>();
 

@@ -871,7 +871,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
     let udf = create_udf(
         "dummy",
         vec![DataType::Int64],
-        Arc::new(DataType::Int64),
+        DataType::Int64,
         Volatility::Immutable,
         scalar_fn.clone(),
     );

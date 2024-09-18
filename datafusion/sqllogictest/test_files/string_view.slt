@@ -1638,4 +1638,3 @@ select column2|| ' ' ||column3 from temp;
 ----
 rust fast
 datafusion cool
-

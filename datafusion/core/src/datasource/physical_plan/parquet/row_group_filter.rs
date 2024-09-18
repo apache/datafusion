@@ -264,8 +264,12 @@ impl PruningStatistics for BloomFilterStatistics {
             .iter()
             .map(|value| {
                 match value {
-                    ScalarValue::Utf8(Some(v)) => sbbf.check(&v.as_str()),
-                    ScalarValue::Binary(Some(v)) => sbbf.check(v),
+                    ScalarValue::Utf8(Some(v)) | ScalarValue::Utf8View(Some(v)) => {
+                        sbbf.check(&v.as_str())
+                    }
+                    ScalarValue::Binary(Some(v)) | ScalarValue::BinaryView(Some(v)) => {
+                        sbbf.check(v)
+                    }
                     ScalarValue::FixedSizeBinary(_size, Some(v)) => sbbf.check(v),
                     ScalarValue::Boolean(Some(v)) => sbbf.check(v),
                     ScalarValue::Float64(Some(v)) => sbbf.check(v),
@@ -1220,6 +1224,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_multiple_expr_view() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_all_pruned()
+            // generate pruning predicate `(String = "Hello_Not_exists" OR String = "Hello_Not_exists2")`
+            .run(
+                lit("1").eq(lit("1")).and(
+                    col(r#""String""#)
+                        .eq(Expr::Literal(ScalarValue::Utf8View(Some(String::from(
+                            "Hello_Not_Exists",
+                        )))))
+                        .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
+                            Some(String::from("Hello_Not_Exists2")),
+                        )))),
+                ),
+            )
+            .await
+    }
+
+    #[tokio::test]
     async fn test_row_group_bloom_filter_pruning_predicate_sql_in() {
         // load parquet file
         let testdata = datafusion_common::test_util::parquet_test_data();
@@ -1282,6 +1305,26 @@ mod tests {
                     .eq(lit("Hello"))
                     .or(col(r#""String""#).eq(lit("the quick")))
                     .or(col(r#""String""#).eq(lit("are you"))),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_exists_3_values_view() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_none_pruned()
+            // generate pruning predicate `(String = "Hello") OR (String = "the quick") OR (String = "are you")`
+            .run(
+                col(r#""String""#)
+                    .eq(Expr::Literal(ScalarValue::Utf8View(Some(String::from(
+                        "Hello",
+                    )))))
+                    .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
+                        Some(String::from("the quick")),
+                    ))))
+                    .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
+                        Some(String::from("are you")),
+                    )))),
             )
             .await
     }

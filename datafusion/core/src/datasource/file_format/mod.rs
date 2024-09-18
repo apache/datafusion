@@ -45,6 +45,7 @@ use crate::physical_plan::{ExecutionPlan, Statistics};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt};
+use datafusion_expr::Expr;
 use datafusion_physical_expr::PhysicalExpr;
 
 use async_trait::async_trait;
@@ -138,6 +139,33 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
     }
+
+    /// Check if the specified file format has support for pushing down the provided filters within
+    /// the given schemas. Added initially to support the Parquet file format's ability to do this.
+    fn supports_filters_pushdown(
+        &self,
+        _file_schema: &Schema,
+        _table_schema: &Schema,
+        _filters: &[&Expr],
+    ) -> Result<FilePushdownSupport> {
+        Ok(FilePushdownSupport::NoSupport)
+    }
+}
+
+/// An enum to distinguish between different states when determining if certain filters can be
+/// pushed down to file scanning
+#[derive(Debug, PartialEq)]
+pub enum FilePushdownSupport {
+    /// The file format/system being asked does not support any sort of pushdown. This should be
+    /// used even if the file format theoretically supports some sort of pushdown, but it's not
+    /// enabled or implemented yet.
+    NoSupport,
+    /// The file format/system being asked *does* support pushdown, but it can't make it work for
+    /// the provided filter/expression
+    NotSupportedForFilter,
+    /// The file format/system being asked *does* support pushdown and *can* make it work for the
+    /// provided filter/expression
+    Supported,
 }
 
 /// A container of [FileFormatFactory] which also implements [FileType].

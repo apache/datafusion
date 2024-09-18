@@ -176,7 +176,7 @@ fn optimize_projections(
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
             let schema = aggregate.input.schema();
             let necessary_indices =
-                RequiredIndicies::new().with_exprs(schema, all_exprs_iter)?;
+                RequiredIndicies::new().with_exprs(schema, all_exprs_iter);
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
 
             return optimize_projections(
@@ -216,8 +216,7 @@ fn optimize_projections(
 
             // Get all the required column indices at the input, either by the
             // parent or window expression requirements.
-            let required_indices =
-                child_reqs.with_exprs(&input_schema, &new_window_expr)?;
+            let required_indices = child_reqs.with_exprs(&input_schema, &new_window_expr);
 
             return optimize_projections(
                 Arc::unwrap_or_clone(window.input),
@@ -269,7 +268,6 @@ fn optimize_projections(
             .map(LogicalPlan::TableScan)
             .map(Transformed::yes);
         }
-
         // Other node types are handled below
         _ => {}
     };
@@ -761,7 +759,7 @@ fn rewrite_projection_given_requirements(
     let exprs_used = indices.get_at_indices(&expr);
 
     let required_indices =
-        RequiredIndicies::new().with_exprs(input.schema(), exprs_used.iter())?;
+        RequiredIndicies::new().with_exprs(input.schema(), exprs_used.iter());
 
     // rewrite the children projection, and if they are changed rewrite the
     // projection down
@@ -781,8 +779,8 @@ fn rewrite_projection_given_requirements(
 /// - input schema of the projection, output schema of the projection are same, and
 /// - all projection expressions are either Column or Literal
 fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result<bool> {
-    Ok(&projection_schema(input, proj_exprs)? == input.schema()
-        && proj_exprs.iter().all(is_expr_trivial))
+    let proj_schema = projection_schema(input, proj_exprs)?;
+    Ok(&proj_schema == input.schema() && proj_exprs.iter().all(is_expr_trivial))
 }
 
 #[cfg(test)]

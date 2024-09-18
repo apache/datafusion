@@ -1980,7 +1980,7 @@ impl LogicalPlan {
                             .map(|i| &input_columns[*i])
                             .collect::<Vec<&Column>>();
                         // get items from input_columns indexed by list_col_indices
-                        write!(f, "Unnest: lists[{}] structs[{}]", 
+                        write!(f, "Unnest: lists[{}] structs[{}]",
                         expr_vec_fmt!(list_type_columns),
                         expr_vec_fmt!(struct_type_columns))
                     }
@@ -2124,11 +2124,13 @@ impl Projection {
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
     let metadata = input.schema().metadata().clone();
-    let mut schema =
-        DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?;
-    schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
-        exprs, input,
-    )?)?;
+
+    let schema =
+        DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?
+            .with_functional_dependencies(calc_func_dependencies_for_project(
+                exprs, input,
+            )?)?;
+
     Ok(Arc::new(schema))
 }
 
