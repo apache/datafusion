@@ -19,13 +19,11 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
     use datafusion::common::Result;
     use datafusion::dataframe::DataFrame;
-    use datafusion::prelude::{CsvReadOptions, SessionContext};
+    use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
-    use std::fs::File;
-    use std::io::BufReader;
-    use substrait::proto::Plan;
 
     #[tokio::test]
     async fn scalar_function_compound_signature() -> Result<()> {
@@ -35,18 +33,17 @@ mod tests {
         // we don't yet produce such plans.
         // Once we start producing plans with compound signatures, this test can be replaced by the roundtrip tests.
 
-        let ctx = create_context().await?;
-
         // File generated with substrait-java's Isthmus:
-        // ./isthmus-cli/build/graal/isthmus "select not d from data" -c "create table data (d boolean)"
-        let proto = read_json("tests/testdata/test_plans/select_not_bool.substrait.json");
-
-        let plan = from_substrait_plan(&ctx, &proto).await?;
+        // ./isthmus-cli/build/graal/isthmus --create "create table data (d boolean)" "select not d from data"
+        let proto_plan =
+            read_json("tests/testdata/test_plans/select_not_bool.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx, &proto_plan).await?;
 
         assert_eq!(
             format!("{}", plan),
-            "Projection: NOT DATA.a AS EXPR$0\
-            \n  TableScan: DATA projection=[a, b, c, d, e, f]"
+            "Projection: NOT DATA.D AS EXPR$0\
+            \n  TableScan: DATA projection=[D]"
         );
         Ok(())
     }
@@ -61,19 +58,18 @@ mod tests {
         // we don't yet produce such plans.
         // Once we start producing plans with compound signatures, this test can be replaced by the roundtrip tests.
 
-        let ctx = create_context().await?;
-
         // File generated with substrait-java's Isthmus:
-        // ./isthmus-cli/build/graal/isthmus "select sum(d) OVER (PARTITION BY part ORDER BY ord ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) AS lead_expr from data" -c "create table data (d int, part int, ord int)"
-        let proto = read_json("tests/testdata/test_plans/select_window.substrait.json");
-
-        let plan = from_substrait_plan(&ctx, &proto).await?;
+        // ./isthmus-cli/build/graal/isthmus --create "create table data (d int, part int, ord int)" "select sum(d) OVER (PARTITION BY part ORDER BY ord ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) AS lead_expr from data"
+        let proto_plan =
+            read_json("tests/testdata/test_plans/select_window.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx, &proto_plan).await?;
 
         assert_eq!(
             format!("{}", plan),
-            "Projection: sum(DATA.a) PARTITION BY [DATA.b] ORDER BY [DATA.c ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR\
-            \n  WindowAggr: windowExpr=[[sum(DATA.a) PARTITION BY [DATA.b] ORDER BY [DATA.c ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]\
-            \n    TableScan: DATA projection=[a, b, c, d, e, f]"
+            "Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR\
+            \n  WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]\
+            \n    TableScan: DATA projection=[D, PART, ORD]"
         );
         Ok(())
     }
@@ -83,11 +79,10 @@ mod tests {
         // DataFusion's Substrait consumer treats all lists as nullable, even if the Substrait plan specifies them as non-nullable.
         // That's because implementing the non-nullability consistently is non-trivial.
         // This test confirms that reading a plan with non-nullable lists works as expected.
-        let ctx = create_context().await?;
-        let proto =
+        let proto_plan =
             read_json("tests/testdata/test_plans/non_nullable_lists.substrait.json");
-
-        let plan = from_substrait_plan(&ctx, &proto).await?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx, &proto_plan).await?;
 
         assert_eq!(format!("{}", &plan), "Values: (List([1, 2]))");
 
@@ -95,19 +90,5 @@ mod tests {
         DataFrame::new(ctx.state(), plan).show().await?;
 
         Ok(())
-    }
-
-    fn read_json(path: &str) -> Plan {
-        serde_json::from_reader::<_, Plan>(BufReader::new(
-            File::open(path).expect("file not found"),
-        ))
-        .expect("failed to parse json")
-    }
-
-    async fn create_context() -> datafusion::common::Result<SessionContext> {
-        let ctx = SessionContext::new();
-        ctx.register_csv("DATA", "tests/testdata/data.csv", CsvReadOptions::new())
-            .await?;
-        Ok(ctx)
     }
 }

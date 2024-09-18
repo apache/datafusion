@@ -54,7 +54,7 @@ math_expressions = []
 # enable regular expressions
 regex_expressions = ["regex"]
 # enable string functions
-string_expressions = ["uuid"]
+string_expressions = ["regex_expressions", "uuid"]
 # enable unicode functions
 unicode_expressions = ["hashbrown", "unicode-segmentation"]
 
@@ -170,4 +170,9 @@ required-features = ["unicode_expressions"]
 [[bench]]
 harness = false
 name = "character_length"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "strpos"
 required-features = ["unicode_expressions"]

@@ -234,30 +234,35 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
                 .build(),
             )),
-            #[cfg(feature = "parquet")]
+            #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
-                let base_config = parse_protobuf_file_scan_config(
-                    scan.base_conf.as_ref().unwrap(),
-                    registry,
-                    extension_codec,
-                )?;
-                let predicate = scan
-                    .predicate
-                    .as_ref()
-                    .map(|expr| {
-                        parse_physical_expr(
-                            expr,
-                            registry,
-                            base_config.file_schema.as_ref(),
-                            extension_codec,
-                        )
-                    })
-                    .transpose()?;
-                let mut builder = ParquetExec::builder(base_config);
-                if let Some(predicate) = predicate {
-                    builder = builder.with_predicate(predicate)
+                #[cfg(feature = "parquet")]
+                {
+                    let base_config = parse_protobuf_file_scan_config(
+                        scan.base_conf.as_ref().unwrap(),
+                        registry,
+                        extension_codec,
+                    )?;
+                    let predicate = scan
+                        .predicate
+                        .as_ref()
+                        .map(|expr| {
+                            parse_physical_expr(
+                                expr,
+                                registry,
+                                base_config.file_schema.as_ref(),
+                                extension_codec,
+                            )
+                        })
+                        .transpose()?;
+                    let mut builder = ParquetExec::builder(base_config);
+                    if let Some(predicate) = predicate {
+                        builder = builder.with_predicate(predicate)
+                    }
+                    Ok(builder.build_arc())
                 }
-                Ok(builder.build_arc())
+                #[cfg(not(feature = "parquet"))]
+                panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
             }
             PhysicalPlanType::AvroScan(scan) => {
                 Ok(Arc::new(AvroExec::new(parse_protobuf_file_scan_config(
@@ -1068,35 +1073,45 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     sort_order,
                 )))
             }
+            #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetSink(sink) => {
-                let input =
-                    into_physical_plan(&sink.input, registry, runtime, extension_codec)?;
+                #[cfg(feature = "parquet")]
+                {
+                    let input = into_physical_plan(
+                        &sink.input,
+                        registry,
+                        runtime,
+                        extension_codec,
+                    )?;
 
-                let data_sink: ParquetSink = sink
-                    .sink
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Missing required field in protobuf"))?
-                    .try_into()?;
-                let sink_schema = input.schema();
-                let sort_order = sink
-                    .sort_order
-                    .as_ref()
-                    .map(|collection| {
-                        parse_physical_sort_exprs(
-                            &collection.physical_sort_expr_nodes,
-                            registry,
-                            &sink_schema,
-                            extension_codec,
-                        )
-                        .map(|item| PhysicalSortRequirement::from_sort_exprs(&item))
-                    })
-                    .transpose()?;
-                Ok(Arc::new(DataSinkExec::new(
-                    input,
-                    Arc::new(data_sink),
-                    sink_schema,
-                    sort_order,
-                )))
+                    let data_sink: ParquetSink = sink
+                        .sink
+                        .as_ref()
+                        .ok_or_else(|| proto_error("Missing required field in protobuf"))?
+                        .try_into()?;
+                    let sink_schema = input.schema();
+                    let sort_order = sink
+                        .sort_order
+                        .as_ref()
+                        .map(|collection| {
+                            parse_physical_sort_exprs(
+                                &collection.physical_sort_expr_nodes,
+                                registry,
+                                &sink_schema,
+                                extension_codec,
+                            )
+                            .map(|item| PhysicalSortRequirement::from_sort_exprs(&item))
+                        })
+                        .transpose()?;
+                    Ok(Arc::new(DataSinkExec::new(
+                        input,
+                        Arc::new(data_sink),
+                        sink_schema,
+                        sort_order,
+                    )))
+                }
+                #[cfg(not(feature = "parquet"))]
+                panic!("Trying to use ParquetSink without `parquet` feature enabled");
             }
             PhysicalPlanType::Unnest(unnest) => {
                 let input = into_physical_plan(
@@ -1954,6 +1969,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 });
             }
 
+            #[cfg(feature = "parquet")]
             if let Some(sink) = exec.sink().as_any().downcast_ref::<ParquetSink>() {
                 return Ok(protobuf::PhysicalPlanNode {
                     physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
