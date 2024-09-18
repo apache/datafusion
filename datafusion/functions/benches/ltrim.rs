@@ -37,6 +37,7 @@ pub enum StringArrayType {
 
 pub fn create_string_array_and_characters(
     size: usize,
+    characters: &str,
     trimmed: &str,
     remaining_len: usize,
     string_array_type: StringArrayType,
@@ -58,15 +59,15 @@ pub fn create_string_array_and_characters(
     match string_array_type {
         StringArrayType::Utf8View => (
             Arc::new(string_iter.collect::<StringViewArray>()),
-            ScalarValue::Utf8View(Some(trimmed.to_string())),
+            ScalarValue::Utf8View(Some(characters.to_string())),
         ),
         StringArrayType::Utf8 => (
             Arc::new(string_iter.collect::<StringArray>()),
-            ScalarValue::Utf8(Some(trimmed.to_string())),
+            ScalarValue::Utf8(Some(characters.to_string())),
         ),
         StringArrayType::LargeUtf8 => (
             Arc::new(string_iter.collect::<LargeStringArray>()),
-            ScalarValue::LargeUtf8(Some(trimmed.to_string())),
+            ScalarValue::LargeUtf8(Some(characters.to_string())),
         ),
     }
 }
@@ -92,6 +93,7 @@ fn create_args(
 ) -> Vec<ColumnarValue> {
     let (string_array, pattern) = create_string_array_and_characters(
         size,
+        characters,
         trimmed,
         remaining_len,
         string_array_type,
