@@ -59,18 +59,22 @@ pub fn create_string_array_and_characters(
 ) -> (ArrayRef, ScalarValue) {
     let rng = &mut seedable_rng();
 
-    let lens = vec![remaining_len; size];
-    let string_iter = lens.into_iter().map(|len| {
+    // Create `size` rows:
+    //   - 10% rows will be `None`
+    //   - Other 90% will be strings with same `remaining_len` lengths
+    // We will build the string array on it later.
+    let string_iter = (0..size).into_iter().map(|_| {
         if rng.gen::<f32>() < 0.1 {
             None
         } else {
             let mut value = trimmed.as_bytes().to_vec();
-            let generated = rng.sample_iter(&Alphanumeric).take(len);
+            let generated = rng.sample_iter(&Alphanumeric).take(remaining_len);
             value.extend(generated);
             Some(String::from_utf8(value).unwrap())
         }
     });
 
+    // Build the target `string array` and `characters` according to `string_array_type`
     match string_array_type {
         StringArrayType::Utf8View => (
             Arc::new(string_iter.collect::<StringViewArray>()),
