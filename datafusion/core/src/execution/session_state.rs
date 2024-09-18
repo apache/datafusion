@@ -259,36 +259,9 @@ impl SessionState {
     }
 
     /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionStateBuilder")]
-    pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_default_features()
-            .build()
-    }
-
-    /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogProviderList`]
     #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     pub fn new_with_config_rt_and_catalog_list(
-        config: SessionConfig,
-        runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogProviderList>,
-    ) -> Self {
-        SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_catalog_list(catalog_list)
-            .with_default_features()
-            .build()
-    }
-
-    /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionStateBuilder")]
-    pub fn with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
         catalog_list: Arc<dyn CatalogProviderList>,

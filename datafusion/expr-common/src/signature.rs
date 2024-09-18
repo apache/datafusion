@@ -43,8 +43,8 @@ pub enum Volatility {
     Immutable,
     /// A stable function may return different values given the same input across different
     /// queries but must return the same value for a given input within a query. An example of
-    /// this is the `Now` function. DataFusion
-    /// will attempt to inline `Stable` functions during planning, when possible.
+    /// this is the `Now` function. DataFusion will attempt to inline `Stable` functions
+    /// during planning, when possible.
     /// For query `select col1, now() from t1`, it might take a while to execute but
     /// `now()` column will be the same for each output row, which is evaluated
     /// during planning.
@@ -84,7 +84,7 @@ pub enum Volatility {
 ///   DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
 /// ]);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum TypeSignature {
     /// One or more arguments of an common type out of a list of valid types.
     ///
@@ -127,7 +127,7 @@ pub enum TypeSignature {
     Numeric(usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum ArrayFunctionSignature {
     /// Specialized Signature for ArrayAppend and similar functions
     /// The first argument should be List/LargeList/FixedSizedList, and the second argument should be non-list or list.
@@ -241,7 +241,7 @@ impl TypeSignature {
 ///
 /// DataFusion will automatically coerce (cast) argument types to one of the supported
 /// function signatures, if possible.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Signature {
     /// The data types that the function accepts. See [TypeSignature] for more information.
     pub type_signature: TypeSignature,
@@ -417,5 +417,25 @@ mod tests {
                 case
             );
         }
+    }
+
+    #[test]
+    fn type_signature_partial_ord() {
+        // Test validates that partial ord is defined for TypeSignature and Signature.
+        assert!(TypeSignature::UserDefined < TypeSignature::VariadicAny);
+        assert!(TypeSignature::UserDefined < TypeSignature::Any(1));
+
+        assert!(
+            TypeSignature::Uniform(1, vec![DataType::Null])
+                < TypeSignature::Uniform(1, vec![DataType::Boolean])
+        );
+        assert!(
+            TypeSignature::Uniform(1, vec![DataType::Null])
+                < TypeSignature::Uniform(2, vec![DataType::Null])
+        );
+        assert!(
+            TypeSignature::Uniform(usize::MAX, vec![DataType::Null])
+                < TypeSignature::Exact(vec![DataType::Null])
+        );
     }
 }

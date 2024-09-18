@@ -53,6 +53,8 @@ use crate::variation_const::{
 };
 use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::common::scalar::ScalarStructBuilder;
+use datafusion::dataframe::DataFrame;
+use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -276,6 +278,20 @@ pub fn extract_projection(
                             DFSchema::new_with_metadata(fields, HashMap::new())?,
                         );
                         Ok(LogicalPlan::TableScan(scan))
+                    }
+                    LogicalPlan::Projection(projection) => {
+                        // create another Projection around the Projection to handle the field masking
+                        let fields: Vec<Expr> = column_indices
+                            .into_iter()
+                            .map(|i| {
+                                let (qualifier, field) =
+                                    projection.schema.qualified_field(i);
+                                let column =
+                                    Column::new(qualifier.cloned(), field.name());
+                                Expr::Column(column)
+                            })
+                            .collect();
+                        project(LogicalPlan::Projection(projection), fields)
                     }
                     _ => plan_err!("unexpected plan for table"),
                 }
@@ -640,6 +656,10 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
+                let named_struct = read.base_schema.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("No base schema provided for Named Table")
+                })?;
+
                 let table_reference = match nt.names.len() {
                     0 => {
                         return plan_err!("No table name found in NamedTable");
@@ -657,7 +677,13 @@ pub async fn from_substrait_rel(
                         table: nt.names[2].clone().into(),
                     },
                 };
-                let t = ctx.table(table_reference).await?;
+
+                let substrait_schema =
+                    from_substrait_named_struct(named_struct, extensions)?
+                        .replace_qualifier(table_reference.clone());
+
+                let t = ctx.table(table_reference.clone()).await?;
+                let t = ensure_schema_compatability(t, substrait_schema)?;
                 let t = t.into_optimized_plan()?;
                 extract_projection(t, &read.projection)
             }
@@ -671,7 +697,7 @@ pub async fn from_substrait_rel(
                 if vt.values.is_empty() {
                     return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
-                        schema,
+                        schema: DFSchemaRef::new(schema),
                     }));
                 }
 
@@ -704,7 +730,10 @@ pub async fn from_substrait_rel(
                     })
                     .collect::<Result<_>>()?;
 
-                Ok(LogicalPlan::Values(Values { schema, values }))
+                Ok(LogicalPlan::Values(Values {
+                    schema: DFSchemaRef::new(schema),
+                    values,
+                }))
             }
             Some(ReadType::LocalFiles(lf)) => {
                 fn extract_filename(name: &str) -> Option<String> {
@@ -848,6 +877,87 @@ pub async fn from_substrait_rel(
         }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
     }
+}
+
+/// Ensures that the given Substrait schema is compatible with the schema as given by DataFusion
+///
+/// This means:
+/// 1. All fields present in the Substrait schema are present in the DataFusion schema. The
+///    DataFusion schema may have MORE fields, but not the other way around.
+/// 2. All fields are compatible. See [`ensure_field_compatability`] for details
+///
+/// This function returns a DataFrame with fields adjusted if necessary in the event that the
+/// Substrait schema is a subset of the DataFusion schema.
+fn ensure_schema_compatability(
+    table: DataFrame,
+    substrait_schema: DFSchema,
+) -> Result<DataFrame> {
+    let df_schema = table.schema().to_owned().strip_qualifiers();
+    if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
+        return Ok(table);
+    }
+    let selected_columns = substrait_schema
+        .strip_qualifiers()
+        .fields()
+        .iter()
+        .map(|substrait_field| {
+            let df_field =
+                df_schema.field_with_unqualified_name(substrait_field.name())?;
+            ensure_field_compatability(df_field, substrait_field)?;
+            Ok(col(format!("\"{}\"", df_field.name())))
+        })
+        .collect::<Result<_>>()?;
+
+    table.select(selected_columns)
+}
+
+/// Ensures that the given Substrait field is compatible with the given DataFusion field
+///
+/// A field is compatible between Substrait and DataFusion if:
+/// 1. They have logically equivalent types.
+/// 2. They have the same nullability OR the Substrait field is nullable and the DataFusion fields
+///    is not nullable.
+///
+/// If a Substrait field is not nullable, the Substrait plan may be built around assuming it is not
+/// nullable. As such if DataFusion has that field as nullable the plan should be rejected.
+fn ensure_field_compatability(
+    datafusion_field: &Field,
+    substrait_field: &Field,
+) -> Result<()> {
+    if !DFSchema::datatype_is_logically_equal(
+        datafusion_field.data_type(),
+        substrait_field.data_type(),
+    ) {
+        return substrait_err!(
+            "Field '{}' in Substrait schema has a different type ({}) than the corresponding field in the table schema ({}).",
+            substrait_field.name(),
+            substrait_field.data_type(),
+            datafusion_field.data_type()
+        );
+    }
+
+    if !compatible_nullabilities(
+        datafusion_field.is_nullable(),
+        substrait_field.is_nullable(),
+    ) {
+        // TODO: from_substrait_struct_type needs to be updated to set the nullability correctly. It defaults to true for now.
+        return substrait_err!(
+            "Field '{}' is nullable in the DataFusion schema but not nullable in the Substrait schema.",
+            substrait_field.name()
+        );
+    }
+    Ok(())
+}
+
+/// Returns true if the DataFusion and Substrait nullabilities are compatible, false otherwise
+fn compatible_nullabilities(
+    datafusion_nullability: bool,
+    substrait_nullability: bool,
+) -> bool {
+    // DataFusion and Substrait have the same nullability
+    (datafusion_nullability == substrait_nullability)
+    // DataFusion is not nullable and Substrait is nullable
+     || (!datafusion_nullability && substrait_nullability)
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
@@ -1588,10 +1698,11 @@ fn next_struct_field_name(
     }
 }
 
-fn from_substrait_named_struct(
+/// Convert Substrait NamedStruct to DataFusion DFSchemaRef
+pub fn from_substrait_named_struct(
     base_schema: &NamedStruct,
     extensions: &Extensions,
-) -> Result<DFSchemaRef> {
+) -> Result<DFSchema> {
     let mut name_idx = 0;
     let fields = from_substrait_struct_type(
         base_schema.r#struct.as_ref().ok_or_else(|| {
@@ -1603,12 +1714,12 @@ fn from_substrait_named_struct(
     );
     if name_idx != base_schema.names.len() {
         return substrait_err!(
-                                "Names list must match exactly to nested schema, but found {} uses for {} names",
-                                name_idx,
-                                base_schema.names.len()
-                            );
+            "Names list must match exactly to nested schema, but found {} uses for {} names",
+            name_idx,
+            base_schema.names.len()
+        );
     }
-    Ok(DFSchemaRef::new(DFSchema::try_from(Schema::new(fields?))?))
+    DFSchema::try_from(Schema::new(fields?))
 }
 
 fn from_substrait_bound(
@@ -1953,14 +2064,19 @@ fn from_substrait_literal(
             // DF only supports millisecond precision, so for any more granular type we lose precision
             let milliseconds = match precision_mode {
                 Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
+                None =>
+                    if *subseconds != 0 {
+                        return substrait_err!("Cannot set subseconds field of IntervalDayToSecond without setting precision");
+                    } else {
+                        0_i32
+                    }
                 Some(PrecisionMode::Precision(0)) => *subseconds as i32 * 1000,
                 Some(PrecisionMode::Precision(3)) => *subseconds as i32,
                 Some(PrecisionMode::Precision(6)) => (subseconds / 1000) as i32,
                 Some(PrecisionMode::Precision(9)) => (subseconds / 1000 / 1000) as i32,
                 _ => {
                     return not_impl_err!(
-                        "Unsupported Substrait interval day to second precision mode"
-                    )
+                    "Unsupported Substrait interval day to second precision mode: {precision_mode:?}")
                 }
             };
 
