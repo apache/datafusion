@@ -18,16 +18,17 @@
 //! The table implementation.
 
 use std::collections::HashMap;
-use std::str::FromStr;
-use std::{any::Any, sync::Arc};
+use std::{any::Any, str::FromStr, sync::Arc};
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
-use super::PartitionedFile;
+use super::{ListingTableUrl, PartitionedFile};
 
-use super::ListingTableUrl;
-use crate::datasource::{create_ordering, get_statistics_with_limit};
 use crate::datasource::{
-    file_format::{file_compression_type::FileCompressionType, FileFormat},
+    create_ordering,
+    file_format::{
+        file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
+    },
+    get_statistics_with_limit,
     physical_plan::{FileScanConfig, FileSinkConfig},
 };
 use crate::execution::context::SessionState;
@@ -43,8 +44,9 @@ use datafusion_common::{
     config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
     SchemaExt, ToDFSchema,
 };
-use datafusion_execution::cache::cache_manager::FileStatisticsCache;
-use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+use datafusion_execution::cache::{
+    cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache,
+};
 use datafusion_physical_expr::{
     create_physical_expr, LexOrdering, PhysicalSortRequirement,
 };
@@ -817,19 +819,22 @@ impl TableProvider for ListingTable {
             .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
             .collect::<Result<Vec<_>>>()?;
 
-        let filters = if let Some(expr) = conjunction(filters.to_vec()) {
-            // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
-            let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
-            let filters =
-                create_physical_expr(&expr, &table_df_schema, state.execution_props())?;
-            Some(filters)
-        } else {
-            None
-        };
+        let filters = conjunction(filters.to_vec())
+            .map(|expr| -> Result<_> {
+                // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
+                let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
+                let filters = create_physical_expr(
+                    &expr,
+                    &table_df_schema,
+                    state.execution_props(),
+                )?;
+                Ok(Some(filters))
+            })
+            .unwrap_or(Ok(None))?;
 
-        let object_store_url = if let Some(url) = self.table_paths.first() {
-            url.object_store()
-        } else {
+        let Some(object_store_url) =
+            self.table_paths.first().map(ListingTableUrl::object_store)
+        else {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
@@ -854,7 +859,7 @@ impl TableProvider for ListingTable {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        Ok(filters
+        filters
             .iter()
             .map(|filter| {
                 if expr_applicable_for_cols(
@@ -862,19 +867,29 @@ impl TableProvider for ListingTable {
                         .options
                         .table_partition_cols
                         .iter()
-                        .map(|x| x.0.as_str())
+                        .map(|col| col.0.as_str())
                         .collect::<Vec<_>>(),
                     filter,
                 ) {
                     // if filter can be handled by partition pruning, it is exact
-                    TableProviderFilterPushDown::Exact
-                } else {
-                    // otherwise, we still might be able to handle the filter with file
-                    // level mechanisms such as Parquet row group pruning.
-                    TableProviderFilterPushDown::Inexact
+                    return Ok(TableProviderFilterPushDown::Exact);
                 }
+
+                // if we can't push it down completely with only the filename-based/path-based
+                // column names, then we should check if we can do parquet predicate pushdown
+                let supports_pushdown = self.options.format.supports_filters_pushdown(
+                    &self.file_schema,
+                    &self.table_schema,
+                    &[filter],
+                )?;
+
+                if supports_pushdown == FilePushdownSupport::Supported {
+                    return Ok(TableProviderFilterPushDown::Exact);
+                }
+
+                Ok(TableProviderFilterPushDown::Inexact)
             })
-            .collect())
+            .collect()
     }
 
     fn get_table_definition(&self) -> Option<&str> {
