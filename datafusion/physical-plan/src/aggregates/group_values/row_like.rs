@@ -158,6 +158,14 @@ impl GroupValues for GroupValuesRowLike {
                             let b = ByteGroupValueBuilder::<i64>::new(OutputType::Utf8);
                             v.push(Box::new(b) as _)
                         }
+                        &DataType::Binary => {
+                            let b = ByteGroupValueBuilder::<i32>::new(OutputType::Binary);
+                            v.push(Box::new(b) as _)
+                        }
+                        &DataType::LargeBinary => {
+                            let b = ByteGroupValueBuilder::<i64>::new(OutputType::Binary);
+                            v.push(Box::new(b) as _)
+                        }
                         dt => todo!("{dt} not impl"),
                     }
                 }
