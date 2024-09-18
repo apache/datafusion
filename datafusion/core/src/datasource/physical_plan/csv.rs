@@ -1329,15 +1329,15 @@ mod tests {
 
         let df = ctx.sql(r#"select * from t1"#).await?.collect().await?;
         let expected = [
-            "+-------+-----------------------------+",
-            "| col1  | col2                        |",
-            "+-------+-----------------------------+",
-            "| 1     | hello\rworld                 |",
-            "| 2     | something\relse              |",
+            "+-------+------------------------+",
+            "| col1  | col2                   |",
+            "+-------+------------------------+",
+            "| 1     | hello\rworld             |",
+            "| 2     | something\relse          |",
             "| 3     | \rmany\rlines\rmake\rgood test\r |",
-            "| 4     | unquoted                    |",
-            "| value | end                         |",
-            "+-------+-----------------------------+",
+            "| 4     | unquoted               |",
+            "| value | end                    |",
+            "+-------+------------------------+",
         ];
         crate::assert_batches_eq!(expected, &df);
         Ok(())

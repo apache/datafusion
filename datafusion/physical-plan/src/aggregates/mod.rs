@@ -1358,7 +1358,8 @@ mod tests {
             .build()?];
 
         let task_ctx = if spill {
-            new_spill_ctx(4, 1000)
+            // adjust the max memory size to have the partial aggregate result for spill mode.
+            new_spill_ctx(4, 500)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -1375,24 +1376,55 @@ mod tests {
         let result =
             common::collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
-        let expected = vec![
-            "+---+-----+-----------------+",
-            "| a | b   | COUNT(1)[count] |",
-            "+---+-----+-----------------+",
-            "|   | 1.0 | 2               |",
-            "|   | 2.0 | 2               |",
-            "|   | 3.0 | 2               |",
-            "|   | 4.0 | 2               |",
-            "| 2 |     | 2               |",
-            "| 2 | 1.0 | 2               |",
-            "| 3 |     | 3               |",
-            "| 3 | 2.0 | 2               |",
-            "| 3 | 3.0 | 1               |",
-            "| 4 |     | 3               |",
-            "| 4 | 3.0 | 1               |",
-            "| 4 | 4.0 | 2               |",
-            "+---+-----+-----------------+",
-        ];
+        let expected = if spill {
+            // In spill mode, we test with the limited memory, if the mem usage exceeds,
+            // we trigger the early emit rule, which turns out the partial aggregate result.
+            vec![
+                "+---+-----+-----------------+",
+                "| a | b   | COUNT(1)[count] |",
+                "+---+-----+-----------------+",
+                "|   | 1.0 | 1               |",
+                "|   | 1.0 | 1               |",
+                "|   | 2.0 | 1               |",
+                "|   | 2.0 | 1               |",
+                "|   | 3.0 | 1               |",
+                "|   | 3.0 | 1               |",
+                "|   | 4.0 | 1               |",
+                "|   | 4.0 | 1               |",
+                "| 2 |     | 1               |",
+                "| 2 |     | 1               |",
+                "| 2 | 1.0 | 1               |",
+                "| 2 | 1.0 | 1               |",
+                "| 3 |     | 1               |",
+                "| 3 |     | 2               |",
+                "| 3 | 2.0 | 2               |",
+                "| 3 | 3.0 | 1               |",
+                "| 4 |     | 1               |",
+                "| 4 |     | 2               |",
+                "| 4 | 3.0 | 1               |",
+                "| 4 | 4.0 | 2               |",
+                "+---+-----+-----------------+",
+            ]
+        } else {
+            vec![
+                "+---+-----+-----------------+",
+                "| a | b   | COUNT(1)[count] |",
+                "+---+-----+-----------------+",
+                "|   | 1.0 | 2               |",
+                "|   | 2.0 | 2               |",
+                "|   | 3.0 | 2               |",
+                "|   | 4.0 | 2               |",
+                "| 2 |     | 2               |",
+                "| 2 | 1.0 | 2               |",
+                "| 3 |     | 3               |",
+                "| 3 | 2.0 | 2               |",
+                "| 3 | 3.0 | 1               |",
+                "| 4 |     | 3               |",
+                "| 4 | 3.0 | 1               |",
+                "| 4 | 4.0 | 2               |",
+                "+---+-----+-----------------+",
+            ]
+        };
         assert_batches_sorted_eq!(expected, &result);
 
         let groups = partial_aggregate.group_expr().expr().to_vec();
