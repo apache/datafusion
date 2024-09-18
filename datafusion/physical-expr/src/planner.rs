@@ -258,6 +258,23 @@ pub fn create_physical_expr(
                 create_physical_expr(expr, input_dfschema, execution_props)?;
             let physical_pattern =
                 create_physical_expr(pattern, input_dfschema, execution_props)?;
+
+            if let Expr::Literal(
+                ScalarValue::Null
+                | ScalarValue::Utf8(_)
+                | ScalarValue::Utf8View(_)
+                | ScalarValue::LargeUtf8(_),
+            ) = pattern.as_ref()
+            {
+                // handle literal regexp pattern case to `ScalarRegexMatchExpr`
+                return scalar_regex_match(
+                    *negated,
+                    *case_insensitive,
+                    physical_expr,
+                    physical_pattern,
+                    input_schema,
+                );
+            }
             similar_to(*negated, *case_insensitive, physical_expr, physical_pattern)
         }
         Expr::Case(case) => {
