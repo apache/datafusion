@@ -22,11 +22,16 @@ use arrow_array::{
 };
 use arrow_buffer::BooleanBufferBuilder;
 use arrow_schema::{DataType, Schema};
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result as DFResult, ScalarValue};
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::{down_cast_any_ref, PhysicalExpr};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use regex::Regex;
-use std::{any::Any, hash::Hash, sync::Arc};
+use std::{
+    any::Any,
+    fmt::{Debug, Display, Formatter, Result as FmtResult},
+    hash::Hash,
+    sync::Arc,
+};
 
 /// ScalarRegexMatchExpr
 /// Only used when evaluating regexp matching with literal pattern.
@@ -133,9 +138,7 @@ impl ScalarRegexMatchExpr {
             (true, true) => "NOT IMATCH",
         }
     }
-}
 
-impl ScalarRegexMatchExpr {
     /// Evaluate the scalar regex match expression match array value
     fn evaluate_array(
         &self,
@@ -200,16 +203,9 @@ impl ScalarRegexMatchExpr {
     }
 }
 
-impl std::hash::Hash for ScalarRegexMatchExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.negated.hash(state);
-        self.case_insensitive.hash(state);
-        self.expr.hash(state);
-        self.pattern.hash(state);
-    }
-}
+impl Eq for ScalarRegexMatchExpr {}
 
-impl std::cmp::PartialEq for ScalarRegexMatchExpr {
+impl PartialEq for ScalarRegexMatchExpr {
     fn eq(&self, other: &Self) -> bool {
         self.negated.eq(&other.negated)
             && self.case_insensitive.eq(&self.case_insensitive)
@@ -218,8 +214,17 @@ impl std::cmp::PartialEq for ScalarRegexMatchExpr {
     }
 }
 
-impl std::fmt::Debug for ScalarRegexMatchExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Hash for ScalarRegexMatchExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.negated.hash(state);
+        self.case_insensitive.hash(state);
+        self.expr.hash(state);
+        self.pattern.hash(state);
+    }
+}
+
+impl Debug for ScalarRegexMatchExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("ScalarRegexMatchExpr")
             .field("negated", &self.negated)
             .field("case_insensitive", &self.case_insensitive)
@@ -229,35 +234,26 @@ impl std::fmt::Debug for ScalarRegexMatchExpr {
     }
 }
 
-impl std::fmt::Display for ScalarRegexMatchExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Display for ScalarRegexMatchExpr {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
         write!(f, "{} {} {}", self.expr, self.op_name(), self.pattern)
     }
 }
 
 impl PhysicalExpr for ScalarRegexMatchExpr {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn data_type(
-        &self,
-        _: &arrow_schema::Schema,
-    ) -> datafusion_common::Result<arrow_schema::DataType> {
+    fn data_type(&self, _: &Schema) -> DFResult<DataType> {
         Ok(DataType::Boolean)
     }
 
-    fn nullable(
-        &self,
-        input_schema: &arrow_schema::Schema,
-    ) -> datafusion_common::Result<bool> {
+    fn nullable(&self, input_schema: &Schema) -> DFResult<bool> {
         Ok(self.expr.nullable(input_schema)? || self.pattern.nullable(input_schema)?)
     }
 
-    fn evaluate(
-        &self,
-        batch: &arrow_array::RecordBatch,
-    ) -> datafusion_common::Result<ColumnarValue> {
+    fn evaluate(&self, batch: &arrow_array::RecordBatch) -> DFResult<ColumnarValue> {
         self.expr
             .evaluate(batch)
             .and_then(|lhs| {
@@ -274,14 +270,14 @@ impl PhysicalExpr for ScalarRegexMatchExpr {
             .map(ColumnarValue::Array)
     }
 
-    fn children(&self) -> Vec<&std::sync::Arc<dyn PhysicalExpr>> {
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![&self.expr, &self.pattern]
     }
 
     fn with_new_children(
-        self: std::sync::Arc<Self>,
-        children: Vec<std::sync::Arc<dyn PhysicalExpr>>,
-    ) -> datafusion_common::Result<std::sync::Arc<dyn PhysicalExpr>> {
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> DFResult<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(ScalarRegexMatchExpr::new(
             self.negated,
             self.case_insensitive,
@@ -290,18 +286,24 @@ impl PhysicalExpr for ScalarRegexMatchExpr {
         )))
     }
 
-    fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-}
+    fn evaluate_selection(
+        &self,
+        batch: &arrow_array::RecordBatch,
+        selection: &BooleanArray,
+    ) -> DFResult<ColumnarValue> {
+        let tmp_batch = arrow::compute::filter_record_batch(batch, selection)?;
 
-impl PartialEq<dyn Any> for ScalarRegexMatchExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self == x)
-            .unwrap_or(false)
+        let tmp_result = self.evaluate(&tmp_batch)?;
+
+        if batch.num_rows() == tmp_batch.num_rows() {
+            // All values from the `selection` filter are true.
+            Ok(tmp_result)
+        } else if let ColumnarValue::Array(a) = tmp_result {
+            datafusion_physical_expr_common::utils::scatter(selection, a.as_ref())
+                .map(ColumnarValue::Array)
+        } else {
+            Ok(tmp_result)
+        }
     }
 }
 
@@ -310,7 +312,7 @@ fn array_regexp_match(
     array: &dyn ArrayAccessor<Item = &str>,
     regex: &Regex,
     negated: bool,
-) -> datafusion_common::Result<ColumnarValue> {
+) -> DFResult<ColumnarValue> {
     let null_bit_buffer = array.nulls().map(|x| x.inner().sliced());
     let mut buffer_builder = BooleanBufferBuilder::new(array.len());
 
@@ -359,7 +361,7 @@ pub fn scalar_regex_match(
     expr: Arc<dyn PhysicalExpr>,
     pattern: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
-) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+) -> DFResult<Arc<dyn PhysicalExpr>> {
     let valid_data_type = |data_type: &DataType| {
         if !matches!(
             data_type,

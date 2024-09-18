@@ -53,6 +53,7 @@ itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 paste = "^1.0"
 petgraph = "0.6.2"
+regex = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
