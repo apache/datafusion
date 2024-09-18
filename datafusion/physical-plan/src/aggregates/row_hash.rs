@@ -868,7 +868,7 @@ impl GroupedHashAggregateStream {
                     get_filter_at_indices(opt_filter, &batch_indices)
                 })
                 .collect::<Result<Vec<_>>>()?;
-
+                
             // Update the accumulators of each partition
             for (part_idx, part_start_end) in offsets.windows(2).enumerate() {
                 let (offset, length) =
@@ -981,6 +981,12 @@ impl GroupedHashAggregateStream {
     /// Create an output RecordBatch with the group keys and
     /// accumulator states/values specified in emit_to
     fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<RecordBatch> {
+        self.emit_single(emit_to, spilling)
+    }
+
+    /// Create an output RecordBatch with the group keys and
+    /// accumulator states/values specified in emit_to
+    fn emit_single(&mut self, emit_to: EmitTo, spilling: bool) -> Result<RecordBatch> {
         let schema = if spilling {
             Arc::clone(&self.spill_state.spill_schema)
         } else {
@@ -1011,6 +1017,33 @@ impl GroupedHashAggregateStream {
                 | AggregateMode::Single
                 | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
             }
+        }
+
+        // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
+        // over the target memory size after emission, we can emit again rather than returning Err.
+        let _ = self.update_memory_reservation();
+        let batch = RecordBatch::try_new(schema, output)?;
+        Ok(batch)
+    }
+
+    fn emit_partitioned(&mut self, emit_to: EmitTo, spilling: bool) -> Result<Vec<RecordBatch>> {
+        assert!(
+            self.mode == AggregateMode::Partial
+                && matches!(self.group_ordering, GroupOrdering::None)
+        );
+
+        let schema = self.schema();
+
+        if self.group_values.is_empty() {
+            return Ok(RecordBatch::new_empty(schema));
+        }
+
+        let group_values = self.group_values.as_partitioned_mut();
+        let mut output = group_values.emit(emit_to)?;
+
+        // Next output each aggregate value
+        for acc in self.accumulators[0].iter_mut() {
+            output.extend(acc.state(emit_to)?)
         }
 
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
