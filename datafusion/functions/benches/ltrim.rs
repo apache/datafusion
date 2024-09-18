@@ -37,7 +37,6 @@ pub enum StringArrayType {
 
 pub fn create_string_array_and_characters(
     size: usize,
-    characters: &str,
     trimmed: &str,
     remaining_len: usize,
     string_array_type: StringArrayType,
@@ -93,7 +92,6 @@ fn create_args(
 ) -> Vec<ColumnarValue> {
     let (string_array, pattern) = create_string_array_and_characters(
         size,
-        characters,
         trimmed,
         remaining_len,
         string_array_type,
