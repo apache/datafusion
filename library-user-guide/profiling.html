@@ -568,30 +568,32 @@
 <h2>MacOS<a class="headerlink" href="#macos" title="Link to this heading">¶</a></h2>
 <section id="building-a-flamegraph">
 <h3>Building a flamegraph<a class="headerlink" href="#building-a-flamegraph" title="Link to this heading">¶</a></h3>
-<ul class="simple">
-<li><p><a class="reference external" href="https://github.com/flamegraph-rs/flamegraph">cargo-flamegraph</a></p></li>
-</ul>
-<p>Test:</p>
+<p><a class="reference external" href="https://youtu.be/2z11xtYw_xs">Video: how to CPU profile DataFusion with a Flamegraph</a></p>
+<p>A flamegraph is a visual representation of which functions are being run
+You can create flamegraphs in many ways; The instructions below are for
+<a class="reference external" href="https://github.com/flamegraph-rs/flamegraph">cargo-flamegraph</a> which results
+in images such as this:</p>
+<p><img alt="Flamegraph" src="../_images/flamegraph.svg" /></p>
+<p>To create a flamegraph, you need to install the <code class="docutils literal notranslate"><span class="pre">flamegraph</span></code> tool:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>install<span class="w"> </span>flamegraph
+</pre></div>
+</div>
+<p>Then you can run the flamegraph tool with the <code class="docutils literal notranslate"><span class="pre">--</span></code> separator to pass arguments
+to the binary you want to profile.</p>
+<p>Example: Flamegraph for <code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code> executing <code class="docutils literal notranslate"><span class="pre">q28.sql</span></code>. Note this
+must be run as root on Mac OSx to access DTrace.</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>flamegraph<span class="w"> </span>--<span class="w"> </span>datafusion-cli<span class="w"> </span>-f<span class="w"> </span>q28.sq
+</pre></div>
+</div>
+<p>You can also invoke the flamegraph tool with <code class="docutils literal notranslate"><span class="pre">cargo</span></code> to profile a specific test or benchmark.</p>
+<p>Example: Flamegraph for a specific test:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CARGO_PROFILE_RELEASE_DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>cargo<span class="w"> </span>flamegraph<span class="w"> </span>--root<span class="w"> </span>--unit-test<span class="w"> </span>datafusion<span class="w">  </span>--<span class="w"> </span>dataframe::tests::test_array_agg
 </pre></div>
 </div>
-<p>Benchmark:</p>
+<p>Example: Flamegraph for a benchmark</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CARGO_PROFILE_RELEASE_DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>cargo<span class="w"> </span>flamegraph<span class="w"> </span>--root<span class="w"> </span>--bench<span class="w"> </span>sql_planner<span class="w"> </span>--<span class="w"> </span>--bench
 </pre></div>
 </div>
-<p>Open <code class="docutils literal notranslate"><span class="pre">flamegraph.svg</span></code> file with the browser</p>
-<ul class="simple">
-<li><p>dtrace with DataFusion CLI</p></li>
-</ul>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/brendangregg/FlameGraph.git<span class="w"> </span>/tmp/fg
-<span class="nb">cd</span><span class="w"> </span>datafusion-cli
-<span class="nv">CARGO_PROFILE_RELEASE_DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>cargo<span class="w"> </span>build<span class="w"> </span>--release
-<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;select * from table;&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>test.sql
-sudo<span class="w"> </span>dtrace<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;./target/debug/datafusion-cli -f test.sql&#39;</span><span class="w"> </span>-o<span class="w"> </span>out.stacks<span class="w"> </span>-n<span class="w"> </span><span class="s1">&#39;profile-997 /execname == &quot;datafusion-cli&quot;/ { @[ustack(100)] = count(); }&#39;</span>
-/tmp/fg/FlameGraph/stackcollapse.pl<span class="w"> </span>out.stacks<span class="w"> </span><span class="p">|</span><span class="w"> </span>/tmp/fg/FlameGraph/flamegraph.pl<span class="w"> </span>&gt;<span class="w"> </span>flamegraph.svg
-</pre></div>
-</div>
-<p>Open <code class="docutils literal notranslate"><span class="pre">flamegraph.svg</span></code> file with the browser</p>
 </section>
 <section id="cpu-profiling-with-xcode-instruments">
 <h3>CPU profiling with XCode Instruments<a class="headerlink" href="#cpu-profiling-with-xcode-instruments" title="Link to this heading">¶</a></h3>
