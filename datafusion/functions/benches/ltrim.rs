@@ -49,6 +49,7 @@ impl fmt::Display for StringArrayType {
     }
 }
 
+/// returns an array of strings, and `characters` as a ScalarValue
 pub fn create_string_array_and_characters(
     size: usize,
     characters: &str,
