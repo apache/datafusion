@@ -86,7 +86,7 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<Vec<usize>>,
-        part_row_indices: &mut Vec<Vec<usize>>,
+        part_row_indices: &mut Vec<Vec<u32>>,
     ) -> Result<()> {
         // Convert the group keys into the row format
         let group_rows = &mut self.rows_buffer;
@@ -107,7 +107,7 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
         let num_partitions = self.partitions.len();
         for (row_idx, hash) in batch_hashes.iter().enumerate() {
             let partition_idx = (*hash as usize) % num_partitions;
-            part_row_indices[partition_idx].push(row_idx);
+            part_row_indices[partition_idx].push(row_idx as u32);
         }
 
         // 3. Get or create groups in partitions
@@ -146,6 +146,10 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
 
     fn len(&self) -> usize {
         self.partitions.iter().map(|part| part.len()).sum::<usize>()
+    }
+
+    fn partition_len(&self, partition_index: usize) -> usize {
+        self.partitions[partition_index].len()
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<Vec<ArrayRef>>> {
@@ -205,7 +209,7 @@ impl GroupValuesPartition {
         input_rows: &Rows,
         hashes: &[u64],
         row_converter: &RowConverter,
-        row_indices: &[usize],
+        row_indices: &[u32],
         group_indices: &mut Vec<usize>,
     ) {
         group_indices.clear();
@@ -216,6 +220,7 @@ impl GroupValuesPartition {
         };
 
         for &row_idx in row_indices {
+            let row_idx = row_idx as usize;
             let target_hash = hashes[row_idx];
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
                 // Somewhat surprisingly, this closure can be called even if the

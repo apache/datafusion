@@ -118,7 +118,7 @@ pub trait PartitionedGroupValues: Send {
         &mut self,
         cols: &[ArrayRef],
         part_groups: &mut Vec<Vec<usize>>,
-        part_row_indices: &mut Vec<Vec<usize>>,
+        part_row_indices: &mut Vec<Vec<u32>>,
     ) -> Result<()>;
 
     fn num_partitions(&self) -> usize;
@@ -128,6 +128,8 @@ pub trait PartitionedGroupValues: Send {
 
     /// Returns true if this [`GroupValues`] is empty
     fn is_empty(&self) -> bool;
+
+    fn partition_len(&self, partition_index: usize) -> usize;
 
     /// The number of values stored in this [`GroupValues`]
     fn len(&self) -> usize;

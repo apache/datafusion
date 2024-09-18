@@ -35,8 +35,8 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
-use arrow::datatypes::SchemaRef;
 use arrow::array::*;
+use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
 use datafusion_common::utils::get_arrayref_at_indices;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
@@ -396,7 +396,7 @@ pub(crate) struct GroupedHashAggregateStream {
     /// processed. Reused across batches here to avoid reallocations
     current_group_indices: Vec<Vec<usize>>,
 
-    current_row_indices: Vec<Vec<usize>>,
+    current_row_indices: Vec<Vec<u32>>,
 
     /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
@@ -800,7 +800,11 @@ impl GroupedHashAggregateStream {
                 &filter_values,
             )?;
         } else {
-            self.group_aggregate_batch_partitioned()?;
+            self.group_aggregate_batch_partitioned(
+                &group_by_values,
+                &input_values,
+                &filter_values,
+            )?;
         }
 
         match self.update_memory_reservation() {
@@ -815,75 +819,85 @@ impl GroupedHashAggregateStream {
         }
     }
 
-    fn group_aggregate_batch_partitioned(&self,
+    fn group_aggregate_batch_partitioned(
+        &mut self,
         group_by_values: &[Vec<ArrayRef>],
-        input_values: &[Vec<ArrayRef>],
-        filter_values: &[Option<ArrayRef>],) -> Result<()> {
-        assert!(self.mode == AggregateMode::Partial && matches!(self.group_ordering, GroupOrdering::None));
+        acc_values: &[Vec<ArrayRef>],
+        acc_opt_filters: &[Option<ArrayRef>],
+    ) -> Result<()> {
+        assert!(
+            self.mode == AggregateMode::Partial
+                && matches!(self.group_ordering, GroupOrdering::None)
+        );
 
         let group_values = self.group_values.as_partitioned_mut();
-        
-        // 1. Reorder the arrays and record offsets
-        // batch_indices holds indices into values, each group is contiguous
+
         let mut batch_indices = vec![];
-        // offsets[i] is index into batch_indices where the rows for
-        // group_index i starts
-        let mut offsets = vec![0];
-        let mut offset_so_far = 0;
-        for indices in self.current_row_indices.iter() {
-            batch_indices.extend_from_slice(indices);
-            offset_so_far += indices.len();
-            offsets.push(offset_so_far);
-        }
-        let batch_indices = batch_indices.into();
+        let mut offsets = vec![];
 
-        let values = get_arrayref_at_indices(input_values, &batch_indices)?;
-        let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
+        for group_cols in group_by_values {
+            // 1.Calculate `row_indices` and related `group_indices` for each partition
+            group_values.intern(
+                group_cols,
+                &mut self.current_group_indices,
+                &mut self.current_row_indices,
+            )?;
 
+            // 2.update the arrays in each partition to their accumulators
+            //  - Reorder the arrays to make them sorted by partitions
+            //  - Collect the `offsets`, and we can get arrays in partition through `slice`
+            batch_indices.clear();
+            offsets.clear();
+            offsets.push(0);
 
-        Ok(())
+            let mut offset_so_far = 0;
+            for indices in self.current_row_indices.iter() {
+                batch_indices.extend_from_slice(indices);
+                offset_so_far += indices.len();
+                offsets.push(offset_so_far);
+            }
+            let batch_indices = batch_indices.clone().into();
+            let acc_values = acc_values
+                .iter()
+                .map(|values| get_arrayref_at_indices(values, &batch_indices))
+                .collect::<Result<Vec<_>>>()?;
+            let acc_opt_filters = acc_opt_filters
+                .iter()
+                .map(|opt_filter| {
+                    let opt_filter = opt_filter.as_ref().map(|f| f.as_boolean());
+                    get_filter_at_indices(opt_filter, &batch_indices)
+                })
+                .collect::<Result<Vec<_>>>()?;
 
-        for group_cols in &group_by_values {
-            // calculate the group indices for each input row
-            let starting_num_groups = group_values.len();
-            group_values.intern(group_cols, &mut self.current_group_indices, &mut self.current_row_indices)?;
-            let group_indices = &self.current_group_indices[0];
+            // Update the accumulators of each partition
+            for (part_idx, part_start_end) in offsets.windows(2).enumerate() {
+                let (offset, length) =
+                    (part_start_end[0], part_start_end[1] - part_start_end[0]);
 
-            // Gather the inputs to call the actual accumulator
-            let t = self.accumulators[0]
-                .iter_mut()
-                .zip(input_values.iter())
-                .zip(filter_values.iter());
+                // Gather the inputs to call the actual accumulator
+                let iter = self.accumulators[part_idx]
+                    .iter_mut()
+                    .zip(acc_values.iter())
+                    .zip(acc_opt_filters.iter());
 
-            for ((acc, values), opt_filter) in t {
-                let opt_filter =
-                    opt_filter.as_ref().map(|filter| filter.as_boolean());
+                for ((acc, values), opt_filter) in iter {
+                    let part_values = values
+                        .iter()
+                        .map(|array| array.slice(offset, length))
+                        .collect::<Vec<_>>();
 
-                // Call the appropriate method on each aggregator with
-                // the entire input row and the relevant group indexes
-                match self.mode {
-                    AggregateMode::Partial
-                    | AggregateMode::Single
-                    | AggregateMode::SinglePartitioned
-                        if !self.spill_state.is_stream_merging =>
-                    {
-                        acc.update_batch(
-                            values,
-                            group_indices,
-                            opt_filter,
-                            total_num_groups,
-                        )?;
-                    }
-                    _ => {
-                        // if aggregation is over intermediate states,
-                        // use merge
-                        acc.merge_batch(
-                            values,
-                            group_indices,
-                            opt_filter,
-                            total_num_groups,
-                        )?;
-                    }
+                    let part_opt_filter = opt_filter.as_ref().map(|f| f.slice(offset, length));
+                    let part_opt_filter =
+                        part_opt_filter.as_ref().map(|filter| filter.as_boolean());
+
+                    let group_indices = &self.current_group_indices[part_idx];
+                    let total_num_groups = group_values.partition_len(part_idx);
+                    acc.update_batch(
+                        &part_values,
+                        group_indices,
+                        part_opt_filter,
+                        total_num_groups,
+                    )?;
                 }
             }
         }
