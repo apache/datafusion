@@ -239,6 +239,18 @@ impl NestedLoopJoinExec {
         PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 
+    /// Returns a vector indicating whether the left and right inputs maintain their order.
+    /// The first element corresponds to the left input, and the second to the right.
+    ///
+    /// The left (build-side) input's order may change, but the right (probe-side) input's
+    /// order is maintained for INNER, RIGHT, RIGHT ANTI, and RIGHT SEMI joins.
+    ///
+    /// Maintaining the right input's order helps optimize the nodes down the pipeline
+    /// (See [`ExecutionPlan::maintains_input_order`]).
+    ///
+    /// This is a separate method because it is also called when computing properties, before
+    /// a [`NestedLoopJoinExec`] is created. It also takes [`JoinType`] as an argument, as
+    /// opposed to `Self`, for the same reason.
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
         vec![
             false,
