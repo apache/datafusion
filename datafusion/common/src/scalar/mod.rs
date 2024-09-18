@@ -104,7 +104,7 @@ pub use struct_builder::ScalarStructBuilder;
 ///
 /// `ScalarValue` represents null values in the same way as Arrow. Nulls are
 /// "typed" in the sense that a null value in an [`Int32Array`] is different
-/// than a null value in a [`Float64Array`], and is different than the values in
+/// from a null value in a [`Float64Array`], and is different from the values in
 /// a [`NullArray`].
 ///
 /// ```
