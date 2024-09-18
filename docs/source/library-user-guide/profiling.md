@@ -37,7 +37,7 @@ in images such as this:
 To create a flamegraph, you need to install the `flamegraph` tool:
 
 ```shell
-cargo install cargo-flamegraph
+cargo install flamegraph
 ```
 
 Then you can run the flamegraph tool with the `--` separator to pass arguments
