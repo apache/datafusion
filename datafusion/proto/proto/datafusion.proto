@@ -806,7 +806,7 @@ message PhysicalExprNode {
     PhysicalLikeExprNode like_expr = 18;
 
     PhysicalExtensionExprNode extension = 19;
-    
+
     PhysicalScalarRegexMatchExprNode scalar_regex_match_expr = 20;
   }
 }

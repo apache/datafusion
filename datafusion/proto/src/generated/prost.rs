@@ -1361,7 +1361,6 @@ pub struct PhysicalScalarRegexMatchExprNode {
     #[prost(message, optional, boxed, tag = "4")]
     pub pattern: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FilterExecNode {
     #[prost(message, optional, boxed, tag = "1")]
