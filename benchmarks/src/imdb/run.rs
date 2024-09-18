@@ -554,7 +554,6 @@ impl RunOpt {
     ) -> Result<Arc<dyn TableProvider>> {
         let path = self.path.to_str().unwrap();
         let table_format = self.file_format.as_str();
-        let target_partitions = self.partitions();
 
         // Obtain a snapshot of the SessionState
         let state = ctx.state();
@@ -571,15 +570,16 @@ impl RunOpt {
                     (Arc::new(format), path, ".tbl")
                 }
                 "csv" => {
-                    let path = format!("{path}/{table}");
+                    let path = format!("{path}/{table}.csv");
                     let format = CsvFormat::default()
                         .with_delimiter(b',')
-                        .with_has_header(true);
+                        .with_escape(Some(b'\\'))
+                        .with_has_header(false);
 
                     (Arc::new(format), path, DEFAULT_CSV_EXTENSION)
                 }
                 "parquet" => {
-                    let path = format!("{path}/{table}");
+                    let path = format!("{path}/{table}.parquet");
                     let format = ParquetFormat::default()
                         .with_options(ctx.state().table_options().parquet.clone());
                     (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
@@ -591,7 +591,6 @@ impl RunOpt {
 
         let options = ListingOptions::new(format)
             .with_file_extension(extension)
-            .with_target_partitions(target_partitions)
             .with_collect_stat(state.config().collect_statistics());
 
         let table_path = ListingTableUrl::parse(path)?;
@@ -734,8 +733,233 @@ mod tests {
     }
 
     // logical plan tests
-    test_round_trip_logical!(round_trip_logical_plan_q1, 1);
+    test_round_trip_logical!(round_trip_logical_plan_1a, 1);
+    test_round_trip_logical!(round_trip_logical_plan_1b, 2);
+    test_round_trip_logical!(round_trip_logical_plan_1c, 3);
+    test_round_trip_logical!(round_trip_logical_plan_1d, 4);
+    test_round_trip_logical!(round_trip_logical_plan_2a, 5);
+    test_round_trip_logical!(round_trip_logical_plan_2b, 6);
+    test_round_trip_logical!(round_trip_logical_plan_2c, 7);
+    test_round_trip_logical!(round_trip_logical_plan_2d, 8);
+    test_round_trip_logical!(round_trip_logical_plan_3a, 9);
+    test_round_trip_logical!(round_trip_logical_plan_3b, 10);
+    test_round_trip_logical!(round_trip_logical_plan_3c, 11);
+    test_round_trip_logical!(round_trip_logical_plan_4a, 12);
+    test_round_trip_logical!(round_trip_logical_plan_4b, 13);
+    test_round_trip_logical!(round_trip_logical_plan_4c, 14);
+    test_round_trip_logical!(round_trip_logical_plan_5a, 15);
+    test_round_trip_logical!(round_trip_logical_plan_5b, 16);
+    test_round_trip_logical!(round_trip_logical_plan_5c, 17);
+    test_round_trip_logical!(round_trip_logical_plan_6a, 18);
+    test_round_trip_logical!(round_trip_logical_plan_6b, 19);
+    test_round_trip_logical!(round_trip_logical_plan_6c, 20);
+    test_round_trip_logical!(round_trip_logical_plan_6d, 21);
+    test_round_trip_logical!(round_trip_logical_plan_6e, 22);
+    test_round_trip_logical!(round_trip_logical_plan_6f, 23);
+    test_round_trip_logical!(round_trip_logical_plan_7a, 24);
+    test_round_trip_logical!(round_trip_logical_plan_7b, 25);
+    test_round_trip_logical!(round_trip_logical_plan_7c, 26);
+    test_round_trip_logical!(round_trip_logical_plan_8a, 27);
+    test_round_trip_logical!(round_trip_logical_plan_8b, 28);
+    test_round_trip_logical!(round_trip_logical_plan_8c, 29);
+    test_round_trip_logical!(round_trip_logical_plan_8d, 30);
+    test_round_trip_logical!(round_trip_logical_plan_9a, 31);
+    test_round_trip_logical!(round_trip_logical_plan_9b, 32);
+    test_round_trip_logical!(round_trip_logical_plan_9c, 33);
+    test_round_trip_logical!(round_trip_logical_plan_9d, 34);
+    test_round_trip_logical!(round_trip_logical_plan_10a, 35);
+    test_round_trip_logical!(round_trip_logical_plan_10b, 36);
+    test_round_trip_logical!(round_trip_logical_plan_10c, 37);
+    test_round_trip_logical!(round_trip_logical_plan_11a, 38);
+    test_round_trip_logical!(round_trip_logical_plan_11b, 39);
+    test_round_trip_logical!(round_trip_logical_plan_11c, 40);
+    test_round_trip_logical!(round_trip_logical_plan_11d, 41);
+    test_round_trip_logical!(round_trip_logical_plan_12a, 42);
+    test_round_trip_logical!(round_trip_logical_plan_12b, 43);
+    test_round_trip_logical!(round_trip_logical_plan_12c, 44);
+    test_round_trip_logical!(round_trip_logical_plan_13a, 45);
+    test_round_trip_logical!(round_trip_logical_plan_13b, 46);
+    test_round_trip_logical!(round_trip_logical_plan_13c, 47);
+    test_round_trip_logical!(round_trip_logical_plan_13d, 48);
+    test_round_trip_logical!(round_trip_logical_plan_14a, 49);
+    test_round_trip_logical!(round_trip_logical_plan_14b, 50);
+    test_round_trip_logical!(round_trip_logical_plan_14c, 51);
+    test_round_trip_logical!(round_trip_logical_plan_15a, 52);
+    test_round_trip_logical!(round_trip_logical_plan_15b, 53);
+    test_round_trip_logical!(round_trip_logical_plan_15c, 54);
+    test_round_trip_logical!(round_trip_logical_plan_15d, 55);
+    test_round_trip_logical!(round_trip_logical_plan_16a, 56);
+    test_round_trip_logical!(round_trip_logical_plan_16b, 57);
+    test_round_trip_logical!(round_trip_logical_plan_16c, 58);
+    test_round_trip_logical!(round_trip_logical_plan_16d, 59);
+    test_round_trip_logical!(round_trip_logical_plan_17a, 60);
+    test_round_trip_logical!(round_trip_logical_plan_17b, 61);
+    test_round_trip_logical!(round_trip_logical_plan_17c, 62);
+    test_round_trip_logical!(round_trip_logical_plan_17d, 63);
+    test_round_trip_logical!(round_trip_logical_plan_17e, 64);
+    test_round_trip_logical!(round_trip_logical_plan_17f, 65);
+    test_round_trip_logical!(round_trip_logical_plan_18a, 66);
+    test_round_trip_logical!(round_trip_logical_plan_18b, 67);
+    test_round_trip_logical!(round_trip_logical_plan_18c, 68);
+    test_round_trip_logical!(round_trip_logical_plan_19a, 69);
+    test_round_trip_logical!(round_trip_logical_plan_19b, 70);
+    test_round_trip_logical!(round_trip_logical_plan_19c, 71);
+    test_round_trip_logical!(round_trip_logical_plan_19d, 72);
+    test_round_trip_logical!(round_trip_logical_plan_20a, 73);
+    test_round_trip_logical!(round_trip_logical_plan_20b, 74);
+    test_round_trip_logical!(round_trip_logical_plan_20c, 75);
+    test_round_trip_logical!(round_trip_logical_plan_21a, 76);
+    test_round_trip_logical!(round_trip_logical_plan_21b, 77);
+    test_round_trip_logical!(round_trip_logical_plan_21c, 78);
+    test_round_trip_logical!(round_trip_logical_plan_22a, 79);
+    test_round_trip_logical!(round_trip_logical_plan_22b, 80);
+    test_round_trip_logical!(round_trip_logical_plan_22c, 81);
+    test_round_trip_logical!(round_trip_logical_plan_22d, 82);
+    test_round_trip_logical!(round_trip_logical_plan_23a, 83);
+    test_round_trip_logical!(round_trip_logical_plan_23b, 84);
+    test_round_trip_logical!(round_trip_logical_plan_23c, 85);
+    test_round_trip_logical!(round_trip_logical_plan_24a, 86);
+    test_round_trip_logical!(round_trip_logical_plan_24b, 87);
+    test_round_trip_logical!(round_trip_logical_plan_25a, 88);
+    test_round_trip_logical!(round_trip_logical_plan_25b, 89);
+    test_round_trip_logical!(round_trip_logical_plan_25c, 90);
+    test_round_trip_logical!(round_trip_logical_plan_26a, 91);
+    test_round_trip_logical!(round_trip_logical_plan_26b, 92);
+    test_round_trip_logical!(round_trip_logical_plan_26c, 93);
+    test_round_trip_logical!(round_trip_logical_plan_27a, 94);
+    test_round_trip_logical!(round_trip_logical_plan_27b, 95);
+    test_round_trip_logical!(round_trip_logical_plan_27c, 96);
+    test_round_trip_logical!(round_trip_logical_plan_28a, 97);
+    test_round_trip_logical!(round_trip_logical_plan_28b, 98);
+    test_round_trip_logical!(round_trip_logical_plan_28c, 99);
+    test_round_trip_logical!(round_trip_logical_plan_29a, 100);
+    test_round_trip_logical!(round_trip_logical_plan_29b, 101);
+    test_round_trip_logical!(round_trip_logical_plan_29c, 102);
+    test_round_trip_logical!(round_trip_logical_plan_30a, 103);
+    test_round_trip_logical!(round_trip_logical_plan_30b, 104);
+    test_round_trip_logical!(round_trip_logical_plan_30c, 105);
+    test_round_trip_logical!(round_trip_logical_plan_31a, 106);
+    test_round_trip_logical!(round_trip_logical_plan_31b, 107);
+    test_round_trip_logical!(round_trip_logical_plan_31c, 108);
+    test_round_trip_logical!(round_trip_logical_plan_32a, 109);
+    test_round_trip_logical!(round_trip_logical_plan_32b, 110);
+    test_round_trip_logical!(round_trip_logical_plan_33a, 111);
+    test_round_trip_logical!(round_trip_logical_plan_33b, 112);
+    test_round_trip_logical!(round_trip_logical_plan_33c, 113);
 
     // physical plan tests
-    test_round_trip_physical!(round_trip_physical_plan_q1, 1);
+    test_round_trip_physical!(round_trip_physical_plan_1a, 1);
+    test_round_trip_physical!(round_trip_physical_plan_1a, 1);
+    test_round_trip_physical!(round_trip_physical_plan_1b, 2);
+    test_round_trip_physical!(round_trip_physical_plan_1c, 3);
+    test_round_trip_physical!(round_trip_physical_plan_1d, 4);
+    test_round_trip_physical!(round_trip_physical_plan_2a, 5);
+    test_round_trip_physical!(round_trip_physical_plan_2b, 6);
+    test_round_trip_physical!(round_trip_physical_plan_2c, 7);
+    test_round_trip_physical!(round_trip_physical_plan_2d, 8);
+    test_round_trip_physical!(round_trip_physical_plan_3a, 9);
+    test_round_trip_physical!(round_trip_physical_plan_3b, 10);
+    test_round_trip_physical!(round_trip_physical_plan_3c, 11);
+    test_round_trip_physical!(round_trip_physical_plan_4a, 12);
+    test_round_trip_physical!(round_trip_physical_plan_4b, 13);
+    test_round_trip_physical!(round_trip_physical_plan_4c, 14);
+    test_round_trip_physical!(round_trip_physical_plan_5a, 15);
+    test_round_trip_physical!(round_trip_physical_plan_5b, 16);
+    test_round_trip_physical!(round_trip_physical_plan_5c, 17);
+    test_round_trip_physical!(round_trip_physical_plan_6a, 18);
+    test_round_trip_physical!(round_trip_physical_plan_6b, 19);
+    test_round_trip_physical!(round_trip_physical_plan_6c, 20);
+    test_round_trip_physical!(round_trip_physical_plan_6d, 21);
+    test_round_trip_physical!(round_trip_physical_plan_6e, 22);
+    test_round_trip_physical!(round_trip_physical_plan_6f, 23);
+    test_round_trip_physical!(round_trip_physical_plan_7a, 24);
+    test_round_trip_physical!(round_trip_physical_plan_7b, 25);
+    test_round_trip_physical!(round_trip_physical_plan_7c, 26);
+    test_round_trip_physical!(round_trip_physical_plan_8a, 27);
+    test_round_trip_physical!(round_trip_physical_plan_8b, 28);
+    test_round_trip_physical!(round_trip_physical_plan_8c, 29);
+    test_round_trip_physical!(round_trip_physical_plan_8d, 30);
+    test_round_trip_physical!(round_trip_physical_plan_9a, 31);
+    test_round_trip_physical!(round_trip_physical_plan_9b, 32);
+    test_round_trip_physical!(round_trip_physical_plan_9c, 33);
+    test_round_trip_physical!(round_trip_physical_plan_9d, 34);
+    test_round_trip_physical!(round_trip_physical_plan_10a, 35);
+    test_round_trip_physical!(round_trip_physical_plan_10b, 36);
+    test_round_trip_physical!(round_trip_physical_plan_10c, 37);
+    test_round_trip_physical!(round_trip_physical_plan_11a, 38);
+    test_round_trip_physical!(round_trip_physical_plan_11b, 39);
+    test_round_trip_physical!(round_trip_physical_plan_11c, 40);
+    test_round_trip_physical!(round_trip_physical_plan_11d, 41);
+    test_round_trip_physical!(round_trip_physical_plan_12a, 42);
+    test_round_trip_physical!(round_trip_physical_plan_12b, 43);
+    test_round_trip_physical!(round_trip_physical_plan_12c, 44);
+    test_round_trip_physical!(round_trip_physical_plan_13a, 45);
+    test_round_trip_physical!(round_trip_physical_plan_13b, 46);
+    test_round_trip_physical!(round_trip_physical_plan_13c, 47);
+    test_round_trip_physical!(round_trip_physical_plan_13d, 48);
+    test_round_trip_physical!(round_trip_physical_plan_14a, 49);
+    test_round_trip_physical!(round_trip_physical_plan_14b, 50);
+    test_round_trip_physical!(round_trip_physical_plan_14c, 51);
+    test_round_trip_physical!(round_trip_physical_plan_15a, 52);
+    test_round_trip_physical!(round_trip_physical_plan_15b, 53);
+    test_round_trip_physical!(round_trip_physical_plan_15c, 54);
+    test_round_trip_physical!(round_trip_physical_plan_15d, 55);
+    test_round_trip_physical!(round_trip_physical_plan_16a, 56);
+    test_round_trip_physical!(round_trip_physical_plan_16b, 57);
+    test_round_trip_physical!(round_trip_physical_plan_16c, 58);
+    test_round_trip_physical!(round_trip_physical_plan_16d, 59);
+    test_round_trip_physical!(round_trip_physical_plan_17a, 60);
+    test_round_trip_physical!(round_trip_physical_plan_17b, 61);
+    test_round_trip_physical!(round_trip_physical_plan_17c, 62);
+    test_round_trip_physical!(round_trip_physical_plan_17d, 63);
+    test_round_trip_physical!(round_trip_physical_plan_17e, 64);
+    test_round_trip_physical!(round_trip_physical_plan_17f, 65);
+    test_round_trip_physical!(round_trip_physical_plan_18a, 66);
+    test_round_trip_physical!(round_trip_physical_plan_18b, 67);
+    test_round_trip_physical!(round_trip_physical_plan_18c, 68);
+    test_round_trip_physical!(round_trip_physical_plan_19a, 69);
+    test_round_trip_physical!(round_trip_physical_plan_19b, 70);
+    test_round_trip_physical!(round_trip_physical_plan_19c, 71);
+    test_round_trip_physical!(round_trip_physical_plan_19d, 72);
+    test_round_trip_physical!(round_trip_physical_plan_20a, 73);
+    test_round_trip_physical!(round_trip_physical_plan_20b, 74);
+    test_round_trip_physical!(round_trip_physical_plan_20c, 75);
+    test_round_trip_physical!(round_trip_physical_plan_21a, 76);
+    test_round_trip_physical!(round_trip_physical_plan_21b, 77);
+    test_round_trip_physical!(round_trip_physical_plan_21c, 78);
+    test_round_trip_physical!(round_trip_physical_plan_22a, 79);
+    test_round_trip_physical!(round_trip_physical_plan_22b, 80);
+    test_round_trip_physical!(round_trip_physical_plan_22c, 81);
+    test_round_trip_physical!(round_trip_physical_plan_22d, 82);
+    test_round_trip_physical!(round_trip_physical_plan_23a, 83);
+    test_round_trip_physical!(round_trip_physical_plan_23b, 84);
+    test_round_trip_physical!(round_trip_physical_plan_23c, 85);
+    test_round_trip_physical!(round_trip_physical_plan_24a, 86);
+    test_round_trip_physical!(round_trip_physical_plan_24b, 87);
+    test_round_trip_physical!(round_trip_physical_plan_25a, 88);
+    test_round_trip_physical!(round_trip_physical_plan_25b, 89);
+    test_round_trip_physical!(round_trip_physical_plan_25c, 90);
+    test_round_trip_physical!(round_trip_physical_plan_26a, 91);
+    test_round_trip_physical!(round_trip_physical_plan_26b, 92);
+    test_round_trip_physical!(round_trip_physical_plan_26c, 93);
+    test_round_trip_physical!(round_trip_physical_plan_27a, 94);
+    test_round_trip_physical!(round_trip_physical_plan_27b, 95);
+    test_round_trip_physical!(round_trip_physical_plan_27c, 96);
+    test_round_trip_physical!(round_trip_physical_plan_28a, 97);
+    test_round_trip_physical!(round_trip_physical_plan_28b, 98);
+    test_round_trip_physical!(round_trip_physical_plan_28c, 99);
+    test_round_trip_physical!(round_trip_physical_plan_29a, 100);
+    test_round_trip_physical!(round_trip_physical_plan_29b, 101);
+    test_round_trip_physical!(round_trip_physical_plan_29c, 102);
+    test_round_trip_physical!(round_trip_physical_plan_30a, 103);
+    test_round_trip_physical!(round_trip_physical_plan_30b, 104);
+    test_round_trip_physical!(round_trip_physical_plan_30c, 105);
+    test_round_trip_physical!(round_trip_physical_plan_31a, 106);
+    test_round_trip_physical!(round_trip_physical_plan_31b, 107);
+    test_round_trip_physical!(round_trip_physical_plan_31c, 108);
+    test_round_trip_physical!(round_trip_physical_plan_32a, 109);
+    test_round_trip_physical!(round_trip_physical_plan_32b, 110);
+    test_round_trip_physical!(round_trip_physical_plan_33a, 111);
+    test_round_trip_physical!(round_trip_physical_plan_33b, 112);
+    test_round_trip_physical!(round_trip_physical_plan_33c, 113);
 }
