@@ -5148,3 +5148,23 @@ NULL
 
 statement ok
 drop table test_case_expr
+
+statement ok
+drop table t;
+
+# test multi group by for binary type
+statement ok
+create table t(a int, b bytea) as values (1, 0xa), (1, 0xa), (2, null), (null, 0xb), (null, 0xb);
+
+query I?I
+select a, b, count(*) from t group by grouping sets ((a, b), (a), (b));
+----
+1 0a 2
+2 NULL 2
+NULL 0b 4
+1 NULL 2
+NULL NULL 3
+NULL 0a 2
+
+statement ok
+drop table t;
