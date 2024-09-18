@@ -747,7 +747,7 @@ impl ExecutionPlan for ParquetExec {
             || self.page_pruning_predicate.is_some()
             || (self.predicate.is_some() && self.pushdown_filters())
         {
-            Statistics::new_unknown(&self.schema())
+            self.projected_statistics.clone().to_inexact()
         } else {
             self.projected_statistics.clone()
         };

@@ -493,21 +493,6 @@ async fn parquet_statistics() -> Result<()> {
     // TODO assert partition column stats once implemented (#1186)
     assert_eq!(stat_cols[1], ColumnStatistics::new_unknown());
 
-    //// WITH Filter PushDown to [`ParquetExec`] ////
-    let dataframe = ctx
-        .sql("SELECT mycol, year FROM t WHERE mycol='value'")
-        .await?;
-    let physical_plan = dataframe.create_physical_plan().await?;
-    let schema = physical_plan.schema();
-    assert_eq!(schema.fields().len(), 2);
-
-    let stat_cols = physical_plan.statistics()?.column_statistics;
-    assert_eq!(stat_cols.len(), 2);
-    // stats for the first col are absent due to filter pushdown
-    assert_eq!(stat_cols[0].null_count, Precision::Absent);
-    // TODO assert partition column stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::new_unknown());
-
     Ok(())
 }
 
