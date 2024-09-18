@@ -17,9 +17,7 @@
 
 extern crate criterion;
 
-use arrow::{
-    array::{ArrayRef, LargeStringArray, StringArray, StringViewArray},
-};
+use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
@@ -37,20 +35,21 @@ pub enum StringArrayType {
     LargeUtf8,
 }
 
-pub fn create_prefixed_string_array_and_pattern(
+pub fn create_string_array_and_characters(
     size: usize,
-    prefix: &str,
-    generated_len: usize,
+    characters: &str,
+    trimmed: &str,
+    remaining_len: usize,
     string_array_type: StringArrayType,
 ) -> (ArrayRef, ScalarValue) {
     let rng = &mut seedable_rng();
 
-    let lens = vec![generated_len; size];
+    let lens = vec![remaining_len; size];
     let string_iter = lens.into_iter().map(|len| {
         if rng.gen::<f32>() < 0.1 {
             None
         } else {
-            let mut value = prefix.as_bytes().to_vec();
+            let mut value = trimmed.as_bytes().to_vec();
             let generated = rng.sample_iter(&Alphanumeric).take(len);
             value.extend(generated);
             Some(String::from_utf8(value).unwrap())
@@ -60,29 +59,43 @@ pub fn create_prefixed_string_array_and_pattern(
     match string_array_type {
         StringArrayType::Utf8View => (
             Arc::new(string_iter.collect::<StringViewArray>()),
-            ScalarValue::Utf8View(Some(prefix.to_string())),
+            ScalarValue::Utf8View(Some(trimmed.to_string())),
         ),
         StringArrayType::Utf8 => (
             Arc::new(string_iter.collect::<StringArray>()),
-            ScalarValue::Utf8(Some(prefix.to_string())),
+            ScalarValue::Utf8(Some(trimmed.to_string())),
         ),
         StringArrayType::LargeUtf8 => (
             Arc::new(string_iter.collect::<LargeStringArray>()),
-            ScalarValue::LargeUtf8(Some(prefix.to_string())),
+            ScalarValue::LargeUtf8(Some(trimmed.to_string())),
         ),
     }
 }
 
+/// Create args for the ltrim benchmark
+/// Inputs:
+///   - size: rows num of the test array
+///   - characters: the characters we need to trim
+///   - trimmed: the part in the testing string that will be trimmed
+///   - remaining_len: the len of the remaining part of testing string after trimming
+///   - string_array_type: the method used to store the testing strings
+///
+/// Outputs:
+///   - testing string array
+///   - trimmed characters
+///
 fn create_args(
     size: usize,
     characters: &str,
-    generated_len: usize,
+    trimmed: &str,
+    remaining_len: usize,
     string_array_type: StringArrayType,
 ) -> Vec<ColumnarValue> {
-    let (string_array, pattern) = create_prefixed_string_array_and_pattern(
+    let (string_array, pattern) = create_string_array_and_characters(
         size,
         characters,
-        generated_len,
+        trimmed,
+        remaining_len,
         string_array_type,
     );
     vec![
@@ -93,84 +106,169 @@ fn create_args(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let ltrim = string::ltrim();
-    let prefix = ",!()";
+    let characters = ",!()";
+
     for size in [1024, 4096, 8192] {
-        // len=12, prefix=4, len_after_ltrim=8
+        // len=12, trimmed_len=4, len_after_ltrim=8
         let len = 12;
-        let len_exclude_prefix = len - prefix.len();
+        let trimmed = characters;
+        let remaining_len = len - trimmed.len();
         let mut group = c.benchmark_group("INPUT LEN <= 12");
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
 
-        let args = create_args(size, &prefix, len_exclude_prefix, StringArrayType::Utf8View);
+        let args = create_args(
+            size,
+            &characters,
+            &trimmed,
+            remaining_len,
+            StringArrayType::Utf8View,
+        );
         group.bench_function(
-            format!("ltrim_string_view [size={}, strlen={}]", size, len),
+            format!(
+                "ltrim_string_view [size={}, len_before_ltrim={}, len_after_ltrim={}]",
+                size, len, remaining_len
+            ),
             |b| b.iter(|| black_box(ltrim.invoke(&args))),
         );
 
-        let args = create_args(size, &prefix, len_exclude_prefix, StringArrayType::Utf8);
+        let args = create_args(
+            size,
+            &characters,
+            &trimmed,
+            remaining_len,
+            StringArrayType::Utf8,
+        );
         group.bench_function(
-            format!("ltrim_string [size={}, strlen={}]", size, len),
+            format!(
+                "ltrim_string [size={}, len_before_ltrim={}, len_after_ltrim={}]",
+                size, len, remaining_len
+            ),
             |b| b.iter(|| black_box(ltrim.invoke(&args))),
         );
 
-        let args = create_args(size, &prefix, len_exclude_prefix, StringArrayType::LargeUtf8);
+        let args = create_args(
+            size,
+            &characters,
+            &trimmed,
+            remaining_len,
+            StringArrayType::LargeUtf8,
+        );
         group.bench_function(
-            format!("ltrim_large_string [size={}, strlen={}]", size, len),
+            format!(
+                "ltrim_large_string [size={}, len_before_ltrim={}, len_after_ltrim={}]",
+                size, len, remaining_len
+            ),
             |b| b.iter(|| black_box(ltrim.invoke(&args))),
         );
 
         group.finish();
 
-        // len=64, prefix=4, len_after_ltrim=60
+        // len=64, trimmed_len=4, len_after_ltrim=60
         let len = 64;
-        let len_exclude_prefix = len - prefix.len();
+        let trimmed = characters;
+        let remaining_len = len - trimmed.len();
         let mut group = c.benchmark_group("INPUT LEN > 12, OUTPUT LEN > 12");
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
 
-        let args = create_args(size, &prefix, len_exclude_prefix, StringArrayType::Utf8View);
+        let args = create_args(
+            size,
+            &characters,
+            &trimmed,
+            remaining_len,
+            StringArrayType::Utf8View,
+        );
         group.bench_function(
-            format!("ltrim_string_view [size={}, strlen={}]", size, len),
+            format!(
+                "ltrim_string_view [size={}, len_before_ltrim={}, len_after_ltrim={}]",
+                size, len, remaining_len
+            ),
             |b| b.iter(|| black_box(ltrim.invoke(&args))),
         );
 
-        let args = create_args(size, &prefix, len_exclude_prefix, StringArrayType::Utf8);
+        let args = create_args(
+            size,
+            &characters,
+            &trimmed,
+            remaining_len,
+            StringArrayType::Utf8,
+        );
         group.bench_function(
-            format!("ltrim_string [size={}, strlen={}]", size, len),
+            format!(
+                "ltrim_string [size={}, len_before_ltrim={}, len_after_ltrim={}]",
+                size, len, remaining_len
+            ),
             |b| b.iter(|| black_box(ltrim.invoke(&args))),
         );
 
-        let args = create_args(size, &prefix, len_exclude_prefix, StringArrayType::LargeUtf8);
+        let args = create_args(
+            size,
+            &characters,
+            &trimmed,
+            remaining_len,
+            StringArrayType::LargeUtf8,
+        );
         group.bench_function(
-            format!("ltrim_large_string [size={}, strlen={}]", size, len),
+            format!(
+                "ltrim_large_string [size={}, len_before_ltrim={}, len_after_ltrim={}]",
+                size, len, remaining_len
+            ),
             |b| b.iter(|| black_box(ltrim.invoke(&args))),
         );
 
         group.finish();
 
-        // len=15, prefix=4, len_after_ltrim=11
-        let len = 15;
-        let len_exclude_prefix = len - prefix.len();
+        // len=64, trimmed_len=56, len_after_ltrim=8
+        let len = 64;
+        let trimmed = characters.repeat(15);
+        let remaining_len = len - trimmed.len();
         let mut group = c.benchmark_group("INPUT LEN > 12, OUTPUT LEN <= 12");
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
 
-        let args = create_args(size, &prefix, len_exclude_prefix, StringArrayType::Utf8View);
+        let args = create_args(
+            size,
+            &characters,
+            &trimmed,
+            remaining_len,
+            StringArrayType::Utf8View,
+        );
         group.bench_function(
-            format!("ltrim_string_view [size={}, strlen={}]", size, len),
+            format!(
+                "ltrim_string_view [size={}, len_before_ltrim={}, len_after_ltrim={}]",
+                size, len, remaining_len
+            ),
             |b| b.iter(|| black_box(ltrim.invoke(&args))),
         );
 
-        let args = create_args(size, &prefix, len_exclude_prefix, StringArrayType::Utf8);
+        let args = create_args(
+            size,
+            &characters,
+            &trimmed,
+            remaining_len,
+            StringArrayType::Utf8,
+        );
         group.bench_function(
-            format!("ltrim_string [size={}, strlen={}]", size, len),
+            format!(
+                "ltrim_string [size={}, len_before_ltrim={}, len_after_ltrim={}]",
+                size, len, remaining_len
+            ),
             |b| b.iter(|| black_box(ltrim.invoke(&args))),
         );
 
-        let args = create_args(size, &prefix, len_exclude_prefix, StringArrayType::LargeUtf8);
+        let args = create_args(
+            size,
+            &characters,
+            &trimmed,
+            remaining_len,
+            StringArrayType::LargeUtf8,
+        );
         group.bench_function(
-            format!("ltrim_large_string [size={}, strlen={}]", size, len),
+            format!(
+                "ltrim_large_string [size={}, len_before_ltrim={}, len_after_ltrim={}]",
+                size, len, remaining_len
+            ),
             |b| b.iter(|| black_box(ltrim.invoke(&args))),
         );
 
