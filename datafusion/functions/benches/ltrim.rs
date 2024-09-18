@@ -118,8 +118,9 @@ fn create_args(
     ]
 }
 
-fn run_with_string_type<'a, M: Measurement>(
-    group: &mut BenchmarkGroup<'a, M>,
+#[allow(clippy::too_many_arguments)]
+fn run_with_string_type<M: Measurement>(
+    group: &mut BenchmarkGroup<'_, M>,
     ltrim: &ScalarUDF,
     size: usize,
     len: usize,
@@ -128,7 +129,7 @@ fn run_with_string_type<'a, M: Measurement>(
     remaining_len: usize,
     string_type: StringArrayType,
 ) {
-    let args = create_args(size, &characters, &trimmed, remaining_len, string_type);
+    let args = create_args(size, characters, trimmed, remaining_len, string_type);
     group.bench_function(
         format!(
             "{string_type} [size={size}, len_before={len}, len_after={remaining_len}]",
@@ -137,6 +138,7 @@ fn run_with_string_type<'a, M: Measurement>(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_one_group(
     c: &mut Criterion,
     group_name: &str,
@@ -189,8 +191,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             &string_types,
             size,
             len,
-            &characters,
-            &trimmed,
+            characters,
+            trimmed,
             remaining_len,
         );
 
@@ -205,8 +207,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             &string_types,
             size,
             len,
-            &characters,
-            &trimmed,
+            characters,
+            trimmed,
             remaining_len,
         );
 
@@ -221,7 +223,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             &string_types,
             size,
             len,
-            &characters,
+            characters,
             &trimmed,
             remaining_len,
         );
