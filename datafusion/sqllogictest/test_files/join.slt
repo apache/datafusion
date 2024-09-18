@@ -838,10 +838,10 @@ LEFT JOIN department AS d
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 1 Alice HR
-2 Bob HR
 1 Alice Engineering
-2 Bob Engineering
 1 Alice Sales
+2 Bob HR
+2 Bob Engineering
 2 Bob Sales
 3 Carol NULL
 
@@ -853,10 +853,10 @@ RIGHT JOIN employees AS e
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 1 Alice HR
-2 Bob HR
 1 Alice Engineering
-2 Bob Engineering
 1 Alice Sales
+2 Bob HR
+2 Bob Engineering
 2 Bob Sales
 3 Carol NULL
 
@@ -868,10 +868,10 @@ FULL JOIN employees AS e
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 1 Alice HR
-2 Bob HR
 1 Alice Engineering
-2 Bob Engineering
 1 Alice Sales
+2 Bob HR
+2 Bob Engineering
 2 Bob Sales
 3 Carol NULL
 
