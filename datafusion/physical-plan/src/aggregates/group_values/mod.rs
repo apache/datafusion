@@ -162,9 +162,16 @@ pub trait GroupValues: Send {
     fn clear_shrink(&mut self, batch: &RecordBatch);
 }
 
-pub fn new_group_values(schema: SchemaRef, partitioning_group_values: bool, num_partitions: usize) -> Result<GroupValuesLike> {
+pub fn new_group_values(
+    schema: SchemaRef,
+    partitioning_group_values: bool,
+    num_partitions: usize,
+) -> Result<GroupValuesLike> {
     let group_values = if partitioning_group_values && schema.fields.len() > 1 {
-        GroupValuesLike::Partitioned(Box::new(PartitionedGroupValuesRows::try_new(schema, num_partitions)?))
+        GroupValuesLike::Partitioned(Box::new(PartitionedGroupValuesRows::try_new(
+            schema,
+            num_partitions,
+        )?))
     } else {
         GroupValuesLike::Single(new_single_group_values(schema)?)
     };
