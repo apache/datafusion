@@ -35,8 +35,8 @@ use crate::function::{
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
+use crate::Signature;
 use crate::{Accumulator, Expr};
-use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
 ///
@@ -95,25 +95,6 @@ impl fmt::Display for AggregateUDF {
 }
 
 impl AggregateUDF {
-    /// Create a new AggregateUDF
-    ///
-    /// See  [`AggregateUDFImpl`] for a more convenient way to create a
-    /// `AggregateUDF` using trait objects
-    #[deprecated(since = "34.0.0", note = "please implement AggregateUDFImpl instead")]
-    pub fn new(
-        name: &str,
-        signature: &Signature,
-        return_type: &ReturnTypeFunction,
-        accumulator: &AccumulatorFactoryFunction,
-    ) -> Self {
-        Self::new_from_impl(AggregateUDFLegacyWrapper {
-            name: name.to_owned(),
-            signature: signature.clone(),
-            return_type: Arc::clone(return_type),
-            accumulator: Arc::clone(accumulator),
-        })
-    }
-
     /// Create a new `AggregateUDF` from a `[AggregateUDFImpl]` trait object
     ///
     /// Note this is the same as using the `From` impl (`AggregateUDF::from`)
@@ -728,53 +709,6 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
 
     fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
-    }
-}
-
-/// Implementation of [`AggregateUDFImpl`] that wraps the function style pointers
-/// of the older API
-pub struct AggregateUDFLegacyWrapper {
-    /// name
-    name: String,
-    /// Signature (input arguments)
-    signature: Signature,
-    /// Return type
-    return_type: ReturnTypeFunction,
-    /// actual implementation
-    accumulator: AccumulatorFactoryFunction,
-}
-
-impl Debug for AggregateUDFLegacyWrapper {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("AggregateUDF")
-            .field("name", &self.name)
-            .field("signature", &self.signature)
-            .field("fun", &"<FUNC>")
-            .finish()
-    }
-}
-
-impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // Old API returns an Arc of the datatype for some reason
-        let res = (self.return_type)(arg_types)?;
-        Ok(res.as_ref().clone())
-    }
-
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        (self.accumulator)(acc_args)
     }
 }
 
