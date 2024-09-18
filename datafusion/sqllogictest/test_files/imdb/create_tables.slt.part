@@ -1,0 +1,191 @@
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS aka_name (
+    id integer NOT NULL PRIMARY KEY,
+    person_id integer NOT NULL,
+    name VARCHAR,
+    imdb_index VARCHAR(3),
+    name_pcode_cf VARCHAR(11),
+    name_pcode_nf VARCHAR(11),
+    surname_pcode VARCHAR(11),
+    md5sum VARCHAR(65)
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/aka_title.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS aka_title (
+    id integer NOT NULL PRIMARY KEY,
+    movie_id integer NOT NULL,
+    title VARCHAR,
+    imdb_index VARCHAR(4),
+    kind_id integer NOT NULL,
+    production_year integer,
+    phonetic_code VARCHAR(5),
+    episode_of_id integer,
+    season_nr integer,
+    episode_nr integer,
+    note VARCHAR(72),
+    md5sum VARCHAR(32)
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/aka_title.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS cast_info (
+    id integer NOT NULL PRIMARY KEY,
+    person_id integer NOT NULL,
+    movie_id integer NOT NULL,
+    person_role_id integer,
+    note VARCHAR,
+    nr_order integer,
+    role_id integer NOT NULL
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/cast_info.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS char_name (
+    id integer NOT NULL PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    imdb_index VARCHAR(2),
+    imdb_id integer,
+    name_pcode_nf VARCHAR(5),
+    surname_pcode VARCHAR(5),
+    md5sum VARCHAR(32)
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/char_name.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS  comp_cast_type (
+    id integer NOT NULL PRIMARY KEY,
+    kind VARCHAR(32) NOT NULL
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/comp_cast_type.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS  company_name (
+    id integer NOT NULL PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    country_code VARCHAR(6),
+    imdb_id integer,
+    name_pcode_nf VARCHAR(5),
+    name_pcode_sf VARCHAR(5),
+    md5sum VARCHAR(32)
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/company_name.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS company_type (
+    id integer NOT NULL PRIMARY KEY,
+    kind VARCHAR(32)
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/company_type.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS complete_cast (
+    id integer NOT NULL PRIMARY KEY,
+    movie_id integer,
+    subject_id integer NOT NULL,
+    status_id integer NOT NULL
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/complete_cast.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS info_type (
+    id integer NOT NULL PRIMARY KEY,
+    info VARCHAR(32) NOT NULL
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/info_type.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS keyword (
+    id integer NOT NULL PRIMARY KEY,
+    keyword VARCHAR NOT NULL,
+    phonetic_code VARCHAR(5)
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/keyword.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS kind_type (
+    id integer NOT NULL PRIMARY KEY,
+    kind VARCHAR(15)
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/kind_type.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS link_type (
+    id integer NOT NULL PRIMARY KEY,
+    link VARCHAR(32) NOT NULL
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/link_type.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS movie_companies (
+    id integer NOT NULL PRIMARY KEY,
+    movie_id integer NOT NULL,
+    company_id integer NOT NULL,
+    company_type_id integer NOT NULL,
+    note VARCHAR
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/movie_companies.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS movie_info_idx (
+    id integer NOT NULL PRIMARY KEY,
+    movie_id integer NOT NULL,
+    info_type_id integer NOT NULL,
+    info VARCHAR NOT NULL,
+    note VARCHAR(1) NULL,
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/movie_info_idx.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS movie_keyword (
+    id integer NOT NULL PRIMARY KEY,
+    movie_id integer NOT NULL,
+    keyword_id integer NOT NULL
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/movie_keyword.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS movie_link (
+    id integer NOT NULL PRIMARY KEY,
+    movie_id integer NOT NULL,
+    linked_movie_id integer NOT NULL,
+    link_type_id integer NOT NULL
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/movie_link.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS name (
+    id integer NOT NULL PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    imdb_index VARCHAR(9),
+    imdb_id integer,
+    gender VARCHAR(1),
+    name_pcode_cf VARCHAR(5),
+    name_pcode_nf VARCHAR(5),
+    surname_pcode VARCHAR(5),
+    md5sum VARCHAR(32)
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/name.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS role_type (
+    id integer NOT NULL PRIMARY KEY,
+    role VARCHAR(32) NOT NULL
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/role_type.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS title (
+    id integer NOT NULL PRIMARY KEY,
+    title VARCHAR NOT NULL,
+    imdb_index VARCHAR(5),
+    kind_id integer NOT NULL,
+    production_year integer,
+    imdb_id integer,
+    phonetic_code VARCHAR(5),
+    episode_of_id integer,
+    season_nr integer,
+    episode_nr integer,
+    series_years VARCHAR(49),
+    md5sum VARCHAR(32)
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/title.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS movie_info (
+    id integer NOT NULL PRIMARY KEY,
+    movie_id integer NOT NULL,
+    info_type_id integer NOT NULL,
+    info VARCHAR NOT NULL,
+    note VARCHAR
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/movie_info.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS person_info (
+    id integer NOT NULL PRIMARY KEY,
+    person_id integer NOT NULL,
+    info_type_id integer NOT NULL,
+    info VARCHAR NOT NULL,
+    note VARCHAR
+) STORED AS CSV LOCATION '../../benchmarks/data/imdb/person_info.csv' OPTIONS ('format.delimiter' ',', 'format.escape' '\', 'format.has_header' 'false', 'format.quote' '"');
