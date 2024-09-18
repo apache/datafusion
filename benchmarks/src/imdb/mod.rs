@@ -17,9 +17,17 @@
 
 //! Benchmark derived from IMDB dataset.
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::{
+    arrow::datatypes::{DataType, Field, Schema},
+    common::plan_err,
+    error::Result,
+};
 mod convert;
 pub use convert::ConvertOpt;
+
+use std::fs;
+mod run;
+pub use run::RunOpt;
 
 // we have 21 tables in the IMDB dataset
 pub const IMDB_TABLES: &[&str] = &[
@@ -202,4 +210,27 @@ pub fn get_imdb_table_schema(table: &str) -> Schema {
         ]),
         _ => unimplemented!("Schema for table {} is not implemented", table),
     }
+}
+
+/// Get the SQL statements from the specified query file
+pub fn get_query_sql(query: &str) -> Result<Vec<String>> {
+    let possibilities = vec![
+        format!("queries/imdb/{query}.sql"),
+        format!("benchmarks/queries/imdb/{query}.sql"),
+    ];
+    let mut errors = vec![];
+    for filename in possibilities {
+        match fs::read_to_string(&filename) {
+            Ok(contents) => {
+                return Ok(contents
+                    .split(';')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect());
+            }
+            Err(e) => errors.push(format!("{filename}: {e}")),
+        };
+    }
+    plan_err!("invalid query. Could not find query: {:?}", errors)
 }
