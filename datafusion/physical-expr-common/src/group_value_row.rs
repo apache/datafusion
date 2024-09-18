@@ -72,12 +72,12 @@ where
 impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         // non-null fast path
-        if !self.nullable || !self.has_null {
+        if !self.nullable {
             return self.group_values[lhs_row]
                 == array.as_primitive::<T>().value(rhs_row);
         }
 
-        if self.nulls[lhs_row] {
+        if !self.has_null || self.nulls[lhs_row] {
             if array.is_null(rhs_row) {
                 return false;
             }
@@ -125,6 +125,7 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
+        println!("go");
         if self.has_null {
             let first_n = self.group_values.drain(0..n).collect::<Vec<_>>();
             let first_n_nulls = self.nulls.drain(0..n).collect::<Vec<_>>();
