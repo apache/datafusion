@@ -145,7 +145,6 @@ impl TableProviderFactory for ListingTableFactory {
             }
             Some(s) => s,
         };
-
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options.with_file_sort_order(cmd.order_exprs.clone()))
             .with_schema(resolved_schema);

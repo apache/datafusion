@@ -1137,7 +1137,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Vec<SortExpr>>> {
         let mut all_results = vec![];
-
         if !order_exprs.is_empty() && schema.fields().is_empty() {
             let mut results = vec![];
             for expr in order_exprs {
@@ -1225,8 +1224,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .build_column_defaults(&columns, &mut planner_context)?
             .into_iter()
             .collect();
-
-
 
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
