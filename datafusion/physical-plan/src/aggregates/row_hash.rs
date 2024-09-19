@@ -19,9 +19,9 @@
 
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::vec;
+use std::{mem, vec};
 
-use crate::aggregates::group_values::{new_group_values, GroupValues};
+use crate::aggregates::group_values::{new_group_values, GroupValuesLike};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
@@ -38,13 +38,17 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::utils::get_arrayref_at_indices;
+use datafusion_common::{
+    arrow_datafusion_err, internal_datafusion_err, DataFusionError, Result,
+};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::get_filter_at_indices;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
@@ -60,6 +64,8 @@ pub(crate) enum ExecutionState {
     /// When producing output, the remaining rows to output are stored
     /// here and are sliced off as needed in batch_size chunks
     ProducingOutput(RecordBatch),
+
+    ProducingPartitionedOutput(PartitionedOutput),
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
     ///
@@ -71,6 +77,76 @@ pub(crate) enum ExecutionState {
 
 use super::order::GroupOrdering;
 use super::AggregateExec;
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PartitionedOutput {
+    partitions: Vec<Option<RecordBatch>>,
+    start_idx: usize,
+    batch_size: usize,
+    num_partitions: usize,
+}
+
+impl PartitionedOutput {
+    pub fn new(
+        src_batches: Vec<RecordBatch>,
+        batch_size: usize,
+        num_partitions: usize,
+    ) -> Self {
+        let partitions = src_batches.into_iter().map(|batch| Some(batch)).collect();
+
+        Self {
+            partitions,
+            start_idx: 0,
+            batch_size,
+            num_partitions,
+        }
+    }
+
+    pub fn next_batch(&mut self) -> Option<RecordBatch> {
+        let mut current_idx = self.start_idx;
+        loop {
+            // If found a partition having data,
+            let batch_opt = if self.partitions[current_idx].is_some() {
+                Some(self.extract_batch_from_partition(current_idx))
+            } else {
+                None
+            };
+
+            // Advance the `current_idx`
+            current_idx = (current_idx + 1) % self.num_partitions;
+
+            if batch_opt.is_some() {
+                // If found batch, we update the `start_idx` and return it
+                self.start_idx = current_idx;
+                return batch_opt;
+            } else if self.start_idx == current_idx {
+                // If not found, and has loop to end, we return None
+                return batch_opt;
+            }
+            // Otherwise, we loop to check next partition
+        }
+    }
+
+    pub fn extract_batch_from_partition(&mut self, part_idx: usize) -> RecordBatch {
+        let partition_batch = mem::take(&mut self.partitions[part_idx]).unwrap();
+        if partition_batch.num_rows() > self.batch_size {
+            // If still the exist rows num > `batch_size`,
+            // cut off `batch_size` rows as `output``,
+            // and set back `remaining`.
+            let size = self.batch_size;
+            let num_remaining = partition_batch.num_rows() - size;
+            let remaining = partition_batch.slice(size, num_remaining);
+            let output = partition_batch.slice(0, size);
+            self.partitions[part_idx] = Some(remaining);
+
+            output
+        } else {
+            // If they are the last rows in `partition_batch`, just return,
+            // because `partition_batch` has been set to `None`.
+            partition_batch
+        }
+    }
+}
 
 /// This encapsulates the spilling state
 struct SpillState {
@@ -388,18 +464,20 @@ pub(crate) struct GroupedHashAggregateStream {
     // These fields will accumulate intermediate results during the execution.
     // ========================================================================
     /// An interning store of group keys
-    group_values: Box<dyn GroupValues>,
+    group_values: GroupValuesLike,
 
     /// scratch space for the current input [`RecordBatch`] being
     /// processed. Reused across batches here to avoid reallocations
-    current_group_indices: Vec<usize>,
+    current_group_indices: Vec<Vec<usize>>,
+
+    current_row_indices: Vec<Vec<u32>>,
 
     /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
     /// For example, if the query has aggregates, `SUM(x)`,
     /// `COUNT(y)`, there will be two accumulators, each one
     /// specialized for that particular aggregate and its input types
-    accumulators: Vec<Box<dyn GroupsAccumulator>>,
+    accumulators: Vec<Vec<Box<dyn GroupsAccumulator>>>,
 
     // ========================================================================
     // TASK-SPECIFIC STATES:
@@ -474,13 +552,8 @@ impl GroupedHashAggregateStream {
             }
         };
 
-        // Instantiate the accumulators
-        let accumulators: Vec<_> = aggregate_exprs
-            .iter()
-            .map(create_group_accumulator)
-            .collect::<Result<_>>()?;
-
         let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
+
         let spill_expr = group_schema
             .fields
             .into_iter()
@@ -505,7 +578,39 @@ impl GroupedHashAggregateStream {
             ordering.as_slice(),
         )?;
 
-        let group_values = new_group_values(group_schema)?;
+        // Instantiate the accumulators and group values
+        // Judge should we try to use partitioned hashtable, it will be enabled while:
+        //   - It is partial operator
+        //   - It is not streaming
+        let suggest_num_partitions = context.session_config().target_partitions();
+        let partitioning_group_values = agg.mode == AggregateMode::Partial
+            && matches!(group_ordering, GroupOrdering::None);
+        let group_values = new_group_values(
+            group_schema,
+            partitioning_group_values,
+            suggest_num_partitions,
+        )?;
+
+        // We need to decide how many accumulators partitions should we create according to group values partitions
+        let num_partitions = group_values.num_partitions();
+        let mut accumulators_partitions = Vec::with_capacity(num_partitions);
+        for _ in 0..num_partitions {
+            let accumulators: Vec<_> = aggregate_exprs
+                .iter()
+                .map(create_group_accumulator)
+                .collect::<Result<_>>()?;
+            accumulators_partitions.push(accumulators);
+        }
+
+        let current_group_indices = (0..num_partitions)
+            .into_iter()
+            .map(|_| Vec::new())
+            .collect::<Vec<_>>();
+        let current_row_indices = (0..num_partitions)
+            .into_iter()
+            .map(|_| Vec::new())
+            .collect::<Vec<_>>();
+
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
@@ -528,7 +633,7 @@ impl GroupedHashAggregateStream {
         // - there is only one GROUP BY expressions set
         let skip_aggregation_probe = if agg.mode == AggregateMode::Partial
             && matches!(group_ordering, GroupOrdering::None)
-            && accumulators
+            && accumulators_partitions[0]
                 .iter()
                 .all(|acc| acc.supports_convert_to_state())
             && agg_group_by.is_single()
@@ -553,13 +658,14 @@ impl GroupedHashAggregateStream {
             schema: agg_schema,
             input,
             mode: agg.mode,
-            accumulators,
+            accumulators: accumulators_partitions,
             aggregate_arguments,
             filter_expressions,
             group_by: agg_group_by,
             reservation,
             group_values,
-            current_group_indices: Default::default(),
+            current_group_indices,
+            current_row_indices,
             exec_state,
             baseline_metrics,
             batch_size,
@@ -613,7 +719,7 @@ impl Stream for GroupedHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
         loop {
-            match &self.exec_state {
+            match &mut self.exec_state {
                 ExecutionState::ReadingInput => 'reading_input: {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         // new batch to aggregate
@@ -643,7 +749,9 @@ impl Stream for GroupedHashAggregateStream {
                             }
 
                             if let Some(to_emit) = self.group_ordering.emit_to() {
-                                let batch = extract_ok!(self.emit(to_emit, false));
+                                let mut batch = extract_ok!(self.emit(to_emit, false));
+                                assert_eq!(batch.len(), 1);
+                                let batch = batch.pop().unwrap();
                                 self.exec_state = ExecutionState::ProducingOutput(batch);
                                 timer.done();
                                 // make sure the exec_state just set is not overwritten below
@@ -693,6 +801,7 @@ impl Stream for GroupedHashAggregateStream {
                 ExecutionState::ProducingOutput(batch) => {
                     // slice off a part of the batch, if needed
                     let output_batch;
+                    let batch = batch.clone();
                     let size = self.batch_size;
                     (self.exec_state, output_batch) = if batch.num_rows() <= size {
                         (
@@ -703,7 +812,7 @@ impl Stream for GroupedHashAggregateStream {
                             } else {
                                 ExecutionState::ReadingInput
                             },
-                            batch.clone(),
+                            batch,
                         )
                     } else {
                         // output first batch_size rows
@@ -724,6 +833,31 @@ impl Stream for GroupedHashAggregateStream {
                     self.clear_all();
                     let _ = self.update_memory_reservation();
                     return Poll::Ready(None);
+                }
+
+                ExecutionState::ProducingPartitionedOutput(parts) => {
+                    // slice off a part of the batch, if needed
+                    let batch_opt = parts.next_batch();
+                    if let Some(batch) = batch_opt {
+                        // output first batch_size rows
+                        let size = self.batch_size;
+                        let num_remaining = batch.num_rows() - size;
+                        let remaining = batch.slice(size, num_remaining);
+                        let output = batch.slice(0, size);
+                        self.exec_state = ExecutionState::ProducingOutput(remaining);
+
+                        return Poll::Ready(Some(Ok(
+                            output.record_output(&self.baseline_metrics)
+                        )));
+                    } else {
+                        self.exec_state = if self.input_done {
+                            ExecutionState::Done
+                        } else if self.should_skip_aggregation() {
+                            ExecutionState::SkippingAggregation
+                        } else {
+                            ExecutionState::ReadingInput
+                        };
+                    }
                 }
             }
         }
@@ -761,26 +895,144 @@ impl GroupedHashAggregateStream {
             evaluate_optional(&self.filter_expressions, &batch)?
         };
 
-        for group_values in &group_by_values {
+        if !self.group_values.is_partitioned() {
+            self.group_aggregate_batch_single(
+                &group_by_values,
+                &input_values,
+                &filter_values,
+            )?;
+        } else {
+            self.group_aggregate_batch_partitioned(
+                &group_by_values,
+                &input_values,
+                &filter_values,
+            )?;
+        }
+
+        match self.update_memory_reservation() {
+            // Here we can ignore `insufficient_capacity_err` because we will spill later,
+            // but at least one batch should fit in the memory
+            Err(DataFusionError::ResourcesExhausted(_))
+                if self.group_values.len() >= self.batch_size =>
+            {
+                Ok(())
+            }
+            other => other,
+        }
+    }
+
+    fn group_aggregate_batch_partitioned(
+        &mut self,
+        group_by_values: &[Vec<ArrayRef>],
+        acc_values: &[Vec<ArrayRef>],
+        acc_opt_filters: &[Option<ArrayRef>],
+    ) -> Result<()> {
+        assert!(
+            self.mode == AggregateMode::Partial
+                && matches!(self.group_ordering, GroupOrdering::None)
+        );
+
+        let group_values = self.group_values.as_partitioned_mut();
+
+        let mut batch_indices = vec![];
+        let mut offsets = vec![];
+
+        for group_cols in group_by_values {
+            // 1.Calculate `row_indices` and related `group_indices` for each partition
+            group_values.intern(
+                group_cols,
+                &mut self.current_group_indices,
+                &mut self.current_row_indices,
+            )?;
+
+            // 2.update the arrays in each partition to their accumulators
+            //  - Reorder the arrays to make them sorted by partitions
+            //  - Collect the `offsets`, and we can get arrays in partition through `slice`
+            batch_indices.clear();
+            offsets.clear();
+            offsets.push(0);
+
+            let mut offset_so_far = 0;
+            for indices in self.current_row_indices.iter() {
+                batch_indices.extend_from_slice(indices);
+                offset_so_far += indices.len();
+                offsets.push(offset_so_far);
+            }
+            let batch_indices = batch_indices.clone().into();
+            let acc_values = acc_values
+                .iter()
+                .map(|values| get_arrayref_at_indices(values, &batch_indices))
+                .collect::<Result<Vec<_>>>()?;
+            let acc_opt_filters = acc_opt_filters
+                .iter()
+                .map(|opt_filter| {
+                    let opt_filter = opt_filter.as_ref().map(|f| f.as_boolean());
+                    get_filter_at_indices(opt_filter, &batch_indices)
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            // Update the accumulators of each partition
+            for (part_idx, part_start_end) in offsets.windows(2).enumerate() {
+                let (offset, length) =
+                    (part_start_end[0], part_start_end[1] - part_start_end[0]);
+
+                // Gather the inputs to call the actual accumulator
+                let iter = self.accumulators[part_idx]
+                    .iter_mut()
+                    .zip(acc_values.iter())
+                    .zip(acc_opt_filters.iter());
+
+                for ((acc, values), opt_filter) in iter {
+                    let part_values = values
+                        .iter()
+                        .map(|array| array.slice(offset, length))
+                        .collect::<Vec<_>>();
+
+                    let part_opt_filter =
+                        opt_filter.as_ref().map(|f| f.slice(offset, length));
+                    let part_opt_filter =
+                        part_opt_filter.as_ref().map(|filter| filter.as_boolean());
+
+                    let group_indices = &self.current_group_indices[part_idx];
+                    let total_num_groups = group_values.partition_len(part_idx);
+                    acc.update_batch(
+                        &part_values,
+                        group_indices,
+                        part_opt_filter,
+                        total_num_groups,
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn group_aggregate_batch_single(
+        &mut self,
+        group_by_values: &[Vec<ArrayRef>],
+        input_values: &[Vec<ArrayRef>],
+        filter_values: &[Option<ArrayRef>],
+    ) -> Result<()> {
+        let group_values = self.group_values.as_single_mut();
+        for group_cols in group_by_values {
             // calculate the group indices for each input row
-            let starting_num_groups = self.group_values.len();
-            self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
-            let group_indices = &self.current_group_indices;
+            let starting_num_groups = group_values.len();
+            group_values.intern(group_cols, &mut self.current_group_indices[0])?;
+            let group_indices = &self.current_group_indices[0];
 
             // Update ordering information if necessary
-            let total_num_groups = self.group_values.len();
+            let total_num_groups = group_values.len();
             if total_num_groups > starting_num_groups {
                 self.group_ordering.new_groups(
-                    group_values,
+                    group_cols,
                     group_indices,
                     total_num_groups,
                 )?;
             }
 
             // Gather the inputs to call the actual accumulator
-            let t = self
-                .accumulators
+            let t = self.accumulators[0]
                 .iter_mut()
                 .zip(input_values.iter())
                 .zip(filter_values.iter());
@@ -817,20 +1069,11 @@ impl GroupedHashAggregateStream {
             }
         }
 
-        match self.update_memory_reservation() {
-            // Here we can ignore `insufficient_capacity_err` because we will spill later,
-            // but at least one batch should fit in the memory
-            Err(DataFusionError::ResourcesExhausted(_))
-                if self.group_values.len() >= self.batch_size =>
-            {
-                Ok(())
-            }
-            other => other,
-        }
+        Ok(())
     }
 
     fn update_memory_reservation(&mut self) -> Result<()> {
-        let acc = self.accumulators.iter().map(|x| x.size()).sum::<usize>();
+        let acc = self.accumulators[0].iter().map(|x| x.size()).sum::<usize>();
         self.reservation.try_resize(
             acc + self.group_values.size()
                 + self.group_ordering.size()
@@ -840,23 +1083,39 @@ impl GroupedHashAggregateStream {
 
     /// Create an output RecordBatch with the group keys and
     /// accumulator states/values specified in emit_to
-    fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<RecordBatch> {
+    fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<Vec<RecordBatch>> {
+        if !self.group_values.is_partitioned() {
+            self.emit_single(emit_to, spilling)
+        } else {
+            self.emit_partitioned(emit_to)
+        }
+    }
+
+    /// Create an output RecordBatch with the group keys and
+    /// accumulator states/values specified in emit_to
+    fn emit_single(
+        &mut self,
+        emit_to: EmitTo,
+        spilling: bool,
+    ) -> Result<Vec<RecordBatch>> {
         let schema = if spilling {
             Arc::clone(&self.spill_state.spill_schema)
         } else {
             self.schema()
         };
+
         if self.group_values.is_empty() {
-            return Ok(RecordBatch::new_empty(schema));
+            return Ok(Vec::new());
         }
 
-        let mut output = self.group_values.emit(emit_to)?;
+        let group_values = self.group_values.as_single_mut();
+        let mut output = group_values.emit(emit_to)?;
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
         }
 
         // Next output each aggregate value
-        for acc in self.accumulators.iter_mut() {
+        for acc in self.accumulators[0].iter_mut() {
             match self.mode {
                 AggregateMode::Partial => output.extend(acc.state(emit_to)?),
                 _ if spilling => {
@@ -875,7 +1134,48 @@ impl GroupedHashAggregateStream {
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
         let batch = RecordBatch::try_new(schema, output)?;
-        Ok(batch)
+
+        Ok(vec![batch])
+    }
+
+    fn emit_partitioned(&mut self, emit_to: EmitTo) -> Result<Vec<RecordBatch>> {
+        assert!(
+            self.mode == AggregateMode::Partial
+                && matches!(self.group_ordering, GroupOrdering::None)
+        );
+
+        let schema = self.schema();
+
+        if self.group_values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let group_values = self.group_values.as_partitioned_mut();
+        let mut partitioned_outputs = group_values.emit(emit_to)?;
+
+        // Next output each aggregate value
+        for (output, accs) in partitioned_outputs
+            .iter_mut()
+            .zip(self.accumulators.iter_mut())
+        {
+            for acc in accs.iter_mut() {
+                output.extend(acc.state(emit_to)?);
+            }
+        }
+
+        // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
+        // over the target memory size after emission, we can emit again rather than returning Err.
+        let _ = self.update_memory_reservation();
+
+        let batch_parts = partitioned_outputs
+            .into_iter()
+            .map(|part| {
+                RecordBatch::try_new(schema.clone(), part)
+                    .map_err(|e| arrow_datafusion_err!(e))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(batch_parts)
     }
 
     /// Optimistically, [`Self::group_aggregate_batch`] allows to exceed the memory target slightly
@@ -901,7 +1201,9 @@ impl GroupedHashAggregateStream {
 
     /// Emit all rows, sort them, and store them on disk.
     fn spill(&mut self) -> Result<()> {
-        let emit = self.emit(EmitTo::All, true)?;
+        let mut emit = self.emit(EmitTo::All, true)?;
+        assert_eq!(emit.len(), 1);
+        let emit = emit.pop().unwrap();
         let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
         let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
         // TODO: slice large `sorted` and write to multiple files in parallel
@@ -917,7 +1219,8 @@ impl GroupedHashAggregateStream {
 
     /// Clear memory and shirk capacities to the size of the batch.
     fn clear_shrink(&mut self, batch: &RecordBatch) {
-        self.group_values.clear_shrink(batch);
+        let group_values = self.group_values.as_single_mut();
+        group_values.clear_shrink(batch);
         self.current_group_indices.clear();
         self.current_group_indices.shrink_to(batch.num_rows());
     }
@@ -937,9 +1240,20 @@ impl GroupedHashAggregateStream {
             && matches!(self.mode, AggregateMode::Partial)
             && self.update_memory_reservation().is_err()
         {
-            let n = self.group_values.len() / self.batch_size * self.batch_size;
-            let batch = self.emit(EmitTo::First(n), false)?;
-            self.exec_state = ExecutionState::ProducingOutput(batch);
+            if !self.group_values.is_partitioned() {
+                let n = self.group_values.len() / self.batch_size * self.batch_size;
+                let mut batch = self.emit(EmitTo::First(n), false)?;
+                let batch = batch.pop().unwrap();
+                self.exec_state = ExecutionState::ProducingOutput(batch);
+            } else {
+                let batches = self.emit(EmitTo::All, false)?;
+                self.exec_state =
+                    ExecutionState::ProducingPartitionedOutput(PartitionedOutput::new(
+                        batches,
+                        self.batch_size,
+                        self.group_values.num_partitions(),
+                    ));
+            }
         }
         Ok(())
     }
@@ -949,7 +1263,9 @@ impl GroupedHashAggregateStream {
     /// Conduct a streaming merge sort between the batch and spilled data. Since the stream is fully
     /// sorted, set `self.group_ordering` to Full, then later we can read with [`EmitTo::First`].
     fn update_merged_stream(&mut self) -> Result<()> {
-        let batch = self.emit(EmitTo::All, true)?;
+        let mut batch = self.emit(EmitTo::All, true)?;
+        assert_eq!(batch.len(), 1);
+        let batch = batch.pop().unwrap();
         // clear up memory for streaming_merge
         self.clear_all();
         self.update_memory_reservation()?;
@@ -997,8 +1313,18 @@ impl GroupedHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
-            let batch = self.emit(EmitTo::All, false)?;
-            ExecutionState::ProducingOutput(batch)
+            if !self.group_values.is_partitioned() {
+                let mut batch = self.emit(EmitTo::All, false)?;
+                let batch = batch.pop().unwrap();
+                ExecutionState::ProducingOutput(batch)
+            } else {
+                let batches = self.emit(EmitTo::All, false)?;
+                ExecutionState::ProducingPartitionedOutput(PartitionedOutput::new(
+                    batches,
+                    self.batch_size,
+                    self.group_values.num_partitions(),
+                ))
+            }
         } else {
             // If spill files exist, stream-merge them.
             self.update_merged_stream()?;
@@ -1030,8 +1356,20 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<()> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
-                let batch = self.emit(EmitTo::All, false)?;
-                self.exec_state = ExecutionState::ProducingOutput(batch);
+                if !self.group_values.is_partitioned() {
+                    let mut batch = self.emit(EmitTo::All, false)?;
+                    let batch = batch.pop().unwrap();
+                    self.exec_state = ExecutionState::ProducingOutput(batch);
+                } else {
+                    let batches = self.emit(EmitTo::All, false)?;
+                    self.exec_state = ExecutionState::ProducingPartitionedOutput(
+                        PartitionedOutput::new(
+                            batches,
+                            self.batch_size,
+                            self.group_values.num_partitions(),
+                        ),
+                    );
+                }
             }
         }
 
@@ -1056,8 +1394,7 @@ impl GroupedHashAggregateStream {
             internal_datafusion_err!("group_values expected to have at least one element")
         })?;
 
-        let iter = self
-            .accumulators
+        let iter = self.accumulators[0]
             .iter()
             .zip(input_values.iter())
             .zip(filter_values.iter());
@@ -1072,3 +1409,24 @@ impl GroupedHashAggregateStream {
         Ok(states_batch)
     }
 }
+
+// /// ```text
+// /// ┌─────┐           ┌─────┐            ┌─────┐
+// /// │true │           │NULL │            │NULL │
+// /// │true │    │      │true │            │true │
+// /// │true │ ───┼───   │false│  ────────▶ │false│       filtered_nulls
+// /// │false│    │      │NULL │            │false│
+// /// │false│           │true │            │false│
+// /// └─────┘           └─────┘            └─────┘
+// /// array           opt_filter           output
+// ///  .nulls()
+// ///
+// /// false = NULL    true  = pass          false = NULL       Meanings
+// /// true  = valid   false = filter        true  = valid
+// ///                 NULL  = filter
+// /// ```
+// ///
+// /// [`GroupsAccumulator::convert_to_state`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
+// fn create_partitioned_filter() {
+//     BooleanBufferBuilder
+// }
