@@ -299,7 +299,7 @@ impl BatchPartitioner {
                             // Tracking time required for repartitioned batches construction
                             let _timer = partitioner_timer.timer();
 
-                            if batch.num_rows() != indices {
+                            if batch.num_rows() != indices.len() {
                                 // Produce batches based on indices
                                 let columns = batch
                                     .columns()
