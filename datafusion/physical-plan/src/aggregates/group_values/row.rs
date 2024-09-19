@@ -214,7 +214,7 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
                 // Convert the all rows to a total Vec<Array>,
                 // And we use slice to distinguish partitions.
                 let total_rows =
-                    row_partitions.into_iter().flat_map(|part| part.into_iter());
+                    row_partitions.iter().flat_map(|part| part.iter());
                 let total_rows = self
                     .row_converter
                     .convert_rows(total_rows)
