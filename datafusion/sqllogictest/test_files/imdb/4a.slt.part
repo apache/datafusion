@@ -1,5 +1,4 @@
 
-
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,10 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-include create_tables.slt.part
-include 1*.slt.part
-include 2*.slt.part
-include 3*.slt.part
-include 4*.slt.part
-include 5*.slt.part
-include drop_tables.slt.part
+query TT
+SELECT MIN(mi_idx.info) AS rating, MIN(t.title) AS movie_title FROM info_type AS it, keyword AS k, movie_info_idx AS mi_idx, movie_keyword AS mk, title AS t WHERE it.info ='rating' AND k.keyword  like '%sequel%' AND mi_idx.info  > '5.0' AND t.production_year > 2005 AND t.id = mi_idx.movie_id AND t.id = mk.movie_id AND mk.movie_id = mi_idx.movie_id AND k.id = mk.keyword_id AND it.id = mi_idx.info_type_id;
+----
+5.1 & Teller 2
