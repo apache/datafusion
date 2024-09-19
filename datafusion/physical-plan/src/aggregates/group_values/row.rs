@@ -23,9 +23,9 @@ use arrow::compute::cast;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::{Array, ArrayRef};
-use arrow_schema::{DataType, Schema, SchemaRef};
+use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use hashbrown::raw::RawTable;
@@ -38,7 +38,20 @@ pub struct PartitionedGroupValuesRows {
     /// Converter for the group values
     row_converter: RowConverter,
 
-    partitions: Vec<GroupValuesPartition>,
+    row_partitions: Vec<Rows>,
+
+    /// Logically maps group values to a group_index in
+    /// [`Self::group_values`] and in each accumulator
+    ///
+    /// Uses the raw API of hashbrown to avoid actually storing the
+    /// keys (group values) in the table
+    ///
+    /// keys: u64 hashes of the GroupValue
+    /// values: (hash, group_index)
+    map: RawTable<(u64, usize)>,
+
+    /// The size of `map` in bytes
+    map_size: usize,
 
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
@@ -66,18 +79,20 @@ impl PartitionedGroupValuesRows {
             row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
 
         assert!(num_partitions > 0);
-        let mut partitions = Vec::with_capacity(num_partitions);
+        let mut row_partitions = Vec::with_capacity(num_partitions);
         for _ in 0..num_partitions {
-            partitions.push(GroupValuesPartition::new());
+            row_partitions.push(row_converter.empty_rows(0, 0));
         }
 
         Ok(Self {
             schema,
             row_converter,
-            partitions,
+            row_partitions,
             hashes_buffer: Default::default(),
             rows_buffer,
             random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
+            map: RawTable::with_capacity(0),
+            map_size: 0,
         })
     }
 }
@@ -100,129 +115,19 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
-
-        // 2. Partition values according to hashes
+  
+        // 2. Get or create groups in partitions
         part_row_indices
             .iter_mut()
             .for_each(|indices| indices.clear());
-        let num_partitions = self.partitions.len();
-        for (row_idx, hash) in batch_hashes.iter().enumerate() {
-            let partition_idx = (*hash as usize) % num_partitions;
-            part_row_indices[partition_idx].push(row_idx as u32);
-        }
 
-        // 3. Get or create groups in partitions
-        for (part_idx, part_row_indices) in part_row_indices.iter().enumerate() {
-            self.partitions[part_idx].get_or_create_groups(
-                &group_rows,
-                &batch_hashes,
-                &self.row_converter,
-                &part_row_indices,
-                &mut groups[part_idx],
-            )
-        }
-
-        Ok(())
-    }
-
-    fn num_partitions(&self) -> usize {
-        self.partitions.len()
-    }
-
-    fn size(&self) -> usize {
-        let partitions_size = self
-            .partitions
-            .iter()
-            .map(|part| part.size())
-            .sum::<usize>();
-        self.row_converter.size()
-            + partitions_size
-            + self.rows_buffer.size()
-            + self.hashes_buffer.allocated_size()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    fn len(&self) -> usize {
-        self.partitions.iter().map(|part| part.len()).sum::<usize>()
-    }
-
-    fn partition_len(&self, partition_index: usize) -> usize {
-        self.partitions[partition_index].len()
-    }
-
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<Vec<ArrayRef>>> {
-        let mut partitions = mem::take(&mut self.partitions);
-
-        let group_parts = partitions
-            .iter_mut()
-            .map(|part| part.emit(emit_to, &self.schema, &self.row_converter))
-            .collect::<Result<Vec<_>>>();
-
-        self.partitions = partitions;
-
-        group_parts
-    }
-
-    fn clear(&mut self) {
-        // Seems unnecessary, just do nothing now
-    }
-}
-
-struct GroupValuesPartition {
-    /// Logically maps group values to a group_index in
-    /// [`Self::group_values`] and in each accumulator
-    ///
-    /// Uses the raw API of hashbrown to avoid actually storing the
-    /// keys (group values) in the table
-    ///
-    /// keys: u64 hashes of the GroupValue
-    /// values: (hash, group_index)
-    map: RawTable<(u64, usize)>,
-
-    /// The size of `map` in bytes
-    map_size: usize,
-
-    /// The actual group by values, stored in arrow [`Row`] format.
-    /// `group_values[i]` holds the group value for group_index `i`.
-    ///
-    /// The row format is used to compare group keys quickly and store
-    /// them efficiently in memory. Quick comparison is especially
-    /// important for multi-column group keys.
-    ///
-    /// [`Row`]: arrow::row::Row
-    group_values: Option<Rows>,
-}
-
-impl GroupValuesPartition {
-    fn new() -> Self {
-        Self {
-            map: RawTable::with_capacity(0),
-            map_size: 0,
-            group_values: None,
-        }
-    }
-
-    fn get_or_create_groups(
-        &mut self,
-        input_rows: &Rows,
-        hashes: &[u64],
-        row_converter: &RowConverter,
-        row_indices: &[u32],
-        group_indices: &mut Vec<usize>,
-    ) {
-        group_indices.clear();
-
-        let mut group_values = match self.group_values.take() {
-            Some(group_values) => group_values,
-            None => row_converter.empty_rows(0, 0),
-        };
-
-        for &row_idx in row_indices {
+        let num_partitions = self.row_partitions.len();
+        for (row_idx, &target_hash) in batch_hashes.iter().enumerate() {
             let row_idx = row_idx as usize;
-            let target_hash = hashes[row_idx];
+            let part_idx =  (target_hash as usize) % num_partitions;
+
+            part_row_indices[part_idx].push(row_idx as u32);
+
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
                 // Somewhat surprisingly, this closure can be called even if the
                 // hash doesn't match, so check the hash first with an integer
@@ -232,7 +137,7 @@ impl GroupValuesPartition {
                     // verify that the group that we are inserting with hash is
                     // actually the same key value as the group in
                     // existing_idx  (aka group_values @ row)
-                    && input_rows.row(row_idx) == group_values.row(*group_idx)
+                    && group_rows.row(row_idx) == self.row_partitions[part_idx].row(*group_idx)
             });
 
             let group_idx = match entry {
@@ -241,8 +146,8 @@ impl GroupValuesPartition {
                 //  1.2 Need to create new entry for the group
                 None => {
                     // Add new entry to aggr_state and save newly created index
-                    let group_idx = group_values.num_rows();
-                    group_values.push(input_rows.row(row_idx));
+                    let group_idx = self.row_partitions[part_idx].num_rows();
+                    self.row_partitions[part_idx].push(group_rows.row(row_idx));
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
@@ -253,32 +158,58 @@ impl GroupValuesPartition {
                     group_idx
                 }
             };
-            group_indices.push(group_idx);
+
+            groups[part_idx].push(group_idx);
         }
 
-        self.group_values = Some(group_values);
+        Ok(())
     }
 
-    fn emit(
-        &mut self,
-        emit_to: EmitTo,
-        schema: &Schema,
-        row_converter: &RowConverter,
-    ) -> Result<Vec<ArrayRef>> {
-        let mut group_values = self
-            .group_values
-            .take()
-            .expect("Can not emit from empty rows");
+    fn num_partitions(&self) -> usize {
+        self.row_partitions.len()
+    }
 
-        let mut output = match emit_to {
+    fn size(&self) -> usize {
+        let partitions_size = self
+            .row_partitions
+            .iter()
+            .map(|part| part.size())
+            .sum::<usize>();
+        self.row_converter.size()
+            + partitions_size
+            + self.map_size
+            + self.rows_buffer.size()
+            + self.hashes_buffer.allocated_size()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    fn partition_len(&self, partition_index: usize) -> usize {
+        self.row_partitions[partition_index].num_rows()
+    }
+
+    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<Vec<ArrayRef>>> {
+        let mut output_parts = match emit_to {
             EmitTo::All => {
-                let output = row_converter.convert_rows(&group_values)?;
-                group_values.clear();
-
+                let mut row_partitions = mem::take(&mut self.row_partitions);
+                let mut output_parts = Vec::with_capacity(self.num_partitions());
+                for part in row_partitions.iter_mut() {
+                    let rows = mem::replace(part,  self.row_converter.empty_rows(0, 0));
+                    let part_arrays = self.row_converter.convert_rows(&rows).map_err(|e| arrow_datafusion_err!(e))?;
+                    output_parts.push(part_arrays);
+                }
+                
+                self.row_partitions = row_partitions;
                 self.map = RawTable::with_capacity(0);
                 self.map_size = 0;
 
-                output
+                output_parts
             }
             EmitTo::First(_) => {
                 unreachable!()
@@ -286,38 +217,26 @@ impl GroupValuesPartition {
         };
 
         // TODO: Materialize dictionaries in group keys (#7647)
-        for (field, array) in schema.fields.iter().zip(&mut output) {
-            let expected = field.data_type();
-            if let DataType::Dictionary(_, v) = expected {
-                let actual = array.data_type();
-                if v.as_ref() != actual {
-                    return Err(DataFusionError::Internal(format!(
-                        "Converted group rows expected dictionary of {v} got {actual}"
-                    )));
+        for output in output_parts.iter_mut() {
+            for (field, array) in self.schema.fields.iter().zip(output) {
+                let expected = field.data_type();
+                if let DataType::Dictionary(_, v) = expected {
+                    let actual = array.data_type();
+                    if v.as_ref() != actual {
+                        return Err(DataFusionError::Internal(format!(
+                            "Converted group rows expected dictionary of {v} got {actual}"
+                        )));
+                    }
+                    *array = cast(array.as_ref(), expected)?;
                 }
-                *array = cast(array.as_ref(), expected)?;
             }
         }
 
-        self.group_values = Some(group_values);
-
-        Ok(output)
+        Ok(output_parts)
     }
 
-    fn size(&self) -> usize {
-        self.map_size
-            + self
-                .group_values
-                .as_ref()
-                .map(|group| group.size())
-                .unwrap_or(0)
-    }
-
-    fn len(&self) -> usize {
-        self.group_values
-            .as_ref()
-            .map(|group| group.num_rows())
-            .unwrap_or(0)
+    fn clear(&mut self) {
+        // Seems unnecessary, just do nothing now
     }
 }
 
