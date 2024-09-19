@@ -669,12 +669,14 @@ impl DefaultPhysicalPlanner {
                 let input_exec = children.one()?;
                 let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
-                let physical_input_schema_from_logical: Arc<Schema> =
-                    logical_input_schema.as_ref().clone().into();
 
-                if physical_input_schema != physical_input_schema_from_logical {
-                    return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
-                }
+                // spiceai: https://github.com/apache/datafusion/pull/11989#issuecomment-2360601240
+                // let physical_input_schema_from_logical: Arc<Schema> =
+                //     logical_input_schema.as_ref().clone().into();
+
+                // if physical_input_schema != physical_input_schema_from_logical {
+                //     return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
+                // }
 
                 let groups = self.create_grouping_physical_expr(
                     group_expr,
