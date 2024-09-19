@@ -42,10 +42,9 @@ use crate::{
 
 use arrow::array::{BooleanBufferBuilder, UInt32Array, UInt64Array};
 use arrow::compute::concat_batches;
-use arrow::datatypes::{Schema, SchemaRef, UInt64Type};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use arrow_array::PrimitiveArray;
 use datafusion_common::{exec_datafusion_err, JoinSide, Result, Statistics};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -458,19 +457,47 @@ struct NestedLoopJoinStream {
     join_metrics: BuildProbeJoinMetrics,
 }
 
+/// Creates a Cartesian product of two input batches, preserving the order of the right batch,
+/// and applying a join filter if provided.
+///
+/// # Example
+/// Input:
+/// left = [0, 1], right = [0, 1, 2]
+///
+/// Output:
+/// left_indices = [0, 1, 0, 1, 0, 1], right_indices = [0, 0, 1, 1, 2, 2]
+///
+/// Input:
+/// left = [0, 1, 2], right = [0, 1, 2, 3], filter = left.a != right.a
+///
+/// Output:
+/// left_indices = [1, 2, 0, 2, 0, 1, 0, 1, 2], right_indices = [0, 0, 1, 1, 2, 2, 3, 3, 3]
 fn build_join_indices(
-    right_row_index: usize,
     left_batch: &RecordBatch,
     right_batch: &RecordBatch,
     filter: Option<&JoinFilter>,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    // left indices: [0, 1, 2, 3, 4, ..., left_row_count]
-    // right indices: [right_index, right_index, ..., right_index]
-
     let left_row_count = left_batch.num_rows();
-    let left_indices = UInt64Array::from_iter_values(0..(left_row_count as u64));
-    let right_indices = UInt32Array::from(vec![right_row_index as u32; left_row_count]);
-    // in the nested loop join, the filter can contain non-equal and equal condition.
+    let right_row_count = right_batch.num_rows();
+
+    // Calculate the capacity of the output array to avoid reallocations
+    let capacity = left_row_count * right_row_count;
+
+    // Left indices are 0..left_row_count repeated right_row_count times
+    let mut left_indices_builder = UInt64Array::builder(capacity);
+    for _ in 0..right_row_count {
+        left_indices_builder.extend((0..(left_row_count as u64)).map(Some));
+    }
+
+    // Right indices are each right row index repeated left_row_count times
+    let mut right_indices_builder = UInt32Array::builder(capacity);
+    for right_index in 0..right_row_count {
+        right_indices_builder.extend(vec![Some(right_index as u32); left_row_count])
+    }
+
+    let left_indices = left_indices_builder.finish();
+    let right_indices = right_indices_builder.finish();
+
     if let Some(filter) = filter {
         apply_join_filter_to_indices(
             left_batch,
@@ -596,26 +623,14 @@ fn join_left_and_right_batch(
     schema: &Schema,
     visited_left_side: &SharedBitmapBuilder,
 ) -> Result<RecordBatch> {
-    let indices = (0..right_batch.num_rows())
-        .map(|right_row_index| {
-            build_join_indices(right_row_index, left_batch, right_batch, filter)
-        })
-        .collect::<Result<Vec<(UInt64Array, UInt32Array)>>>()
+    let (left_side, right_side) =
+        build_join_indices(left_batch, right_batch, filter)
         .map_err(|e| {
             exec_datafusion_err!(
                 "Fail to build join indices in NestedLoopJoinExec, error:{e}"
             )
         })?;
 
-    let mut left_indices_builder: Vec<u64> = vec![];
-    let mut right_indices_builder: Vec<u32> = vec![];
-    for (left_side, right_side) in indices {
-        left_indices_builder.extend(left_side.values());
-        right_indices_builder.extend(right_side.values());
-    }
-
-    let left_side: PrimitiveArray<UInt64Type> = left_indices_builder.into();
-    let right_side = right_indices_builder.into();
     // set the left bitmap
     // and only full join need the left bitmap
     if need_produce_result_in_final(join_type) {
