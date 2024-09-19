@@ -201,16 +201,39 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
             EmitTo::All => {
                 let mut row_partitions = mem::take(&mut self.row_partitions);
                 let mut output_parts = Vec::with_capacity(self.num_partitions());
-                for part in row_partitions.iter_mut() {
-                    let rows = mem::replace(part, self.row_converter.empty_rows(0, 0));
-                    let part_arrays = self
-                        .row_converter
-                        .convert_rows(&rows)
-                        .map_err(|e| arrow_datafusion_err!(e))?;
+
+                // Used later to sliced the Array.
+                let mut part_offsets = Vec::with_capacity(row_partitions.len() + 1);
+                let mut offset_so_far = 0;
+                part_offsets.push(0);
+                for part in row_partitions.iter() {
+                    offset_so_far += part.num_rows();
+                    part_offsets.push(offset_so_far);
+                }
+
+                // Convert the all rows to a total Vec<Array>,
+                // And we use slice to distinguish partitions.
+                let total_rows =
+                    row_partitions.into_iter().flat_map(|part| part.into_iter());
+                let total_rows = self
+                    .row_converter
+                    .convert_rows(total_rows)
+                    .map_err(|e| arrow_datafusion_err!(e))?;
+
+                for part_start_end in part_offsets.windows(2) {
+                    let (offset, length) =
+                        (part_start_end[0], part_start_end[1] - part_start_end[0]);
+                    let part_arrays = total_rows
+                        .iter()
+                        .map(|array| array.slice(offset, length))
+                        .collect::<Vec<_>>();
                     output_parts.push(part_arrays);
                 }
 
-                self.row_partitions = row_partitions;
+                // Clear the stale data to save memory.
+                self.row_partitions = (0..self.num_partitions())
+                    .map(|_| self.row_converter.empty_rows(0, 0))
+                    .collect::<Vec<_>>();
                 self.map = RawTable::with_capacity(0);
                 self.map_size = 0;
 

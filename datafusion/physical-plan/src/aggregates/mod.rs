@@ -1164,7 +1164,7 @@ pub(crate) fn evaluate_group_by(
             value.into_array(batch.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
-    
+
     Ok(group_by
         .groups
         .iter()

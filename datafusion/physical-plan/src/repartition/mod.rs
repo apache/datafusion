@@ -268,7 +268,7 @@ impl BatchPartitioner {
 
                     if let Some(partition_idx) =
                         batch.schema_ref().metadata().get("partition")
-                    {   
+                    {
                         let partition_idx = partition_idx.parse::<usize>().unwrap();
 
                         Box::new(iter::once(Ok((partition_idx, batch))))

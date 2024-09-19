@@ -155,7 +155,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
 
     // TODO: temporarily remote this assert
     // assert!(collected_running.len() > collected_usual.len());
-    
+
     // compare
     let usual_formatted = pretty_format_batches(&collected_usual).unwrap().to_string();
     let running_formatted = pretty_format_batches(&collected_running)
