@@ -279,6 +279,7 @@ impl BatchPartitioner {
                         .map(|_| Vec::with_capacity(batch.num_rows()))
                         .collect();
 
+                    let partition = (hash_buffer[0]  % *partitions as u64) as usize;
                     for (index, hash) in hash_buffer.iter().enumerate() {
                         indices[(*hash % *partitions as u64) as usize].push(index as u64);
                     }
@@ -299,7 +300,7 @@ impl BatchPartitioner {
                             // Tracking time required for repartitioned batches construction
                             let _timer = partitioner_timer.timer();
 
-                            if batch.num_rows() != indices.len() {
+                            if dbg!(batch.num_rows()) != dbg!(indices.len()) {
                                 // Produce batches based on indices
                                 let columns = batch
                                     .columns()
@@ -321,7 +322,6 @@ impl BatchPartitioner {
 
                                 Ok((partition, batch))
                             } else {
-                                dbg!("only one partition");
                                 Ok((partition, batch.clone()))
                             }
                         });
