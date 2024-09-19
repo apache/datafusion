@@ -275,6 +275,7 @@ jobs:
           make
           ./dbgen -f -s 0.1
           mv *.tbl ../datafusion/sqllogictest/test_files/tpch/data
+          ../benchmarks/bench.sh data imdb
       - name: Verify that benchmark queries return expected results
         run: |
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
