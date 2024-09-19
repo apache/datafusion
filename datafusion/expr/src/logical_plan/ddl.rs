@@ -436,26 +436,32 @@ pub struct CreateFunction {
 
 impl PartialOrd for CreateFunction {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.or_replace.partial_cmp(&other.or_replace) {
-            Some(Ordering::Equal) => match self.temporary.partial_cmp(&other.temporary) {
-                Some(Ordering::Equal) => match self.name.partial_cmp(&other.name) {
-                    Some(Ordering::Equal) => match self.args.partial_cmp(&other.args) {
-                        Some(Ordering::Equal) => {
-                            match self.return_type.partial_cmp(&other.return_type) {
-                                Some(Ordering::Equal) => {
-                                    self.params.partial_cmp(&other.params)
-                                }
-                                cmp => cmp,
-                            }
-                        }
-                        cmp => cmp,
-                    },
-                    cmp => cmp,
-                },
-                cmp => cmp,
-            },
-            cmp => cmp,
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableCreateFunction<'a> {
+            pub or_replace: &'a bool,
+            pub temporary: &'a bool,
+            pub name: &'a String,
+            pub args: &'a Option<Vec<OperateFunctionArg>>,
+            pub return_type: &'a Option<DataType>,
+            pub params: &'a CreateFunctionBody,
         }
+        let comparable_self = ComparableCreateFunction {
+            or_replace: &self.or_replace,
+            temporary: &self.temporary,
+            name: &self.name,
+            args: &self.args,
+            return_type: &self.return_type,
+            params: &self.params,
+        };
+        let comparable_other = ComparableCreateFunction {
+            or_replace: &other.or_replace,
+            temporary: &other.temporary,
+            name: &other.name,
+            args: &other.args,
+            return_type: &other.return_type,
+            params: &other.params,
+        };
+        comparable_self.partial_cmp(&comparable_other)
     }
 }
 
@@ -506,28 +512,32 @@ pub struct CreateIndex {
 
 impl PartialOrd for CreateIndex {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.name.partial_cmp(&other.name) {
-            Some(Ordering::Equal) => match self.table.partial_cmp(&other.table) {
-                Some(Ordering::Equal) => match self.using.partial_cmp(&other.using) {
-                    Some(Ordering::Equal) => {
-                        match self.columns.partial_cmp(&other.columns) {
-                            Some(Ordering::Equal) => {
-                                match self.unique.partial_cmp(&other.unique) {
-                                    Some(Ordering::Equal) => self
-                                        .if_not_exists
-                                        .partial_cmp(&other.if_not_exists),
-                                    cmp => cmp,
-                                }
-                            }
-                            cmp => cmp,
-                        }
-                    }
-                    cmp => cmp,
-                },
-                cmp => cmp,
-            },
-            cmp => cmp,
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableCreateIndex<'a> {
+            pub name: &'a Option<String>,
+            pub table: &'a TableReference,
+            pub using: &'a Option<String>,
+            pub columns: &'a Vec<SortExpr>,
+            pub unique: &'a bool,
+            pub if_not_exists: &'a bool,
         }
+        let comparable_self = ComparableCreateIndex {
+            name: &self.name,
+            table: &self.table,
+            using: &self.using,
+            columns: &self.columns,
+            unique: &self.unique,
+            if_not_exists: &self.if_not_exists,
+        };
+        let comparable_other = ComparableCreateIndex {
+            name: &other.name,
+            table: &other.table,
+            using: &other.using,
+            columns: &other.columns,
+            unique: &other.unique,
+            if_not_exists: &other.if_not_exists,
+        };
+        comparable_self.partial_cmp(&comparable_other)
     }
 }
 

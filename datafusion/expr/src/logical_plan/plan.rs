@@ -2493,20 +2493,30 @@ impl Eq for TableScan {}
 
 impl PartialOrd for TableScan {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.table_name.partial_cmp(&other.table_name) {
-            Some(Ordering::Equal) => {
-                match self.projection.partial_cmp(&other.projection) {
-                    Some(Ordering::Equal) => {
-                        match self.filters.partial_cmp(&other.filters) {
-                            Some(Ordering::Equal) => self.fetch.partial_cmp(&other.fetch),
-                            cmp => cmp,
-                        }
-                    }
-                    cmp => cmp,
-                }
-            }
-            cmp => cmp,
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableTableScan<'a> {
+            /// The name of the table
+            pub table_name: &'a TableReference,
+            /// Optional column indices to use as a projection
+            pub projection: &'a Option<Vec<usize>>,
+            /// Optional expressions to be used as filters by the table provider
+            pub filters: &'a Vec<Expr>,
+            /// Optional number of rows to read
+            pub fetch: &'a Option<usize>,
         }
+        let comparable_self = ComparableTableScan {
+            table_name: &self.table_name,
+            projection: &self.projection,
+            filters: &self.filters,
+            fetch: &self.fetch,
+        };
+        let comparable_other = ComparableTableScan {
+            table_name: &other.table_name,
+            projection: &other.projection,
+            filters: &other.filters,
+            fetch: &other.fetch,
+        };
+        comparable_self.partial_cmp(&comparable_other)
     }
 }
 
@@ -2685,20 +2695,30 @@ pub struct Explain {
 
 impl PartialOrd for Explain {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.verbose.partial_cmp(&other.verbose) {
-            Some(Ordering::Equal) => match self.plan.partial_cmp(&other.plan) {
-                Some(Ordering::Equal) => {
-                    match self.stringified_plans.partial_cmp(&other.stringified_plans) {
-                        Some(Ordering::Equal) => self
-                            .logical_optimization_succeeded
-                            .partial_cmp(&other.logical_optimization_succeeded),
-                        cmp => cmp,
-                    }
-                }
-                cmp => cmp,
-            },
-            cmp => cmp,
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableExplain<'a> {
+            /// Should extra (detailed, intermediate plans) be included?
+            pub verbose: &'a bool,
+            /// The logical plan that is being EXPLAIN'd
+            pub plan: &'a Arc<LogicalPlan>,
+            /// Represent the various stages plans have gone through
+            pub stringified_plans: &'a Vec<StringifiedPlan>,
+            /// Used by physical planner to check if should proceed with planning
+            pub logical_optimization_succeeded: &'a bool,
         }
+        let comparable_self = ComparableExplain {
+            verbose: &self.verbose,
+            plan: &self.plan,
+            stringified_plans: &self.stringified_plans,
+            logical_optimization_succeeded: &self.logical_optimization_succeeded,
+        };
+        let comparable_other = ComparableExplain {
+            verbose: &other.verbose,
+            plan: &other.plan,
+            stringified_plans: &other.stringified_plans,
+            logical_optimization_succeeded: &other.logical_optimization_succeeded,
+        };
+        comparable_self.partial_cmp(&comparable_other)
     }
 }
 
@@ -2862,20 +2882,32 @@ impl DistinctOn {
 
 impl PartialOrd for DistinctOn {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.on_expr.partial_cmp(&other.on_expr) {
-            Some(Ordering::Equal) => {
-                match self.select_expr.partial_cmp(&other.select_expr) {
-                    Some(Ordering::Equal) => {
-                        match self.sort_expr.partial_cmp(&other.sort_expr) {
-                            Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
-                            cmp => cmp,
-                        }
-                    }
-                    cmp => cmp,
-                }
-            }
-            cmp => cmp,
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableDistinctOn<'a> {
+            /// The `DISTINCT ON` clause expression list
+            pub on_expr: &'a Vec<Expr>,
+            /// The selected projection expression list
+            pub select_expr: &'a Vec<Expr>,
+            /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause when
+            /// present. Note that those matching expressions actually wrap the `ON` expressions with
+            /// additional info pertaining to the sorting procedure (i.e. ASC/DESC, and NULLS FIRST/LAST).
+            pub sort_expr: &'a Option<Vec<SortExpr>>,
+            /// The logical plan that is being DISTINCT'd
+            pub input: &'a Arc<LogicalPlan>,
         }
+        let comparable_self = ComparableDistinctOn {
+            on_expr: &self.on_expr,
+            select_expr: &self.select_expr,
+            sort_expr: &self.sort_expr,
+            input: &self.input,
+        };
+        let comparable_other = ComparableDistinctOn {
+            on_expr: &other.on_expr,
+            select_expr: &other.select_expr,
+            sort_expr: &other.sort_expr,
+            input: &other.input,
+        };
+        comparable_self.partial_cmp(&comparable_other)
     }
 }
 
@@ -3163,36 +3195,42 @@ impl Join {
 
 impl PartialOrd for Join {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.left.partial_cmp(&other.right) {
-            Some(Ordering::Equal) => match self.right.partial_cmp(&other.right) {
-                Some(Ordering::Equal) => match self.on.partial_cmp(&other.on) {
-                    Some(Ordering::Equal) => {
-                        match self.filter.partial_cmp(&other.filter) {
-                            Some(Ordering::Equal) => {
-                                match self.join_type.partial_cmp(&other.join_type) {
-                                    Some(Ordering::Equal) => {
-                                        match self
-                                            .join_constraint
-                                            .partial_cmp(&other.join_constraint)
-                                        {
-                                            Some(Ordering::Equal) => self
-                                                .null_equals_null
-                                                .partial_cmp(&other.null_equals_null),
-                                            cmp => cmp,
-                                        }
-                                    }
-                                    cmp => cmp,
-                                }
-                            }
-                            cmp => cmp,
-                        }
-                    }
-                    cmp => cmp,
-                },
-                cmp => cmp,
-            },
-            cmp => cmp,
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableJoin<'a> {
+            /// Left input
+            pub left: &'a Arc<LogicalPlan>,
+            /// Right input
+            pub right: &'a Arc<LogicalPlan>,
+            /// Equijoin clause expressed as pairs of (left, right) join expressions
+            pub on: &'a Vec<(Expr, Expr)>,
+            /// Filters applied during join (non-equi conditions)
+            pub filter: &'a Option<Expr>,
+            /// Join type
+            pub join_type: &'a JoinType,
+            /// Join constraint
+            pub join_constraint: &'a JoinConstraint,
+            /// If null_equals_null is true, null == null else null != null
+            pub null_equals_null: &'a bool,
         }
+        let comparable_self = ComparableJoin {
+            left: &self.left,
+            right: &self.right,
+            on: &self.on,
+            filter: &self.filter,
+            join_type: &self.join_type,
+            join_constraint: &self.join_constraint,
+            null_equals_null: &self.null_equals_null,
+        };
+        let comparable_other = ComparableJoin {
+            left: &other.left,
+            right: &other.right,
+            on: &other.on,
+            filter: &other.filter,
+            join_type: &other.join_type,
+            join_constraint: &other.join_constraint,
+            null_equals_null: &other.null_equals_null,
+        };
+        comparable_self.partial_cmp(&comparable_other)
     }
 }
 
@@ -3269,39 +3307,41 @@ pub struct Unnest {
 
 impl PartialOrd for Unnest {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.input.partial_cmp(&other.input) {
-            Some(Ordering::Equal) => {
-                match self.exec_columns.partial_cmp(&other.exec_columns) {
-                    Some(Ordering::Equal) => {
-                        match self.list_type_columns.partial_cmp(&other.list_type_columns)
-                        {
-                            Some(Ordering::Equal) => {
-                                match self
-                                    .struct_type_columns
-                                    .partial_cmp(&other.struct_type_columns)
-                                {
-                                    Some(Ordering::Equal) => {
-                                        match self
-                                            .dependency_indices
-                                            .partial_cmp(&other.dependency_indices)
-                                        {
-                                            Some(Ordering::Equal) => {
-                                                self.options.partial_cmp(&other.options)
-                                            }
-                                            cmp => cmp,
-                                        }
-                                    }
-                                    cmp => cmp,
-                                }
-                            }
-                            cmp => cmp,
-                        }
-                    }
-                    cmp => cmp,
-                }
-            }
-            cmp => cmp,
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableUnnest<'a> {
+            /// The incoming logical plan
+            pub input: &'a Arc<LogicalPlan>,
+            /// Columns to run unnest on, can be a list of (List/Struct) columns
+            pub exec_columns: &'a Vec<Column>,
+            /// refer to the indices(in the input schema) of columns
+            /// that have type list to run unnest on
+            pub list_type_columns: &'a Vec<usize>,
+            /// refer to the indices (in the input schema) of columns
+            /// that have type struct to run unnest on
+            pub struct_type_columns: &'a Vec<usize>,
+            /// Having items aligned with the output columns
+            /// representing which column in the input schema each output column depends on
+            pub dependency_indices: &'a Vec<usize>,
+            /// Options
+            pub options: &'a UnnestOptions,
         }
+        let comparable_self = ComparableUnnest {
+            input: &self.input,
+            exec_columns: &self.exec_columns,
+            list_type_columns: &self.list_type_columns,
+            struct_type_columns: &self.struct_type_columns,
+            dependency_indices: &self.dependency_indices,
+            options: &self.options,
+        };
+        let comparable_other = ComparableUnnest {
+            input: &other.input,
+            exec_columns: &other.exec_columns,
+            list_type_columns: &other.list_type_columns,
+            struct_type_columns: &other.struct_type_columns,
+            dependency_indices: &other.dependency_indices,
+            options: &other.options,
+        };
+        comparable_self.partial_cmp(&comparable_other)
     }
 }
 
