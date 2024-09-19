@@ -841,15 +841,8 @@ impl Stream for GroupedHashAggregateStream {
                     // slice off a part of the batch, if needed
                     let batch_opt = parts.next_batch();
                     if let Some(batch) = batch_opt {
-                        // output first batch_size rows
-                        let size = self.batch_size;
-                        let num_remaining = batch.num_rows() - size;
-                        let remaining = batch.slice(size, num_remaining);
-                        let output = batch.slice(0, size);
-                        self.exec_state = ExecutionState::ProducingOutput(remaining);
-
                         return Poll::Ready(Some(Ok(
-                            output.record_output(&self.baseline_metrics)
+                            batch.record_output(&self.baseline_metrics)
                         )));
                     } else {
                         self.exec_state = if self.input_done {
