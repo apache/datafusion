@@ -115,16 +115,18 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
-  
+
         // 2. Get or create groups in partitions
         part_row_indices
             .iter_mut()
             .for_each(|indices| indices.clear());
+        groups
+            .iter_mut()
+            .for_each(|group_indices| group_indices.clear());
 
         let num_partitions = self.row_partitions.len();
         for (row_idx, &target_hash) in batch_hashes.iter().enumerate() {
-            let row_idx = row_idx as usize;
-            let part_idx =  (target_hash as usize) % num_partitions;
+            let part_idx = (target_hash as usize) % num_partitions;
 
             part_row_indices[part_idx].push(row_idx as u32);
 
@@ -200,11 +202,14 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
                 let mut row_partitions = mem::take(&mut self.row_partitions);
                 let mut output_parts = Vec::with_capacity(self.num_partitions());
                 for part in row_partitions.iter_mut() {
-                    let rows = mem::replace(part,  self.row_converter.empty_rows(0, 0));
-                    let part_arrays = self.row_converter.convert_rows(&rows).map_err(|e| arrow_datafusion_err!(e))?;
+                    let rows = mem::replace(part, self.row_converter.empty_rows(0, 0));
+                    let part_arrays = self
+                        .row_converter
+                        .convert_rows(&rows)
+                        .map_err(|e| arrow_datafusion_err!(e))?;
                     output_parts.push(part_arrays);
                 }
-                
+
                 self.row_partitions = row_partitions;
                 self.map = RawTable::with_capacity(0);
                 self.map_size = 0;
