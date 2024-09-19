@@ -65,7 +65,7 @@ pub(crate) enum ExecutionState {
     /// here and are sliced off as needed in batch_size chunks
     ProducingOutput(RecordBatch),
 
-    ProducingPartitionedOutput(Vec<Option<RecordBatch>>),
+    ProducingPartitionedOutput(PartitionedOutput),
     /// Produce intermediate aggregate state for each input row without
     /// aggregation.
     ///
@@ -78,7 +78,8 @@ pub(crate) enum ExecutionState {
 use super::order::GroupOrdering;
 use super::AggregateExec;
 
-struct PartitionedOutput {
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PartitionedOutput {
     partitions: Vec<Option<RecordBatch>>,
     start_idx: usize,
     batch_size: usize,
@@ -133,7 +134,7 @@ impl PartitionedOutput {
             // cut off `batch_size` rows as `output``,
             // and set back `remaining`.
             let size = self.batch_size;
-            let num_remaining = batch.num_rows() - size;
+            let num_remaining = partition_batch.num_rows() - size;
             let remaining = partition_batch.slice(size, num_remaining);
             let output = partition_batch.slice(0, size);
             self.partitions[part_idx] = Some(remaining);
@@ -718,7 +719,7 @@ impl Stream for GroupedHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
         loop {
-            match &self.exec_state {
+            match &mut self.exec_state {
                 ExecutionState::ReadingInput => 'reading_input: {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         // new batch to aggregate
@@ -800,6 +801,7 @@ impl Stream for GroupedHashAggregateStream {
                 ExecutionState::ProducingOutput(batch) => {
                     // slice off a part of the batch, if needed
                     let output_batch;
+                    let batch = batch.clone();
                     let size = self.batch_size;
                     (self.exec_state, output_batch) = if batch.num_rows() <= size {
                         (
@@ -810,7 +812,7 @@ impl Stream for GroupedHashAggregateStream {
                             } else {
                                 ExecutionState::ReadingInput
                             },
-                            batch.clone(),
+                            batch,
                         )
                     } else {
                         // output first batch_size rows
@@ -833,7 +835,30 @@ impl Stream for GroupedHashAggregateStream {
                     return Poll::Ready(None);
                 }
 
-                ExecutionState::ProducingPartitionedOutput(_) => todo!(),
+                ExecutionState::ProducingPartitionedOutput(parts) => {
+                    // slice off a part of the batch, if needed
+                    let batch_opt = parts.next_batch();
+                    if let Some(batch) = batch_opt {
+                        // output first batch_size rows
+                        let size = self.batch_size;
+                        let num_remaining = batch.num_rows() - size;
+                        let remaining = batch.slice(size, num_remaining);
+                        let output = batch.slice(0, size);
+                        self.exec_state = ExecutionState::ProducingOutput(remaining);
+
+                        return Poll::Ready(Some(Ok(
+                            output.record_output(&self.baseline_metrics)
+                        )));
+                    } else {
+                        self.exec_state = if self.input_done {
+                            ExecutionState::Done
+                        } else if self.should_skip_aggregation() {
+                            ExecutionState::SkippingAggregation
+                        } else {
+                            ExecutionState::ReadingInput
+                        };
+                    }
+                }
             }
         }
     }
@@ -1222,8 +1247,12 @@ impl GroupedHashAggregateStream {
                 self.exec_state = ExecutionState::ProducingOutput(batch);
             } else {
                 let batches = self.emit(EmitTo::All, false)?;
-                let batches = batches.into_iter().map(|batch| Some(batch)).collect();
-                self.exec_state = ExecutionState::ProducingPartitionedOutput(batches);
+                self.exec_state =
+                    ExecutionState::ProducingPartitionedOutput(PartitionedOutput::new(
+                        batches,
+                        self.batch_size,
+                        self.group_values.num_partitions(),
+                    ));
             }
         }
         Ok(())
@@ -1290,8 +1319,11 @@ impl GroupedHashAggregateStream {
                 ExecutionState::ProducingOutput(batch)
             } else {
                 let batches = self.emit(EmitTo::All, false)?;
-                let batches = batches.into_iter().map(|batch| Some(batch)).collect();
-                ExecutionState::ProducingPartitionedOutput(batches)
+                ExecutionState::ProducingPartitionedOutput(PartitionedOutput::new(
+                    batches,
+                    self.batch_size,
+                    self.group_values.num_partitions(),
+                ))
             }
         } else {
             // If spill files exist, stream-merge them.
@@ -1330,8 +1362,13 @@ impl GroupedHashAggregateStream {
                     self.exec_state = ExecutionState::ProducingOutput(batch);
                 } else {
                     let batches = self.emit(EmitTo::All, false)?;
-                    let batches = batches.into_iter().map(|batch| Some(batch)).collect();
-                    self.exec_state = ExecutionState::ProducingPartitionedOutput(batches);
+                    self.exec_state = ExecutionState::ProducingPartitionedOutput(
+                        PartitionedOutput::new(
+                            batches,
+                            self.batch_size,
+                            self.group_values.num_partitions(),
+                        ),
+                    );
                 }
             }
         }
