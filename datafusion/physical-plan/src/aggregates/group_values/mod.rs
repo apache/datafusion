@@ -168,7 +168,6 @@ pub fn new_group_values(
     num_partitions: usize,
 ) -> Result<GroupValuesLike> {
     let group_values = if partitioning_group_values && schema.fields.len() > 1 {
-        dbg!("partitioned");
         GroupValuesLike::Partitioned(Box::new(PartitionedGroupValuesRows::try_new(
             schema,
             num_partitions,

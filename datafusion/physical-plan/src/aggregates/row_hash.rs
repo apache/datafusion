@@ -597,7 +597,7 @@ impl GroupedHashAggregateStream {
         )?;
 
         // We need to decide how many accumulators partitions should we create according to group values partitions
-        let num_partitions = dbg!(group_values.num_partitions());
+        let num_partitions = group_values.num_partitions();
         let mut accumulators_partitions = Vec::with_capacity(num_partitions);
         for _ in 0..num_partitions {
             let accumulators: Vec<_> = aggregate_exprs
