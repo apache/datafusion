@@ -199,7 +199,7 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<Vec<ArrayRef>>> {
         let mut output_parts = match emit_to {
             EmitTo::All => {
-                let mut row_partitions = mem::take(&mut self.row_partitions);
+                let row_partitions = mem::take(&mut self.row_partitions);
                 let mut output_parts = Vec::with_capacity(self.num_partitions());
 
                 // Used later to sliced the Array.
@@ -213,8 +213,7 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
 
                 // Convert the all rows to a total Vec<Array>,
                 // And we use slice to distinguish partitions.
-                let total_rows =
-                    row_partitions.iter().flat_map(|part| part.iter());
+                let total_rows = row_partitions.iter().flat_map(|part| part.iter());
                 let total_rows = self
                     .row_converter
                     .convert_rows(total_rows)
@@ -231,7 +230,7 @@ impl PartitionedGroupValues for PartitionedGroupValuesRows {
                 }
 
                 // Clear the stale data to save memory.
-                self.row_partitions = (0..self.num_partitions())
+                self.row_partitions = (0..row_partitions.len())
                     .map(|_| self.row_converter.empty_rows(0, 0))
                     .collect::<Vec<_>>();
                 self.map = RawTable::with_capacity(0);
