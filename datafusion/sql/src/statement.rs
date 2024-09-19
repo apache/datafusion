@@ -1136,14 +1136,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Vec<SortExpr>>> {
+        let mut all_results = vec![];
         // Ask user to provide a schema if schema is empty.
         if !order_exprs.is_empty() && schema.fields().is_empty() {
-            return plan_err!(
-                "Provide a schema before specifying the order while creating a table."
-            );
+            let mut results = vec![];
+            for expr in order_exprs {
+                for ordered_expr in expr {
+                    let order_expr = ordered_expr.expr.to_owned();
+                    let order_expr = self.sql_expr_to_logical_expr(
+                        order_expr,
+                        schema,
+                        planner_context,
+                    )?;
+                    let nulls_first = ordered_expr.nulls_first.unwrap_or(true);
+                    let asc = ordered_expr.asc.unwrap_or(true);
+                    let sort_expr = SortExpr::new(order_expr, asc, nulls_first);
+                    results.push(sort_expr);
+                }
+                let sort_results = &results;
+                all_results.push(sort_results.to_owned());
+            }
+
+            return Ok(all_results);
         }
 
-        let mut all_results = vec![];
         for expr in order_exprs {
             // Convert each OrderByExpr to a SortExpr:
             let expr_vec =
@@ -1210,15 +1226,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .into_iter()
             .collect();
 
+        // External tables do not support schemas at the moment, so the name is just a table name
+        let name = TableReference::bare(name);
+
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
         df_schema.check_names()?;
 
         let ordered_exprs =
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
-
-        // External tables do not support schemas at the moment, so the name is just a table name
-        let name = TableReference::bare(name);
         let constraints =
             Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(

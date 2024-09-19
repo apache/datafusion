@@ -228,3 +228,13 @@ OPTIONS (
         format.delimiter '|',
         has_header false,
         compression gzip);
+
+# Create an external parquet table and infer schema to order by
+
+# query should succeed
+statement ok
+CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (id);
+
+# query should fail with bad column
+statement error
+CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (foo);
