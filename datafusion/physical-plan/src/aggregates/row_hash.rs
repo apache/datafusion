@@ -583,6 +583,7 @@ impl GroupedHashAggregateStream {
         //   - It is partial operator
         //   - It is not streaming
         let suggest_num_partitions = context.session_config().target_partitions();
+        assert!(suggest_num_partitions > 0);
         let partitioning_group_values = agg.mode == AggregateMode::Partial
             && matches!(group_ordering, GroupOrdering::None);
         let group_values = new_group_values(
@@ -593,6 +594,7 @@ impl GroupedHashAggregateStream {
 
         // We need to decide how many accumulators partitions should we create according to group values partitions
         let num_partitions = group_values.num_partitions();
+        assert!(num_partitions > 0);
         let mut accumulators_partitions = Vec::with_capacity(num_partitions);
         for _ in 0..num_partitions {
             let accumulators: Vec<_> = aggregate_exprs
@@ -1105,7 +1107,7 @@ impl GroupedHashAggregateStream {
         };
 
         if self.group_values.is_empty() {
-            return Ok(Vec::new());
+            return Ok(vec![RecordBatch::new_empty(schema.clone())]);
         }
 
         let group_values = self.group_values.as_single_mut();
@@ -1221,14 +1223,21 @@ impl GroupedHashAggregateStream {
     fn clear_shrink(&mut self, batch: &RecordBatch) {
         let group_values = self.group_values.as_single_mut();
         group_values.clear_shrink(batch);
-        self.current_group_indices.clear();
-        self.current_group_indices.shrink_to(batch.num_rows());
     }
 
     /// Clear memory and shirk capacities to zero.
     fn clear_all(&mut self) {
-        let s = self.schema();
-        self.clear_shrink(&RecordBatch::new_empty(s));
+        let schema = self.schema();
+        match &mut self.group_values {
+            GroupValuesLike::Single(v) => {
+                v.clear_shrink(&RecordBatch::new_empty(schema));
+            }
+            GroupValuesLike::Partitioned(v) => {
+                self.current_group_indices.clear();
+                self.current_row_indices.clear();
+                v.clear();
+            }
+        }
     }
 
     /// Emit if the used memory exceeds the target for partial aggregation.

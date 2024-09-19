@@ -65,6 +65,7 @@ impl PartitionedGroupValuesRows {
         let rows_buffer =
             row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
 
+        assert!(num_partitions > 0);
         let mut partitions = Vec::with_capacity(num_partitions);
         for _ in 0..num_partitions {
             partitions.push(GroupValuesPartition::new());

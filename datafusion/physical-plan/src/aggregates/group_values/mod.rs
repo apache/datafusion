@@ -49,7 +49,7 @@ impl GroupValuesLike {
     #[inline]
     pub fn num_partitions(&self) -> usize {
         if let Self::Partitioned(group_values) = self {
-            group_values.len()
+            group_values.num_partitions()
         } else {
             1
         }
