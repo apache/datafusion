@@ -64,10 +64,18 @@ impl PartialEq for CopyTo {
 // Implement Eq (no need for additional logic over PartialEq)
 impl Eq for CopyTo {}
 
+// Manual implementation needed because of `file_type` and `options` fields.
+// Comparison excludes these field.
 impl PartialOrd for CopyTo {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.input.partial_cmp(&other.input) {
-            Some(Ordering::Equal) => self.output_url.partial_cmp(&other.output_url),
+            Some(Ordering::Equal) => match self.output_url.partial_cmp(&other.output_url)
+            {
+                Some(Ordering::Equal) => {
+                    self.partition_by.partial_cmp(&other.partition_by)
+                }
+                cmp => cmp,
+            },
             cmp => cmp,
         }
     }
@@ -122,6 +130,8 @@ impl DmlStatement {
     }
 }
 
+// Manual implementation needed because of `table_schema` and `output_schema` fields.
+// Comparison excludes these fields.
 impl PartialOrd for DmlStatement {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.table_name.partial_cmp(&other.table_name) {

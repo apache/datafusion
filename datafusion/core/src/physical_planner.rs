@@ -2529,6 +2529,8 @@ mod tests {
         }
     }
 
+    // Implementation needed for `UserDefinedLogicalNodeCore`, since the only field is
+    // a schema, we can't derive `PartialOrd`, and we can't compare these.
     impl PartialOrd for NoOpExtensionNode {
         fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
             None

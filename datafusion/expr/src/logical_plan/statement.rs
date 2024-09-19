@@ -126,6 +126,7 @@ pub struct TransactionStart {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for TransactionStart {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.access_mode.partial_cmp(&other.access_mode) {
@@ -148,6 +149,7 @@ pub struct TransactionEnd {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for TransactionEnd {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.conclusion.partial_cmp(&other.conclusion) {
@@ -169,6 +171,7 @@ pub struct SetVariable {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for SetVariable {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.variable.partial_cmp(&other.value) {

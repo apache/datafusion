@@ -845,6 +845,7 @@ mod tests {
         }
     }
 
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
     impl PartialOrd for NoOpUserDefined {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
             match self.exprs.partial_cmp(&other.exprs) {
@@ -920,6 +921,7 @@ mod tests {
         }
     }
 
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
     impl PartialOrd for UserDefinedCrossJoin {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
             match self.exprs.partial_cmp(&other.exprs) {

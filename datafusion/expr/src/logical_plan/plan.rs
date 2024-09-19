@@ -2013,6 +2013,7 @@ pub struct EmptyRelation {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for EmptyRelation {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.produce_one_row.partial_cmp(&other.produce_one_row)
@@ -2066,6 +2067,7 @@ pub struct Values {
     pub values: Vec<Vec<Expr>>,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Values {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.values.partial_cmp(&other.values)
@@ -2086,6 +2088,7 @@ pub struct Projection {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Projection {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.expr.partial_cmp(&other.expr) {
@@ -2194,6 +2197,7 @@ impl SubqueryAlias {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for SubqueryAlias {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.input.partial_cmp(&other.input) {
@@ -2440,6 +2444,7 @@ impl Window {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Window {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.input.partial_cmp(&other.input) {
@@ -2491,6 +2496,8 @@ impl PartialEq for TableScan {
 
 impl Eq for TableScan {}
 
+// Manual implementation needed because of `source` and `projected_schema` fields.
+// Comparison excludes these field.
 impl PartialOrd for TableScan {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
@@ -2595,6 +2602,7 @@ pub struct CrossJoin {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for CrossJoin {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.left.partial_cmp(&other.left) {
@@ -2622,6 +2630,7 @@ pub struct Union {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Union {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.inputs.partial_cmp(&other.inputs)
@@ -2670,6 +2679,8 @@ pub struct DescribeTable {
     pub output_schema: DFSchemaRef,
 }
 
+// Manual implementation of `PartialOrd`, returning none since there are no comparable types in
+// `DescribeTable`. This allows `LogicalPlan` to derive `PartialOrd`.
 impl PartialOrd for DescribeTable {
     fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
         // There is no relevant comparison for schemas
@@ -2693,6 +2704,7 @@ pub struct Explain {
     pub logical_optimization_succeeded: bool,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Explain {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
@@ -2734,6 +2746,7 @@ pub struct Analyze {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Analyze {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.verbose.partial_cmp(&other.verbose) {
@@ -2880,6 +2893,7 @@ impl DistinctOn {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for DistinctOn {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
@@ -3015,6 +3029,7 @@ impl Aggregate {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Aggregate {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.input.partial_cmp(&other.input) {
@@ -3193,6 +3208,7 @@ impl Join {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Join {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
@@ -3305,6 +3321,7 @@ pub struct Unnest {
     pub options: UnnestOptions,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for Unnest {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]

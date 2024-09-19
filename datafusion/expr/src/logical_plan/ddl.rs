@@ -232,6 +232,8 @@ impl Hash for CreateExternalTable {
     }
 }
 
+// Manual implementation needed because of `schema`, `options`, and `column_defaults` fields.
+// Comparison excludes these fields.
 impl PartialOrd for CreateExternalTable {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
@@ -322,6 +324,7 @@ pub struct CreateCatalog {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for CreateCatalog {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.catalog_name.partial_cmp(&other.catalog_name) {
@@ -342,6 +345,7 @@ pub struct CreateCatalogSchema {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for CreateCatalogSchema {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.schema_name.partial_cmp(&other.schema_name) {
@@ -362,6 +366,7 @@ pub struct DropTable {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for DropTable {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.name.partial_cmp(&other.name) {
@@ -382,6 +387,7 @@ pub struct DropView {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for DropView {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.name.partial_cmp(&other.name) {
@@ -404,6 +410,7 @@ pub struct DropCatalogSchema {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for DropCatalogSchema {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.name.partial_cmp(&other.name) {
@@ -434,6 +441,7 @@ pub struct CreateFunction {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for CreateFunction {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
@@ -510,6 +518,7 @@ pub struct CreateIndex {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for CreateIndex {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]

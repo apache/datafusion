@@ -85,6 +85,8 @@ struct MockUserDefinedLogicalPlan {
     empty_schema: DFSchemaRef,
 }
 
+// `PartialOrd` needed for `UserDefinedLogicalNodeCore`, manual implementation necessary due to
+// the `empty_schema` field.
 impl PartialOrd for MockUserDefinedLogicalPlan {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.validation_bytes.partial_cmp(&other.validation_bytes) {

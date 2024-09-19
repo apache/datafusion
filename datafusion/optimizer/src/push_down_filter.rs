@@ -1452,6 +1452,7 @@ mod tests {
         schema: DFSchemaRef,
     }
 
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
     impl PartialOrd for NoopPlan {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
             self.input.partial_cmp(&other.input)
