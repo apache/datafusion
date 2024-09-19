@@ -347,6 +347,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
         let outer_table = self.right.execute(partition, context)?;
 
+        let indices_cache = (UInt64Array::new_null(0), UInt32Array::new_null(0));
+
         Ok(Box::pin(NestedLoopJoinStream {
             schema: Arc::clone(&self.schema),
             filter: self.filter.clone(),
@@ -356,6 +358,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             is_exhausted: false,
             column_indices: self.column_indices.clone(),
             join_metrics,
+            indices_cache,
         }))
     }
 
@@ -455,6 +458,8 @@ struct NestedLoopJoinStream {
     // null_equals_null: bool
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
+    /// Cache for join indices calculations
+    indices_cache: (UInt64Array, UInt32Array),
 }
 
 /// Creates a Cartesian product of two input batches, preserving the order of the right batch,
@@ -476,21 +481,48 @@ fn build_join_indices(
     left_batch: &RecordBatch,
     right_batch: &RecordBatch,
     filter: Option<&JoinFilter>,
+    indices_cache: &mut (UInt64Array, UInt32Array),
 ) -> Result<(UInt64Array, UInt32Array)> {
     let left_row_count = left_batch.num_rows();
     let right_row_count = right_batch.num_rows();
-
     let output_row_count = left_row_count * right_row_count;
 
-    // Left indices are 0..left_row_count repeated right_row_count times
-    let left_indices = UInt64Array::from_iter_values(
-        (0..output_row_count as u64).map(|i| i % left_row_count as u64),
-    );
+    // We always use the same indices before applying the filter, so we can cache them
+    let (left_indices_cache, right_indices_cache) = indices_cache;
+    let cached_output_row_count = left_indices_cache.len();
 
-    // Right indices are each right row index repeated left_row_count times
-    let right_indices = UInt32Array::from_iter_values(
-        (0..output_row_count as u32).map(|i| i / left_row_count as u32),
-    );
+    let (left_indices, right_indices) =
+        match output_row_count.cmp(&cached_output_row_count) {
+            std::cmp::Ordering::Equal => {
+                // Reuse the cached indices
+                (left_indices_cache.clone(), right_indices_cache.clone())
+            }
+            std::cmp::Ordering::Less => {
+                // Left_row_count never changes because it's the build side. The changes to the
+                // right_row_count can be handled trivially by taking the first output_row_count
+                // elements of the cache because of how the indices are generated.
+                // (See the Ordering::Greater match arm)
+                (
+                    left_indices_cache.slice(0, output_row_count),
+                    right_indices_cache.slice(0, output_row_count),
+                )
+            }
+            std::cmp::Ordering::Greater => {
+                // Rebuild the indices cache
+
+                // Produces 0, 1, 2, 0, 1, 2, 0, 1, 2, ...
+                *left_indices_cache = UInt64Array::from_iter_values(
+                    (0..output_row_count as u64).map(|i| i % left_row_count as u64),
+                );
+
+                // Produces 0, 0, 0, 1, 1, 1, 2, 2, 2, ...
+                *right_indices_cache = UInt32Array::from_iter_values(
+                    (0..output_row_count as u32).map(|i| i / left_row_count as u32),
+                );
+
+                (left_indices_cache.clone(), right_indices_cache.clone())
+            }
+        };
 
     if let Some(filter) = filter {
         apply_join_filter_to_indices(
@@ -545,6 +577,7 @@ impl NestedLoopJoinStream {
                         &self.column_indices,
                         &self.schema,
                         visited_left_side,
+                        &mut self.indices_cache,
                     );
 
                     // Recording time & updating output metrics
@@ -608,6 +641,7 @@ impl NestedLoopJoinStream {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn join_left_and_right_batch(
     left_batch: &RecordBatch,
     right_batch: &RecordBatch,
@@ -616,13 +650,16 @@ fn join_left_and_right_batch(
     column_indices: &[ColumnIndex],
     schema: &Schema,
     visited_left_side: &SharedBitmapBuilder,
+    indices_cache: &mut (UInt64Array, UInt32Array),
 ) -> Result<RecordBatch> {
-    let (left_side, right_side) = build_join_indices(left_batch, right_batch, filter)
-        .map_err(|e| {
-            exec_datafusion_err!(
-                "Fail to build join indices in NestedLoopJoinExec, error:{e}"
-            )
-        })?;
+    let (left_side, right_side) =
+        build_join_indices(left_batch, right_batch, filter, indices_cache).map_err(
+            |e| {
+                exec_datafusion_err!(
+                    "Fail to build join indices in NestedLoopJoinExec, error:{e}"
+                )
+            },
+        )?;
 
     // set the left bitmap
     // and only full join need the left bitmap
