@@ -2724,8 +2724,8 @@ mod tests {
                         Arc::clone(&schema3),
                     ),
                 ],
-                // Expected
-                vec![vec!["a", "b"]],
+                // Expected: union sort orders
+                vec![vec!["a", "b", "c"]],
             ),
             // --------- TEST CASE 2 ----------
             (
@@ -2799,8 +2799,8 @@ mod tests {
                         Arc::clone(&schema3),
                     ),
                 ],
-                // Expected
-                vec![],
+                // Expected: union sort orders
+                vec![vec!["a", "b", "c"]],
             ),
             // --------- TEST CASE 5 ----------
             (
