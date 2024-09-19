@@ -280,7 +280,7 @@ jobs:
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
           # use release build for plan verificaton because debug build causes stack overflow
           cargo test plan_q --package datafusion-benchmarks --profile release-nonlto --features=ci -- --test-threads=1
-          INCLUDE_TPCH=true cargo test --test sqllogictests
+          INCLUDE_TPCH=true INCLUDE_IMDB=true cargo test --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
