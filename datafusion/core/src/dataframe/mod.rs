@@ -244,6 +244,31 @@ impl DataFrame {
             .collect();
         self.select(expr)
     }
+    /// Project arbitrary list of expression strings into a new `DataFrame`.
+    /// Method will parse string expressions into logical plan expressions.
+    ///
+    /// The output `DataFrame` has one column for each element in `exprs`.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let df : DataFrame = df.select_exprs(&["a * b", "c"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn select_exprs(self, exprs: &[&str]) -> Result<DataFrame> {
+        let expr_list = exprs
+            .iter()
+            .map(|e| self.parse_sql_expr(e))
+            .collect::<Result<Vec<_>>>()?;
+
+        self.select(expr_list)
+    }
 
     /// Project arbitrary expressions (like SQL SELECT expressions) into a new
     /// `DataFrame`.
@@ -1890,6 +1915,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn select_exprs() -> Result<()> {
+        // build plan using `select_expr``
+        let t = test_table().await?;
+        let plan = t
+            .clone()
+            .select_exprs(&["c1", "c2", "c11", "c2 * c11"])?
+            .plan;
+
+        // build plan using select
+        let expected_plan = t
+            .select(vec![
+                col("c1"),
+                col("c2"),
+                col("c11"),
+                col("c2") * col("c11"),
+            ])?
+            .plan;
+
+        assert_same_plan(&expected_plan, &plan);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn select_with_window_exprs() -> Result<()> {
         // build plan using Table API
         let t = test_table().await?;
@@ -2772,7 +2821,7 @@ mod tests {
         ctx.register_udf(create_udf(
             "my_fn",
             vec![DataType::Float64],
-            Arc::new(DataType::Float64),
+            DataType::Float64,
             Volatility::Immutable,
             my_fn,
         ));

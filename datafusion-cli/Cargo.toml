@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-cli"
 description = "Command Line Client for DataFusion query engine."
-version = "41.0.0"
+version = "42.0.0"
 authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
 edition = "2021"
 keywords = ["arrow", "datafusion", "query", "sql"]
@@ -26,23 +26,20 @@ license = "Apache-2.0"
 homepage = "https://datafusion.apache.org"
 repository = "https://github.com/apache/datafusion"
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.76"
+rust-version = "1.78"
 readme = "README.md"
 
 [dependencies]
 arrow = { version = "53.0.0" }
 async-trait = "0.1.73"
 aws-config = "1.5.5"
-# begin pin aws-sdk crates otherwise CI MSRV check fails
-# We can't update these libraries yet as it requires Rust 1.78, which is not available until Nov 2024
-# per https://github.com/apache/datafusion?tab=readme-ov-file#rust-version-compatibility-policy
-aws-sdk-sso = "=1.39.0"
-aws-sdk-ssooidc = "=1.40.0"
-aws-sdk-sts = "=1.39.0"
+aws-sdk-sso = "1.43.0"
+aws-sdk-ssooidc = "1.44.0"
+aws-sdk-sts = "1.43.0"
 # end pin aws-sdk crates
 aws-credential-types = "1.2.0"
 clap = { version = "4.5.16", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "41.0.0", features = [
+datafusion = { path = "../datafusion/core", version = "42.0.0", features = [
     "avro",
     "crypto_expressions",
     "datetime_expressions",

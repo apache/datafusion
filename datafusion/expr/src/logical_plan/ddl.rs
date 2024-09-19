@@ -234,54 +234,50 @@ impl Hash for CreateExternalTable {
 
 impl PartialOrd for CreateExternalTable {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.name.partial_cmp(&other.name) {
-            Some(Ordering::Equal) => {
-                match self.location.partial_cmp(&other.location) {
-                    Some(Ordering::Equal) => {
-                        match self.file_type.partial_cmp(&other.file_type) {
-                            Some(Ordering::Equal) => {
-                                match self
-                                    .table_partition_cols
-                                    .partial_cmp(&other.table_partition_cols)
-                                {
-                                    Some(Ordering::Equal) => {
-                                        match self
-                                            .if_not_exists
-                                            .partial_cmp(&other.if_not_exists)
-                                        {
-                                            Some(Ordering::Equal) => {
-                                                match self
-                                                    .definition
-                                                    .partial_cmp(&other.definition)
-                                                {
-                                                    Some(Ordering::Equal) => {
-                                                        match self.order_exprs.partial_cmp(&other.order_exprs) {
-                                                            Some(Ordering::Equal) => {
-                                                                match self.unbounded.partial_cmp(&other.unbounded) {
-                                                                    Some(Ordering::Equal) => self.constraints.partial_cmp(&other.constraints),
-                                                                    cmp => cmp,
-                                                                }
-                                                            },
-                                                            cmp => cmp,
-                                                        }
-                                                    }
-                                                    cmp => cmp,
-                                                }
-                                            }
-                                            cmp => cmp,
-                                        }
-                                    }
-                                    cmp => cmp,
-                                }
-                            }
-                            cmp => cmp,
-                        }
-                    }
-                    cmp => cmp,
-                }
-            }
-            cmp => cmp,
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableCreateExternalTable<'a> {
+            /// The table name
+            pub name: &'a TableReference,
+            /// The physical location
+            pub location: &'a String,
+            /// The file type of physical file
+            pub file_type: &'a String,
+            /// Partition Columns
+            pub table_partition_cols: &'a Vec<String>,
+            /// Option to not error if table already exists
+            pub if_not_exists: &'a bool,
+            /// SQL used to create the table, if available
+            pub definition: &'a Option<String>,
+            /// Order expressions supplied by user
+            pub order_exprs: &'a Vec<Vec<Sort>>,
+            /// Whether the table is an infinite streams
+            pub unbounded: &'a bool,
+            /// The list of constraints in the schema, such as primary key, unique, etc.
+            pub constraints: &'a Constraints,
         }
+        let comparable_self = ComparableCreateExternalTable {
+            name: &self.name,
+            location: &self.location,
+            file_type: &self.file_type,
+            table_partition_cols: &self.table_partition_cols,
+            if_not_exists: &self.if_not_exists,
+            definition: &self.definition,
+            order_exprs: &self.order_exprs,
+            unbounded: &self.unbounded,
+            constraints: &self.constraints,
+        };
+        let comparable_other = ComparableCreateExternalTable {
+            name: &other.name,
+            location: &other.location,
+            file_type: &other.file_type,
+            table_partition_cols: &other.table_partition_cols,
+            if_not_exists: &other.if_not_exists,
+            definition: &other.definition,
+            order_exprs: &other.order_exprs,
+            unbounded: &other.unbounded,
+            constraints: &other.constraints,
+        };
+        comparable_self.partial_cmp(&comparable_other)
     }
 }
 

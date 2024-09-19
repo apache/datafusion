@@ -7086,6 +7086,16 @@ select [1,2,3]::int[], [['1']]::int[][], arrow_typeof([]::text[]);
 ----
 [1, 2, 3] [[1]] List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
+# test empty arrays return length
+# issue: https://github.com/apache/datafusion/pull/12459
+statement ok
+create table values_all_empty (a int[]) as values ([]), ([]);
+
+query B
+select array_has(a, 1) from values_all_empty;
+----
+false
+false
 
 ### Delete tables
 
@@ -7259,3 +7269,6 @@ drop table fixed_size_arrays_values_without_nulls;
 
 statement ok
 drop table test_create_array_table;
+
+statement ok
+drop table values_all_empty;

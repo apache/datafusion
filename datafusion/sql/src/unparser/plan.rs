@@ -17,7 +17,9 @@
 
 use crate::unparser::utils::unproject_agg_exprs;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DataFusionError, Result, TableReference,
+    internal_err, not_impl_err,
+    tree_node::{TransformedResult, TreeNode},
+    Column, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{
     expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
@@ -32,9 +34,9 @@ use super::{
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
     rewrite::{
-        inject_column_aliases, normalize_union_schema,
+        inject_column_aliases_into_subquery, normalize_union_schema,
         rewrite_plan_for_sort_on_non_projected_fields,
-        subquery_alias_inner_query_and_columns,
+        subquery_alias_inner_query_and_columns, TableAliasRewriter,
     },
     utils::{find_agg_node_within_select, unproject_window_exprs, AggVariant},
     Unparser,
@@ -475,15 +477,17 @@ impl Unparser<'_> {
                 if !columns.is_empty()
                     && !self.dialect.supports_column_alias_in_table_alias()
                 {
-                    // if columns are returned then the plan corresponds to a projection
-                    let LogicalPlan::Projection(inner_p) = plan else {
-                        return plan_err!(
-                            "Inner projection for subquery alias is expected"
-                        );
-                    };
-
                     // Instead of specifying column aliases as part of the outer table, inject them directly into the inner projection
-                    let rewritten_plan = inject_column_aliases(&inner_p, columns);
+                    let rewritten_plan =
+                        match inject_column_aliases_into_subquery(plan, columns) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                return internal_err!(
+                                    "Failed to transform SubqueryAlias plan: {e}"
+                                )
+                            }
+                        };
+
                     columns = vec![];
 
                     self.select_to_sql_recursively(
@@ -554,13 +558,11 @@ impl Unparser<'_> {
     ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::TableScan(table_scan) => {
-                // TODO: support filters for table scan with alias. Remove this check after #12368 issue.
-                // see the issue: https://github.com/apache/datafusion/issues/12368
-                if alias.is_some() && !table_scan.filters.is_empty() {
-                    return not_impl_err!(
-                        "Subquery alias is not supported for table scan with pushdown filters"
-                    );
-                }
+                let mut filter_alias_rewriter =
+                    alias.as_ref().map(|alias_name| TableAliasRewriter {
+                        table_schema: table_scan.source.schema(),
+                        alias_name: alias_name.clone(),
+                    });
 
                 let mut builder = LogicalPlanBuilder::scan(
                     table_scan.table_name.clone(),
@@ -587,12 +589,25 @@ impl Unparser<'_> {
                     builder = builder.project(project_columns)?;
                 }
 
-                let filter_expr = table_scan
+                let filter_expr: Result<Option<Expr>> = table_scan
                     .filters
                     .iter()
                     .cloned()
-                    .reduce(|acc, expr| acc.and(expr));
-                if let Some(filter) = filter_expr {
+                    .map(|expr| {
+                        if let Some(ref mut rewriter) = filter_alias_rewriter {
+                            expr.rewrite(rewriter).data()
+                        } else {
+                            Ok(expr)
+                        }
+                    })
+                    .reduce(|acc, expr_result| {
+                        acc.and_then(|acc_expr| {
+                            expr_result.map(|expr| acc_expr.and(expr))
+                        })
+                    })
+                    .transpose();
+
+                if let Some(filter) = filter_expr? {
                     builder = builder.filter(filter)?;
                 }
 
