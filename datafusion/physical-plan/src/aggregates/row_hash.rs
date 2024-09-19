@@ -103,6 +103,10 @@ impl PartitionedOutput {
     }
 
     pub fn next_batch(&mut self) -> Option<RecordBatch> {
+        if self.partitions.is_empty() {
+            return None;
+        }
+
         let mut current_idx = self.start_idx;
         loop {
             // If found a partition having data,
@@ -594,7 +598,6 @@ impl GroupedHashAggregateStream {
 
         // We need to decide how many accumulators partitions should we create according to group values partitions
         let num_partitions = group_values.num_partitions();
-        assert!(num_partitions > 0);
         let mut accumulators_partitions = Vec::with_capacity(num_partitions);
         for _ in 0..num_partitions {
             let accumulators: Vec<_> = aggregate_exprs
