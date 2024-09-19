@@ -90,7 +90,7 @@ impl PartitionedGroupValuesRows {
             row_partitions,
             hashes_buffer: Default::default(),
             rows_buffer,
-            random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
+            random_state: ahash::RandomState::with_seed(42),
             map: RawTable::with_capacity(0),
             map_size: 0,
         })

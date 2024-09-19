@@ -209,7 +209,7 @@ impl BatchPartitioner {
                 exprs,
                 num_partitions,
                 // Use fixed random hash
-                random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
+                random_state: ahash::RandomState::with_seed(42),
                 hash_buffer: vec![],
             },
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
