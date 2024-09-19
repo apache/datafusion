@@ -17,6 +17,7 @@
 
 //! Hash aggregation
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{mem, vec};
@@ -1167,9 +1168,17 @@ impl GroupedHashAggregateStream {
 
         let batch_parts = partitioned_outputs
             .into_iter()
-            .map(|part| {
-                RecordBatch::try_new(schema.clone(), part)
-                    .map_err(|e| arrow_datafusion_err!(e))
+            .enumerate()
+            .map(|(part_idx, part)| {
+                let schema_with_metadata = Arc::new(
+                    schema.as_ref().clone().with_metadata(
+                        [("partition".to_owned(), part_idx.to_string())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                );
+                let batch = RecordBatch::try_new(schema_with_metadata, part)
+                    .map_err(|e| arrow_datafusion_err!(e))?;
             })
             .collect::<Result<Vec<_>>>()?;
 
