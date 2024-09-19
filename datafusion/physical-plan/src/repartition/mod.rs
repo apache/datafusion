@@ -299,26 +299,31 @@ impl BatchPartitioner {
                             // Tracking time required for repartitioned batches construction
                             let _timer = partitioner_timer.timer();
 
-                            // Produce batches based on indices
-                            let columns = batch
-                                .columns()
-                                .iter()
-                                .map(|c| {
-                                    arrow::compute::take(c.as_ref(), &indices, None)
-                                        .map_err(|e| arrow_datafusion_err!(e))
-                                })
-                                .collect::<Result<Vec<ArrayRef>>>()?;
+                            if batch.num_rows() != indices {
+                                // Produce batches based on indices
+                                let columns = batch
+                                    .columns()
+                                    .iter()
+                                    .map(|c| {
+                                        arrow::compute::take(c.as_ref(), &indices, None)
+                                            .map_err(|e| arrow_datafusion_err!(e))
+                                    })
+                                    .collect::<Result<Vec<ArrayRef>>>()?;
 
-                            let mut options = RecordBatchOptions::new();
-                            options = options.with_row_count(Some(indices.len()));
-                            let batch = RecordBatch::try_new_with_options(
-                                batch.schema(),
-                                columns,
-                                &options,
-                            )
-                            .unwrap();
+                                let mut options = RecordBatchOptions::new();
+                                options = options.with_row_count(Some(indices.len()));
+                                let batch = RecordBatch::try_new_with_options(
+                                    batch.schema(),
+                                    columns,
+                                    &options,
+                                )
+                                .unwrap();
 
-                            Ok((partition, batch))
+                                Ok((partition, batch))
+                            } else {
+                                dbg!("only one partition");
+                                Ok((partition, batch.clone()))
+                            }
                         });
 
                     Box::new(it)
