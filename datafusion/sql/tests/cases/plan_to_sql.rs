@@ -673,6 +673,17 @@ fn test_table_scan_pushdown() -> Result<()> {
         "SELECT ta.id, ta.age FROM t1 AS ta"
     );
 
+    let table_scan_with_projection_alias =
+        table_scan(Some("t1"), &schema, Some(vec![1]))?
+            .alias("ta")?
+            .build()?;
+    let table_scan_with_projection_alias =
+        plan_to_sql(&table_scan_with_projection_alias)?;
+    assert_eq!(
+        format!("{}", table_scan_with_projection_alias),
+        "SELECT ta.age FROM t1 AS ta"
+    );
+
     let table_scan_with_no_projection_alias = table_scan(Some("t1"), &schema, None)?
         .alias("ta")?
         .build()?;

@@ -579,10 +579,10 @@ impl Unparser<'_> {
                             if alias.is_some() {
                                 Column::new(alias.clone(), field.name().clone())
                             } else {
-                                Column {
-                                    relation: Some(table_scan.table_name.clone()),
-                                    name: field.name().clone(),
-                                }
+                                Column::new(
+                                    Some(table_scan.table_name.clone()),
+                                    field.name().clone(),
+                                )
                             }
                         })
                         .collect::<Vec<_>>();
