@@ -654,6 +654,10 @@ fn test_table_scan_pushdown() -> Result<()> {
         "SELECT t1.id, t1.age FROM t1"
     );
 
+    let scan_with_projection = table_scan(Some("t1"), &schema, Some(vec![1]))?.build()?;
+    let scan_with_projection = plan_to_sql(&scan_with_projection)?;
+    assert_eq!(format!("{}", scan_with_projection), "SELECT t1.age FROM t1");
+
     let scan_with_no_projection = table_scan(Some("t1"), &schema, None)?.build()?;
     let scan_with_no_projection = plan_to_sql(&scan_with_no_projection)?;
     assert_eq!(format!("{}", scan_with_no_projection), "SELECT * FROM t1");
@@ -743,6 +747,20 @@ fn test_table_scan_pushdown() -> Result<()> {
     assert_eq!(
         format!("{}", table_scan_with_projection_and_filter),
         "SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age)"
+    );
+
+    let table_scan_with_projection_and_filter = table_scan_with_filters(
+        Some("t1"),
+        &schema,
+        Some(vec![1]),
+        vec![col("id").gt(col("age"))],
+    )?
+    .build()?;
+    let table_scan_with_projection_and_filter =
+        plan_to_sql(&table_scan_with_projection_and_filter)?;
+    assert_eq!(
+        format!("{}", table_scan_with_projection_and_filter),
+        "SELECT t1.age FROM t1 WHERE (t1.id > t1.age)"
     );
 
     let table_scan_with_inline_fetch =
