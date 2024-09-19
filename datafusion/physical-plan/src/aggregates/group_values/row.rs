@@ -77,7 +77,7 @@ impl PartitionedGroupValuesRows {
             partitions,
             hashes_buffer: Default::default(),
             rows_buffer,
-            random_state: ahash::RandomState::with_seed(42),
+            random_state: Default::default(),
         })
     }
 }
