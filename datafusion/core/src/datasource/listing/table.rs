@@ -1709,7 +1709,7 @@ mod tests {
             "100".into(),
         );
         config_map.insert(
-            "datafusion.execution.parquet.staistics_enabled".into(),
+            "datafusion.execution.parquet.statistics_enabled".into(),
             "none".into(),
         );
         config_map.insert(
@@ -1783,7 +1783,7 @@ mod tests {
             "100".into(),
         );
         config_map.insert(
-            "datafusion.execution.parquet.staistics_enabled".into(),
+            "datafusion.execution.parquet.statistics_enabled".into(),
             "none".into(),
         );
         config_map.insert(
