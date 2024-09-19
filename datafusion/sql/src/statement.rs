@@ -1137,7 +1137,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Vec<SortExpr>>> {
         let mut all_results = vec![];
-        // Ask user to provide a schema if schema is empty.
+
         if !order_exprs.is_empty() && schema.fields().is_empty() {
             let mut results = vec![];
             for expr in order_exprs {
@@ -1226,8 +1226,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .into_iter()
             .collect();
 
-        // External tables do not support schemas at the moment, so the name is just a table name
-        let name = TableReference::bare(name);
+
 
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
@@ -1235,6 +1234,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let ordered_exprs =
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
+
+        // External tables do not support schemas at the moment, so the name is just a table name
+        let name = TableReference::bare(name);
         let constraints =
             Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
