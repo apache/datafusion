@@ -480,23 +480,17 @@ fn build_join_indices(
     let left_row_count = left_batch.num_rows();
     let right_row_count = right_batch.num_rows();
 
-    // Calculate the capacity of the output array to avoid reallocations
-    let capacity = left_row_count * right_row_count;
+    let output_row_count = left_row_count * right_row_count;
 
     // Left indices are 0..left_row_count repeated right_row_count times
-    let mut left_indices_builder = UInt64Array::builder(capacity);
-    for _ in 0..right_row_count {
-        left_indices_builder.extend((0..(left_row_count as u64)).map(Some));
-    }
+    let left_indices = UInt64Array::from_iter_values(
+        (0..output_row_count as u64).map(|i| i % left_row_count as u64),
+    );
 
     // Right indices are each right row index repeated left_row_count times
-    let mut right_indices_builder = UInt32Array::builder(capacity);
-    for right_index in 0..right_row_count {
-        right_indices_builder.extend(vec![Some(right_index as u32); left_row_count])
-    }
-
-    let left_indices = left_indices_builder.finish();
-    let right_indices = right_indices_builder.finish();
+    let right_indices = UInt32Array::from_iter_values(
+        (0..output_row_count as u32).map(|i| i / left_row_count as u32),
+    );
 
     if let Some(filter) = filter {
         apply_join_filter_to_indices(
@@ -623,8 +617,7 @@ fn join_left_and_right_batch(
     schema: &Schema,
     visited_left_side: &SharedBitmapBuilder,
 ) -> Result<RecordBatch> {
-    let (left_side, right_side) =
-        build_join_indices(left_batch, right_batch, filter)
+    let (left_side, right_side) = build_join_indices(left_batch, right_batch, filter)
         .map_err(|e| {
             exec_datafusion_err!(
                 "Fail to build join indices in NestedLoopJoinExec, error:{e}"
