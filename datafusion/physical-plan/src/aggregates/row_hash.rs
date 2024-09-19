@@ -17,7 +17,6 @@
 
 //! Hash aggregation
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{mem, vec};
@@ -1177,8 +1176,8 @@ impl GroupedHashAggregateStream {
                             .collect(),
                     ),
                 );
-                let batch = RecordBatch::try_new(schema_with_metadata, part)
-                    .map_err(|e| arrow_datafusion_err!(e))?;
+                RecordBatch::try_new(schema_with_metadata, part)
+                    .map_err(|e| arrow_datafusion_err!(e))
             })
             .collect::<Result<Vec<_>>>()?;
 

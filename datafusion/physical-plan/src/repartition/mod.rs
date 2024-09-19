@@ -19,6 +19,7 @@
 //! partitions to M output partitions based on a partitioning scheme, optionally
 //! maintaining the order of the input rows in the output.
 
+use std::iter;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -265,42 +266,50 @@ impl BatchPartitioner {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
-                    let arrays = exprs
-                        .iter()
-                        .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
-                        .collect::<Result<Vec<_>>>()?;
+                    if let Some(partition_idx) =
+                        batch.schema_ref().metadata().get("partition")
+                    {   
+                        dbg!("fast path");
+                        let partition_idx = partition_idx.parse::<usize>().unwrap();
 
-                    hash_buffer.clear();
-                    hash_buffer.resize(batch.num_rows(), 0);
+                        Box::new(iter::once(Ok((partition_idx, batch))))
+                    } else {
+                        let arrays = exprs
+                            .iter()
+                            .map(|expr| {
+                                expr.evaluate(&batch)?.into_array(batch.num_rows())
+                            })
+                            .collect::<Result<Vec<_>>>()?;
 
-                    create_hashes(&arrays, random_state, hash_buffer)?;
+                        hash_buffer.clear();
+                        hash_buffer.resize(batch.num_rows(), 0);
 
-                    let mut indices: Vec<_> = (0..*partitions)
-                        .map(|_| Vec::with_capacity(batch.num_rows()))
-                        .collect();
+                        create_hashes(&arrays, random_state, hash_buffer)?;
 
-                    let partition = (hash_buffer[0] % *partitions as u64) as usize;
-                    for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize].push(index as u64);
-                    }
+                        let mut indices: Vec<_> = (0..*partitions)
+                            .map(|_| Vec::with_capacity(batch.num_rows()))
+                            .collect();
 
-                    // Finished building index-arrays for output partitions
-                    timer.done();
+                        for (index, hash) in hash_buffer.iter().enumerate() {
+                            indices[(*hash % *partitions as u64) as usize]
+                                .push(index as u64);
+                        }
 
-                    // Borrowing partitioner timer to prevent moving `self` to closure
-                    let partitioner_timer = &self.timer;
-                    let it = indices
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(partition, indices)| {
-                            let indices: PrimitiveArray<UInt64Type> = indices.into();
-                            (!indices.is_empty()).then_some((partition, indices))
-                        })
-                        .map(move |(partition, indices)| {
-                            // Tracking time required for repartitioned batches construction
-                            let _timer = partitioner_timer.timer();
+                        // Finished building index-arrays for output partitions
+                        timer.done();
 
-                            if batch.num_rows() != indices.len() {
+                        // Borrowing partitioner timer to prevent moving `self` to closure
+                        let partitioner_timer = &self.timer;
+                        let it = indices
+                            .into_iter()
+                            .enumerate()
+                            .filter_map(|(partition, indices)| {
+                                let indices: PrimitiveArray<UInt64Type> = indices.into();
+                                (!indices.is_empty()).then_some((partition, indices))
+                            })
+                            .map(move |(partition, indices)| {
+                                // Tracking time required for repartitioned batches construction
+                                let _timer = partitioner_timer.timer();
                                 // Produce batches based on indices
                                 let columns = batch
                                     .columns()
@@ -321,12 +330,10 @@ impl BatchPartitioner {
                                 .unwrap();
 
                                 Ok((partition, batch))
-                            } else {
-                                Ok((partition, batch.clone()))
-                            }
-                        });
+                            });
 
-                    Box::new(it)
+                        Box::new(it)
+                    }
                 }
             };
 
