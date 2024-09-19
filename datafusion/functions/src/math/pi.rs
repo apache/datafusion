@@ -64,7 +64,7 @@ impl ScalarUDFImpl for PiFunc {
     }
 
     fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
-        Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(
+        Ok(ColumnarValue::from(ScalarValue::Float64(Some(
             std::f64::consts::PI,
         ))))
     }

@@ -40,7 +40,7 @@ use datafusion_common::hash_utils::HashValue;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, DFSchema, Result, ScalarValue,
 };
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Scalar};
 use datafusion_physical_expr_common::datum::compare_with_eq;
 
 use ahash::RandomState;
@@ -222,13 +222,15 @@ fn evaluate_list(
                     exec_err!("InList expression must evaluate to a scalar")
                 }
                 // Flatten dictionary values
-                ColumnarValue::Scalar(ScalarValue::Dictionary(_, v)) => Ok(*v),
-                ColumnarValue::Scalar(s) => Ok(s),
+                ColumnarValue::Scalar(s) => match s.value() {
+                    ScalarValue::Dictionary(_, v) => Ok(Scalar::from(v.as_ref().clone())),
+                    _ => Ok(s),
+                },
             })
         })
         .collect::<Result<Vec<_>>>()?;
 
-    ScalarValue::iter_to_array(scalars)
+    Scalar::iter_to_array(scalars)
 }
 
 fn try_cast_static_filter_to_set(

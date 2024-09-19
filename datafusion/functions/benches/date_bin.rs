@@ -40,7 +40,7 @@ fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("date_bin_1000", |b| {
         let mut rng = rand::thread_rng();
-        let interval = ColumnarValue::Scalar(ScalarValue::new_interval_dt(0, 1_000_000));
+        let interval = ColumnarValue::from(ScalarValue::new_interval_dt(0, 1_000_000));
         let timestamps = ColumnarValue::Array(Arc::new(timestamps(&mut rng)) as ArrayRef);
         let udf = date_bin();
 

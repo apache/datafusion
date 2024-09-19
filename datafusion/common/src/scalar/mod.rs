@@ -41,7 +41,7 @@ use crate::hash_utils::create_hashes;
 use crate::utils::{
     array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
 };
-use arrow::compute::kernels::numeric::*;
+use arrow::compute::kernels::{self, numeric::*};
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow::{
     array::*,
@@ -1704,6 +1704,15 @@ impl ScalarValue {
             Some(sv) => sv.data_type(),
         };
 
+        Self::iter_to_array_of_type(scalars, &data_type)
+    }
+
+    pub fn iter_to_array_of_type(
+        scalars: impl IntoIterator<Item = ScalarValue>,
+        data_type: &DataType,
+    ) -> Result<ArrayRef> {
+        let mut scalars = scalars.into_iter().peekable();
+
         /// Creates an array of $ARRAY_TY by unpacking values of
         /// SCALAR_TY for primitive types
         macro_rules! build_array_primitive {
@@ -2177,6 +2186,16 @@ impl ScalarValue {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
         Arc::new(array_into_large_list_array(values))
+    }
+
+    pub fn to_array_of_size_and_type(
+        &self,
+        size: usize,
+        target_type: &DataType,
+    ) -> Result<ArrayRef> {
+        let array = self.to_array_of_size(size)?;
+        let cast_array = kernels::cast::cast(&array, target_type)?;
+        Ok(cast_array)
     }
 
     /// Converts a scalar value into an array of `size` rows.

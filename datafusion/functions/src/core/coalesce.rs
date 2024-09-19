@@ -86,7 +86,7 @@ impl ScalarUDFImpl for CoalesceFunc {
 
         if let Some(size) = return_array.next() {
             // start with nulls as default output
-            let mut current_value = new_null_array(&return_type, size);
+            let mut current_value = new_null_array(return_type, size);
             let mut remainder = BooleanArray::from(vec![true; size]);
 
             for arg in args {
@@ -97,7 +97,7 @@ impl ScalarUDFImpl for CoalesceFunc {
                         remainder = and(&remainder, &is_null(array)?)?;
                     }
                     ColumnarValue::Scalar(value) => {
-                        if value.is_null() {
+                        if value.value().is_null() {
                             continue;
                         } else {
                             let last_value = value.to_scalar()?;
@@ -115,7 +115,7 @@ impl ScalarUDFImpl for CoalesceFunc {
             let result = args
                 .iter()
                 .filter_map(|x| match x {
-                    ColumnarValue::Scalar(s) if !s.is_null() => Some(x.clone()),
+                    ColumnarValue::Scalar(s) if !s.value().is_null() => Some(x.clone()),
                     _ => None,
                 })
                 .next()

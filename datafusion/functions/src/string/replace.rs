@@ -136,9 +136,9 @@ mod tests {
         test_function!(
             ReplaceFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("aabbdqcbb")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("bb")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ccc")))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("aabbdqcbb")))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("bb")))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("ccc")))),
             ],
             Ok(Some("aacccdqcccc")),
             &str,
@@ -149,11 +149,9 @@ mod tests {
         test_function!(
             ReplaceFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
-                    "aabbb"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("bbb")))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("cc")))),
+                ColumnarValue::from(ScalarValue::LargeUtf8(Some(String::from("aabbb")))),
+                ColumnarValue::from(ScalarValue::LargeUtf8(Some(String::from("bbb")))),
+                ColumnarValue::from(ScalarValue::LargeUtf8(Some(String::from("cc")))),
             ],
             Ok(Some("aacc")),
             &str,
@@ -164,11 +162,9 @@ mod tests {
         test_function!(
             ReplaceFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "aabbbcw"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("bb")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("cc")))),
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("aabbbcw")))),
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("bb")))),
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("cc")))),
             ],
             Ok(Some("aaccbcw")),
             &str,

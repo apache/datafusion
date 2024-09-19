@@ -117,7 +117,7 @@ mod tests {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
+                &[ColumnarValue::from(ScalarValue::Utf8($INPUT))],
                 $EXPECTED,
                 &str,
                 Utf8,
@@ -126,7 +126,7 @@ mod tests {
 
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
+                &[ColumnarValue::from(ScalarValue::LargeUtf8($INPUT))],
                 $EXPECTED,
                 &str,
                 LargeUtf8,
@@ -135,7 +135,7 @@ mod tests {
 
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
+                &[ColumnarValue::from(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 &str,
                 Utf8,

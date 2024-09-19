@@ -111,8 +111,8 @@ mod tests {
         test_function!(
             EndsWithFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("alph")),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from("alph")),
             ],
             Ok(Some(false)),
             bool,
@@ -122,8 +122,8 @@ mod tests {
         test_function!(
             EndsWithFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("bet")),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from("bet")),
             ],
             Ok(Some(true)),
             bool,
@@ -133,8 +133,8 @@ mod tests {
         test_function!(
             EndsWithFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("alph")),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from("alph")),
             ],
             Ok(None),
             bool,
@@ -144,8 +144,8 @@ mod tests {
         test_function!(
             EndsWithFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
             ],
             Ok(None),
             bool,

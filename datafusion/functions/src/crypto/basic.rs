@@ -120,7 +120,7 @@ pub fn digest(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         );
     }
     let digest_algorithm = match &args[1] {
-        ColumnarValue::Scalar(scalar) => match scalar {
+        ColumnarValue::Scalar(scalar) => match scalar.value() {
             ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
                 method.parse::<DigestAlgorithm>()
             }
@@ -191,10 +191,12 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 .collect();
             ColumnarValue::Array(Arc::new(string_array))
         }
-        ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
-            ColumnarValue::Scalar(ScalarValue::Utf8(opt.map(hex_encode::<_>)))
-        }
-        _ => return exec_err!("Impossibly got invalid results from digest"),
+        ColumnarValue::Scalar(scalar) => match scalar.into_value() {
+            ScalarValue::Binary(opt) => {
+                ColumnarValue::from(ScalarValue::Utf8(opt.map(hex_encode::<_>)))
+            }
+            _ => return exec_err!("Impossibly got invalid results from digest"),
+        },
     })
 }
 
@@ -244,7 +246,7 @@ macro_rules! digest_to_array {
 impl DigestAlgorithm {
     /// digest an optional string to its hash value, null values are returned as is
     pub fn digest_scalar(self, value: Option<&[u8]>) -> ColumnarValue {
-        ColumnarValue::Scalar(match self {
+        ColumnarValue::from(match self {
             Self::Md5 => digest_to_scalar!(Md5, value),
             Self::Sha224 => digest_to_scalar!(Sha224, value),
             Self::Sha256 => digest_to_scalar!(Sha256, value),
@@ -338,7 +340,7 @@ pub fn digest_process(
                 "Unsupported data type {other:?} for function {digest_algorithm}"
             ),
         },
-        ColumnarValue::Scalar(scalar) => match scalar {
+        ColumnarValue::Scalar(scalar) => match scalar.value() {
             ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
                 Ok(digest_algorithm
                     .digest_scalar(a.as_ref().map(|s: &String| s.as_bytes())))

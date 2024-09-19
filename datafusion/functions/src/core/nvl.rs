@@ -112,7 +112,7 @@ fn nvl_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Scalar(rhs)) => {
             let mut current_value = lhs;
-            if lhs.is_null() {
+            if lhs.value().is_null() {
                 current_value = rhs;
             }
             return Ok(ColumnarValue::Scalar(current_value.clone()));
@@ -147,7 +147,7 @@ mod tests {
         ]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(6i32)));
+        let lit_array = ColumnarValue::from(ScalarValue::Int32(Some(6i32)));
 
         let result = nvl_func(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
@@ -173,7 +173,7 @@ mod tests {
         let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(20i32)));
+        let lit_array = ColumnarValue::from(ScalarValue::Int32(Some(20i32)));
 
         let result = nvl_func(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
@@ -198,7 +198,7 @@ mod tests {
         let a = BooleanArray::from(vec![Some(true), Some(false), None]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
+        let lit_array = ColumnarValue::from(ScalarValue::Boolean(Some(false)));
 
         let result = nvl_func(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
@@ -218,7 +218,7 @@ mod tests {
         let a = StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::from("bax"));
+        let lit_array = ColumnarValue::from(ScalarValue::from("bax"));
 
         let result = nvl_func(&[a, lit_array])?;
         let result = result.into_array(0).expect("Failed to convert to array");
@@ -239,7 +239,7 @@ mod tests {
         let a = Int32Array::from(vec![Some(1), Some(2), None, None, Some(3), Some(4)]);
         let a = ColumnarValue::Array(Arc::new(a));
 
-        let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
+        let lit_array = ColumnarValue::from(ScalarValue::Int32(Some(2i32)));
 
         let result = nvl_func(&[lit_array, a])?;
         let result = result.into_array(0).expect("Failed to convert to array");
@@ -258,8 +258,8 @@ mod tests {
 
     #[test]
     fn nvl_scalar() -> Result<()> {
-        let a_null = ColumnarValue::Scalar(ScalarValue::Int32(None));
-        let b_null = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
+        let a_null = ColumnarValue::from(ScalarValue::Int32(None));
+        let b_null = ColumnarValue::from(ScalarValue::Int32(Some(2i32)));
 
         let result_null = nvl_func(&[a_null, b_null])?;
         let result_null = result_null
@@ -270,8 +270,8 @@ mod tests {
 
         assert_eq!(expected_null.as_ref(), result_null.as_ref());
 
-        let a_nnull = ColumnarValue::Scalar(ScalarValue::Int32(Some(2i32)));
-        let b_nnull = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));
+        let a_nnull = ColumnarValue::from(ScalarValue::Int32(Some(2i32)));
+        let b_nnull = ColumnarValue::from(ScalarValue::Int32(Some(1i32)));
 
         let result_nnull = nvl_func(&[a_nnull, b_nnull])?;
         let result_nnull = result_nnull

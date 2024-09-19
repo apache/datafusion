@@ -169,7 +169,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
             }
             DataType::Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
+                args[0].cast_to(&Timestamp(Nanosecond, Some(Arc::clone(tz))), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp")
@@ -219,7 +219,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
                 args[0].cast_to(&Timestamp(Second, None), None)
             }
             DataType::Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Second, Some(tz)), None)
+                args[0].cast_to(&Timestamp(Second, Some(Arc::clone(tz))), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds")
@@ -269,7 +269,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
                 args[0].cast_to(&Timestamp(Millisecond, None), None)
             }
             DataType::Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Millisecond, Some(tz)), None)
+                args[0].cast_to(&Timestamp(Millisecond, Some(Arc::clone(tz))), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampMillisecondType>(args, "to_timestamp_millis")
@@ -319,7 +319,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
                 args[0].cast_to(&Timestamp(Microsecond, None), None)
             }
             DataType::Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Microsecond, Some(tz)), None)
+                args[0].cast_to(&Timestamp(Microsecond, Some(Arc::clone(tz))), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampMicrosecondType>(args, "to_timestamp_micros")
@@ -369,7 +369,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
             }
             DataType::Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
+                args[0].cast_to(&Timestamp(Nanosecond, Some(Arc::clone(tz))), None)
             }
             DataType::Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp_nanos")
@@ -803,7 +803,7 @@ mod tests {
 
         for udf in &udfs {
             for array in arrays {
-                let rt = udf.return_type(&[array.data_type()]).unwrap();
+                let rt = udf.return_type(&[array.data_type().clone()]).unwrap();
                 assert!(matches!(rt, DataType::Timestamp(_, Some(_))));
 
                 let res = udf
@@ -846,7 +846,7 @@ mod tests {
 
         for udf in &udfs {
             for array in arrays {
-                let rt = udf.return_type(&[array.data_type()]).unwrap();
+                let rt = udf.return_type(&[array.data_type().clone()]).unwrap();
                 assert!(matches!(rt, DataType::Timestamp(_, None)));
 
                 let res = udf
@@ -896,9 +896,9 @@ mod tests {
             // test UTF8
             let string_array = [
                 ColumnarValue::Array(Arc::new(data.clone()) as ArrayRef),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%s".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%c".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%+".to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(Some("%s".to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(Some("%c".to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(Some("%+".to_string()))),
             ];
             let parsed_timestamps = func(&string_array)
                 .expect("that to_timestamp with format args parsed values without error");
@@ -925,9 +925,9 @@ mod tests {
             // test LargeUTF8
             let string_array = [
                 ColumnarValue::Array(Arc::new(data.clone()) as ArrayRef),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("%s".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("%c".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("%+".to_string()))),
+                ColumnarValue::from(ScalarValue::LargeUtf8(Some("%s".to_string()))),
+                ColumnarValue::from(ScalarValue::LargeUtf8(Some("%c".to_string()))),
+                ColumnarValue::from(ScalarValue::LargeUtf8(Some("%+".to_string()))),
             ];
             let parsed_timestamps = func(&string_array)
                 .expect("that to_timestamp with format args parsed values without error");
@@ -959,9 +959,9 @@ mod tests {
             // test other types
             let string_array = [
                 ColumnarValue::Array(Arc::new(data.clone()) as ArrayRef),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(3))),
+                ColumnarValue::from(ScalarValue::Int32(Some(1))),
+                ColumnarValue::from(ScalarValue::Int32(Some(2))),
+                ColumnarValue::from(ScalarValue::Int32(Some(3))),
             ];
 
             let expected = "Unsupported data type Int32 for function".to_string();

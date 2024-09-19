@@ -212,7 +212,7 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
     }
 
     fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
-        Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
+        Ok(ColumnarValue::from(ScalarValue::Int32(Some(100))))
     }
 }
 
@@ -323,7 +323,7 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
         vec![DataType::Int32],
         DataType::Int32,
         Volatility::Immutable,
-        Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(1))))),
+        Arc::new(move |_| Ok(ColumnarValue::from(ScalarValue::Int32(Some(1))))),
     ));
 
     // Make sure that the UDF is used instead of the built-in function
@@ -669,7 +669,10 @@ impl ScalarUDFImpl for TakeUDF {
     // The actual implementation
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let take_idx = match &args[2] {
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) if v < &2 => *v as usize,
+            ColumnarValue::Scalar(scalar) => match scalar.value() {
+                ScalarValue::Int64(Some(v)) if v < &2 => *v as usize,
+                _ => unreachable!(),
+            },
             _ => unreachable!(),
         };
         match &args[take_idx] {
@@ -1070,11 +1073,12 @@ impl ScalarUDFImpl for MyRegexUdf {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args {
-            [ColumnarValue::Scalar(ScalarValue::Utf8(value))] => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
-                    self.matches(value.as_deref()),
-                )))
-            }
+            [ColumnarValue::Scalar(scalar)] => match scalar.value() {
+                ScalarValue::Utf8(value) => Ok(ColumnarValue::from(
+                    ScalarValue::Boolean(self.matches(value.as_deref())),
+                )),
+                _ => exec_err!("regex_udf only accepts a Utf8 arguments"),
+            },
             [ColumnarValue::Array(values)] => {
                 let mut builder = BooleanBuilder::with_capacity(values.len());
                 for value in values.as_string::<i32>() {
@@ -1082,7 +1086,7 @@ impl ScalarUDFImpl for MyRegexUdf {
                 }
                 Ok(ColumnarValue::Array(Arc::new(builder.finish())))
             }
-            _ => exec_err!("regex_udf only accepts a Utf8 arguments"),
+            _ => unreachable!(),
         }
     }
 

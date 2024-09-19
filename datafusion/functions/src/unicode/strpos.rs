@@ -199,8 +199,8 @@ mod tests {
             test_function!(
                 StrposFunc::new(),
                 &[
-                    ColumnarValue::Scalar(ScalarValue::$t1(Some($lhs.to_owned()))),
-                    ColumnarValue::Scalar(ScalarValue::$t2(Some($rhs.to_owned()))),
+                    ColumnarValue::from(ScalarValue::$t1(Some($lhs.to_owned()))),
+                    ColumnarValue::from(ScalarValue::$t2(Some($rhs.to_owned()))),
                 ],
                 Ok(Some($result)),
                 $t3,

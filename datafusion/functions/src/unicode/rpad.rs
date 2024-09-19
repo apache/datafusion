@@ -281,8 +281,8 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("josé")),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from("josé")),
+                ColumnarValue::from(ScalarValue::from(5i64)),
             ],
             Ok(Some("josé ")),
             &str,
@@ -292,8 +292,8 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("hi")),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from("hi")),
+                ColumnarValue::from(ScalarValue::from(5i64)),
             ],
             Ok(Some("hi   ")),
             &str,
@@ -303,8 +303,8 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("hi")),
-                ColumnarValue::Scalar(ScalarValue::from(0i64)),
+                ColumnarValue::from(ScalarValue::from("hi")),
+                ColumnarValue::from(ScalarValue::from(0i64)),
             ],
             Ok(Some("")),
             &str,
@@ -314,8 +314,8 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("hi")),
-                ColumnarValue::Scalar(ScalarValue::Int64(None)),
+                ColumnarValue::from(ScalarValue::from("hi")),
+                ColumnarValue::from(ScalarValue::Int64(None)),
             ],
             Ok(None),
             &str,
@@ -325,8 +325,8 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from(5i64)),
             ],
             Ok(None),
             &str,
@@ -336,9 +336,9 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("hi")),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
-                ColumnarValue::Scalar(ScalarValue::from("xy")),
+                ColumnarValue::from(ScalarValue::from("hi")),
+                ColumnarValue::from(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from("xy")),
             ],
             Ok(Some("hixyx")),
             &str,
@@ -348,9 +348,9 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("hi")),
-                ColumnarValue::Scalar(ScalarValue::from(21i64)),
-                ColumnarValue::Scalar(ScalarValue::from("abcdef")),
+                ColumnarValue::from(ScalarValue::from("hi")),
+                ColumnarValue::from(ScalarValue::from(21i64)),
+                ColumnarValue::from(ScalarValue::from("abcdef")),
             ],
             Ok(Some("hiabcdefabcdefabcdefa")),
             &str,
@@ -360,9 +360,9 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("hi")),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
-                ColumnarValue::Scalar(ScalarValue::from(" ")),
+                ColumnarValue::from(ScalarValue::from("hi")),
+                ColumnarValue::from(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from(" ")),
             ],
             Ok(Some("hi   ")),
             &str,
@@ -372,9 +372,9 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("hi")),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
-                ColumnarValue::Scalar(ScalarValue::from("")),
+                ColumnarValue::from(ScalarValue::from("hi")),
+                ColumnarValue::from(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from("")),
             ],
             Ok(Some("hi")),
             &str,
@@ -384,9 +384,9 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
-                ColumnarValue::Scalar(ScalarValue::from("xy")),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from("xy")),
             ],
             Ok(None),
             &str,
@@ -396,9 +396,9 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("hi")),
-                ColumnarValue::Scalar(ScalarValue::Int64(None)),
-                ColumnarValue::Scalar(ScalarValue::from("xy")),
+                ColumnarValue::from(ScalarValue::from("hi")),
+                ColumnarValue::from(ScalarValue::Int64(None)),
+                ColumnarValue::from(ScalarValue::from("xy")),
             ],
             Ok(None),
             &str,
@@ -408,9 +408,9 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("hi")),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from("hi")),
+                ColumnarValue::from(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
             ],
             Ok(None),
             &str,
@@ -420,9 +420,9 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("josé")),
-                ColumnarValue::Scalar(ScalarValue::from(10i64)),
-                ColumnarValue::Scalar(ScalarValue::from("xy")),
+                ColumnarValue::from(ScalarValue::from("josé")),
+                ColumnarValue::from(ScalarValue::from(10i64)),
+                ColumnarValue::from(ScalarValue::from("xy")),
             ],
             Ok(Some("joséxyxyxy")),
             &str,
@@ -432,9 +432,9 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("josé")),
-                ColumnarValue::Scalar(ScalarValue::from(10i64)),
-                ColumnarValue::Scalar(ScalarValue::from("éñ")),
+                ColumnarValue::from(ScalarValue::from("josé")),
+                ColumnarValue::from(ScalarValue::from(10i64)),
+                ColumnarValue::from(ScalarValue::from("éñ")),
             ],
             Ok(Some("josééñéñéñ")),
             &str,
@@ -445,8 +445,8 @@ mod tests {
         test_function!(
             RPadFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("josé")),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from("josé")),
+                ColumnarValue::from(ScalarValue::from(5i64)),
             ],
             internal_err!(
                 "function rpad requires compilation with feature flag: unicode_expressions."

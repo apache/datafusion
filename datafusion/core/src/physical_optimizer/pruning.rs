@@ -687,14 +687,16 @@ impl BoolVecBuilder {
             ColumnarValue::Array(array) => {
                 self.combine_array(array.as_boolean());
             }
-            ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))) => {
-                // False means all containers can not pass the predicate
-                self.inner = vec![false; self.inner.len()];
-            }
-            _ => {
-                // Null or true means the rows in container may pass this
-                // conjunct so we can't prune any containers based on that
-            }
+            ColumnarValue::Scalar(scalar) => match scalar.value() {
+                ScalarValue::Boolean(Some(false)) => {
+                    // False means all containers can not pass the predicate
+                    self.inner = vec![false; self.inner.len()];
+                }
+                _ => {
+                    // Null or true means the rows in container may pass this
+                    // conjunct so we can't prune any containers based on that
+                }
+            },
         }
     }
 

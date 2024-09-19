@@ -26,12 +26,12 @@ use super::{
 };
 use crate::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
-    PhysicalExpr,
+    PhysicalExpr, Scalar,
 };
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -74,7 +74,7 @@ impl ValuesExec {
                         match r {
                             Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
                             Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
-                                ScalarValue::try_from_array(&a, 0)
+                                Scalar::try_from_array(&a, 0)
                             }
                             Ok(ColumnarValue::Array(a)) => {
                                 plan_err!(
@@ -85,7 +85,7 @@ impl ValuesExec {
                         }
                     })
                     .collect::<Result<Vec<_>>>()
-                    .and_then(ScalarValue::iter_to_array)
+                    .and_then(Scalar::iter_to_array)
             })
             .collect::<Result<Vec<_>>>()?;
         let batch = RecordBatch::try_new_with_options(
@@ -219,6 +219,7 @@ mod tests {
     use crate::test::{self, make_partition};
 
     use arrow_schema::{DataType, Field};
+    use datafusion_common::ScalarValue;
 
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {

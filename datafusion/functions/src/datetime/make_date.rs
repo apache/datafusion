@@ -94,7 +94,7 @@ impl ScalarUDFImpl for MakeDateFunc {
             let ColumnarValue::Scalar(s) = col else {
                 return exec_err!("Expected scalar value");
             };
-            let ScalarValue::Int32(Some(i)) = s else {
+            let ScalarValue::Int32(Some(i)) = s.value() else {
                 return exec_err!("Unable to parse date from null/empty value");
             };
             Ok(*i)
@@ -143,7 +143,7 @@ impl ScalarUDFImpl for MakeDateFunc {
                 |days: i32| value = days,
             )?;
 
-            ColumnarValue::Scalar(ScalarValue::Date32(Some(value)))
+            ColumnarValue::from(ScalarValue::Date32(Some(value)))
         };
 
         Ok(value)
@@ -192,44 +192,65 @@ mod tests {
     fn test_make_date() {
         let res = MakeDateFunc::new()
             .invoke(&[
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(2024))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
+                ColumnarValue::from(ScalarValue::Int32(Some(2024))),
+                ColumnarValue::from(ScalarValue::Int64(Some(1))),
+                ColumnarValue::from(ScalarValue::UInt32(Some(14))),
             ])
             .expect("that make_date parsed values without error");
 
-        if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
+        let ColumnarValue::Scalar(scalar) = res else {
+            panic!("Expected a scalar value")
+        };
+
+        if let ScalarValue::Date32(date) = scalar.value() {
             assert_eq!(19736, date.unwrap());
         } else {
-            panic!("Expected a scalar value")
+            panic!(
+                "Expected a Date32 scalar, got {}",
+                scalar.value().data_type()
+            )
         }
 
         let res = MakeDateFunc::new()
             .invoke(&[
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(2024))),
-                ColumnarValue::Scalar(ScalarValue::UInt64(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
+                ColumnarValue::from(ScalarValue::Int64(Some(2024))),
+                ColumnarValue::from(ScalarValue::UInt64(Some(1))),
+                ColumnarValue::from(ScalarValue::UInt32(Some(14))),
             ])
             .expect("that make_date parsed values without error");
 
-        if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
+        let ColumnarValue::Scalar(scalar) = res else {
+            panic!("Expected a scalar value")
+        };
+
+        if let ScalarValue::Date32(date) = scalar.value() {
             assert_eq!(19736, date.unwrap());
         } else {
-            panic!("Expected a scalar value")
+            panic!(
+                "Expected a Date32 scalar, got {}",
+                scalar.value().data_type()
+            )
         }
 
         let res = MakeDateFunc::new()
             .invoke(&[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("2024".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("1".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("14".to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(Some("2024".to_string()))),
+                ColumnarValue::from(ScalarValue::LargeUtf8(Some("1".to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(Some("14".to_string()))),
             ])
             .expect("that make_date parsed values without error");
 
-        if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
+        let ColumnarValue::Scalar(scalar) = res else {
+            panic!("Expected a scalar value")
+        };
+
+        if let ScalarValue::Date32(date) = scalar.value() {
             assert_eq!(19736, date.unwrap());
         } else {
-            panic!("Expected a scalar value")
+            panic!(
+                "Expected a Date32 scalar, got {}",
+                scalar.value().data_type()
+            )
         }
 
         let years = Arc::new((2021..2025).map(Some).collect::<Int64Array>());
@@ -261,7 +282,7 @@ mod tests {
 
         // invalid number of arguments
         let res = MakeDateFunc::new()
-            .invoke(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))]);
+            .invoke(&[ColumnarValue::from(ScalarValue::Int32(Some(1)))]);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: make_date function requires 3 arguments, got 1"
@@ -269,9 +290,9 @@ mod tests {
 
         // invalid type
         let res = MakeDateFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::from(ScalarValue::IntervalYearMonth(Some(1))),
+            ColumnarValue::from(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::from(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -280,9 +301,9 @@ mod tests {
 
         // overflow of month
         let res = MakeDateFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
-            ColumnarValue::Scalar(ScalarValue::UInt64(Some(u64::MAX))),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
+            ColumnarValue::from(ScalarValue::Int32(Some(2023))),
+            ColumnarValue::from(ScalarValue::UInt64(Some(u64::MAX))),
+            ColumnarValue::from(ScalarValue::Int32(Some(22))),
         ]);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -291,9 +312,9 @@ mod tests {
 
         // overflow of day
         let res = MakeDateFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
-            ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
+            ColumnarValue::from(ScalarValue::Int32(Some(2023))),
+            ColumnarValue::from(ScalarValue::Int32(Some(22))),
+            ColumnarValue::from(ScalarValue::UInt32(Some(u32::MAX))),
         ]);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),

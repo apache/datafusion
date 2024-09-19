@@ -21,10 +21,11 @@ use arrow::buffer::NullBuffer;
 use arrow::compute::SortOptions;
 use arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
+use datafusion_common::Result;
 use datafusion_common::{arrow_datafusion_err, internal_err};
-use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::operator::Operator;
+use datafusion_expr_common::scalar::Scalar;
 use std::sync::Arc;
 
 /// Applies a binary [`Datum`] kernel `f` to `lhs` and `rhs`
@@ -47,7 +48,7 @@ pub fn apply(
         ),
         (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
             let array = f(&left.to_scalar()?, &right.to_scalar()?)?;
-            let scalar = ScalarValue::try_from_array(array.as_ref(), 0)?;
+            let scalar = Scalar::try_from_array(array.as_ref(), 0)?;
             Ok(ColumnarValue::Scalar(scalar))
         }
     }

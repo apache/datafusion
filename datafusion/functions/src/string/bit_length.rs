@@ -77,13 +77,13 @@ impl ScalarUDFImpl for BitLengthFunc {
 
         match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
-            ColumnarValue::Scalar(v) => match v {
-                ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
+            ColumnarValue::Scalar(v) => match v.value() {
+                ScalarValue::Utf8(v) => Ok(ColumnarValue::from(ScalarValue::Int32(
                     v.as_ref().map(|x| (x.len() * 8) as i32),
                 ))),
-                ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64)),
-                )),
+                ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::from(ScalarValue::Int64(
+                    v.as_ref().map(|x| (x.len() * 8) as i64),
+                ))),
                 _ => unreachable!(),
             },
         }

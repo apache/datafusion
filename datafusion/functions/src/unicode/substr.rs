@@ -456,8 +456,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
-                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+                ColumnarValue::from(ScalarValue::Utf8View(None)),
+                ColumnarValue::from(ScalarValue::from(1i64)),
             ],
             Ok(None),
             &str,
@@ -467,10 +467,10 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::from(0i64)),
+                ColumnarValue::from(ScalarValue::from(0i64)),
             ],
             Ok(Some("alphabet")),
             &str,
@@ -480,11 +480,11 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from(
                     "this és longer than 12B"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
-                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+                ColumnarValue::from(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from(2i64)),
             ],
             Ok(Some(" é")),
             &str,
@@ -494,10 +494,10 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from(
                     "this is longer than 12B"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from(5i64)),
             ],
             Ok(Some(" is longer than 12B")),
             &str,
@@ -507,10 +507,10 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from(
                     "joséésoj"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from(5i64)),
             ],
             Ok(Some("ésoj")),
             &str,
@@ -520,11 +520,11 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::from(3i64)),
-                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+                ColumnarValue::from(ScalarValue::from(3i64)),
+                ColumnarValue::from(ScalarValue::from(2i64)),
             ],
             Ok(Some("ph")),
             &str,
@@ -534,11 +534,11 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::from(3i64)),
-                ColumnarValue::Scalar(ScalarValue::from(20i64)),
+                ColumnarValue::from(ScalarValue::from(3i64)),
+                ColumnarValue::from(ScalarValue::from(20i64)),
             ],
             Ok(Some("phabet")),
             &str,
@@ -548,8 +548,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(0i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(0i64)),
             ],
             Ok(Some("alphabet")),
             &str,
@@ -559,8 +559,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from("joséésoj")),
+                ColumnarValue::from(ScalarValue::from(5i64)),
             ],
             Ok(Some("ésoj")),
             &str,
@@ -570,8 +570,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
-                ColumnarValue::Scalar(ScalarValue::from(-5i64)),
+                ColumnarValue::from(ScalarValue::from("joséésoj")),
+                ColumnarValue::from(ScalarValue::from(-5i64)),
             ],
             Ok(Some("joséésoj")),
             &str,
@@ -581,8 +581,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(1i64)),
             ],
             Ok(Some("alphabet")),
             &str,
@@ -592,8 +592,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(2i64)),
             ],
             Ok(Some("lphabet")),
             &str,
@@ -603,8 +603,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(3i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(3i64)),
             ],
             Ok(Some("phabet")),
             &str,
@@ -614,8 +614,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(-3i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(-3i64)),
             ],
             Ok(Some("alphabet")),
             &str,
@@ -625,8 +625,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(30i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(30i64)),
             ],
             Ok(Some("")),
             &str,
@@ -636,8 +636,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::Int64(None)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::Int64(None)),
             ],
             Ok(None),
             &str,
@@ -647,9 +647,9 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(3i64)),
-                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(3i64)),
+                ColumnarValue::from(ScalarValue::from(2i64)),
             ],
             Ok(Some("ph")),
             &str,
@@ -659,9 +659,9 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(3i64)),
-                ColumnarValue::Scalar(ScalarValue::from(20i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(3i64)),
+                ColumnarValue::from(ScalarValue::from(20i64)),
             ],
             Ok(Some("phabet")),
             &str,
@@ -671,9 +671,9 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(0i64)),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(0i64)),
+                ColumnarValue::from(ScalarValue::from(5i64)),
             ],
             Ok(Some("alph")),
             &str,
@@ -684,9 +684,9 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(-5i64)),
-                ColumnarValue::Scalar(ScalarValue::from(10i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(-5i64)),
+                ColumnarValue::from(ScalarValue::from(10i64)),
             ],
             Ok(Some("alph")),
             &str,
@@ -697,9 +697,9 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(-5i64)),
-                ColumnarValue::Scalar(ScalarValue::from(4i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(-5i64)),
+                ColumnarValue::from(ScalarValue::from(4i64)),
             ],
             Ok(Some("")),
             &str,
@@ -710,9 +710,9 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(-5i64)),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(-5i64)),
+                ColumnarValue::from(ScalarValue::from(5i64)),
             ],
             Ok(Some("")),
             &str,
@@ -722,9 +722,9 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::Int64(None)),
-                ColumnarValue::Scalar(ScalarValue::from(20i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::Int64(None)),
+                ColumnarValue::from(ScalarValue::from(20i64)),
             ],
             Ok(None),
             &str,
@@ -734,9 +734,9 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(3i64)),
-                ColumnarValue::Scalar(ScalarValue::Int64(None)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(3i64)),
+                ColumnarValue::from(ScalarValue::Int64(None)),
             ],
             Ok(None),
             &str,
@@ -746,9 +746,9 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(1i64)),
-                ColumnarValue::Scalar(ScalarValue::from(-1i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(1i64)),
+                ColumnarValue::from(ScalarValue::from(-1i64)),
             ],
             exec_err!("negative substring length not allowed: substr(<str>, 1, -1)"),
             &str,
@@ -758,9 +758,9 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
-                ColumnarValue::Scalar(ScalarValue::from(5i64)),
-                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+                ColumnarValue::from(ScalarValue::from("joséésoj")),
+                ColumnarValue::from(ScalarValue::from(5i64)),
+                ColumnarValue::from(ScalarValue::from(2i64)),
             ],
             Ok(Some("és")),
             &str,
@@ -771,8 +771,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from(0i64)),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from(0i64)),
             ],
             internal_err!(
                 "function substr requires compilation with feature flag: unicode_expressions."
@@ -784,8 +784,8 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("abc")),
-                ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
+                ColumnarValue::from(ScalarValue::from("abc")),
+                ColumnarValue::from(ScalarValue::from(-9223372036854775808i64)),
             ],
             Ok(Some("abc")),
             &str,
@@ -795,9 +795,9 @@ mod tests {
         test_function!(
             SubstrFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("overflow")),
-                ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
-                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+                ColumnarValue::from(ScalarValue::from("overflow")),
+                ColumnarValue::from(ScalarValue::from(-9223372036854775808i64)),
+                ColumnarValue::from(ScalarValue::from(1i64)),
             ],
             exec_err!("negative overflow when calculating skip value"),
             &str,

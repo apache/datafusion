@@ -28,7 +28,7 @@ fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
     let scalar = ScalarValue::Utf8(Some(", ".to_string()));
     vec![
         ColumnarValue::Array(Arc::clone(&array) as ArrayRef),
-        ColumnarValue::Scalar(scalar),
+        ColumnarValue::from(scalar),
         ColumnarValue::Array(array),
     ]
 }
