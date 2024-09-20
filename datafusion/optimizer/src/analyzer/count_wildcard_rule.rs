@@ -28,7 +28,7 @@ use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
 /// Resolves issue: <https://github.com/apache/datafusion/issues/5473>
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CountWildcardRule {}
 
 impl CountWildcardRule {

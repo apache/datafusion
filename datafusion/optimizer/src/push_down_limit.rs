@@ -31,7 +31,7 @@ use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
 /// Optimization rule that tries to push down `LIMIT`.
 ///
 //. It will push down through projection, limits (taking the smaller limit)
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PushDownLimit {}
 
 impl PushDownLimit {

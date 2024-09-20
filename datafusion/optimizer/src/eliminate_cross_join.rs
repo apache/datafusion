@@ -30,7 +30,7 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{build_join_schema, ExprSchemable, Operator};
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EliminateCrossJoin;
 
 impl EliminateCrossJoin {

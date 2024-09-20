@@ -51,7 +51,7 @@ use hashbrown::HashSet;
 ///    )
 ///    GROUP BY a
 ///  ```
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
 const SINGLE_DISTINCT_ALIAS: &str = "alias1";

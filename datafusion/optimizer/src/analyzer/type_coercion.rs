@@ -57,7 +57,7 @@ use datafusion_expr::{
 
 /// Performs type coercion by determining the schema
 /// and performing the expression rewrites.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct TypeCoercion {}
 
 impl TypeCoercion {

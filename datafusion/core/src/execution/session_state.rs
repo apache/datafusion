@@ -1905,6 +1905,7 @@ mod tests {
 
     #[test]
     fn test_session_state_with_optimizer_rules() {
+        #[derive(Default, Debug)]
         struct DummyRule {}
 
         impl OptimizerRule for DummyRule {
