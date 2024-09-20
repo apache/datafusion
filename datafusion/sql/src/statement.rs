@@ -1147,7 +1147,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         schema,
                         planner_context,
                     )?;
-                    let nulls_first = ordered_expr.nulls_first.unwrap_or(true);
+                    let nulls_first = ordered_expr.nulls_first.unwrap_or(!asc);
                     let asc = ordered_expr.asc.unwrap_or(true);
                     let sort_expr = SortExpr::new(order_expr, asc, nulls_first);
                     results.push(sort_expr);
