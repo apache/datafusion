@@ -274,7 +274,19 @@ impl TableProvider for MemTable {
             .logically_equivalent_names_and_types(&input.schema())
         {
             return plan_err!(
-                "Inserting query must have the same schema with the table."
+                "Inserting query must have the same schema with the table. \
+                Expected: {:?}, got: {:?}",
+                self.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>(),
+                input
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>()
             );
         }
         if overwrite {
