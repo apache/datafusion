@@ -1,0 +1,326 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# This file is intended to be run with tables already defined
+# with standard values, but different types in string columns
+# (String, StringView, etc.)
+
+# select
+query TTTT
+SELECT ascii_1, ascii_2, unicode_1, unicode_2 FROM test_basic_operator
+----
+Andrew X datafusion📊🔥 🔥
+Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合
+Raphael R datafusionДатаФусион аФус
+NULL R NULL 🔥
+
+# --------------------------------------
+# column comparison as filters
+# --------------------------------------
+
+query TT
+select ascii_1, ascii_2 from test_basic_operator where ascii_1 = ascii_2
+----
+Xiangpeng Xiangpeng
+
+query TT
+select ascii_1, ascii_2 from test_basic_operator where ascii_1 <> ascii_2
+----
+Andrew X
+Raphael R
+
+query TT
+select unicode_1, unicode_2 from test_basic_operator where unicode_1 = unicode_2
+----
+datafusion数据融合 datafusion数据融合
+
+query TT
+select unicode_1, unicode_2 from test_basic_operator where unicode_1 <> unicode_2
+----
+datafusion📊🔥 🔥
+datafusionДатаФусион аФус
+
+query TT
+select ascii_1, unicode_1 from test_basic_operator where ascii_1 = unicode_1
+----
+
+query TT
+select ascii_1, unicode_1 from test_basic_operator where ascii_1 <> unicode_1
+----
+Andrew datafusion📊🔥
+Xiangpeng datafusion数据融合
+Raphael datafusionДатаФусион
+
+# --------------------------------------
+# column comparison
+# --------------------------------------
+query TTTTBBBBBB
+select
+    ascii_1, ascii_2, unicode_1, unicode_2,
+    ascii_1 = ascii_2,
+    ascii_1 <> ascii_2,
+    unicode_1 = unicode_2,
+    unicode_1 <> unicode_2,
+    ascii_1 = unicode_1,
+    ascii_1 <> unicode_1
+from test_basic_operator;
+----
+Andrew X datafusion📊🔥 🔥 false true false true false true
+Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合 true false true false false true
+Raphael R datafusionДатаФусион аФус false true false true false true
+NULL R NULL 🔥 NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# column to StringView scalar comparison
+# --------------------------------------
+query TTBBBB
+select
+    ascii_1, unicode_1,
+    ascii_1 = arrow_cast('Andrew', 'Utf8View'),
+    ascii_1 <> arrow_cast('Andrew', 'Utf8View'),
+    unicode_1 = arrow_cast('datafusion数据融合', 'Utf8View'),
+    unicode_1 <> arrow_cast('datafusion数据融合', 'Utf8View')
+from test_basic_operator;
+----
+Andrew datafusion📊🔥 true false false true
+Xiangpeng datafusion数据融合 false true true false
+Raphael datafusionДатаФусион false true false true
+NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# column to String scalar
+# --------------------------------------
+query TTBBBB
+select
+    ascii_1, unicode_1,
+    ascii_1 = arrow_cast('Andrew', 'Utf8'),
+    ascii_1 <> arrow_cast('Andrew', 'Utf8'),
+    unicode_1 = arrow_cast('datafusion数据融合', 'Utf8'),
+    unicode_1 <> arrow_cast('datafusion数据融合', 'Utf8')
+from test_basic_operator;
+----
+Andrew datafusion📊🔥 true false false true
+Xiangpeng datafusion数据融合 false true true false
+Raphael datafusionДатаФусион false true false true
+NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# column to LargeString scalar
+# --------------------------------------
+query TTBBBB
+select
+    ascii_1, unicode_1,
+    ascii_1 = arrow_cast('Andrew', 'LargeUtf8'),
+    ascii_1 <> arrow_cast('Andrew', 'LargeUtf8'),
+    unicode_1 = arrow_cast('datafusion数据融合', 'LargeUtf8'),
+    unicode_1 <> arrow_cast('datafusion数据融合', 'LargeUtf8')
+from test_basic_operator;
+----
+Andrew datafusion📊🔥 true false false true
+Xiangpeng datafusion数据融合 false true true false
+Raphael datafusionДатаФусион false true false true
+NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# substr function
+# --------------------------------------
+
+query TTTTTTTTTTTTTT
+select
+    substr(c1, 1),
+    substr(c1, 3),
+    substr(c1, 100),
+    substr(c1, -1),
+    substr(c1, 0, 0),
+    substr(c1, -1, 2),
+    substr(c1, -2, 10),
+    substr(c1, -100, 200),
+    substr(c1, -10, 10),
+    substr(c1, -100, 10),
+    substr(c1, 1, 100),
+    substr(c1, 5, 3),
+    substr(c1, 100, 200),
+    substr(c1, 8, 0)
+from test_substr;
+----
+foo o (empty) foo (empty) (empty) foo foo (empty) (empty) foo (empty) (empty) (empty)
+hello🌏世界 llo🌏世界 (empty) hello🌏世界 (empty) (empty) hello🌏世 hello🌏世界 (empty) (empty) hello🌏世界 o🌏世 (empty) (empty)
+💩 (empty) (empty) 💩 (empty) (empty) 💩 💩 (empty) (empty) 💩 (empty) (empty) (empty)
+ThisIsAVeryLongASCIIString isIsAVeryLongASCIIString (empty) ThisIsAVeryLongASCIIString (empty) (empty) ThisIsA ThisIsAVeryLongASCIIString (empty) (empty) ThisIsAVeryLongASCIIString IsA (empty) (empty)
+(empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty)
+NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# test distinct aggregate
+# --------------------------------------
+query II
+SELECT
+    COUNT(DISTINCT ascii_1),
+    COUNT(DISTINCT unicode_1)
+FROM
+    test_basic_operator
+----
+3 3
+
+query II
+SELECT
+    COUNT(DISTINCT ascii_1),
+    COUNT(DISTINCT unicode_1)
+FROM
+    test_basic_operator
+GROUP BY ascii_2;
+----
+1 1
+1 1
+1 1
+
+query II
+SELECT
+    COUNT(DISTINCT ascii_1),
+    COUNT(DISTINCT unicode_1)
+FROM
+    test_basic_operator
+GROUP BY unicode_2;
+----
+1 1
+1 1
+1 1
+
+# --------------------------------------
+# STARTS_WITH function
+# --------------------------------------
+
+query BBBB
+SELECT
+    STARTS_WITH(ascii_1, ascii_2),
+    STARTS_WITH(unicode_1, unicode_2),
+    STARTS_WITH(ascii_1, unicode_2),
+    STARTS_WITH(unicode_1, ascii_2)
+FROM test_basic_operator
+----
+false false false false
+true true false false
+true false false false
+NULL NULL NULL NULL
+
+query BBBB
+SELECT
+    STARTS_WITH(ascii_1, 'And'),
+    STARTS_WITH(ascii_2, 'And'),
+    STARTS_WITH(unicode_1, 'data'),
+    STARTS_WITH(unicode_2, 'data')
+FROM test_basic_operator
+----
+true false true false
+false false true true
+false false true false
+NULL false NULL false
+
+# --------------------------------------
+# Test TRANSLATE
+# --------------------------------------
+
+query T
+SELECT
+  TRANSLATE(ascii_1, 'foo', 'bar') as c
+FROM test_basic_operator;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+query T
+SELECT
+  TRANSLATE(unicode_1, 'foo', 'bar') as c
+FROM test_basic_operator;
+----
+databusirn📊🔥
+databusirn数据融合
+databusirnДатаФусион
+NULL
+
+# --------------------------------------
+# Test REGEXP_REPLACE
+# --------------------------------------
+
+# Should run REGEXP_REPLACE with Scalar value for string
+query T
+SELECT
+  REGEXP_REPLACE(ascii_1, 'e', 'f') AS k
+FROM test_basic_operator;
+----
+Andrfw
+Xiangpfng
+Raphafl
+NULL
+
+# Should run REGEXP_REPLACE with Scalar value for string with flag
+query T
+SELECT
+  REGEXP_REPLACE(ascii_1, 'e', 'f', 'i') AS k
+FROM test_basic_operator;
+----
+Andrfw
+Xiangpfng
+Raphafl
+NULL
+
+# Should run REGEXP_REPLACE with ScalarArray value for string
+query T
+SELECT
+  REGEXP_REPLACE(ascii_1, lower(ascii_1), 'bar') AS k
+FROM test_basic_operator;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+# Should run REGEXP_REPLACE with ScalarArray value for string with flag
+query T
+SELECT
+  REGEXP_REPLACE(ascii_1, lower(ascii_1), 'bar', 'g') AS k
+FROM test_basic_operator;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
+
+# --------------------------------------
+# Test Initcap
+# --------------------------------------
+statement ok
+CREATE TABLE test_lowercase AS SELECT
+  lower(ascii_1) as ascii_1_lower,
+  lower(unicode_1) as unicode_1_lower
+FROM test_basic_operator;
+
+query TT
+SELECT
+  INITCAP(ascii_1_lower) as c1,
+  INITCAP(unicode_1_lower) as c2
+FROM test_lowercase;
+----
+Andrew Datafusion📊🔥
+Xiangpeng Datafusion数据融合
+Raphael Datafusionдатафусион
+NULL NULL
+
+statement ok
+drop table test_lowercase;
