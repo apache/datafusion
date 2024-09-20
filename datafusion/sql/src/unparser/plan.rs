@@ -574,12 +574,15 @@ impl Unparser<'_> {
                         .iter()
                         .cloned()
                         .map(|i| {
-                            let (qualifier, field) =
-                                table_scan.projected_schema.qualified_field(i);
+                            let schema = table_scan.source.schema();
+                            let field = schema.field(i);
                             if alias.is_some() {
                                 Column::new(alias.clone(), field.name().clone())
                             } else {
-                                Column::new(qualifier.cloned(), field.name().clone())
+                                Column::new(
+                                    Some(table_scan.table_name.clone()),
+                                    field.name().clone(),
+                                )
                             }
                         })
                         .collect::<Vec<_>>();
