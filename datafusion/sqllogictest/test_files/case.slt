@@ -122,22 +122,22 @@ SELECT CASE 1 WHEN 1 THEN [[1,2], [2,4]] WHEN 2 THEN [['1','2'], ['2','4']] ELSE
 [[1, 2], [2, 4]]
 
 query ?
-SELECT CASE 1 WHEN 1 THEN [1,2,3] WHEN 2 THEN arrow_cast([1,2,3], 'LargeList(Int64)') ELSE null END;
+SELECT CASE 1 WHEN 1 THEN [1,2,3] WHEN 2 THEN arrow_cast([1,2,3], 'LargeList(Int64)') WHEN 3 THEN arrow_cast([1,2,3], 'FixedSizeList(3, Int32)') ELSE null END;
 ----
 [1, 2, 3]
 
 query ?
-SELECT CASE 1 WHEN 1 THEN [[1,2], [2,4]] WHEN 2 THEN arrow_cast([[1,2], [2,4]], 'LargeList(LargeList(Int64))') ELSE null END;
+SELECT CASE 1 WHEN 1 THEN [[1,2], [2,4]] WHEN 2 THEN arrow_cast([[1,2], [2,4]], 'LargeList(LargeList(Int64))') WHEN 3 THEN arrow_cast([[1,2], [2,4]], 'FixedSizeList(2, FixedSizeList(2, Int32))') ELSE null END;
 ----
 [[1, 2], [2, 4]]
 
 query ?
-SELECT CASE 1 WHEN 1 THEN [1,2,3] WHEN 2 THEN arrow_cast(['1','2','3'], 'LargeList(Utf8)') ELSE null END;
+SELECT CASE 1 WHEN 1 THEN [1,2,3] WHEN 2 THEN arrow_cast(['1','2','3'], 'LargeList(Utf8)') WHEN 3 THEN arrow_cast(['1','2','3'], 'FixedSizeList(3, Utf8)') ELSE null END;
 ----
 [1, 2, 3]
 
 query ?
-SELECT CASE 1 WHEN 1 THEN [[1,2], [2,4]] WHEN 2 THEN arrow_cast([['1','2'], ['2','4']], 'LargeList(LargeList(Utf8))') ELSE null END;
+SELECT CASE 1 WHEN 1 THEN [[1,2], [2,4]] WHEN 2 THEN arrow_cast([['1','2'], ['2','4']], 'LargeList(LargeList(Utf8))') WHEN 3 THEN arrow_cast([['1','2'], ['2','4']], 'FixedSizeList(2, FixedSizeList(2, Utf8))') ELSE null END;
 ----
 [[1, 2], [2, 4]]
 
@@ -170,5 +170,30 @@ SELECT CASE [[1,2],[2,4]] WHEN arrow_cast([[1,2],[2,4]], 'LargeList(LargeList(In
 ----
 1
 
+query I
+SELECT CASE arrow_cast([1,2,3], 'FixedSizeList(3, Int64)') WHEN [1,2,3] THEN 1 ELSE 0 END;
+----
+1
+
 query error DataFusion error: type_coercion
 SELECT CASE [1,2,3] WHEN 'test' THEN 1 ELSE 0 END;
+
+query I
+SELECT CASE arrow_cast([1,2], 'FixedSizeList(2, Int64)') WHEN arrow_cast([1,2,3], 'FixedSizeList(3, Int64)') THEN 1 ELSE 0 END;
+----
+0
+
+query I
+SELECT CASE arrow_cast([1,2], 'FixedSizeList(2, Int64)') WHEN arrow_cast(['1','2','3'], 'FixedSizeList(3, Utf8)') THEN 1 ELSE 0 END;
+----
+0
+
+query I
+SELECT CASE arrow_cast(['1','2'], 'FixedSizeList(2, Utf8)') WHEN arrow_cast([1,2,3], 'FixedSizeList(3, Int64)') THEN 1 ELSE 0 END;
+----
+0
+
+query I
+SELECT CASE arrow_cast([1,2,3], 'FixedSizeList(3, Int64)') WHEN arrow_cast([1,2,3], 'FixedSizeList(3, Int64)') THEN 1 ELSE 0 END;
+----
+1

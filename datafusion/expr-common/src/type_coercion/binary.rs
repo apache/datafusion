@@ -1026,7 +1026,15 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
         (LargeList(_), LargeList(_)) => Some(lhs_type.clone()),
         (List(_), FixedSizeList(_, _)) => Some(lhs_type.clone()),
         (FixedSizeList(_, _), List(_)) => Some(rhs_type.clone()),
-        (FixedSizeList(_, _), FixedSizeList(_, _)) => Some(lhs_type.clone()),
+        // Coerce to the left side FixedSizeList type if the list lengths are the same,
+        // otherwise coerce to list with the left type for dynamic length
+        (FixedSizeList(lf, ls), FixedSizeList(_, rs)) => {
+            if ls == rs {
+                Some(lhs_type.clone())
+            } else {
+                Some(List(Arc::clone(lf)))
+            }
+        }
         (LargeList(_), FixedSizeList(_, _)) => Some(lhs_type.clone()),
         (FixedSizeList(_, _), LargeList(_)) => Some(rhs_type.clone()),
         _ => None,
