@@ -168,6 +168,7 @@ impl ParquetOptions {
             enable_page_index: _,
             pruning: _,
             skip_metadata: _,
+            cache_metadata: _,
             metadata_size_hint: _,
             pushdown_filters: _,
             reorder_filters: _,

@@ -365,6 +365,11 @@ config_namespace! {
         /// multiple parquet files with schemas containing compatible types but different metadata
         pub skip_metadata: bool, default = true
 
+        /// (reading) If true, caches the Parquet file-level metadata so it does not need
+        /// to be parsed on every query. This should typically be true when running more than
+        /// one (short) query on a table.
+        pub cache_metadata: bool, default = false
+
         /// (reading) If specified, the parquet reader will try and fetch the last `size_hint`
         /// bytes of the parquet file optimistically. If not specified, two reads are required:
         /// One read to fetch the 8-byte parquet footer and

@@ -20,14 +20,16 @@
 
 use crate::datasource::physical_plan::{FileMeta, ParquetFileMetrics};
 use bytes::Bytes;
+use dashmap::DashMap;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, Either};
+use futures::FutureExt;
 use object_store::ObjectStore;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::file::metadata::ParquetMetaData;
 use std::fmt::Debug;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Interface for reading parquet files.
 ///
@@ -65,7 +67,8 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
 /// This implementation:
 /// 1. Reads parquet directly from an underlying [`ObjectStore`] instance.
 /// 2. Reads the footer and page metadata on demand.
-/// 3. Does not cache metadata or coalesce I/O operations.
+/// 3. Does not cache metadata
+/// 4. Does not coalesce I/O operations.
 #[derive(Debug)]
 pub struct DefaultParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
@@ -78,6 +81,34 @@ impl DefaultParquetFileReaderFactory {
     }
 }
 
+/// Caching implementation of [`ParquetFileReaderFactory`]
+///
+/// This implementation:
+/// 1. Reads parquet directly from an underlying [`ObjectStore`] instance.
+/// 2. Reads the footer and page metadata on demand (but may cache them in the future).
+/// 3. Ches metadata
+/// 4. Does not coalesce I/O operations.
+#[derive(Debug)]
+pub struct CachedParquetFileReaderFactory {
+    store: Arc<dyn ObjectStore>,
+    /// The parquet metadata for each file in the index, keyed by the file name
+    /// (e.g. `file1.parquet`).
+    ///
+    /// There are two layers of Arc. The outer one allows sharing the lock while a future is
+    /// executing, while the inner one shares the metadata between readers once it is cached
+    metadata: DashMap<String, Arc<OnceLock<Arc<ParquetMetaData>>>>,
+}
+
+impl CachedParquetFileReaderFactory {
+    /// Create a new `CachedParquetFileReaderFactory`.
+    pub fn new(store: Arc<dyn ObjectStore>) -> Self {
+        Self {
+            store,
+            metadata: DashMap::new(),
+        }
+    }
+}
+
 /// Implements [`AsyncFileReader`] for a parquet file in object storage.
 ///
 /// This implementation uses the [`ParquetObjectReader`] to read data from the
@@ -86,9 +117,12 @@ impl DefaultParquetFileReaderFactory {
 /// This implementation does not coalesce I/O operations or cache bytes. Such
 /// optimizations can be done either at the object store level or by providing a
 /// custom implementation of [`ParquetFileReaderFactory`].
+///
+/// It will cache file metadata if `metadata_cache` is set.
 pub(crate) struct ParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
     pub inner: ParquetObjectReader,
+    pub metadata_cache: Option<Arc<OnceLock<Arc<ParquetMetaData>>>>,
 }
 
 impl AsyncFileReader for ParquetFileReader {
@@ -115,7 +149,24 @@ impl AsyncFileReader for ParquetFileReader {
     fn get_metadata(
         &mut self,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        self.inner.get_metadata()
+        Box::pin(match &self.metadata_cache {
+            None => Either::Left(self.inner.get_metadata()),
+            Some(metadata_cache) => Either::Right(match metadata_cache.get() {
+                Some(metadata) => {
+                    Either::Left(std::future::ready(Ok(Arc::clone(metadata))))
+                }
+                None => {
+                    let metadata_cache = Arc::clone(&metadata_cache);
+                    Either::Right(self.inner.get_metadata().inspect(move |metadata| {
+                        if let Ok(metadata) = metadata {
+                            // TODO: use metadata.try_insert when
+                            // https://github.com/rust-lang/rust/issues/116693 is stabilized
+                            metadata_cache.get_or_init(|| Arc::clone(metadata));
+                        }
+                    }))
+                }
+            }),
+        })
     }
 }
 
@@ -142,6 +193,50 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
         Ok(Box::new(ParquetFileReader {
             inner,
             file_metrics,
+            metadata_cache: None,
+        }))
+    }
+}
+
+impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
+    fn create_reader(
+        &self,
+        partition_index: usize,
+        file_meta: FileMeta,
+        metadata_size_hint: Option<usize>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+        let filename = file_meta
+            .location()
+            .parts()
+            .last()
+            .expect("No path in location")
+            .as_ref()
+            .to_string();
+
+        // TODO: cache metrics?
+        let file_metrics = ParquetFileMetrics::new(
+            partition_index,
+            file_meta.location().as_ref(),
+            metrics,
+        );
+        let object_store = Arc::clone(&self.store);
+        let mut inner = ParquetObjectReader::new(object_store, file_meta.object_meta);
+
+        if let Some(hint) = metadata_size_hint {
+            inner = inner.with_footer_size_hint(hint)
+        };
+
+        let metadata = Arc::clone(
+            self.metadata
+                .entry(filename)
+                .or_insert_with(|| Arc::new(OnceLock::new()))
+                .value(),
+        );
+        Ok(Box::new(ParquetFileReader {
+            inner,
+            file_metrics,
+            metadata_cache: Some(metadata),
         }))
     }
 }

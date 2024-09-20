@@ -52,6 +52,8 @@ use datafusion_common::{
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
+use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
@@ -60,6 +62,7 @@ use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
+use dashmap::DashMap;
 use hashbrown::HashMap;
 use log::debug;
 use object_store::buffered::BufWriter;
@@ -80,7 +83,8 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 
 use crate::datasource::physical_plan::parquet::{
-    can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
+    can_expr_be_pushed_down_with_schemas, CachedParquetFileReaderFactory,
+    DefaultParquetFileReaderFactory, ParquetExecBuilder, ParquetFileReaderFactory,
 };
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{StreamExt, TryStreamExt};
@@ -140,7 +144,9 @@ impl FileFormatFactory for ParquetFormatFactory {
         };
 
         Ok(Arc::new(
-            ParquetFormat::default().with_options(parquet_options),
+            ParquetFormat::default()
+                .with_options(parquet_options)
+                .with_runtime_env(Some(state.runtime_env().clone())),
         ))
     }
 
@@ -171,6 +177,8 @@ impl fmt::Debug for ParquetFormatFactory {
 #[derive(Debug, Default)]
 pub struct ParquetFormat {
     options: TableParquetOptions,
+    runtime_env: Option<Arc<RuntimeEnv>>,
+    reader_factory: DashMap<ObjectStoreUrl, Arc<dyn ParquetFileReaderFactory>>,
 }
 
 impl ParquetFormat {
@@ -182,6 +190,7 @@ impl ParquetFormat {
     /// Activate statistics based row group level pruning
     /// - If `None`, defaults to value on `config_options`
     pub fn with_enable_pruning(mut self, enable: bool) -> Self {
+        self.reader_factory.clear();
         self.options.global.pruning = enable;
         self
     }
@@ -198,6 +207,7 @@ impl ParquetFormat {
     ///
     /// - If `None`, defaults to value on `config_options`
     pub fn with_metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
+        self.reader_factory.clear();
         self.options.global.metadata_size_hint = size_hint;
         self
     }
@@ -213,6 +223,7 @@ impl ParquetFormat {
     ///
     /// - If `None`, defaults to value on `config_options`
     pub fn with_skip_metadata(mut self, skip_metadata: bool) -> Self {
+        self.reader_factory.clear();
         self.options.global.skip_metadata = skip_metadata;
         self
     }
@@ -225,6 +236,7 @@ impl ParquetFormat {
 
     /// Set Parquet options for the ParquetFormat
     pub fn with_options(mut self, options: TableParquetOptions) -> Self {
+        self.reader_factory.clear();
         self.options = options;
         self
     }
@@ -232,6 +244,18 @@ impl ParquetFormat {
     /// Parquet options
     pub fn options(&self) -> &TableParquetOptions {
         &self.options
+    }
+
+    /// Sets the session this factory will create tables for.
+    pub fn with_runtime_env(mut self, runtime_env: Option<Arc<RuntimeEnv>>) -> Self {
+        self.reader_factory.clear();
+        self.runtime_env = runtime_env;
+        self
+    }
+
+    /// Returns the session this factory creates tables for, if any.
+    pub fn runtime_env(&self) -> Option<&Arc<RuntimeEnv>> {
+        self.runtime_env.as_ref()
     }
 
     /// Return `true` if should use view types.
@@ -253,8 +277,36 @@ impl ParquetFormat {
     ///
     /// Refer to [`Self::force_view_types`].
     pub fn with_force_view_types(mut self, use_views: bool) -> Self {
+        self.reader_factory.clear();
         self.options.global.schema_force_view_types = use_views;
         self
+    }
+
+    /// Returns the current [`ParquetFileReaderFactory`], if a [runtime environment is set](`Self::with_runtime_env`)
+    ///
+    /// This may create it if it was not accessed before.
+    pub fn reader_factory(
+        &self,
+        object_store_url: ObjectStoreUrl,
+    ) -> Result<Option<Arc<dyn ParquetFileReaderFactory>>> {
+        let cache_metadata = self.options.global.cache_metadata;
+        self.runtime_env
+            .as_ref()
+            .map(|runtime_env| {
+                let store = runtime_env.object_store(&object_store_url)?;
+                Ok(Arc::clone(
+                    &self
+                        .reader_factory
+                        .entry(object_store_url.clone())
+                        .or_insert_with(|| match cache_metadata {
+                            false => {
+                                Arc::new(DefaultParquetFileReaderFactory::new(store))
+                            }
+                            true => Arc::new(CachedParquetFileReaderFactory::new(store)),
+                        }),
+                ))
+            })
+            .transpose()
     }
 }
 
@@ -378,8 +430,13 @@ impl FileFormat for ParquetFormat {
         conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let object_store_url = conf.object_store_url.clone();
         let mut builder =
             ParquetExecBuilder::new_with_options(conf, self.options.clone());
+
+        if let Some(reader_factory) = self.reader_factory(object_store_url)? {
+            builder = builder.with_parquet_file_reader_factory(reader_factory);
+        }
 
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
@@ -1303,8 +1360,6 @@ mod tests {
     use datafusion_common::config::ParquetOptions;
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Utf8;
-    use datafusion_execution::object_store::ObjectStoreUrl;
-    use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use futures::stream::BoxStream;
     use log::error;

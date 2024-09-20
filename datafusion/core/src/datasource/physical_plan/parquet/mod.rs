@@ -60,7 +60,10 @@ use crate::datasource::schema_adapter::{
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
-pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
+pub use reader::{
+    CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
+    ParquetFileReaderFactory,
+};
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use writer::plan_to_parquet;
 
