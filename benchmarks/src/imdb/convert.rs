@@ -74,7 +74,7 @@ impl ConvertOpt {
             let selection = csv
                 .schema()
                 .iter()
-                .take(schema.fields.len() - 1)
+                .take(schema.fields.len())
                 .map(Expr::from)
                 .collect();
 
