@@ -1,0 +1,818 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query T
+SELECT substr('alphabet', -3)
+----
+alphabet
+
+query T
+SELECT substr('alphabet', 0)
+----
+alphabet
+
+query T
+SELECT substr('alphabet', 1)
+----
+alphabet
+
+query T
+SELECT substr('alphabet', 2)
+----
+lphabet
+
+query T
+SELECT substr('alphabet', 3)
+----
+phabet
+
+query T
+SELECT substr('alphabet', 30)
+----
+(empty)
+
+query T
+SELECT substr('alphabet', 3, 2)
+----
+ph
+
+query T
+SELECT substr('alphabet', 3, 20)
+----
+phabet
+
+query TT
+select
+    substr(arrow_cast('alphabet', 'LargeUtf8'), 3, 20),
+    substr(arrow_cast('alphabet', 'Utf8View'), 3, 20);
+----
+phabet phabet
+
+# test range ouside of string length
+query TTTTTTTTTTTT
+SELECT
+    substr('hi🌏', 1, 3),
+    substr('hi🌏', 1, 4),
+    substr('hi🌏', 1, 100),
+    substr('hi🌏', 0, 1),
+    substr('hi🌏', 0, 2),
+    substr('hi🌏', 0, 4),
+    substr('hi🌏', 0, 5),
+    substr('hi🌏', -10, 100),
+    substr('hi🌏', -10, 12),
+    substr('hi🌏', -10, 5),
+    substr('hi🌏', 10, 0),
+    substr('hi🌏', 10, 10);
+----
+hi🌏 hi🌏 hi🌏 (empty) h hi🌏 hi🌏 hi🌏 h (empty) (empty) (empty)
+
+query TTTTTTTTTTTT
+SELECT
+    substr('', 1, 3),
+    substr('', 1, 4),
+    substr('', 1, 100),
+    substr('', 0, 1),
+    substr('', 0, 2),
+    substr('', 0, 4),
+    substr('', 0, 5),
+    substr('', -10, 100),
+    substr('', -10, 12),
+    substr('', -10, 5),
+    substr('', 10, 0),
+    substr('', 10, 10);
+----
+(empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty)
+
+# Nulls
+query TTTTTTTTTT
+SELECT
+  substr('alphabet', NULL),
+  substr(NULL, 1),
+  substr(NULL, NULL),
+  substr('alphabet', CAST(NULL AS int), -20),
+  substr('alphabet', 3, CAST(NULL AS int)),
+  substr(NULL, 3, -4),
+  substr(NULL, NULL, 4),
+  substr(NULL, 1, NULL),
+  substr('', NULL, NULL),
+  substr(NULL, NULL, NULL);
+----
+NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
+
+query T
+SELECT substr('Hello🌏世界', 5)
+----
+o🌏世界
+
+query T
+SELECT substr('Hello🌏世界', 5, 3)
+----
+o🌏世
+
+statement error The first argument of the substr function can only be a string, but got Int64
+SELECT substr(1, 3)
+
+statement error The first argument of the substr function can only be a string, but got Int64
+SELECT substr(1, 3, 4)
+
+statement error Execution error: negative substring length not allowed
+select substr(arrow_cast('foo', 'Utf8View'), 1, -1);
+
+statement error Execution error: negative substring length not allowed
+select substr('', 1, -1);
+
+# StringView scalar to StringView scalar
+
+query BBBB
+select
+  arrow_cast('NULL', 'Utf8View') = arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('NULL', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Andrew', 'Utf8View') = arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Xiangpeng', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View');
+----
+false true true true
+
+
+query II
+SELECT
+  ASCII('hello'),
+  ASCII(arrow_cast('world', 'Utf8View'))
+----
+104 119
+
+query III
+SELECT
+  ASCII(arrow_cast('äöüß', 'Utf8View')) as c1,
+  ASCII(arrow_cast('', 'Utf8View')) as c2,
+  ASCII(arrow_cast(NULL, 'Utf8View')) as c3
+----
+228 0 NULL
+
+# coercion from stringview to integer, as input to make_date
+query D
+select make_date(arrow_cast('2024', 'Utf8View'), arrow_cast('01', 'Utf8View'), arrow_cast('23', 'Utf8View'))
+----
+2024-01-23
+
+query I
+SELECT character_length('')
+----
+0
+
+query I
+SELECT character_length('chars')
+----
+5
+
+query I
+SELECT character_length('josé')
+----
+4
+
+query I
+SELECT character_length(NULL)
+----
+NULL
+
+query B
+SELECT ends_with('foobar', 'bar')
+----
+true
+
+query B
+SELECT ends_with('foobar', 'foo')
+----
+false
+
+query I
+SELECT levenshtein('kitten', 'sitting')
+----
+3
+
+query I
+SELECT levenshtein('kitten', NULL)
+----
+NULL
+
+query I
+SELECT levenshtein(NULL, 'sitting')
+----
+NULL
+
+query I
+SELECT levenshtein(NULL, NULL)
+----
+NULL
+
+
+query T
+SELECT lpad('hi', -1, 'xy')
+----
+(empty)
+
+query T
+SELECT lpad('hi', 5, 'xy')
+----
+xyxhi
+
+query T
+SELECT lpad('hi', -1)
+----
+(empty)
+
+query T
+SELECT lpad('hi', 0)
+----
+(empty)
+
+query T
+SELECT lpad('hi', 21, 'abcdef')
+----
+abcdefabcdefabcdefahi
+
+query T
+SELECT lpad('hi', 5, 'xy')
+----
+xyxhi
+
+query T
+SELECT lpad('hi', 5, NULL)
+----
+NULL
+
+query T
+SELECT lpad('hi', 5)
+----
+   hi
+
+query T
+SELECT lpad('hi', CAST(NULL AS INT), 'xy')
+----
+NULL
+
+query T
+SELECT lpad('hi', CAST(NULL AS INT))
+----
+NULL
+
+query T
+SELECT lpad('xyxhi', 3)
+----
+xyx
+
+query T
+SELECT lpad(NULL, 0)
+----
+NULL
+
+query T
+SELECT lpad(NULL, 5, 'xy')
+----
+NULL
+
+query T
+SELECT regexp_replace('foobar', 'bar', 'xx', 'gi')
+----
+fooxx
+
+query T
+SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'xx', 'gi')
+----
+fooxx
+
+query T
+SELECT repeat('foo', 3)
+----
+foofoofoo
+
+query T
+SELECT repeat(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 3)
+----
+foofoofoo
+
+
+query T
+SELECT replace('foobar', 'bar', 'hello')
+----
+foohello
+
+query T
+SELECT replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'hello')
+----
+foohello
+
+query T
+SELECT replace(arrow_cast('foobar', 'Utf8View'), arrow_cast('bar', 'Utf8View'), arrow_cast('hello', 'Utf8View'))
+----
+foohello
+
+query T
+SELECT replace(arrow_cast('foobar', 'LargeUtf8'), arrow_cast('bar', 'LargeUtf8'), arrow_cast('hello', 'LargeUtf8'))
+----
+foohello
+
+
+query T
+SELECT reverse('abcde')
+----
+edcba
+
+query T
+SELECT reverse(arrow_cast('abcde', 'LargeUtf8'))
+----
+edcba
+
+query T
+SELECT reverse(arrow_cast('abcde', 'Utf8View'))
+----
+edcba
+
+query T
+SELECT reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'))
+----
+edcba
+
+query T
+SELECT reverse('loẅks')
+----
+sk̈wol
+
+query T
+SELECT reverse(arrow_cast('loẅks', 'LargeUtf8'))
+----
+sk̈wol
+
+query T
+SELECT reverse(arrow_cast('loẅks', 'Utf8View'))
+----
+sk̈wol
+
+query T
+SELECT reverse(NULL)
+----
+NULL
+
+query T
+SELECT reverse(arrow_cast(NULL, 'LargeUtf8'))
+----
+NULL
+
+query T
+SELECT reverse(arrow_cast(NULL, 'Utf8View'))
+----
+NULL
+
+
+query I
+SELECT strpos('abc', 'c')
+----
+3
+
+query I
+SELECT strpos('josé', 'é')
+----
+4
+
+query I
+SELECT strpos('joséésoj', 'so')
+----
+6
+
+query I
+SELECT strpos('joséésoj', 'abc')
+----
+0
+
+query I
+SELECT strpos(NULL, 'abc')
+----
+NULL
+
+query I
+SELECT strpos('joséésoj', NULL)
+----
+NULL
+
+
+
+query T
+SELECT rpad('hi', -1, 'xy')
+----
+(empty)
+
+query T
+SELECT rpad('hi', 5, 'xy')
+----
+hixyx
+
+query T
+SELECT rpad('hi', -1)
+----
+(empty)
+
+query T
+SELECT rpad('hi', 0)
+----
+(empty)
+
+query T
+SELECT rpad('hi', 21, 'abcdef')
+----
+hiabcdefabcdefabcdefa
+
+query T
+SELECT rpad('hi', 5, 'xy')
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast('hi', 'Dictionary(Int32, Utf8)'), 5, 'xy')
+----
+hixyx
+
+query T
+SELECT rpad('hi', 5, NULL)
+----
+NULL
+
+query T
+SELECT rpad('hi', 5)
+----
+hi
+
+query T
+SELECT rpad('hi', CAST(NULL AS INT), 'xy')
+----
+NULL
+
+query T
+SELECT rpad('hi', CAST(NULL AS INT))
+----
+NULL
+
+query T
+SELECT rpad('xyxhi', 3)
+----
+xyx
+
+# test for rpad with largeutf8 and utf8View
+
+query T
+SELECT rpad(arrow_cast('hi', 'LargeUtf8'), 5, 'xy')
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast('hi', 'Utf8View'), 5, 'xy')
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast('hi', 'LargeUtf8'), 5, arrow_cast('xy', 'LargeUtf8'))
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast('hi', 'Utf8View'), 5, arrow_cast('xy', 'Utf8View'))
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast(NULL, 'Utf8View'), 5, 'xy')
+----
+NULL
+
+query I
+SELECT char_length('')
+----
+0
+
+query I
+SELECT char_length('chars')
+----
+5
+
+query I
+SELECT char_length('josé')
+----
+4
+
+query I
+SELECT char_length(NULL)
+----
+NULL
+
+# Test substring_index using '.' as delimiter
+# This query is compatible with MySQL(8.0.19 or later), convenient for comparing results
+query TIT
+SELECT str, n, substring_index(str, '.', n) AS c FROM
+  (VALUES
+    ROW('arrow.apache.org'),
+    ROW('.'),
+    ROW('...'),
+    ROW(NULL)
+  ) AS strings(str),
+  (VALUES
+    ROW(1),
+    ROW(2),
+    ROW(3),
+    ROW(100),
+    ROW(-1),
+    ROW(-2),
+    ROW(-3),
+    ROW(-100)
+  ) AS occurrences(n)
+ORDER BY str DESC, n;
+----
+NULL -100 NULL
+NULL -3 NULL
+NULL -2 NULL
+NULL -1 NULL
+NULL 1 NULL
+NULL 2 NULL
+NULL 3 NULL
+NULL 100 NULL
+arrow.apache.org -100 arrow.apache.org
+arrow.apache.org -3 arrow.apache.org
+arrow.apache.org -2 apache.org
+arrow.apache.org -1 org
+arrow.apache.org 1 arrow
+arrow.apache.org 2 arrow.apache
+arrow.apache.org 3 arrow.apache.org
+arrow.apache.org 100 arrow.apache.org
+... -100 ...
+... -3 ..
+... -2 .
+... -1 (empty)
+... 1 (empty)
+... 2 .
+... 3 ..
+... 100 ...
+. -100 .
+. -3 .
+. -2 .
+. -1 (empty)
+. 1 (empty)
+. 2 .
+. 3 .
+. 100 .
+
+# Test substring_index using '.' as delimiter with utf8view
+query TIT
+SELECT str, n, substring_index(arrow_cast(str, 'Utf8View'), '.', n) AS c FROM
+  (VALUES
+    ROW('arrow.apache.org'),
+    ROW('.'),
+    ROW('...'),
+    ROW(NULL)
+  ) AS strings(str),
+  (VALUES
+    ROW(1),
+    ROW(2),
+    ROW(3),
+    ROW(100),
+    ROW(-1),
+    ROW(-2),
+    ROW(-3),
+    ROW(-100)
+  ) AS occurrences(n)
+ORDER BY str DESC, n;
+----
+NULL -100 NULL
+NULL -3 NULL
+NULL -2 NULL
+NULL -1 NULL
+NULL 1 NULL
+NULL 2 NULL
+NULL 3 NULL
+NULL 100 NULL
+arrow.apache.org -100 arrow.apache.org
+arrow.apache.org -3 arrow.apache.org
+arrow.apache.org -2 apache.org
+arrow.apache.org -1 org
+arrow.apache.org 1 arrow
+arrow.apache.org 2 arrow.apache
+arrow.apache.org 3 arrow.apache.org
+arrow.apache.org 100 arrow.apache.org
+... -100 ...
+... -3 ..
+... -2 .
+... -1 (empty)
+... 1 (empty)
+... 2 .
+... 3 ..
+... 100 ...
+. -100 .
+. -3 .
+. -2 .
+. -1 (empty)
+. 1 (empty)
+. 2 .
+. 3 .
+. 100 .
+
+# Test substring_index using 'ac' as delimiter
+query TIT
+SELECT str, n, substring_index(str, 'ac', n) AS c FROM
+  (VALUES
+    -- input string does not contain the delimiter
+    ROW('arrow'),
+    -- input string contains the delimiter
+    ROW('arrow.apache.org')
+  ) AS strings(str),
+  (VALUES
+    ROW(1),
+    ROW(2),
+    ROW(-1),
+    ROW(-2)
+  ) AS occurrences(n)
+ORDER BY str DESC, n;
+----
+arrow.apache.org -2 arrow.apache.org
+arrow.apache.org -1 he.org
+arrow.apache.org 1 arrow.ap
+arrow.apache.org 2 arrow.apache.org
+arrow -2 arrow
+arrow -1 arrow
+arrow 1 arrow
+arrow 2 arrow
+
+# Test substring_index with NULL values
+query TTTT
+SELECT
+  substring_index(NULL, '.', 1),
+  substring_index('arrow.apache.org', NULL, 1),
+  substring_index('arrow.apache.org', '.', NULL),
+  substring_index(NULL, NULL, NULL)
+----
+NULL NULL NULL NULL
+
+# Test substring_index with empty strings
+query TT
+SELECT
+  -- input string is empty
+  substring_index('', '.', 1),
+  -- delimiter is empty
+  substring_index('arrow.apache.org', '', 1)
+----
+(empty) (empty)
+
+# Test substring_index with 0 occurrence
+query T
+SELECT substring_index('arrow.apache.org', 'ac', 0)
+----
+(empty)
+
+# Test substring_index with large occurrences
+query TT
+SELECT
+  -- i64::MIN
+  substring_index('arrow.apache.org', '.', -9223372036854775808) as c1,
+  -- i64::MAX
+  substring_index('arrow.apache.org', '.', 9223372036854775807) as c2;
+----
+arrow.apache.org arrow.apache.org
+
+# Test substring_index issue https://github.com/apache/datafusion/issues/9472
+query TTT
+SELECT
+  url,
+  substring_index(url, '.', 1) AS subdomain,
+  substring_index(url, '.', -1) AS tld
+FROM
+  (VALUES ROW('docs.apache.com'),
+          ROW('community.influxdata.com'),
+          ROW('arrow.apache.org')
+  ) data(url)
+----
+docs.apache.com docs com
+community.influxdata.com community com
+arrow.apache.org arrow org
+
+
+# find_in_set tests
+query I
+SELECT find_in_set('b', 'a,b,c,d')
+----
+2
+
+
+query I
+SELECT find_in_set('a', 'a,b,c,d,a')
+----
+1
+
+query I
+SELECT find_in_set('', 'a,b,c,d,a')
+----
+0
+
+query I
+SELECT find_in_set('a', '')
+----
+0
+
+
+query I
+SELECT find_in_set('', '')
+----
+1
+
+query I
+SELECT find_in_set(NULL, 'a,b,c,d')
+----
+NULL
+
+query I
+SELECT find_in_set('a', NULL)
+----
+NULL
+
+
+query I
+SELECT find_in_set(NULL, NULL)
+----
+NULL
+
+# find_in_set tests with utf8view
+query I
+SELECT find_in_set(arrow_cast('b', 'Utf8View'), 'a,b,c,d')
+----
+2
+
+
+query I
+SELECT find_in_set('a', arrow_cast('a,b,c,d,a', 'Utf8View'))
+----
+1
+
+query I
+SELECT find_in_set(arrow_cast('', 'Utf8View'), arrow_cast('a,b,c,d,a', 'Utf8View'))
+----
+0
+
+
+query T
+SELECT split_part('foo_bar', '_', 2)
+----
+bar
+
+query T
+SELECT split_part(arrow_cast('foo_bar', 'Dictionary(Int32, Utf8)'), '_', 2)
+----
+bar
+
+# test largeutf8, utf8view for split_part
+query T
+SELECT split_part(arrow_cast('large_apple_large_orange_large_banana', 'LargeUtf8'), '_', 3)
+----
+large
+
+query T
+SELECT split_part(arrow_cast('view_apple_view_orange_view_banana', 'Utf8View'), '_', 3);
+----
+view
+
+query T
+SELECT split_part('test_large_split_large_case', arrow_cast('_large', 'LargeUtf8'), 2)
+----
+_split
+
+query T
+SELECT split_part(arrow_cast('huge_large_apple_large_orange_large_banana', 'LargeUtf8'), arrow_cast('_', 'Utf8View'), 2)
+----
+large
+
+query T
+SELECT split_part(arrow_cast('view_apple_view_large_banana', 'Utf8View'), arrow_cast('_large', 'LargeUtf8'), 2)
+----
+_banana
+
+query T
+SELECT split_part(NULL, '_', 2)
+----
+NULL
+
+query B
+SELECT starts_with('foobar', 'foo')
+----
+true
+
+query B
+SELECT starts_with('foobar', 'bar')
+----
+false
