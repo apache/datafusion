@@ -956,13 +956,25 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
             }
             ScalarValue::Float16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Float32(Some(f)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
-            }
+            ScalarValue::Float32(Some(f)) => Ok(ast::Expr::Cast {
+                kind: ast::CastKind::Cast,
+                expr: Box::new(ast::Expr::Value(ast::Value::Number(
+                    f.to_string(),
+                    false,
+                ))),
+                data_type: self.arrow_dtype_to_ast_dtype(&DataType::Float32)?,
+                format: None,
+            }),
             ScalarValue::Float32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Float64(Some(f)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
-            }
+            ScalarValue::Float64(Some(f)) => Ok(ast::Expr::Cast {
+                kind: ast::CastKind::Cast,
+                expr: Box::new(ast::Expr::Value(ast::Value::Number(
+                    f.to_string(),
+                    false,
+                ))),
+                data_type: self.arrow_dtype_to_ast_dtype(&DataType::Float64)?,
+                format: None,
+            }),
             ScalarValue::Float64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Decimal128(Some(value), precision, scale) => {
                 Ok(ast::Expr::Value(ast::Value::Number(
@@ -2181,6 +2193,51 @@ mod tests {
 
             let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
 
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn test_float64_scalar_to_expr() {
+        let tests = [
+            (
+                Expr::Literal(ScalarValue::Float64(Some(3f64))),
+                sqlparser::ast::DataType::Double,
+                "CAST(3 AS DOUBLE)",
+            ),
+            (
+                Expr::Literal(ScalarValue::Float64(Some(3f64))),
+                sqlparser::ast::DataType::DoublePrecision,
+                "CAST(3 AS DOUBLE PRECISION)",
+            ),
+        ];
+        for (value, float64_ast_dtype, expected) in tests {
+            let dialect = CustomDialectBuilder::new()
+                .with_float64_ast_dtype(float64_ast_dtype)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn test_float32_scalar_to_expr() {
+        let tests = [(
+            Expr::Literal(ScalarValue::Float32(Some(3f32))),
+            "CAST(3 AS FLOAT)",
+        )];
+
+        for (value, expected) in tests {
+            let dialect = CustomDialectBuilder::new().build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
             let actual = format!("{ast}");
 
             assert_eq!(actual, expected);
