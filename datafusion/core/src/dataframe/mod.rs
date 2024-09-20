@@ -1676,6 +1676,7 @@ impl DataFrame {
     }
 }
 
+#[derive(Debug)]
 struct DataFrameTableProvider {
     plan: LogicalPlan,
 }

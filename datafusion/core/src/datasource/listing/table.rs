@@ -645,6 +645,7 @@ impl ListingOptions {
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
     /// File fields only

@@ -1830,6 +1830,7 @@ mod tests {
 
     #[test]
     fn test_streaming_table_after_projection() -> Result<()> {
+        #[derive(Debug)]
         struct DummyStreamPartition {
             schema: SchemaRef,
         }
