@@ -15,58 +15,36 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# --------------------------------------
-# Test `substr()` with literal arguments
-# --------------------------------------
-include ./substr_literal.slt.part
+include ./init_data.slt.part
 
 # --------------------------------------
-# Setup test tables with different physical string types (Utf8/Utf8View/LargeUtf8)
-# and repeat tests in `substr_table.slt.part`
+# Setup test tables with different physical string types
+# and repeat tests in `string_query.slt.part`
 # --------------------------------------
 statement ok
-create table test_substr_base (
-    col1 VARCHAR
-) as values ('foo'), ('hello🌏世界'), ('💩'), ('ThisIsAVeryLongASCIIString'), (''), (NULL);
+create table test_basic_operator as
+select
+    arrow_cast(column1, 'Utf8') as ascii_1,
+    arrow_cast(column2, 'Utf8') as ascii_2,
+    arrow_cast(column3, 'Utf8') as unicode_1,
+    arrow_cast(column4, 'Utf8') as unicode_2
+from test_source;
 
-#
-# Run1: Utf8
-#
 statement ok
 create table test_substr as
 select arrow_cast(col1, 'Utf8') as c1 from test_substr_base;
 
-include ./substr_table.slt.part
+#
+# common test for string-like functions and operators
+#
+include ./string_query.slt.part
+
+#
+# Clean up
+#
+
+statement ok
+drop table test_basic_operator;
 
 statement ok
 drop table test_substr;
-
-#
-# Run2: Utf8View
-#
-statement ok
-create table test_substr as
-select arrow_cast(col1, 'Utf8View') as c1 from test_substr_base;
-
-include ./substr_table.slt.part
-
-statement ok
-drop table test_substr;
-
-#
-# Run3: LargeUtf8
-#
-statement ok
-create table test_substr as
-select arrow_cast(col1, 'LargeUtf8') as c1 from test_substr_base;
-
-include ./substr_table.slt.part
-
-statement ok
-drop table test_substr;
-
-# --------------------------------------
-# Cleanup
-# --------------------------------------
-statement ok
-drop table test_substr_base;
