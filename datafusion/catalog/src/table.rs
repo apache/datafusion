@@ -194,6 +194,7 @@ pub trait TableProvider: Debug + Sync + Send {
     /// # use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
     /// # use datafusion_physical_plan::ExecutionPlan;
     /// // Define a struct that implements the TableProvider trait
+    /// #[derive(Debug)]
     /// struct TestDataSource {}
     ///
     /// #[async_trait]
