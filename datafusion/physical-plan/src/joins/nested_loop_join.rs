@@ -656,7 +656,7 @@ fn join_left_and_right_batch(
         build_join_indices(left_batch, right_batch, filter, indices_cache).map_err(
             |e| {
                 exec_datafusion_err!(
-                    "Fail to build join indices in NestedLoopJoinExec, error:{e}"
+                    "Fail to build join indices in NestedLoopJoinExec, error: {e}"
                 )
             },
         )?;
