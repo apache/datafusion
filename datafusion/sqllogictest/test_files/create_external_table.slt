@@ -242,9 +242,18 @@ EXPLAIN SELECT id FROM t ORDER BY id ASC;
 logical_plan
 01)Sort: t.id ASC NULLS LAST
 02)--TableScan: t projection=[id]
+physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST]
+
+## Test a DESC order and verify that output_ordering is ASC from the previous OBRDER BY
+query TT
+EXPLAIN SELECT id FROM t ORDER BY id DESC;
+----
+logical_plan
+01)Sort: t.id DESC NULLS FIRST
+02)--TableScan: t projection=[id]
 physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC]
+01)SortExec: expr=[id@0 DESC], preserve_partitioning=[false]
+02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST]
 
 statement ok
 DROP TABLE t;
