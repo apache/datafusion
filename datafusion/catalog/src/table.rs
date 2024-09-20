@@ -214,7 +214,7 @@ pub trait TableProvider: Debug + Sync + Send {
     ///             // This example only supports a between expr with a single column named "c1".
     ///             Expr::Between(between_expr) => {
     ///                 between_expr.expr
-    ///                 .try_into_col()
+    ///                 .try_as_col()
     ///                 .map(|column| {
     ///                     if column.name == "c1" {
     ///                         TableProviderFilterPushDown::Exact
