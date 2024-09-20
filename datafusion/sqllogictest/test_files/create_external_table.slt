@@ -235,6 +235,34 @@ OPTIONS (
 statement ok
 CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (id);
 
+## Verify that the table is created with a sort order. Explain should show output_ordering=[id@0 ASC]
+query TT
+EXPLAIN SELECT id FROM t ORDER BY id ASC;
+----
+logical_plan
+01)Sort: t.id ASC NULLS LAST
+02)--TableScan: t projection=[id]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC]
+
+statement ok
+DROP TABLE t;
+
+# Create table with non default sort order
+statement ok
+CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (id DESC NULLS FIRST);
+
+## Verify that the table is created with a sort order. Explain should show output_ordering=[id@0 DESC NULLS FIRST]
+query TT
+EXPLAIN SELECT id FROM t;
+----
+logical_plan TableScan: t projection=[id]
+physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 DESC]
+
+statement ok
+DROP TABLE t;
+
 # query should fail with bad column
-statement error
+statement error DataFusion error: Error during planning: Column foo is not in schema
 CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (foo);
