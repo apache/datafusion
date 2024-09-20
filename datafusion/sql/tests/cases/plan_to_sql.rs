@@ -622,8 +622,11 @@ fn test_pretty_roundtrip() -> Result<()> {
     Ok(())
 }
 
-fn sql_round_trip(query: &str, expect: &str) {
-    let statement = Parser::new(&GenericDialect {})
+fn sql_round_trip<D>(dialect: D, query: &str, expect: &str)
+where
+    D: Dialect,
+{
+    let statement = Parser::new(&dialect)
         .try_with_sql(query)
         .unwrap()
         .parse_statement()
@@ -817,6 +820,7 @@ fn test_table_scan_pushdown() -> Result<()> {
 #[test]
 fn test_interval_lhs_eq() {
     sql_round_trip(
+        GenericDialect {},
         "select interval '2 seconds' = interval '2 seconds'",
         "SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')",
     );
@@ -825,7 +829,23 @@ fn test_interval_lhs_eq() {
 #[test]
 fn test_interval_lhs_lt() {
     sql_round_trip(
+        GenericDialect {},
         "select interval '2 seconds' < interval '2 seconds'",
         "SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')",
     );
+}
+
+#[test]
+fn test_without_offset() {
+    sql_round_trip(MySqlDialect {}, "select 1", "SELECT 1");
+}
+
+#[test]
+fn test_with_offset0() {
+    sql_round_trip(MySqlDialect {}, "select 1 offset 0", "SELECT 1");
+}
+
+#[test]
+fn test_with_offset95() {
+    sql_round_trip(MySqlDialect {}, "select 1 offset 95", "SELECT 1 OFFSET 95");
 }
