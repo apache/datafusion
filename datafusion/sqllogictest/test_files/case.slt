@@ -146,6 +146,11 @@ SELECT CASE 1 WHEN 1 THEN arrow_cast([1,2,3], 'LargeList(Int64)') WHEN 2 THEN ar
 ----
 [1, 2, 3]
 
+query ?
+SELECT CASE 1 WHEN 1 THEN arrow_cast([1, 2], 'FixedSizeList(2, Int64)') WHEN 2 THEN arrow_cast(['1', '2', '3'], 'FixedSizeList(3, Utf8)') ELSE null END;
+----
+[1, 2]
+
 query error DataFusion error: type_coercion
 SELECT CASE 1 WHEN 1 THEN [1,2,3] WHEN 2 THEN 'test' ELSE null END;
 
