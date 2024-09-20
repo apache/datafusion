@@ -322,6 +322,21 @@ impl Unparser<'_> {
                     ))));
                 }
 
+                if limit.skip > 0 {
+                    let Some(query) = query.as_mut() else {
+                        return internal_err!(
+                            "Offset operator only valid in a statement context."
+                        );
+                    };
+                    query.offset(Some(ast::Offset {
+                        rows: ast::OffsetRows::None,
+                        value: ast::Expr::Value(ast::Value::Number(
+                            limit.skip.to_string(),
+                            false,
+                        )),
+                    }));
+                }
+
                 self.select_to_sql_recursively(
                     limit.input.as_ref(),
                     query,
