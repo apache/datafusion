@@ -184,7 +184,7 @@ impl DataFrame {
     }
 
     /// Creates logical expression from a SQL query text.
-    /// The expression is created and processed againt the current schema.
+    /// The expression is created and processed against the current schema.
     ///
     /// # Example: Parsing SQL queries
     /// ```
@@ -225,7 +225,12 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.select_columns(&["a", "b"])?;
+    /// df.select_columns(&["a", "b"])?.show().await?;
+    /// // +----+----+
+    /// // | a  | b  |
+    /// // +----+----+
+    /// // | 1  | 2  |
+    /// // +----+----+
     /// # Ok(())
     /// # }
     /// ```
@@ -258,7 +263,12 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.select(vec![col("a") * col("b"), col("c")])?;
+    /// df.select(vec![col("a"), col("b") * col("c")])?.show().await?;
+    /// // +---+-----------------------+
+    /// // | a | ?table?.b * ?table?.c |
+    /// // +---+-----------------------+
+    /// // | 1 | 6                     |
+    /// // +---+-----------------------+
     /// # Ok(())
     /// # }
     /// ```
@@ -286,7 +296,17 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.drop_columns(&["a"])?;
+    /// // +----+----+----+
+    /// // | a  | b  | c  |
+    /// // +----+----+----+
+    /// // | 1  | 2  | 3  |
+    /// // +----+----+----+
+    /// df.drop_columns(&["a"])?.show().await?;
+    /// // +----+----+
+    /// // | b  | c  |
+    /// // +----+----+
+    /// // | 2  | 3  |
+    /// // +----+----+
     /// # Ok(())
     /// # }
     /// ```
@@ -348,7 +368,18 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_json("tests/data/unnest.json", NdJsonReadOptions::default()).await?;
-    /// let df = df.unnest_columns(&["b","c","d"])?;
+    /// // expend into multiple columns if it's json array, flatten field name if it's nested structure
+    /// df.unnest_columns(&["b","c","d"])?.show().await?;
+    /// // +---+------+-------+-----+-----+
+    /// // | a | b    | c     | d.e | d.f |
+    /// // +---+------+-------+-----+-----+
+    /// // | 1 | 2.0  | false | 1   | 2   |
+    /// // | 1 | 1.3  | true  | 1   | 2   |
+    /// // | 1 | -6.1 |       | 1   | 2   |
+    /// // | 2 | 3.0  | false |     |     |
+    /// // | 2 | 2.3  | true  |     |     |
+    /// // | 2 | -7.1 |       |     |     |
+    /// // +---+------+-------+-----+-----+
     /// # Ok(())
     /// # }
     /// ```
@@ -389,8 +420,15 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.filter(col("a").lt_eq(col("b")))?;
+    /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
+    /// df.filter(col("a").lt_eq(col("b")))?.show().await?;
+    /// // +----+----+----+
+    /// // | a  | b  | c  |
+    /// // +----+----+----+
+    /// // | 1  | 2  | 3  |
+    /// // | 4  | 5  | 6  |
+    /// // | ............ |
+    /// // +----+----+----+
     /// # Ok(())
     /// # }
     /// ```
@@ -415,13 +453,24 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
     ///
     /// // The following use is the equivalent of "SELECT MIN(b) GROUP BY a"
-    /// let _ = df.clone().aggregate(vec![col("a")], vec![min(col("b"))])?;
-    ///
+    /// df.clone().aggregate(vec![col("a")], vec![min(col("b"))])?.show().await?;
+    /// // +---+----------------+
+    /// // | a | min(?table?.b) |
+    /// // +----+---------------+
+    /// // | 1 | 2              |
+    /// // | 4 | 5              |
+    /// // | .................. |
+    /// // +---+----------------+
     /// // The following use is the equivalent of "SELECT MIN(b)"
-    /// let _ = df.aggregate(vec![], vec![min(col("b"))])?;
+    /// df.aggregate(vec![], vec![min(col("b"))])?.show().await?;
+    /// // +----------------+
+    /// // | min(?table?.b) |
+    /// // +----------------+
+    /// // | 2              |
+    /// // +----------------+
     /// # Ok(())
     /// # }
     /// ```
@@ -464,9 +513,23 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.limit(0, Some(100))?;
-    /// # Ok(())
+    /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
+    /// // +---+---+---+
+    /// // | a | b | c |
+    /// // +---+---+---+
+    /// // | 1 | 2 | 3 |
+    /// // | 4 | 5 | 6 |
+    /// // | 7 | 8 | 9 |
+    /// // | ......... |
+    /// // +---+---+---+
+    /// let df = df.limit(1, Some(2))?;
+    /// // +---+---+---+
+    /// // | a | b | c |
+    /// // +---+---+---+
+    /// // | 4 | 5 | 6 |
+    /// // | 7 | 8 | 9 |
+    /// // +---+---+---+
+    /// # df.clone().show().await
     /// # }
     /// ```
     pub fn limit(self, skip: usize, fetch: Option<usize>) -> Result<DataFrame> {
@@ -491,9 +554,21 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// // +---+---+---+
+    /// // | a | b | c |
+    /// // +---+---+---+
+    /// // | 1 | 2 | 3 |
+    /// // +---+---+---+
+    /// # df.clone().show().await?;
     /// let d2 = df.clone();
     /// let df = df.union(d2)?;
-    /// # Ok(())
+    /// // +---+---+---+
+    /// // | a | b | c |
+    /// // +---+---+---+
+    /// // | 1 | 2 | 3 |
+    /// // | 1 | 2 | 3 |
+    /// // +---+---+---+
+    /// # df.show().await
     /// # }
     /// ```
     pub fn union(self, dataframe: DataFrame) -> Result<DataFrame> {
@@ -521,6 +596,13 @@ impl DataFrame {
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let d2 = df.clone();
     /// let df = df.union_distinct(d2)?;
+    /// // df2 are duplicate of df
+    /// # df.show().await?;
+    /// // +---+---+---+
+    /// // | a | b | c |
+    /// // +---+---+---+
+    /// // | 1 | 2 | 3 |
+    /// // +---+---+---+
     /// # Ok(())
     /// # }
     /// ```
@@ -544,7 +626,12 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.distinct()?;
+    /// df.distinct()?.show().await?;
+    /// // +---+---+---+
+    /// // | a | b | c |
+    /// // +---+---+---+
+    /// // | 1 | 2 | 3 |
+    /// // +---+---+---+
     /// # Ok(())
     /// # }
     /// ```
@@ -570,6 +657,12 @@ impl DataFrame {
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
     ///   // Return a single row (a, b) for each distinct value of a
     ///   .distinct_on(vec![col("a")], vec![col("a"), col("b")], None)?;
+    /// # df.show().await?;
+    /// // +---+---+
+    /// // | a | b |
+    /// // +---+---+
+    /// // | 1 | 2 |
+    /// // +---+---+
     /// # Ok(())
     /// # }
     /// ```
@@ -602,8 +695,19 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/tpch-csv/customer.csv", CsvReadOptions::new()).await?;
-    /// df.describe().await.unwrap();
-    ///
+    /// df.describe().await?.show().await?;
+    /// # // some output column are ignored
+    /// // +------------+--------------------+--------------------+------------------------------------+
+    /// // | describe   | c_custkey          | c_name             | c_address                          |
+    /// // +------------+--------------------+--------------------+------------------------------------+
+    /// // | count      | 9.0                | 9                  | 9                                  |
+    /// // | null_count | 0.0                | 0                  | 0                                  |
+    /// // | mean       | 6.0                | null               | null                               |
+    /// // | std        | 2.7386127875258306 | null               | null                               |
+    /// // | min        | 2.0                | Customer#000000002 | 6LrEaV6KR6PLVcgl2ArL Q3rqzLzcT1 v2 |
+    /// // | max        | 10.0               | Customer#000000010 | xKiAFTjUsCuxfeleNqefumTrjS         |
+    /// // | median     | 6.0                | null               | null                               |
+    /// // +------------+--------------------+--------------------+------------------------------------+
     /// # Ok(())
     /// # }
     /// ```
@@ -798,11 +902,19 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
     /// let df = df.sort(vec![
     ///   col("a").sort(true, true),   // a ASC, nulls first
     ///   col("b").sort(false, false), // b DESC, nulls last
     ///  ])?;
+    /// # df.show().await?;
+    /// // +----+----+----+
+    /// // | a  | b  | c  |
+    /// // +----+----+----+
+    /// // | 1  | 2  | 3  |
+    /// // | 4  | 5  | 6  |
+    /// // | ............ |
+    /// // +----+----+----+
     /// # Ok(())
     /// # }
     /// ```
@@ -844,7 +956,12 @@ impl DataFrame {
     /// // Perform the equivalent of `left INNER JOIN right ON (a = a2 AND b = b2)`
     /// // finding all pairs of rows from `left` and `right` where `a = a2` and `b = b2`.
     /// let join = left.join(right, JoinType::Inner, &["a", "b"], &["a2", "b2"], None)?;
-    /// let batches = join.collect().await?;
+    /// # join.show().await?;
+    /// // +---+---+---+----+----+----+
+    /// // | a | b | c | a2 | b2 | c2 |
+    /// // +---+---+---+----+----+----+
+    /// // | 1 | 2 | 3 | 1  | 2  | 3  |
+    /// // +---+---+---+----+----+----+
     /// # Ok(())
     /// # }
     /// ```
@@ -904,7 +1021,10 @@ impl DataFrame {
     ///     JoinType::Inner,
     ///     [col("a").not_eq(col("a2")), col("b").not_eq(col("b2"))],
     /// )?;
-    /// let batches = join_on.collect().await?;
+    /// join_on.show().await?;
+    /// // +---+---+---+----+----+----+
+    /// // | a | b | c | a2 | b2 | c2 |
+    /// // +---+---+---+----+----+----+
     /// # Ok(())
     /// # }
     /// ```
@@ -932,8 +1052,16 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
     /// let df1 = df.repartition(Partitioning::RoundRobinBatch(4))?;
+    /// # df1.show().await?;
+    /// // +----+----+----+
+    /// // | a  | b  | c  |
+    /// // +----+----+----+
+    /// // | 1  | 2  | 3  |
+    /// // | 4  | 5  | 6  |
+    /// // | ............ |
+    /// // +----+----+----+
     /// # Ok(())
     /// # }
     /// ```
@@ -960,7 +1088,7 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let count = df.count().await?;
+    /// let count = df.count().await?; // 1
     /// # Ok(())
     /// # }
     /// ```
@@ -1245,8 +1373,26 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let d2 = df.clone();
+    /// // +----+----+----+
+    /// // | a  | b  | c  |
+    /// // +----+----+----+
+    /// // | 1  | 2  | 3  |
+    /// // +----+----+----+
+    /// let d2 = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
+    /// // +----+----+----+
+    /// // | a  | b  | c  |
+    /// // +----+----+----+
+    /// // | 1  | 2  | 3  |
+    /// // | 4  | 5  | 6  |
+    /// // | ............ |
+    /// // +----+----+----+
     /// let df = df.intersect(d2)?;
+    /// df.show().await?;
+    /// // +----+----+----+
+    /// // | a  | b  | c  |
+    /// // +----+----+----+
+    /// // | 1  | 2  | 3  |
+    /// // +----+----+----+
     /// # Ok(())
     /// # }
     /// ```
@@ -1268,9 +1414,17 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let d2 = df.clone();
-    /// let df = df.except(d2)?;
+    /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
+    /// let d2 = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// df.except(d2)?.show().await?;
+    /// // those column are not in example.csv, but in example_long.csv
+    /// // +----+----+----+
+    /// // | a  | b  | c  |
+    /// // +----+----+----+
+    /// // | 4  | 5  | 6  |
+    /// // | 19 | 20 | 21 |
+    /// // | ............ |
+    /// // +----+----+----+
     /// # Ok(())
     /// # }
     /// ```
