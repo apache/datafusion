@@ -38,12 +38,25 @@ use crate::binary_map::OutputType;
 use crate::binary_map::INITIAL_BUFFER_CAPACITY;
 
 /// Trait for group values column-wise row comparison
+///
+/// Implementations of this trait store a in-progress collection of group values
+/// (similar to various builders in Arrow-rs) that allow for quick comparison to
+/// incoming rows.
+///
 pub trait ArrayRowEq: Send + Sync {
+    /// Returns equal if the row stored in this builder at `lhs_row` is equal to
+    /// the row in `array` at `rhs_row`
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
+    /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize);
+    /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
+    /// Returns true if this builder is empty
     fn is_empty(&self) -> bool;
+    /// Builds a new array from all of the stored rows
     fn build(self: Box<Self>) -> ArrayRef;
+    /// Builds a new array from the first `n` stored rows, shifting the
+    /// remaining rows to the start of the builder
     fn take_n(&mut self, n: usize) -> ArrayRef;
 }
 
