@@ -907,9 +907,21 @@ impl TableProvider for ListingTable {
             .schema()
             .logically_equivalent_names_and_types(&input.schema())
         {
+            // Return an error if schema of the input query does not match with the table schema.
             return plan_err!(
-                // Return an error if schema of the input query does not match with the table schema.
-                "Inserting query must have the same schema with the table."
+                "Inserting query must have the same schema with the table. \
+                Expected: {:?}, got: {:?}",
+                self.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>(),
+                input
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>()
             );
         }
 
@@ -1709,7 +1721,7 @@ mod tests {
             "100".into(),
         );
         config_map.insert(
-            "datafusion.execution.parquet.staistics_enabled".into(),
+            "datafusion.execution.parquet.statistics_enabled".into(),
             "none".into(),
         );
         config_map.insert(
@@ -1783,7 +1795,7 @@ mod tests {
             "100".into(),
         );
         config_map.insert(
-            "datafusion.execution.parquet.staistics_enabled".into(),
+            "datafusion.execution.parquet.statistics_enabled".into(),
             "none".into(),
         );
         config_map.insert(

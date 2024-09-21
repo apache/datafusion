@@ -838,10 +838,10 @@ LEFT JOIN department AS d
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 1 Alice HR
-2 Bob HR
 1 Alice Engineering
-2 Bob Engineering
 1 Alice Sales
+2 Bob HR
+2 Bob Engineering
 2 Bob Sales
 3 Carol NULL
 
@@ -853,10 +853,10 @@ RIGHT JOIN employees AS e
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 1 Alice HR
-2 Bob HR
 1 Alice Engineering
-2 Bob Engineering
 1 Alice Sales
+2 Bob HR
+2 Bob Engineering
 2 Bob Sales
 3 Carol NULL
 
@@ -868,10 +868,10 @@ FULL JOIN employees AS e
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 1 Alice HR
-2 Bob HR
 1 Alice Engineering
-2 Bob Engineering
 1 Alice Sales
+2 Bob HR
+2 Bob Engineering
 2 Bob Sales
 3 Carol NULL
 
@@ -1209,3 +1209,20 @@ drop table t1;
 
 statement ok
 drop table t2;
+
+# Test SQLancer issue: https://github.com/apache/datafusion/issues/12337
+statement ok
+create table t1(v1 int) as values(100);
+
+## Query with Ambiguous column reference
+query error DataFusion error: Schema error: Ambiguous reference to unqualified field v1
+select count(*)
+from t1
+right outer join t1
+on t1.v1 > 0;
+
+query error DataFusion error: Schema error: Ambiguous reference to unqualified field v1
+select t1.v1 from t1 join t1 using(v1) cross join (select struct('foo' as v1) as t1);
+
+statement ok
+drop table t1;

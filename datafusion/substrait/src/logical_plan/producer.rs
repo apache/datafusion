@@ -61,7 +61,9 @@ use substrait::proto::expression::literal::{
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
 use substrait::proto::read_rel::VirtualTable;
-use substrait::proto::{CrossRel, ExchangeRel};
+use substrait::proto::rel_common::EmitKind;
+use substrait::proto::rel_common::EmitKind::Emit;
+use substrait::proto::{rel_common, CrossRel, ExchangeRel, RelCommon};
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -219,9 +221,20 @@ pub fn to_substrait_rel(
                 .iter()
                 .map(|e| to_substrait_rex(ctx, e, p.input.schema(), 0, extensions))
                 .collect::<Result<Vec<_>>>()?;
+
+            let emit_kind = create_project_remapping(
+                expressions.len(),
+                p.input.as_ref().schema().fields().len(),
+            );
+            let common = RelCommon {
+                emit_kind: Some(emit_kind),
+                hint: None,
+                advanced_extension: None,
+            };
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(Box::new(ProjectRel {
-                    common: None,
+                    common: Some(common),
                     input: Some(to_substrait_rel(p.input.as_ref(), ctx, extensions)?),
                     expressions,
                     advanced_extension: None,
@@ -432,29 +445,15 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Window(window) => {
             let input = to_substrait_rel(window.input.as_ref(), ctx, extensions)?;
-            // If the input is a Project relation, we can just append the WindowFunction expressions
-            // before returning
-            // Otherwise, wrap the input in a Project relation before appending the WindowFunction
-            // expressions
-            let mut project_rel: Box<ProjectRel> = match &input.as_ref().rel_type {
-                Some(RelType::Project(p)) => Box::new(*p.clone()),
-                _ => {
-                    // Create Projection with field referencing all output fields in the input relation
-                    let expressions = (0..window.input.schema().fields().len())
-                        .map(substrait_field_ref)
-                        .collect::<Result<Vec<_>>>()?;
-                    Box::new(ProjectRel {
-                        common: None,
-                        input: Some(input),
-                        expressions,
-                        advanced_extension: None,
-                    })
-                }
-            };
-            // Parse WindowFunction expression
-            let mut window_exprs = vec![];
+
+            // create a field reference for each input field
+            let mut expressions = (0..window.input.schema().fields().len())
+                .map(substrait_field_ref)
+                .collect::<Result<Vec<_>>>()?;
+
+            // process and add each window function expression
             for expr in &window.window_expr {
-                window_exprs.push(to_substrait_rex(
+                expressions.push(to_substrait_rex(
                     ctx,
                     expr,
                     window.input.schema(),
@@ -462,8 +461,23 @@ pub fn to_substrait_rel(
                     extensions,
                 )?);
             }
-            // Append parsed WindowFunction expressions
-            project_rel.expressions.extend(window_exprs);
+
+            let emit_kind = create_project_remapping(
+                expressions.len(),
+                window.input.schema().fields().len(),
+            );
+            let common = RelCommon {
+                emit_kind: Some(emit_kind),
+                hint: None,
+                advanced_extension: None,
+            };
+            let project_rel = Box::new(ProjectRel {
+                common: Some(common),
+                input: Some(input),
+                expressions,
+                advanced_extension: None,
+            });
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(project_rel)),
             }))
@@ -551,6 +565,19 @@ pub fn to_substrait_rel(
         }
         _ => not_impl_err!("Unsupported operator: {plan}"),
     }
+}
+
+/// By default, a Substrait Project outputs all input fields followed by all expressions.
+/// A DataFusion Projection only outputs expressions. In order to keep the Substrait
+/// plan consistent with DataFusion, we must apply an output mapping that skips the input
+/// fields so that the Substrait Project will only output the expression fields.
+fn create_project_remapping(expr_count: usize, input_field_count: usize) -> EmitKind {
+    let expression_field_start = input_field_count;
+    let expression_field_end = expression_field_start + expr_count;
+    let output_mapping = (expression_field_start..expression_field_end)
+        .map(|i| i as i32)
+        .collect();
+    Emit(rel_common::Emit { output_mapping })
 }
 
 fn to_substrait_named_struct(
