@@ -205,7 +205,7 @@ where
         let arr = array.as_bytes::<B>();
         let rhs_elem: &[u8] = arr.value(rhs_row).as_ref();
         let rhs_elem_len = arr.value_length(rhs_row).as_usize();
-        assert_eq!(rhs_elem_len, rhs_elem.len());
+        debug_assert_eq!(rhs_elem_len, rhs_elem.len());
         let l = self.offsets[lhs_row].as_usize();
         let r = self.offsets[lhs_row + 1].as_usize();
         let existing_elem = unsafe { self.buffer.as_slice().get_unchecked(l..r) };
@@ -221,14 +221,14 @@ where
         // Sanity array type
         match self.output_type {
             OutputType::Binary => {
-                assert!(matches!(
+                debug_assert!(matches!(
                     column.data_type(),
                     DataType::Binary | DataType::LargeBinary
                 ));
                 self.equal_to_inner::<GenericBinaryType<O>>(lhs_row, column, rhs_row)
             }
             OutputType::Utf8 => {
-                assert!(matches!(
+                debug_assert!(matches!(
                     column.data_type(),
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
@@ -242,14 +242,14 @@ where
         // Sanity array type
         match self.output_type {
             OutputType::Binary => {
-                assert!(matches!(
+                debug_assert!(matches!(
                     column.data_type(),
                     DataType::Binary | DataType::LargeBinary
                 ));
                 self.append_val_inner::<GenericBinaryType<O>>(column, row)
             }
             OutputType::Utf8 => {
-                assert!(matches!(
+                debug_assert!(matches!(
                     column.data_type(),
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
