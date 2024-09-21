@@ -1343,6 +1343,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr-common",
  "datafusion-functions-aggregate-common",
+ "datafusion-functions-window-common",
  "datafusion-physical-expr-common",
  "paste",
  "serde_json",
@@ -1443,8 +1444,16 @@ version = "42.0.0"
 dependencies = [
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-functions-window-common",
  "datafusion-physical-expr-common",
  "log",
+]
+
+[[package]]
+name = "datafusion-functions-window-common"
+version = "42.0.0"
+dependencies = [
+ "datafusion-common",
 ]
 
 [[package]]
@@ -1537,6 +1546,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
+ "datafusion-functions-window-common",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "futures",
