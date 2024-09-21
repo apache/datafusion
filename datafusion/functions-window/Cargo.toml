@@ -40,6 +40,7 @@ path = "src/lib.rs"
 [dependencies]
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 log = { workspace = true }
 

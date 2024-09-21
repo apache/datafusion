@@ -785,6 +785,7 @@ fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
     use std::collections::HashMap;
     use std::fmt::Formatter;
     use std::ops::Add;
@@ -841,6 +842,16 @@ mod tests {
         fn with_exprs(mut self, exprs: Vec<Expr>) -> Self {
             self.exprs = exprs;
             self
+        }
+    }
+
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for NoOpUserDefined {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            match self.exprs.partial_cmp(&other.exprs) {
+                Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+                cmp => cmp,
+            }
         }
     }
 
@@ -906,6 +917,23 @@ mod tests {
                 schema,
                 left_child,
                 right_child,
+            }
+        }
+    }
+
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for UserDefinedCrossJoin {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            match self.exprs.partial_cmp(&other.exprs) {
+                Some(Ordering::Equal) => {
+                    match self.left_child.partial_cmp(&other.left_child) {
+                        Some(Ordering::Equal) => {
+                            self.right_child.partial_cmp(&other.right_child)
+                        }
+                        cmp => cmp,
+                    }
+                }
+                cmp => cmp,
             }
         }
     }

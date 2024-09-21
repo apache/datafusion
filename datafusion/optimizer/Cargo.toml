@@ -57,5 +57,6 @@ regex-syntax = "0.8.0"
 arrow-buffer = { workspace = true }
 ctor = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-window-common = { workspace = true }
 datafusion-sql = { workspace = true }
 env_logger = { workspace = true }
