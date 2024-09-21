@@ -35,7 +35,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
-use arrow::array::*;
+use arrow::{array::*, compute};
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
 use datafusion_common::utils::get_arrayref_at_indices;
@@ -1440,6 +1440,23 @@ impl GroupedHashAggregateStream {
 // /// ```
 // ///
 // /// [`GroupsAccumulator::convert_to_state`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
-// fn create_partitioned_filter() {
-//     BooleanBufferBuilder
-// }
+fn create_partitioned_filter() {
+    // We need a BooleanBuffer
+
+    // Firstly, we make sure the buffer is long enough
+
+
+    // Then we set the indexed slot to `true` if `equal to` partition_index, 
+    // and `false` if `not equal to`
+
+    // Finally, take `filter` into consider if it exists
+    //   - `buffer:true` + `filter:true` -> `buffer:true`
+    //   - `buffer:true` + `filter:false` -> `buffer:false`
+    //   - `buffer:true` + `filter:NULL` -> `buffer:NULL`
+    //   - `buffer:false` + `filter:true` -> `buffer:false`
+    //   - `buffer:false` + `filter:false` -> `buffer:false`
+    //   - `buffer:false` + `filter:NULL` -> `buffer:false`
+    let mut a = BooleanArray::from(vec![Some(true), Some(false), Some(true)]);
+    let buidler = a.into_data().into_builder();
+    compute::binary_mut(a, b, op)
+}
