@@ -554,7 +554,6 @@ logical_plan
 02)--TableScan: test projection=[column1_large_utf8, column2_large_utf8]
 
 ## Ensure no casts for CONCAT_WS
-## TODO https://github.com/apache/datafusion/issues/11837
 query TT
 EXPLAIN SELECT
   concat_ws(', ', column1_utf8view, column2_utf8view) as c
@@ -879,6 +878,96 @@ FROM test;
 logical_plan
 01)Projection: find_in_set(test.column1_utf8view, Utf8View("a,b,c,d")) AS c
 02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for binary operators
+# `~` operator (regex match)
+query TT
+EXPLAIN SELECT
+  column1_utf8view ~ 'an' AS c1
+FROM test;
+----
+logical_plan
+01)Projection: CAST(test.column1_utf8view AS Utf8) LIKE Utf8("%an%") AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+# `~*` operator (regex match case-insensitive)
+query TT
+EXPLAIN SELECT
+  column1_utf8view ~* '^a.{3}e' AS c1
+FROM test;
+----
+logical_plan
+01)Projection: CAST(test.column1_utf8view AS Utf8) ~* Utf8("^a.{3}e") AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+# `!~~` operator (not like match)
+query TT
+EXPLAIN SELECT
+  column1_utf8view !~~ 'xia_g%g' AS c1
+FROM test;
+----
+logical_plan
+01)Projection: CAST(test.column1_utf8view AS Utf8) !~~ Utf8("xia_g%g") AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+# `!~~*` operator (not like match case-insensitive)
+query TT
+EXPLAIN SELECT
+  column1_utf8view !~~* 'xia_g%g' AS c1
+FROM test;
+----
+logical_plan
+01)Projection: CAST(test.column1_utf8view AS Utf8) !~~* Utf8("xia_g%g") AS c1
+02)--TableScan: test projection=[column1_utf8view]
+
+# coercions between stringview and date types
+statement ok
+create table dates (dt date) as values
+    (date '2024-01-23'),
+    (date '2023-11-30');
+
+query D
+select t.dt from dates t where arrow_cast('2024-01-01', 'Utf8View') < t.dt;
+----
+2024-01-23
+
+statement ok
+drop table dates;
+
+### Tests for `||` with Utf8View specifically
+
+statement ok
+create table temp as values
+('value1', arrow_cast('rust', 'Utf8View'), arrow_cast('fast', 'Utf8View')),
+('value2', arrow_cast('datafusion', 'Utf8View'), arrow_cast('cool', 'Utf8View'));
+
+query TTT
+select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from temp;
+----
+Utf8 Utf8View Utf8View
+Utf8 Utf8View Utf8View
+
+query TT
+explain select column2 || 'is' || column3 from temp;
+----
+logical_plan
+01)Projection: temp.column2 || Utf8View("is") || temp.column3 AS temp.column2 || Utf8("is") || temp.column3
+02)--TableScan: temp projection=[column2, column3]
+
+# should not cast the column2 to utf8
+query TT
+explain select column2||' is fast' from temp;
+----
+logical_plan
+01)Projection: temp.column2 || Utf8View(" is fast") AS temp.column2 || Utf8(" is fast")
+02)--TableScan: temp projection=[column2]
+
+query TT
+explain select column2||column3 from temp;
+----
+logical_plan
+01)Projection: temp.column2 || temp.column3
+02)--TableScan: temp projection=[column2, column3]
 
 statement ok
 drop table test

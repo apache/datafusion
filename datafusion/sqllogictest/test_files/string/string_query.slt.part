@@ -592,3 +592,103 @@ FROM test_basic_operator;
 0 2 0 2
 0 3 0 3
 NULL NULL NULL NULL
+
+# --------------------------------------
+# Test || operator
+# --------------------------------------
+
+# || constants
+# expect all results to be the same for each row as they all have the same values
+query TTTT
+SELECT
+    ascii_1 || 'foo',
+    ascii_1 || '🔥',
+    unicode_1 || 'foo',
+    unicode_1 || '🔥'
+FROM test_basic_operator;
+----
+Andrewfoo Andrew🔥 datafusion📊🔥foo datafusion📊🔥🔥
+Xiangpengfoo Xiangpeng🔥 datafusion数据融合foo datafusion数据融合🔥
+Raphaelfoo Raphael🔥 datafusionДатаФусионfoo datafusionДатаФусион🔥
+NULL NULL NULL NULL
+
+# || same type (column1 has null, so also tests NULL || NULL)
+# expect all results to be the same for each row as they all have the same values
+query TTTT
+SELECT
+    ascii_1 || ascii_2,
+    ascii_1 || unicode_2,
+    unicode_1 || ascii_2,
+    unicode_1 || unicode_2
+FROM test_basic_operator;
+----
+AndrewX Andrew🔥 datafusion📊🔥X datafusion📊🔥🔥
+XiangpengXiangpeng Xiangpengdatafusion数据融合 datafusion数据融合Xiangpeng datafusion数据融合datafusion数据融合
+RaphaelR RaphaelаФус datafusionДатаФусионR datafusionДатаФусионаФус
+NULL NULL NULL NULL
+
+# --------------------------------------
+# Test ~ operator
+# --------------------------------------
+
+query BB
+SELECT
+  ascii_1 ~ 'an',
+  unicode_1 ~ 'таФ'
+FROM test_basic_operator;
+----
+false false
+true false
+false true
+NULL NULL
+
+query BB
+SELECT
+  ascii_1 ~* '^a.{3}e',
+  unicode_1 ~* '^d.*Фу'
+FROM test_basic_operator;
+----
+true false
+false false
+false true
+NULL NULL
+
+query BB
+SELECT
+  ascii_1 !~~ 'xia_g%g',
+  unicode_1 !~~ 'datafusion数据融合'
+FROM test_basic_operator;
+----
+true true
+true false
+true true
+NULL NULL
+
+query BB
+SELECT
+  ascii_1 !~~* 'xia_g%g',
+  unicode_1 !~~* 'datafusion数据融合'
+FROM test_basic_operator;
+----
+true true
+false false
+true true
+NULL NULL
+
+# --------------------------------------
+# Test || operator
+# --------------------------------------
+
+query TTTTT
+select
+    ascii_1 || ' nice',
+    ascii_1 || ' and ' || ascii_2,
+    unicode_1 || ' cool',
+    unicode_1 || ' and ' || unicode_2,
+    ascii_1 || ' 🔥 ' || unicode_1
+from test_basic_operator;
+----
+Andrew nice Andrew and X datafusion📊🔥 cool datafusion📊🔥 and 🔥 Andrew 🔥 datafusion📊🔥
+Xiangpeng nice Xiangpeng and Xiangpeng datafusion数据融合 cool datafusion数据融合 and datafusion数据融合 Xiangpeng 🔥 datafusion数据融合
+Raphael nice Raphael and R datafusionДатаФусион cool datafusionДатаФусион and аФус Raphael 🔥 datafusionДатаФусион
+NULL NULL NULL NULL NULL

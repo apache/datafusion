@@ -161,3 +161,9 @@ SELECT
   ASCII(arrow_cast(NULL, 'Utf8View')) as c3
 ----
 228 0 NULL
+
+# coercion from stringview to integer, as input to make_date
+query D
+select make_date(arrow_cast('2024', 'Utf8View'), arrow_cast('01', 'Utf8View'), arrow_cast('23', 'Utf8View'))
+----
+2024-01-23
