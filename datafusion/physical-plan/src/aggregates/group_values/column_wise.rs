@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aggregates::group_values::group_value_row::{
+    ArrayRowEq, ByteGroupValueBuilder, PrimitiveGroupValueBuilder,
+};
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::compute::cast;
@@ -30,13 +33,11 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
-use datafusion_physical_expr_common::group_value_row::{
-    ArrayRowEq, ByteGroupValueBuilder, PrimitiveGroupValueBuilder,
-};
+
 use hashbrown::raw::RawTable;
 
 /// Compare GroupValue Rows column by column
-pub struct GroupValuesRowLike {
+pub struct GroupValuesColumn {
     /// The output schema
     schema: SchemaRef,
 
@@ -65,7 +66,7 @@ pub struct GroupValuesRowLike {
     random_state: RandomState,
 }
 
-impl GroupValuesRowLike {
+impl GroupValuesColumn {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         let map = RawTable::with_capacity(0);
         Ok(Self {
@@ -79,7 +80,7 @@ impl GroupValuesRowLike {
     }
 }
 
-impl GroupValues for GroupValuesRowLike {
+impl GroupValues for GroupValuesColumn {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         let n_rows = cols[0].len();
 

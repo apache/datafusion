@@ -34,8 +34,7 @@ use arrow::datatypes::GenericStringType;
 use std::sync::Arc;
 use std::vec;
 
-use crate::binary_map::OutputType;
-use crate::binary_map::INITIAL_BUFFER_CAPACITY;
+use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
 
 /// Trait for group values column-wise row comparison
 ///
@@ -51,8 +50,6 @@ pub trait ArrayRowEq: Send + Sync {
     fn append_val(&mut self, array: &ArrayRef, row: usize);
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
-    /// Returns true if this builder is empty
-    fn is_empty(&self) -> bool;
     /// Builds a new array from all of the stored rows
     fn build(self: Box<Self>) -> ArrayRef;
     /// Builds a new array from the first `n` stored rows, shifting the
@@ -119,10 +116,6 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
 
     fn len(&self) -> usize {
         self.group_values.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
@@ -276,10 +269,6 @@ where
         self.offsets.len() - 1
     }
 
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     fn build(self: Box<Self>) -> ArrayRef {
         let Self {
             output_type,
@@ -328,7 +317,7 @@ where
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
-        assert!(self.len() >= n);
+        debug_assert!(self.len() >= n);
 
         let mut nulls_count = 0;
         let null_buffer = if self.nulls.is_empty() {

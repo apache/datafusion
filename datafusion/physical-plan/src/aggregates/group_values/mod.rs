@@ -25,15 +25,17 @@ pub(crate) mod primitive;
 use datafusion_expr::EmitTo;
 use primitive::GroupValuesPrimitive;
 
+mod column_wise;
 mod row;
-mod row_like;
+use column_wise::GroupValuesColumn;
 use row::GroupValuesRows;
-use row_like::GroupValuesRowLike;
 
 mod bytes;
 mod bytes_view;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
+
+mod group_value_row;
 
 /// An interning store for group keys
 pub trait GroupValues: Send {
@@ -100,7 +102,7 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
         .map(|f| f.data_type())
         .all(has_row_like_feature)
     {
-        Ok(Box::new(GroupValuesRowLike::try_new(schema)?))
+        Ok(Box::new(GroupValuesColumn::try_new(schema)?))
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
     }
