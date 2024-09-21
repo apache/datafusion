@@ -238,6 +238,13 @@ impl PartialEq for PhysicalGroupBy {
     }
 }
 
+pub(crate) struct PhysicalGroupingSet {
+    /// Exprs/columns over which the grouping set is aggregated
+    values: Vec<ArrayRef>,
+    /// True if the corresponding value is null in this grouping set
+    mask: Vec<bool>,
+}
+
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHash(GroupedHashAggregateStream),
@@ -1140,13 +1147,13 @@ fn evaluate_optional(
 /// - `batch`: the `RecordBatch` to evaluate against
 ///
 /// Returns: A Vec of Vecs of Array of results
-/// The outer Vec appears to be for grouping sets
+/// The outer Vec contains the grouping sets defined by `group_by.groups`
 /// The inner Vec contains the results per expression
 /// The inner-inner Array contains the results per row
 pub(crate) fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
     batch: &RecordBatch,
-) -> Result<Vec<Vec<ArrayRef>>> {
+) -> Result<Vec<PhysicalGroupingSet>> {
     let exprs: Vec<ArrayRef> = group_by
         .expr
         .iter()
@@ -1169,7 +1176,7 @@ pub(crate) fn evaluate_group_by(
         .groups
         .iter()
         .map(|group| {
-            group
+            let v = group
                 .iter()
                 .enumerate()
                 .map(|(idx, is_null)| {
@@ -1179,7 +1186,11 @@ pub(crate) fn evaluate_group_by(
                         Arc::clone(&exprs[idx])
                     }
                 })
-                .collect()
+                .collect();
+            PhysicalGroupingSet {
+                values: v,
+                mask: group.clone(),
+            }
         })
         .collect())
 }

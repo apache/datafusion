@@ -45,6 +45,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_functions_aggregate::grouping::Grouping;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
@@ -477,7 +478,7 @@ impl GroupedHashAggregateStream {
         // Instantiate the accumulators
         let accumulators: Vec<_> = aggregate_exprs
             .iter()
-            .map(create_group_accumulator)
+            .map(|agg_expr| create_group_accumulator(agg_expr, &agg_group_by))
             .collect::<Result<_>>()?;
 
         let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
@@ -578,7 +579,13 @@ impl GroupedHashAggregateStream {
 /// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
     agg_expr: &AggregateFunctionExpr,
+    group_by: &PhysicalGroupBy,
 ) -> Result<Box<dyn GroupsAccumulator>> {
+    // GROUPING is a special fxn that exposes info about group organization
+    if let Some(grouping) = agg_expr.fun().inner().as_any().downcast_ref::<Grouping>() {
+        let args = agg_expr.all_expressions().args;
+        return grouping.create_grouping_accumulator(&args, &group_by.expr);
+    }
     if agg_expr.groups_accumulator_supported() {
         agg_expr.create_groups_accumulator()
     } else {
@@ -740,7 +747,7 @@ impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
     fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<()> {
         // Evaluate the grouping expressions
-        let group_by_values = if self.spill_state.is_stream_merging {
+        let grouping_sets = if self.spill_state.is_stream_merging {
             evaluate_group_by(&self.spill_state.merging_group_by, &batch)?
         } else {
             evaluate_group_by(&self.group_by, &batch)?
@@ -761,18 +768,18 @@ impl GroupedHashAggregateStream {
             evaluate_optional(&self.filter_expressions, &batch)?
         };
 
-        for group_values in &group_by_values {
+        for grouping_set in grouping_sets.iter() {
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
             self.group_values
-                .intern(group_values, &mut self.current_group_indices)?;
+                .intern(&grouping_set.values, &mut self.current_group_indices)?;
             let group_indices = &self.current_group_indices;
 
             // Update ordering information if necessary
             let total_num_groups = self.group_values.len();
             if total_num_groups > starting_num_groups {
                 self.group_ordering.new_groups(
-                    group_values,
+                    &grouping_set.values,
                     group_indices,
                     total_num_groups,
                 )?;
@@ -800,6 +807,12 @@ impl GroupedHashAggregateStream {
                             values,
                             group_indices,
                             opt_filter,
+                            total_num_groups,
+                        )?;
+                        // Update aggregates that care about which exprs are masked
+                        acc.update_groupings(
+                            group_indices,
+                            &grouping_set.mask,
                             total_num_groups,
                         )?;
                     }
@@ -870,6 +883,7 @@ impl GroupedHashAggregateStream {
                 | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
             }
         }
+        debug!("Output: {:?}", output);
 
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
@@ -1052,9 +1066,14 @@ impl GroupedHashAggregateStream {
         let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
         let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
 
-        let mut output = group_values.first().cloned().ok_or_else(|| {
-            internal_datafusion_err!("group_values expected to have at least one element")
-        })?;
+        let mut output = group_values
+            .first()
+            .map(|gs| gs.values.clone())
+            .ok_or_else(|| {
+                internal_datafusion_err!(
+                    "group_values expected to have at least one element"
+                )
+            })?;
 
         let iter = self
             .accumulators

@@ -235,6 +235,24 @@ pub trait GroupsAccumulator: Send {
         false
     }
 
+    /// Update this accumulator's groupings. Used for aggregates that
+    /// report data about the grouping strategy e.g. GROUPING.
+    ///
+    /// * `group_indices`: Indices of groups in the current grouping set
+    ///
+    /// * `group_mask`: Mask for the current grouping set (true means null/aggregated)
+    ///
+    /// * `total_num_groups`: the number of groups (the largest
+    ///   group_index is thus `total_num_groups - 1`).
+    fn update_groupings(
+        &mut self,
+        _group_indices: &[usize],
+        _group_mask: &[bool],
+        _total_num_groups: usize,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Amount of memory used to store the state of this accumulator,
     /// in bytes.
     ///

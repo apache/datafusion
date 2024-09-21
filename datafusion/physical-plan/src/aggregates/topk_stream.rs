@@ -135,11 +135,11 @@ impl Stream for GroupedTopKAggregateStream {
                         "Exactly 1 group value required"
                     );
                     assert_eq!(
-                        group_by_values[0].len(),
+                        group_by_values[0].values.len(),
                         1,
                         "Exactly 1 group value required"
                     );
-                    let group_by_values = Arc::clone(&group_by_values[0][0]);
+                    let group_by_values = Arc::clone(&group_by_values[0].values[0]);
                     let input_values = evaluate_many(
                         &self.aggregate_arguments,
                         batches.first().unwrap(),
