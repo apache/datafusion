@@ -197,9 +197,6 @@ impl ColumnarValue {
                 kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
             )),
             ColumnarValue::Scalar(scalar) => {
-                // TODO(@notfilippo, logical/physical): this cast in the future should reduce to updating
-                // Scalar's `data_type` to the target `cast_type`.
-
                 let scalar_array =
                     if cast_type == &DataType::Timestamp(TimeUnit::Nanosecond, None) {
                         if let ScalarValue::Float64(Some(float_ts)) = scalar.value() {
@@ -218,8 +215,8 @@ impl ColumnarValue {
                     cast_type,
                     &cast_options,
                 )?;
-                let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-                Ok(ColumnarValue::from(cast_scalar))
+                let cast_scalar = Scalar::try_from_array(&cast_array, 0)?;
+                Ok(ColumnarValue::Scalar(cast_scalar))
             }
         }
     }

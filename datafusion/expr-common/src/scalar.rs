@@ -19,7 +19,7 @@ use arrow::{
     array::{Array, ArrayRef},
     datatypes::DataType,
 };
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, Result, ScalarValue};
 
 #[derive(Clone, Debug)]
 pub struct Scalar {
@@ -36,16 +36,6 @@ impl From<ScalarValue> for Scalar {
     }
 }
 
-impl TryFrom<DataType> for Scalar {
-    type Error = DataFusionError;
-    fn try_from(value: DataType) -> Result<Self> {
-        Ok(Self {
-            value: ScalarValue::try_from(&value)?,
-            data_type: value,
-        })
-    }
-}
-
 impl PartialEq for Scalar {
     fn eq(&self, other: &Self) -> bool {
         self.value.eq(&other.value)
@@ -53,13 +43,29 @@ impl PartialEq for Scalar {
 }
 
 impl Scalar {
-    pub fn new(value: ScalarValue, data_type: DataType) -> Self {
-        Self { value, data_type }
+    pub fn try_from_array(array: &dyn Array, index: usize) -> Result<Self> {
+        let data_type = array.data_type().clone();
+        let value = ScalarValue::try_from_array(array, index)?;
+        Ok(Self { value, data_type })
     }
 
-    pub fn try_from_array(array: &dyn Array, index: usize) -> Result<Self> {
-        let value = ScalarValue::try_from_array(array, index)?;
-        Ok(Self::new(value, array.data_type().clone()))
+    pub fn new_null_of(value: DataType) -> Result<Self> {
+        Ok(Self {
+            value: ScalarValue::try_from(&value)?,
+            data_type: value,
+        })
+    }
+
+    pub fn iter_to_array(scalars: impl IntoIterator<Item = Scalar>) -> Result<ArrayRef> {
+        let mut scalars = scalars.into_iter().peekable();
+
+        // figure out the type based on the first element
+        let data_type = match scalars.peek() {
+            None => return exec_err!("Empty iterator passed to Scalar::iter_to_array"),
+            Some(sv) => sv.data_type().clone(),
+        };
+
+        ScalarValue::iter_to_array_of_type(scalars.map(|scalar| scalar.value), &data_type)
     }
 
     #[inline]
@@ -76,11 +82,6 @@ impl Scalar {
         &self.data_type
     }
 
-    pub fn with_data_type(mut self, data_type: DataType) -> Self {
-        self.data_type = data_type;
-        self
-    }
-
     #[inline]
     pub fn to_array_of_size(&self, size: usize) -> Result<ArrayRef> {
         self.value.to_array_of_size_and_type(size, &self.data_type)
@@ -93,17 +94,5 @@ impl Scalar {
 
     pub fn to_scalar(&self) -> Result<arrow::array::Scalar<ArrayRef>> {
         Ok(arrow::array::Scalar::new(self.to_array()?))
-    }
-
-    pub fn iter_to_array(scalars: impl IntoIterator<Item = Scalar>) -> Result<ArrayRef> {
-        let mut scalars = scalars.into_iter().peekable();
-
-        // figure out the type based on the first element
-        let data_type = match scalars.peek() {
-            None => return exec_err!("Empty iterator passed to Scalar::iter_to_array"),
-            Some(sv) => sv.data_type().clone(),
-        };
-
-        ScalarValue::iter_to_array_of_type(scalars.map(|scalar| scalar.value), &data_type)
     }
 }
