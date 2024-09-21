@@ -27,7 +27,6 @@ use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::prelude::SessionContext;
 use datafusion_common::stats::Precision;
-use datafusion_common::{Column, ScalarValue};
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::cache::cache_unit;
 use datafusion_execution::cache::cache_unit::{
@@ -37,7 +36,7 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion_expr::{BinaryExpr, Expr};
+use datafusion_expr::{col, lit, Expr};
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -54,11 +53,7 @@ async fn check_stats_precision_with_filter_pushdown() {
     assert_eq!(exec.statistics().unwrap().num_rows, Precision::Exact(8));
 
     // Scan with filter pushdown, stats are inexact
-    let filter = Expr::BinaryExpr(BinaryExpr {
-        left: Box::new(Expr::Column(Column::from_name("id"))),
-        op: datafusion_expr::Operator::And,
-        right: Box::new(Expr::Literal(ScalarValue::UInt64(Some(1)))),
-    });
+    let filter = Expr::gt(col("id"), lit(1));
 
     let exec = table.scan(&state, None, &[filter], None).await.unwrap();
     assert_eq!(exec.statistics().unwrap().num_rows, Precision::Inexact(8));
