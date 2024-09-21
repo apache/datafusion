@@ -449,13 +449,13 @@ impl GroupedHashAggregateStream {
         let aggregate_arguments = aggregates::aggregate_expressions(
             &agg.aggr_expr,
             &agg.mode,
-            agg_group_by.expr.len(),
+            agg_group_by.num_group_exprs(),
         )?;
         // arguments for aggregating spilled data is the same as the one for final aggregation
         let merging_aggregate_arguments = aggregates::aggregate_expressions(
             &agg.aggr_expr,
             &AggregateMode::Final,
-            agg_group_by.expr.len(),
+            agg_group_by.num_group_exprs(),
         )?;
 
         let filter_expressions = match agg.mode {
@@ -473,7 +473,7 @@ impl GroupedHashAggregateStream {
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
 
-        let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
+        let group_schema = group_schema(&agg.input().schema(), &agg_group_by)?;
         let spill_expr = group_schema
             .fields
             .into_iter()
@@ -491,7 +491,7 @@ impl GroupedHashAggregateStream {
         let (ordering, _) = agg
             .properties()
             .equivalence_properties()
-            .find_longest_permutation(&agg_group_by.output_exprs());
+            .find_longest_permutation(&agg_group_by.output_exprs(&agg.mode));
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
             &agg.input_order_mode,
@@ -885,6 +885,9 @@ impl GroupedHashAggregateStream {
         }
 
         let mut output = self.group_values.emit(emit_to)?;
+        if !spilling {
+            output.truncate(self.group_by.num_output_exprs(&self.mode));
+        }
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
         }

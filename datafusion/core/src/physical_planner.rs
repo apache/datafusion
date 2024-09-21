@@ -692,10 +692,6 @@ impl DefaultPhysicalPlanner {
                     physical_input_schema.clone(),
                 )?);
 
-                // update group column indices based on partial aggregate plan evaluation
-                let final_group: Vec<Arc<dyn PhysicalExpr>> =
-                    initial_aggr.output_group_expr();
-
                 let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
                     && session_state.config().repartition_aggregations();
@@ -716,13 +712,7 @@ impl DefaultPhysicalPlanner {
                     AggregateMode::Final
                 };
 
-                let final_grouping_set = PhysicalGroupBy::new_single(
-                    final_group
-                        .iter()
-                        .enumerate()
-                        .map(|(i, expr)| (expr.clone(), groups.expr()[i].1.clone()))
-                        .collect(),
-                );
+                let final_grouping_set = initial_aggr.group_expr().as_final();
 
                 Arc::new(AggregateExec::try_new(
                     next_partition_mode,
@@ -2053,7 +2043,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]], num_internal_exprs: 1 })"#;
 
         assert_eq!(format!("{cube:?}"), expected);
 
@@ -2080,7 +2070,7 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
+        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]], num_internal_exprs: 1 })"#;
 
         assert_eq!(format!("{rollup:?}"), expected);
 
