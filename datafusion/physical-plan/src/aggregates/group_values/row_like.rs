@@ -214,7 +214,7 @@ impl GroupValues for GroupValuesRowLike {
                         if i == 0 {
                             checklen = len;
                         } else {
-                            assert_eq!(checklen, len);
+                            debug_assert_eq!(checklen, len);
                         }
                     }
 
@@ -254,7 +254,7 @@ impl GroupValues for GroupValuesRowLike {
         let mut output = match emit_to {
             EmitTo::All => {
                 let group_values = std::mem::take(&mut self.group_values);
-                assert!(self.group_values.is_empty());
+                debug_assert!(self.group_values.is_empty());
 
                 group_values
                     .into_iter()
