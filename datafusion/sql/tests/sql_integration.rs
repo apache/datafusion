@@ -2003,6 +2003,13 @@ fn create_external_table_parquet_no_schema() {
 }
 
 #[test]
+fn create_external_table_parquet_no_schema_sort_order() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet' WITH ORDER (id)";
+    let expected = "CreateExternalTable: Bare { table: \"t\" }";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn equijoin_explicit_syntax() {
     let sql = "SELECT id, order_id \
             FROM person \
