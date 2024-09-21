@@ -221,16 +221,20 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// df.select_columns(&["a", "b"])?.show().await?;
-    /// // +----+----+
-    /// // | a  | b  |
-    /// // +----+----+
-    /// // | 1  | 2  |
-    /// // +----+----+
+    /// let df = df.select_columns(&["a", "b"])?;
+    /// let expected = vec![
+    ///     "+---+---+",
+    ///     "| a | b |",
+    ///     "+---+---+",
+    ///     "| 1 | 2 |",
+    ///     "+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -259,16 +263,20 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// df.select(vec![col("a"), col("b") * col("c")])?.show().await?;
-    /// // +---+-----------------------+
-    /// // | a | ?table?.b * ?table?.c |
-    /// // +---+-----------------------+
-    /// // | 1 | 6                     |
-    /// // +---+-----------------------+
+    /// let df = df.select(vec![col("a"), col("b") * col("c")])?;
+    /// let expected = vec![
+    ///     "+---+-----------------------+",
+    ///     "| a | ?table?.b * ?table?.c |",
+    ///     "+---+-----------------------+",
+    ///     "| 1 | 6                     |",
+    ///     "+---+-----------------------+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -292,6 +300,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
@@ -301,12 +310,15 @@ impl DataFrame {
     /// // +----+----+----+
     /// // | 1  | 2  | 3  |
     /// // +----+----+----+
-    /// df.drop_columns(&["a"])?.show().await?;
-    /// // +----+----+
-    /// // | b  | c  |
-    /// // +----+----+
-    /// // | 2  | 3  |
-    /// // +----+----+
+    /// let df = df.drop_columns(&["a"])?;
+    /// let expected = vec![
+    ///     "+---+---+",
+    ///     "| b | c |",
+    ///     "+---+---+",
+    ///     "| 2 | 3 |",
+    ///     "+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -364,22 +376,26 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_json("tests/data/unnest.json", NdJsonReadOptions::default()).await?;
     /// // expend into multiple columns if it's json array, flatten field name if it's nested structure
-    /// df.unnest_columns(&["b","c","d"])?.show().await?;
-    /// // +---+------+-------+-----+-----+
-    /// // | a | b    | c     | d.e | d.f |
-    /// // +---+------+-------+-----+-----+
-    /// // | 1 | 2.0  | false | 1   | 2   |
-    /// // | 1 | 1.3  | true  | 1   | 2   |
-    /// // | 1 | -6.1 |       | 1   | 2   |
-    /// // | 2 | 3.0  | false |     |     |
-    /// // | 2 | 2.3  | true  |     |     |
-    /// // | 2 | -7.1 |       |     |     |
-    /// // +---+------+-------+-----+-----+
+    /// let df = df.unnest_columns(&["b","c","d"])?;
+    /// let expected = vec![
+    ///     "+---+------+-------+-----+-----+",
+    ///     "| a | b    | c     | d.e | d.f |",
+    ///     "+---+------+-------+-----+-----+",
+    ///     "| 1 | 2.0  | false | 1   | 2   |",
+    ///     "| 1 | 1.3  | true  | 1   | 2   |",
+    ///     "| 1 | -6.1 |       | 1   | 2   |",
+    ///     "| 2 | 3.0  | false |     |     |",
+    ///     "| 2 | 2.3  | true  |     |     |",
+    ///     "| 2 | -7.1 |       |     |     |",
+    ///     "+---+------+-------+-----+-----+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -417,18 +433,23 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
-    /// df.filter(col("a").lt_eq(col("b")))?.show().await?;
-    /// // +----+----+----+
-    /// // | a  | b  | c  |
-    /// // +----+----+----+
-    /// // | 1  | 2  | 3  |
-    /// // | 4  | 5  | 6  |
-    /// // | ............ |
-    /// // +----+----+----+
+    /// let df = df.filter(col("a").lt_eq(col("b")))?;
+    /// // all rows where a <= b are returned
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "| 4 | 5 | 6 |",
+    ///     "| 7 | 8 | 9 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -450,27 +471,34 @@ impl DataFrame {
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
     /// # use datafusion::functions_aggregate::expr_fn::min;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
     ///
     /// // The following use is the equivalent of "SELECT MIN(b) GROUP BY a"
-    /// df.clone().aggregate(vec![col("a")], vec![min(col("b"))])?.show().await?;
-    /// // +---+----------------+
-    /// // | a | min(?table?.b) |
-    /// // +----+---------------+
-    /// // | 1 | 2              |
-    /// // | 4 | 5              |
-    /// // | .................. |
-    /// // +---+----------------+
+    /// let df1 = df.clone().aggregate(vec![col("a")], vec![min(col("b"))])?;
+    /// let expected1 = vec![
+    ///     "+---+----------------+",
+    ///     "| a | min(?table?.b) |",
+    ///     "+---+----------------+",
+    ///     "| 1 | 2              |",
+    ///     "| 4 | 5              |",
+    ///     "| 7 | 8              |",
+    ///     "+---+----------------+"
+    /// ];
+    /// assert_batches_sorted_eq!(expected1, &df1.collect().await?);
     /// // The following use is the equivalent of "SELECT MIN(b)"
-    /// df.aggregate(vec![], vec![min(col("b"))])?.show().await?;
-    /// // +----------------+
-    /// // | min(?table?.b) |
-    /// // +----------------+
-    /// // | 2              |
-    /// // +----------------+
+    /// let df2 = df.aggregate(vec![], vec![min(col("b"))])?;
+    /// let expected2 = vec![
+    ///     "+----------------+",
+    ///     "| min(?table?.b) |",
+    ///     "+----------------+",
+    ///     "| 2              |",
+    ///     "+----------------+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected2, &df2.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -510,26 +538,22 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
-    /// // +---+---+---+
-    /// // | a | b | c |
-    /// // +---+---+---+
-    /// // | 1 | 2 | 3 |
-    /// // | 4 | 5 | 6 |
-    /// // | 7 | 8 | 9 |
-    /// // | ......... |
-    /// // +---+---+---+
     /// let df = df.limit(1, Some(2))?;
-    /// // +---+---+---+
-    /// // | a | b | c |
-    /// // +---+---+---+
-    /// // | 4 | 5 | 6 |
-    /// // | 7 | 8 | 9 |
-    /// // +---+---+---+
-    /// # df.clone().show().await
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 4 | 5 | 6 |",
+    ///     "| 7 | 8 | 9 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
     /// # }
     /// ```
     pub fn limit(self, skip: usize, fetch: Option<usize>) -> Result<DataFrame> {
@@ -550,25 +574,23 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// // +---+---+---+
-    /// // | a | b | c |
-    /// // +---+---+---+
-    /// // | 1 | 2 | 3 |
-    /// // +---+---+---+
-    /// # df.clone().show().await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?   ;
     /// let d2 = df.clone();
     /// let df = df.union(d2)?;
-    /// // +---+---+---+
-    /// // | a | b | c |
-    /// // +---+---+---+
-    /// // | 1 | 2 | 3 |
-    /// // | 1 | 2 | 3 |
-    /// // +---+---+---+
-    /// # df.show().await
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
     /// # }
     /// ```
     pub fn union(self, dataframe: DataFrame) -> Result<DataFrame> {
@@ -590,6 +612,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
@@ -597,12 +620,14 @@ impl DataFrame {
     /// let d2 = df.clone();
     /// let df = df.union_distinct(d2)?;
     /// // df2 are duplicate of df
-    /// # df.show().await?;
-    /// // +---+---+---+
-    /// // | a | b | c |
-    /// // +---+---+---+
-    /// // | 1 | 2 | 3 |
-    /// // +---+---+---+
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -622,16 +647,20 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// df.distinct()?.show().await?;
-    /// // +---+---+---+
-    /// // | a | b | c |
-    /// // +---+---+---+
-    /// // | 1 | 2 | 3 |
-    /// // +---+---+---+
+    /// let df = df.distinct()?;
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -651,18 +680,21 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
     ///   // Return a single row (a, b) for each distinct value of a
     ///   .distinct_on(vec![col("a")], vec![col("a"), col("b")], None)?;
-    /// # df.show().await?;
-    /// // +---+---+
-    /// // | a | b |
-    /// // +---+---+
-    /// // | 1 | 2 |
-    /// // +---+---+
+    /// let expected = vec![
+    ///     "+---+---+",
+    ///     "| a | b |",
+    ///     "+---+---+",
+    ///     "| 1 | 2 |",
+    ///     "+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -691,23 +723,26 @@ impl DataFrame {
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
     /// # use arrow::util::pretty;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/tpch-csv/customer.csv", CsvReadOptions::new()).await?;
-    /// df.describe().await?.show().await?;
+    /// let stat = df.describe().await?;
     /// # // some output column are ignored
-    /// // +------------+--------------------+--------------------+------------------------------------+
-    /// // | describe   | c_custkey          | c_name             | c_address                          |
-    /// // +------------+--------------------+--------------------+------------------------------------+
-    /// // | count      | 9.0                | 9                  | 9                                  |
-    /// // | null_count | 0.0                | 0                  | 0                                  |
-    /// // | mean       | 6.0                | null               | null                               |
-    /// // | std        | 2.7386127875258306 | null               | null                               |
-    /// // | min        | 2.0                | Customer#000000002 | 6LrEaV6KR6PLVcgl2ArL Q3rqzLzcT1 v2 |
-    /// // | max        | 10.0               | Customer#000000010 | xKiAFTjUsCuxfeleNqefumTrjS         |
-    /// // | median     | 6.0                | null               | null                               |
-    /// // +------------+--------------------+--------------------+------------------------------------+
+    /// let expected = vec![
+    ///     "+------------+--------------------+--------------------+------------------------------------+--------------------+-----------------+--------------------+--------------+----------------------------------------------------------------------------------------------------------+",
+    ///     "| describe   | c_custkey          | c_name             | c_address                          | c_nationkey        | c_phone         | c_acctbal          | c_mktsegment | c_comment                                                                                                |",
+    ///     "+------------+--------------------+--------------------+------------------------------------+--------------------+-----------------+--------------------+--------------+----------------------------------------------------------------------------------------------------------+",
+    ///     "| count      | 9.0                | 9                  | 9                                  | 9.0                | 9               | 9.0                | 9            | 9                                                                                                        |",
+    ///     "| max        | 10.0               | Customer#000000010 | xKiAFTjUsCuxfeleNqefumTrjS         | 20.0               | 30-114-968-4951 | 9561.95            | MACHINERY    | tions. even deposits boost according to the slyly bold packages. final accounts cajole requests. furious |",
+    ///     "| mean       | 6.0                | null               | null                               | 9.88888888888889   | null            | 5153.2155555555555 | null         | null                                                                                                     |",
+    ///     "| median     | 6.0                | null               | null                               | 8.0                | null            | 6819.74            | null         | null                                                                                                     |",
+    ///     "| min        | 2.0                | Customer#000000002 | 6LrEaV6KR6PLVcgl2ArL Q3rqzLzcT1 v2 | 1.0                | 11-719-748-3364 | 121.65             | AUTOMOBILE   |  deposits eat slyly ironic, even instructions. express foxes detect slyly. blithely even accounts abov   |",
+    ///     "| null_count | 0.0                | 0                  | 0                                  | 0.0                | 0               | 0.0                | 0            | 0                                                                                                        |",
+    ///     "| std        | 2.7386127875258306 | null               | null                               | 7.2188026092359046 | null            | 3522.169804254585  | null         | null                                                                                                     |",
+    ///     "+------------+--------------------+--------------------+------------------------------------+--------------------+-----------------+--------------------+--------------+----------------------------------------------------------------------------------------------------------+"];
+    /// assert_batches_sorted_eq!(expected, &stat.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -899,22 +934,25 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
     /// let df = df.sort(vec![
-    ///   col("a").sort(true, true),   // a ASC, nulls first
-    ///   col("b").sort(false, false), // b DESC, nulls last
+    ///   col("a").sort(false, true),   // a DESC, nulls first
+    ///   col("b").sort(true, false), // b ASC, nulls last
     ///  ])?;
-    /// # df.show().await?;
-    /// // +----+----+----+
-    /// // | a  | b  | c  |
-    /// // +----+----+----+
-    /// // | 1  | 2  | 3  |
-    /// // | 4  | 5  | 6  |
-    /// // | ............ |
-    /// // +----+----+----+
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "| 4 | 5 | 6 |",
+    ///     "| 7 | 8 | 9 |",
+    ///     "+---+---+---+",
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -944,6 +982,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
@@ -956,12 +995,14 @@ impl DataFrame {
     /// // Perform the equivalent of `left INNER JOIN right ON (a = a2 AND b = b2)`
     /// // finding all pairs of rows from `left` and `right` where `a = a2` and `b = b2`.
     /// let join = left.join(right, JoinType::Inner, &["a", "b"], &["a2", "b2"], None)?;
-    /// # join.show().await?;
-    /// // +---+---+---+----+----+----+
-    /// // | a | b | c | a2 | b2 | c2 |
-    /// // +---+---+---+----+----+----+
-    /// // | 1 | 2 | 3 | 1  | 2  | 3  |
-    /// // +---+---+---+----+----+----+
+    /// let expected = vec![
+    ///     "+---+---+---+----+----+----+",
+    ///     "| a | b | c | a2 | b2 | c2 |",
+    ///     "+---+---+---+----+----+----+",
+    ///     "| 1 | 2 | 3 | 1  | 2  | 3  |",
+    ///     "+---+---+---+----+----+----+"
+    /// ];
+    /// assert_batches_sorted_eq!(expected, &join.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -998,6 +1039,7 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
@@ -1021,10 +1063,13 @@ impl DataFrame {
     ///     JoinType::Inner,
     ///     [col("a").not_eq(col("a2")), col("b").not_eq(col("b2"))],
     /// )?;
-    /// join_on.show().await?;
-    /// // +---+---+---+----+----+----+
-    /// // | a | b | c | a2 | b2 | c2 |
-    /// // +---+---+---+----+----+----+
+    /// let expected = vec![
+    ///     "+---+---+---+----+----+----+",
+    ///     "| a | b | c | a2 | b2 | c2 |",
+    ///     "+---+---+---+----+----+----+",
+    ///     "+---+---+---+----+----+----+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &join_on.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -1049,19 +1094,22 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
     /// let df1 = df.repartition(Partitioning::RoundRobinBatch(4))?;
-    /// # df1.show().await?;
-    /// // +----+----+----+
-    /// // | a  | b  | c  |
-    /// // +----+----+----+
-    /// // | 1  | 2  | 3  |
-    /// // | 4  | 5  | 6  |
-    /// // | ............ |
-    /// // +----+----+----+
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "| 4 | 5 | 6 |",
+    ///     "| 7 | 8 | 9 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df1.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -1089,6 +1137,7 @@ impl DataFrame {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let count = df.count().await?; // 1
+    /// # assert_eq!(count, 1);
     /// # Ok(())
     /// # }
     /// ```
@@ -1369,30 +1418,21 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// // +----+----+----+
-    /// // | a  | b  | c  |
-    /// // +----+----+----+
-    /// // | 1  | 2  | 3  |
-    /// // +----+----+----+
     /// let d2 = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
-    /// // +----+----+----+
-    /// // | a  | b  | c  |
-    /// // +----+----+----+
-    /// // | 1  | 2  | 3  |
-    /// // | 4  | 5  | 6  |
-    /// // | ............ |
-    /// // +----+----+----+
     /// let df = df.intersect(d2)?;
-    /// df.show().await?;
-    /// // +----+----+----+
-    /// // | a  | b  | c  |
-    /// // +----+----+----+
-    /// // | 1  | 2  | 3  |
-    /// // +----+----+----+
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -1411,20 +1451,23 @@ impl DataFrame {
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example_long.csv", CsvReadOptions::new()).await?;
     /// let d2 = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// df.except(d2)?.show().await?;
-    /// // those column are not in example.csv, but in example_long.csv
-    /// // +----+----+----+
-    /// // | a  | b  | c  |
-    /// // +----+----+----+
-    /// // | 4  | 5  | 6  |
-    /// // | 19 | 20 | 21 |
-    /// // | ............ |
-    /// // +----+----+----+
+    /// let result = df.except(d2)?;
+    /// // those columns are not in example.csv, but in example_long.csv
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 4 | 5 | 6 |",
+    ///     "| 7 | 8 | 9 |",
+    ///     "+---+---+---+"
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &result.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
