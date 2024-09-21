@@ -47,7 +47,7 @@ use datafusion_common::{
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
 use datafusion_physical_expr::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
@@ -379,6 +379,29 @@ impl fmt::Debug for JoinHashMap {
 pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
 /// Reference for JoinOn.
 pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
+
+/// Checks whether the inequality conditions are valid.
+/// The inequality conditions are valid if the expressions are not null and the expressions are not equal, and left expression is from left schema and right expression is from right schema.
+pub fn check_inequality_conditions(
+    left: &Schema,
+    right: &Schema,
+    inequality_conditions: &[Arc<dyn PhysicalExpr>],
+) -> Result<()> {
+    for expr in inequality_conditions {
+        if let BinaryExpr(left, op, right, _) = expr.as_any().downcast_ref::<BinaryExpr>()
+        {
+            if left.as_ref().left_col().is_none() || right.as_ref().right_col().is_none()
+            {
+                return plan_err!("Inequality conditions must be between two columns");
+            }
+        } else {
+            return plan_err!(
+                "Inequality conditions must be an inequality binary expression"
+            );
+        }
+    }
+    Ok(())
+}
 
 /// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
 /// They are valid whenever their columns' intersection equals the set `on`

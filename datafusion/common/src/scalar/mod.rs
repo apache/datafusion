@@ -232,6 +232,7 @@ pub enum ScalarValue {
     Binary(Option<Vec<u8>>),
     /// binary but from view types.
     BinaryView(Option<Vec<u8>>),
+	/// 
     /// fixed size binary
     FixedSizeBinary(i32, Option<Vec<u8>>),
     /// large binary
