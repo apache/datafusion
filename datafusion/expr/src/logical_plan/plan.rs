@@ -3306,7 +3306,7 @@ pub enum Partitioning {
 /// The inferred unnesting type works for both struct and list column, but the unnesting
 /// will only be done once (depth = 1). In case recursion is needed on a multi-dimensional
 /// list type, use [`ColumnUnnestList`]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub enum ColumnUnnestType {
     // Unnesting a list column, a vector of ColumnUnnestList is used because
     // a column can be unnested at different levels, resulting different output columns
@@ -3352,7 +3352,7 @@ impl fmt::Display for ColumnUnnestType {
 ///                   │ 5       │           
 ///                   └─────────┘           
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct ColumnUnnestList {
     pub output_column: Column,
     pub depth: usize,
@@ -3395,10 +3395,10 @@ impl PartialOrd for Unnest {
             /// The incoming logical plan
             pub input: &'a Arc<LogicalPlan>,
             /// Columns to run unnest on, can be a list of (List/Struct) columns
-            pub exec_columns: &'a Vec<Column>,
+            pub exec_columns: &'a Vec<(Column, ColumnUnnestType)>,
             /// refer to the indices(in the input schema) of columns
             /// that have type list to run unnest on
-            pub list_type_columns: &'a Vec<usize>,
+            pub list_type_columns: &'a Vec<(usize, ColumnUnnestList)>,
             /// refer to the indices (in the input schema) of columns
             /// that have type struct to run unnest on
             pub struct_type_columns: &'a Vec<usize>,
