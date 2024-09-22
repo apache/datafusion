@@ -46,8 +46,10 @@ use datafusion_common::{
     plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
 use datafusion_physical_expr::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
@@ -380,23 +382,54 @@ pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
 /// Reference for JoinOn.
 pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
 
+pub fn is_ineuqality_operator(op: &Operator) -> bool {
+    matches!(
+        op,
+        Operator::NotEq | Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+    )
+}
+
 /// Checks whether the inequality conditions are valid.
-/// The inequality conditions are valid if the expressions are not null and the expressions are not equal, and left expression is from left schema and right expression is from right schema.
+/// The inequality conditions are valid if the expressions are not null and the expressions are not equal, and left expression is from left schema and right expression is from right schema. Maybe we can reorder the expressions to make it statisfy this condition later, like (right.b < left.a) -> (left.a > right.b).
 pub fn check_inequality_conditions(
     left: &Schema,
-    right: &Schema,
+    _right: &Schema,
     inequality_conditions: &[Arc<dyn PhysicalExpr>],
 ) -> Result<()> {
     for expr in inequality_conditions {
-        if let BinaryExpr(left, op, right, _) = expr.as_any().downcast_ref::<BinaryExpr>()
-        {
-            if left.as_ref().left_col().is_none() || right.as_ref().right_col().is_none()
+        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            if !is_ineuqality_operator(&binary.op()) {
+                return plan_err!(
+                    "Inequality conditions must be an inequality binary expression, but got {}",
+                    binary.op()
+                );
+            }
+            let max_left_columns = collect_columns(&binary.left())
+                .iter()
+                .map(|c| c.index())
+                .max();
+            let min_right_columns = collect_columns(&binary.right())
+                .iter()
+                .map(|c| c.index())
+                .min();
+            if max_left_columns.is_none() || min_right_columns.is_none() {
+                return plan_err!(
+                    "Inequality condition shouldn't be constant expression, but got {}",
+                    expr
+                );
+            }
+            if max_left_columns.unwrap() >= left.fields().len()
+                || min_right_columns.unwrap() < left.fields().len()
             {
-                return plan_err!("Inequality conditions must be between two columns");
+                return plan_err!("Left/right side expression of inequality condition should be from left/right side of join, but got {} and {}",
+                binary.left(),
+                binary.right()
+            );
             }
         } else {
             return plan_err!(
-                "Inequality conditions must be an inequality binary expression"
+                "Inequality conditions must be an inequality binary expression, but got {}",
+                expr
             );
         }
     }

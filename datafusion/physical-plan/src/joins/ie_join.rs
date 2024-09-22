@@ -24,15 +24,18 @@ use arrow::datatypes::{Schema, SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_array::PrimitiveArray;
-use datafusion_common::{exec_datafusion_err, JoinSide, Result, Statistics};
+use arrow_ord::partition;
+use datafusion_common::{exec_datafusion_err, plan_err, JoinSide, Result, Statistics};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
+use datafusion_physical_expr::{Partitioning, PhysicalExpr, PhysicalExprRef};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
+
+use super::utils::check_inequality_conditions;
 
 /// IEJoinExec is optimized join without any equijoin conditions in `ON` clause but with two or more inequality conditions.
 /// For more detail algorithm, see https://vldb.org/pvldb/vol8/p2074-khayyat.pdf
@@ -100,7 +103,14 @@ impl IEJoinExec {
         check_join_is_valid(&left_schema, &right_schema, &[])?;
         let (schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
+        check_inequality_conditions(&left_schema, &right_schema, &inequality_conditions)?;
         let schema = Arc::new(schema);
+        if !matches!(join_type, JoinType::Inner) {
+            return plan_err!(
+                "IEJoinExec only supports inner join currently, got {}",
+                join_type
+            );
+        }
         let cache =
             Self::compute_properties(&left, &right, Arc::clone(&schema), *join_type);
         Ok(IEJoinExec {
@@ -137,8 +147,9 @@ impl IEJoinExec {
             &[],
         );
 
-        let output_partitioning =
-            asymmetric_join_output_partitioning(left, right, &join_type);
+        let output_partitioning = Partitioning::UnknownPartitioning(
+            right.output_partitioning().partition_count(),
+        );
 
         // Determine execution mode:
         let mut mode = execution_mode_from_children([left, right]);
@@ -147,5 +158,89 @@ impl IEJoinExec {
         }
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
+    }
+}
+
+impl DisplayAs for IEJoinExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let display_filter = self.filter.as_ref().map_or_else(
+                    || "".to_string(),
+                    |f| format!(", filter={}", f.expression()),
+                );
+                let display_inequality_conditions = self
+                    .inequality_conditions
+                    .iter()
+                    .map(|c| format!("({})", c))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "IEJoinExec: mode={:?}, join_type={:?}, inequality_conditions=[{}], {}",
+                    self.cache.execution_mode,
+                    self.join_type,
+                    display_inequality_conditions,
+                    display_filter,
+                )
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for IEJoinExec {
+    fn name(&self) -> &'static str {
+        "IEJoinExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.left, &self.right]
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition, Distribution::SinglePartition]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(IEJoinExec::try_new(
+            Arc::clone(&children[0]),
+            Arc::clone(&children[1]),
+            self.inequality_conditions.clone(),
+            self.filter.clone(),
+            &self.join_type,
+        )?))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        todo!()
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        estimate_join_statistics(
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
+            vec![],
+            &self.join_type,
+            &self.schema,
+        )
     }
 }
