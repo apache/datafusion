@@ -3059,6 +3059,8 @@ pub enum Partitioning {
 /// list type, use [`ColumnUnnestList`]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ColumnUnnestType {
+    // Unnesting a list column, a vector of ColumnUnnestList is used because
+    // a column can be unnested at different levels, resulting different output columns
     List(Vec<ColumnUnnestList>),
     // for struct, there can only be one unnest performed on one column at a time
     Struct,
@@ -3086,24 +3088,20 @@ impl fmt::Display for ColumnUnnestType {
 /// the output column name after unnesting
 ///
 /// Example: given `ColumnUnnestList { output_column: "output_name", depth: 2 }`
-/// and input as a two dimentional array column values
+///
 /// ```text
-/// input
-/// ---
-/// [[1,2]]
-/// [[3]]
-/// [[4],[5]]
-/// ```
-///  
-/// This operation will result into a column with values
-/// ```text
-/// output_name
-/// ---
-/// 1
-/// 2
-/// 3
-/// 4
-/// 5
+///   input             output_name
+///  ┌─────────┐      ┌─────────┐
+///  │{{1,2}}  │      │ 1       │
+///  ├─────────┼─────►├─────────┤           
+///  │{{3}}    │      │ 2       │           
+///  ├─────────┤      ├─────────┤           
+///  │{{4},{5}}│      │ 3       │           
+///  └─────────┘      ├─────────┤           
+///                   │ 4       │           
+///                   ├─────────┤           
+///                   │ 5       │           
+///                   └─────────┘           
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ColumnUnnestList {
