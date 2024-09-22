@@ -159,7 +159,7 @@ where
     /// stored in the range `offsets[i]..offsets[i+1]` in `buffer`. Null values
     /// are stored as a zero length string.
     offsets: Vec<O>,
-    /// Null indexes in offsets
+    /// Null indexes in offsets, if `i` is in nulls, `offsets[i]` should be equals to `offsets[i+1]`
     nulls: Vec<usize>,
 }
 
@@ -324,28 +324,24 @@ where
             None
         } else {
             // Only make a `NullBuffer` if there was a null value
-            let num_values = self.offsets.len() - 1;
-            let mut bool_builder = BooleanBufferBuilder::new(num_values);
-            bool_builder.append_n(num_values, true);
+            let mut bool_builder = BooleanBufferBuilder::new(n);
+            bool_builder.append_n(n, true);
 
-            let nth_offset = O::as_usize(self.offsets[n]);
-            // Given offsets [0, 1, 2, 2], we could know that the 3rd index is null since the offset diff is 0
-            let is_nth_offset_null = O::as_usize(self.offsets[n - 1]) == nth_offset;
             let mut new_nulls = vec![];
             self.nulls.iter().for_each(|null_index| {
-                if *null_index < nth_offset
-                    || (*null_index == nth_offset && is_nth_offset_null)
-                {
+                if *null_index < n {
                     nulls_count += 1;
                     bool_builder.set_bit(*null_index, false);
                 } else {
-                    new_nulls.push(null_index - nth_offset);
+                    new_nulls.push(null_index - n);
                 }
             });
 
             self.nulls = new_nulls;
             Some(NullBuffer::from(bool_builder.finish()))
         };
+
+        let first_remaining_offset = O::as_usize(self.offsets[n]);
 
         // Given offests like [0, 2, 4, 5] and n = 1, we expect to get
         // offsets [0, 2, 3]. We first create two offsets for first_n as [0, 2] and the remaining as [2, 4, 5].
@@ -362,12 +358,12 @@ where
         let offsets =
             unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(first_n_offsets)) };
 
-        // Consume first (n - nulls count) of elements since we don't push any value for null case.
-        let r = n - nulls_count;
-
-        let mut remaining_buffer = BufferBuilder::new(self.buffer.len() - r);
-        remaining_buffer.append_slice(&self.buffer.as_slice()[r..]);
-        self.buffer.truncate(r);
+        let mut remaining_buffer =
+            BufferBuilder::new(self.buffer.len() - first_remaining_offset);
+        // TODO: Current approach copy the remaining and truncate the original one
+        // Find out a way to avoid copying buffer but split the original one into two.
+        remaining_buffer.append_slice(&self.buffer.as_slice()[first_remaining_offset..]);
+        self.buffer.truncate(first_remaining_offset);
         let values = self.buffer.finish();
         self.buffer = remaining_buffer;
 
@@ -391,5 +387,60 @@ where
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::{ArrayRef, StringArray};
+    use datafusion_physical_expr::binary_map::OutputType;
+
+    use super::{ArrayRowEq, ByteGroupValueBuilder};
+
+    #[test]
+    fn test_take_n() {
+        let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
+        let array = Arc::new(StringArray::from(vec![Some("a"), None])) as ArrayRef;
+        // a, null, null
+        builder.append_val(&array, 0);
+        builder.append_val(&array, 1);
+        builder.append_val(&array, 1);
+
+        // (a, null) remaining: null
+        let output = builder.take_n(2);
+        assert_eq!(&output, &array);
+
+        // null, a, null, a
+        builder.append_val(&array, 0);
+        builder.append_val(&array, 1);
+        builder.append_val(&array, 0);
+
+        // (null, a) remaining: (null, a)
+        let output = builder.take_n(2);
+        let array = Arc::new(StringArray::from(vec![None, Some("a")])) as ArrayRef;
+        assert_eq!(&output, &array);
+
+        let array = Arc::new(StringArray::from(vec![
+            Some("a"),
+            None,
+            Some("longstringfortest"),
+        ])) as ArrayRef;
+
+        // null, a, longstringfortest, null, null
+        builder.append_val(&array, 2);
+        builder.append_val(&array, 1);
+        builder.append_val(&array, 1);
+
+        // (null, a, longstringfortest, null) remaining: (null)
+        let output = builder.take_n(4);
+        let array = Arc::new(StringArray::from(vec![
+            None,
+            Some("a"),
+            Some("longstringfortest"),
+            None,
+        ])) as ArrayRef;
+        assert_eq!(&output, &array);
     }
 }
