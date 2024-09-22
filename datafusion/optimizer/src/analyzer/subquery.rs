@@ -336,6 +336,7 @@ fn check_mixed_out_refer_in_window(window: &Window) -> Result<()> {
 
 #[cfg(test)]
 mod test {
+    use std::cmp::Ordering;
     use std::sync::Arc;
 
     use datafusion_common::{DFSchema, DFSchemaRef};
@@ -346,6 +347,12 @@ mod test {
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct MockUserDefinedLogicalPlan {
         empty_schema: DFSchemaRef,
+    }
+
+    impl PartialOrd for MockUserDefinedLogicalPlan {
+        fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+            None
+        }
     }
 
     impl UserDefinedLogicalNodeCore for MockUserDefinedLogicalPlan {

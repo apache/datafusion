@@ -53,6 +53,9 @@ use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
 
+use super::order::GroupOrdering;
+use super::AggregateExec;
+
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
 pub(crate) enum ExecutionState {
@@ -68,9 +71,6 @@ pub(crate) enum ExecutionState {
     /// All input has been consumed and all groups have been emitted
     Done,
 }
-
-use super::order::GroupOrdering;
-use super::AggregateExec;
 
 /// This encapsulates the spilling state
 struct SpillState {

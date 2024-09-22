@@ -56,8 +56,8 @@ SELECT substr('alphabet', 3, 20)
 phabet
 
 query TT
-select 
-    substr(arrow_cast('alphabet', 'LargeUtf8'), 3, 20), 
+select
+    substr(arrow_cast('alphabet', 'LargeUtf8'), 3, 20),
     substr(arrow_cast('alphabet', 'Utf8View'), 3, 20);
 ----
 phabet phabet
@@ -99,7 +99,7 @@ SELECT
 
 # Nulls
 query TTTTTTTTTT
-SELECT 
+SELECT
   substr('alphabet', NULL),
   substr(NULL, 1),
   substr(NULL, NULL),
@@ -134,3 +134,36 @@ select substr(arrow_cast('foo', 'Utf8View'), 1, -1);
 
 statement error Execution error: negative substring length not allowed
 select substr('', 1, -1);
+
+# StringView scalar to StringView scalar
+
+query BBBB
+select
+  arrow_cast('NULL', 'Utf8View') = arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('NULL', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Andrew', 'Utf8View') = arrow_cast('Andrew', 'Utf8View'),
+  arrow_cast('Xiangpeng', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View');
+----
+false true true true
+
+
+query II
+SELECT
+  ASCII('hello'),
+  ASCII(arrow_cast('world', 'Utf8View'))
+----
+104 119
+
+query III
+SELECT
+  ASCII(arrow_cast('äöüß', 'Utf8View')) as c1,
+  ASCII(arrow_cast('', 'Utf8View')) as c2,
+  ASCII(arrow_cast(NULL, 'Utf8View')) as c3
+----
+228 0 NULL
+
+# coercion from stringview to integer, as input to make_date
+query D
+select make_date(arrow_cast('2024', 'Utf8View'), arrow_cast('01', 'Utf8View'), arrow_cast('23', 'Utf8View'))
+----
+2024-01-23

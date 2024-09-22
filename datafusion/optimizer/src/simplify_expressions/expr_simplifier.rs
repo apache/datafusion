@@ -1798,6 +1798,7 @@ mod tests {
         interval_arithmetic::Interval,
         *,
     };
+    use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
@@ -3901,10 +3902,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            unimplemented!("not needed for tests")
-        }
-
         fn simplify(&self) -> Option<WindowFunctionSimplification> {
             if self.simplify {
                 Some(Box::new(|_, _| Ok(col("result_column"))))
@@ -3914,6 +3911,10 @@ mod tests {
         }
 
         fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+            unimplemented!("not needed for tests")
+        }
+
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
             unimplemented!("not needed for tests")
         }
     }

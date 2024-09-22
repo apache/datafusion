@@ -37,7 +37,7 @@ use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
 use datafusion_expr::tree_node::replace_sort_expressions;
-use datafusion_expr::{col, BinaryExpr, Case, Expr, ExprSchemable, Operator};
+use datafusion_expr::{col, BinaryExpr, Case, Expr, Operator};
 use indexmap::IndexMap;
 
 const CSE_PREFIX: &str = "__common_expr";
@@ -533,14 +533,9 @@ impl CommonSubexprEliminate {
                                 .map(|(expr, expr_alias)| expr.alias(expr_alias))
                                 .collect::<Vec<_>>();
 
-                            let new_input_schema = Arc::clone(new_input.schema());
                             let mut proj_exprs = vec![];
                             for expr in &new_group_expr {
-                                extract_expressions(
-                                    expr,
-                                    &new_input_schema,
-                                    &mut proj_exprs,
-                                )?
+                                extract_expressions(expr, &mut proj_exprs)
                             }
                             for (expr_rewritten, expr_orig) in
                                 rewritten_aggr_expr.into_iter().zip(new_aggr_expr)
@@ -555,11 +550,11 @@ impl CommonSubexprEliminate {
                                     } else {
                                         let expr_alias =
                                             config.alias_generator().next(CSE_PREFIX);
-                                        let (qualifier, field) =
-                                            expr_rewritten.to_field(&new_input_schema)?;
+                                        let (qualifier, field_name) =
+                                            expr_rewritten.qualified_name();
                                         let out_name = qualified_name(
                                             qualifier.as_ref(),
-                                            field.name(),
+                                            &field_name,
                                         );
 
                                         agg_exprs.push(expr_rewritten.alias(&expr_alias));
@@ -855,24 +850,18 @@ fn build_recover_project_plan(
     Projection::try_new(col_exprs, Arc::new(input)).map(LogicalPlan::Projection)
 }
 
-fn extract_expressions(
-    expr: &Expr,
-    schema: &DFSchema,
-    result: &mut Vec<Expr>,
-) -> Result<()> {
+fn extract_expressions(expr: &Expr, result: &mut Vec<Expr>) {
     if let Expr::GroupingSet(groupings) = expr {
         for e in groupings.distinct_expr() {
-            let (qualifier, field) = e.to_field(schema)?;
-            let col = Column::new(qualifier, field.name());
+            let (qualifier, field_name) = e.qualified_name();
+            let col = Column::new(qualifier, field_name);
             result.push(Expr::Column(col))
         }
     } else {
-        let (qualifier, field) = expr.to_field(schema)?;
-        let col = Column::new(qualifier, field.name());
+        let (qualifier, field_name) = expr.qualified_name();
+        let col = Column::new(qualifier, field_name);
         result.push(Expr::Column(col));
     }
-
-    Ok(())
 }
 
 /// Which type of [expressions](Expr) should be considered for rewriting?
@@ -1780,16 +1769,7 @@ mod test {
     fn test_extract_expressions_from_grouping_set() -> Result<()> {
         let mut result = Vec::with_capacity(3);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
-        let schema = DFSchema::from_unqualified_fields(
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-                Field::new("c", DataType::Int32, false),
-            ]
-            .into(),
-            HashMap::default(),
-        )?;
-        extract_expressions(&grouping, &schema, &mut result)?;
+        extract_expressions(&grouping, &mut result);
 
         assert!(result.len() == 3);
         Ok(())
@@ -1799,16 +1779,7 @@ mod test {
     fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
         let mut result = Vec::with_capacity(2);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
-        let schema = DFSchema::from_unqualified_fields(
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-            ]
-            .into(),
-            HashMap::default(),
-        )?;
-        extract_expressions(&grouping, &schema, &mut result)?;
-
+        extract_expressions(&grouping, &mut result);
         assert!(result.len() == 2);
         Ok(())
     }
@@ -1868,12 +1839,7 @@ mod test {
     #[test]
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
-        let schema = DFSchema::from_unqualified_fields(
-            vec![Field::new("a", DataType::Int32, false)].into(),
-            HashMap::default(),
-        )?;
-        extract_expressions(&col("a"), &schema, &mut result)?;
-
+        extract_expressions(&col("a"), &mut result);
         assert!(result.len() == 1);
         Ok(())
     }

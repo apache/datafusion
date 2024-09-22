@@ -105,7 +105,9 @@ pub(crate) struct DatafusionArrowPredicate {
     /// Columns required to evaluate the expression in the arrow schema
     projection: Vec<usize>,
     /// how many rows were filtered out by this predicate
-    rows_filtered: metrics::Count,
+    rows_pruned: metrics::Count,
+    /// how many rows passed this predicate
+    rows_matched: metrics::Count,
     /// how long was spent evaluating this predicate
     time: metrics::Time,
     /// used to perform type coercion while filtering rows
@@ -118,7 +120,8 @@ impl DatafusionArrowPredicate {
         candidate: FilterCandidate,
         schema: &Schema,
         metadata: &ParquetMetaData,
-        rows_filtered: metrics::Count,
+        rows_pruned: metrics::Count,
+        rows_matched: metrics::Count,
         time: metrics::Time,
         schema_mapping: Arc<dyn SchemaMapper>,
     ) -> Result<Self> {
@@ -140,7 +143,8 @@ impl DatafusionArrowPredicate {
                 metadata.file_metadata().schema_descr(),
                 candidate.projection,
             ),
-            rows_filtered,
+            rows_pruned,
+            rows_matched,
             time,
             schema_mapping,
         })
@@ -167,8 +171,10 @@ impl ArrowPredicate for DatafusionArrowPredicate {
             .and_then(|v| v.into_array(batch.num_rows()))
             .and_then(|array| {
                 let bool_arr = as_boolean_array(&array)?.clone();
-                let num_filtered = bool_arr.len() - bool_arr.true_count();
-                self.rows_filtered.add(num_filtered);
+                let num_matched = bool_arr.true_count();
+                let num_pruned = bool_arr.len() - num_matched;
+                self.rows_pruned.add(num_pruned);
+                self.rows_matched.add(num_matched);
                 timer.stop();
                 Ok(bool_arr)
             })
@@ -523,7 +529,8 @@ pub fn build_row_filter(
     file_metrics: &ParquetFileMetrics,
     schema_mapping: Arc<dyn SchemaMapper>,
 ) -> Result<Option<RowFilter>> {
-    let rows_filtered = &file_metrics.pushdown_rows_filtered;
+    let rows_pruned = &file_metrics.pushdown_rows_pruned;
+    let rows_matched = &file_metrics.pushdown_rows_matched;
     let time = &file_metrics.pushdown_eval_time;
 
     // Split into conjuncts:
@@ -563,7 +570,8 @@ pub fn build_row_filter(
                 candidate,
                 file_schema,
                 metadata,
-                rows_filtered.clone(),
+                rows_pruned.clone(),
+                rows_matched.clone(),
                 time.clone(),
                 Arc::clone(&schema_mapping),
             )
@@ -705,6 +713,7 @@ mod test {
             &file_schema,
             &metadata,
             Count::new(),
+            Count::new(),
             Time::new(),
             Arc::clone(&schema_mapping),
         )
@@ -727,6 +736,7 @@ mod test {
             candidate,
             &file_schema,
             &metadata,
+            Count::new(),
             Count::new(),
             Time::new(),
             schema_mapping,
