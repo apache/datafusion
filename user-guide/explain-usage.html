@@ -805,6 +805,21 @@ by all 16 cores.</p>
 </ul>
 </li>
 </ul>
+<p>When predicate pushdown is enabled, <code class="docutils literal notranslate"><span class="pre">ParquetExec</span></code> gains the following metrics:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">page_index_rows_matched</span></code>: number of rows in pages that were tested by a page index filter, and passed</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">page_index_rows_pruned</span></code>: number of rows in pages that were tested by a page index filter, and did not pass</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">row_groups_matched_bloom_filter</span></code>: number of rows in row groups that were tested by a Bloom Filter, and passed</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">row_groups_pruned_bloom_filter</span></code>: number of rows in row groups that were tested by a Bloom Filter, and did not pass</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">row_groups_matched_statistics</span></code>: number of rows in row groups that were tested by row group statistics (min and max value), and passed</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">row_groups_pruned_statistics</span></code>: number of rows in row groups that were tested by row group statistics (min and max value), and did not pass</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">pushdown_rows_matched</span></code>: rows that were tested by any of the above filtered, and passed all of them (this should be minimum of <code class="docutils literal notranslate"><span class="pre">page_index_rows_matched</span></code>, <code class="docutils literal notranslate"><span class="pre">row_groups_pruned_bloom_filter</span></code>, and <code class="docutils literal notranslate"><span class="pre">row_groups_pruned_statistics</span></code>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">pushdown_rows_pruned</span></code>: rows that were tested by any of the above filtered, and did not pass one of them (this should be sum of <code class="docutils literal notranslate"><span class="pre">page_index_rows_matched</span></code>, <code class="docutils literal notranslate"><span class="pre">row_groups_pruned_bloom_filter</span></code>, and <code class="docutils literal notranslate"><span class="pre">row_groups_pruned_statistics</span></code>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">predicate_evaluation_errors</span></code>: number of times evaluating the filter expression failed (expected to be zero in normal operation)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">num_predicate_creation_errors</span></code>: number of errors creating predicates (expected to be zero in normal operation)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">pushdown_eval_time</span></code>: time spent evaluating these filters</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">page_index_eval_time</span></code>: time required to evaluate the page index filters</p></li>
+</ul>
 </section>
 <section id="partitions-and-execution">
 <h2>Partitions and Execution<a class="headerlink" href="#partitions-and-execution" title="Link to this heading">¶</a></h2>
