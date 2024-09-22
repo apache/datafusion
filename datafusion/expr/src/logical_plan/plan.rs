@@ -3051,6 +3051,12 @@ pub enum Partitioning {
     DistributeBy(Vec<Expr>),
 }
 
+/// Represents the unnesting operation on a column based on the context (a known struct
+/// column, a list column, or let the planner infer the unnesting type).
+///
+/// The inferred unnesting type works for both struct and list column, but the unnesting
+/// will only be done once (depth = 1). In case recursion is needed on a multi-dimensional
+/// list type, use [`ColumnUnnestList`]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ColumnUnnestType {
     List(Vec<ColumnUnnestList>),
@@ -3058,7 +3064,7 @@ pub enum ColumnUnnestType {
     Struct,
     // Infer the unnest type based on column schema
     // If column is a list column, the unnest depth will be 1
-    // This value is to support sugar syntax of old api (unnest(columns1,columns2))
+    // This value is to support sugar syntax of old api in Dataframe (unnest(either_list_or_struct_column))
     Inferred,
 }
 
@@ -3076,6 +3082,29 @@ impl fmt::Display for ColumnUnnestType {
     }
 }
 
+/// Represent the unnesting operation on a list column, such as the recursion depth and
+/// the output column name after unnesting
+///
+/// Example: given `ColumnUnnestList { output_column: "output_name", depth: 2 }`
+/// and input as a two dimentional array column values
+/// ```text
+/// input
+/// ---
+/// [[1,2]]
+/// [[3]]
+/// [[4],[5]]
+/// ```
+///  
+/// This operation will result into a column with values
+/// ```text
+/// output_name
+/// ---
+/// 1
+/// 2
+/// 3
+/// 4
+/// 5
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ColumnUnnestList {
     pub output_column: Column,
