@@ -1173,7 +1173,8 @@ mod tests {
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
-        assert_eq!(get_value(&metrics, "pushdown_rows_filtered"), 4);
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 4);
+        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 2);
     }
 
     #[tokio::test]
@@ -1325,7 +1326,8 @@ mod tests {
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
-        assert_eq!(get_value(&metrics, "pushdown_rows_filtered"), 5);
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 5);
+        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 1);
     }
 
     #[tokio::test]
@@ -1399,7 +1401,8 @@ mod tests {
         // There are 4 rows pruned in each of batch2, batch3, and
         // batch4 for a total of 12. batch1 had no pruning as c2 was
         // filled in as null
-        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 12);
+        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 12);
+        assert_eq!(get_value(&metrics, "page_index_rows_matched"), 6);
     }
 
     #[tokio::test]
@@ -1786,7 +1789,8 @@ mod tests {
             "+-----+"
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
-        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 4);
+        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 4);
+        assert_eq!(get_value(&metrics, "page_index_rows_matched"), 2);
         assert!(
             get_value(&metrics, "page_index_eval_time") > 0,
             "no eval time in metrics: {metrics:#?}"
@@ -1855,7 +1859,8 @@ mod tests {
 
         // pushdown predicates have eliminated all 4 bar rows and the
         // null row for 5 rows total
-        assert_eq!(get_value(&metrics, "pushdown_rows_filtered"), 5);
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 5);
+        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 2);
         assert!(
             get_value(&metrics, "pushdown_eval_time") > 0,
             "no eval time in metrics: {metrics:#?}"

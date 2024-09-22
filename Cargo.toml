@@ -31,6 +31,7 @@ members = [
     "datafusion/functions-aggregate-common",
     "datafusion/functions-nested",
     "datafusion/functions-window",
+    "datafusion/functions-window-common",
     "datafusion/optimizer",
     "datafusion/physical-expr",
     "datafusion/physical-expr-common",
@@ -103,6 +104,7 @@ datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", vers
 datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "42.0.0" }
 datafusion-functions-nested = { path = "datafusion/functions-nested", version = "42.0.0" }
 datafusion-functions-window = { path = "datafusion/functions-window", version = "42.0.0" }
+datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "42.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "42.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "42.0.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "42.0.0", default-features = false }

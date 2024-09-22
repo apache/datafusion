@@ -18,7 +18,6 @@
 //! [`WindowUDF`]: User Defined Window Functions
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::DataType;
 use std::cmp::Ordering;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
@@ -27,7 +26,10 @@ use std::{
     sync::Arc,
 };
 
+use arrow::datatypes::{DataType, Field};
+
 use datafusion_common::{not_impl_err, Result};
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
 use crate::expr::WindowFunction;
 use crate::{
@@ -139,13 +141,6 @@ impl WindowUDF {
         self.inner.signature()
     }
 
-    /// Return the type of the function given its input types
-    ///
-    /// See [`WindowUDFImpl::return_type`] for more details.
-    pub fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(args)
-    }
-
     /// Do the function rewrite
     ///
     /// See [`WindowUDFImpl::simplify`] for more details.
@@ -158,11 +153,11 @@ impl WindowUDF {
         self.inner.partition_evaluator()
     }
 
-    /// Returns if column values are nullable for this window function.
+    /// Returns the field of the final result of evaluating this window function.
     ///
-    /// See [`WindowUDFImpl::nullable`] for more details.
-    pub fn nullable(&self) -> bool {
-        self.inner.nullable()
+    /// See [`WindowUDFImpl::field`] for more details.
+    pub fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        self.inner.field(field_args)
     }
 
     /// Returns custom result ordering introduced by this window function
@@ -201,10 +196,11 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
-/// # use arrow::datatypes::DataType;
+/// # use arrow::datatypes::{DataType, Field};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
+/// use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
 ///   signature: Signature
@@ -223,14 +219,15 @@ where
 ///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "smooth_it" }
 ///    fn signature(&self) -> &Signature { &self.signature }
-///    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-///      if !matches!(args.get(0), Some(&DataType::Int32)) {
-///        return plan_err!("smooth_it only accepts Int32 arguments");
-///      }
-///      Ok(DataType::Int32)
-///    }
 ///    // The actual implementation would add one to the argument
 ///    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
+///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+///      if let Some(DataType::Int32) = field_args.get_input_type(0) {
+///        Ok(Field::new(field_args.name(), DataType::Int32, false))
+///      } else {
+///        plan_err!("smooth_it only accepts Int32 arguments")
+///      }
+///    }
 /// }
 ///
 /// // Create a new WindowUDF from the implementation
@@ -258,10 +255,6 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// Returns the function's [`Signature`] for information about what input
     /// types are accepted and the function's Volatility.
     fn signature(&self) -> &Signature;
-
-    /// What [`DataType`] will be returned by this function, given the types of
-    /// the arguments
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
     /// Invoke the function, returning the [`PartitionEvaluator`] instance
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
@@ -324,14 +317,8 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         hasher.finish()
     }
 
-    /// Allows customizing nullable of column for this window UDF.
-    ///
-    /// By default, the final result of evaluating the window UDF is
-    /// allowed to have null values. But if that is not the case then
-    /// it can be customized in the window UDF implementation.
-    fn nullable(&self) -> bool {
-        true
-    }
+    /// The [`Field`] of the final result of evaluating this window function.
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field>;
 
     /// Allows the window UDF to define a custom result ordering.
     ///
@@ -414,10 +401,6 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.signature()
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(arg_types)
-    }
-
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         self.inner.partition_evaluator()
     }
@@ -445,8 +428,8 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         hasher.finish()
     }
 
-    fn nullable(&self) -> bool {
-        self.inner.nullable()
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        self.inner.field(field_args)
     }
 
     fn sort_options(&self) -> Option<SortOptions> {
@@ -461,9 +444,10 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
 #[cfg(test)]
 mod test {
     use crate::{PartitionEvaluator, WindowUDF, WindowUDFImpl};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
     use datafusion_expr_common::signature::{Signature, Volatility};
+    use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use std::any::Any;
     use std::cmp::Ordering;
 
@@ -495,10 +479,10 @@ mod test {
         fn signature(&self) -> &Signature {
             &self.signature
         }
-        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
             unimplemented!()
         }
     }
@@ -531,10 +515,10 @@ mod test {
         fn signature(&self) -> &Signature {
             &self.signature
         }
-        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
             unimplemented!()
         }
     }

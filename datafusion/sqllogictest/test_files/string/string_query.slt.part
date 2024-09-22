@@ -164,6 +164,19 @@ ThisIsAVeryLongASCIIString isIsAVeryLongASCIIString (empty) ThisIsAVeryLongASCII
 (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty)
 NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
 
+query TTTT
+SELECT
+  SUBSTR(ascii_1, 1, 3) as c1,
+  SUBSTR(ascii_2, 1, 3) as c2,
+  SUBSTR(unicode_1, 1, 3) as c3,
+  SUBSTR(unicode_2, 1, 3) as c4
+FROM test_basic_operator;
+----
+And X dat 🔥
+Xia Xia dat dat
+Rap R dat аФу
+NULL R NULL 🔥
+
 # --------------------------------------
 # test distinct aggregate
 # --------------------------------------
@@ -324,3 +337,399 @@ NULL NULL
 
 statement ok
 drop table test_lowercase;
+
+# --------------------------------------
+# Test ASCII
+# --------------------------------------
+
+query IIII
+SELECT
+  ASCII(ascii_1) as c1,
+  ASCII(ascii_2) as c2,
+  ASCII(unicode_1) as c3,
+  ASCII(unicode_2) as c4
+FROM test_basic_operator;
+----
+65 88 100 128293
+88 88 100 100
+82 82 100 1072
+NULL 82 NULL 128293
+
+# --------------------------------------
+# Test BTRIM
+# --------------------------------------
+
+# Test BTRIM outputs
+query TTTTTT
+SELECT
+  BTRIM(ascii_1, 'foo'),
+  BTRIM(ascii_1, 'A'),
+  BTRIM(ascii_1, NULL),
+  BTRIM(unicode_1),
+  BTRIM(unicode_1, '🔥'),
+  BTRIM(unicode_1, NULL)
+FROM test_basic_operator;
+----
+Andrew ndrew NULL datafusion📊🔥 datafusion📊 NULL
+Xiangpeng Xiangpeng NULL datafusion数据融合 datafusion数据融合 NULL
+Raphael Raphael NULL datafusionДатаФусион datafusionДатаФусион NULL
+NULL NULL NULL NULL NULL NULL
+
+query TTTT
+SELECT
+  arrow_typeof(BTRIM(column1_utf8view, 'foo')) AS t1,
+  arrow_typeof(BTRIM(column1_utf8view, 'A')) AS t2,
+  arrow_typeof(BTRIM(column1_utf8view)) AS t3,
+  arrow_typeof(BTRIM(column1_utf8view, NULL)) AS t4
+FROM test;
+----
+Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View
+
+# --------------------------------------
+# Test LTRIM
+# --------------------------------------
+
+# Test LTRIM outputs
+query TTTTTT
+SELECT
+  LTRIM(ascii_1, 'foo'),
+  LTRIM(ascii_1, ascii_2),
+  LTRIM(ascii_1, NULL),
+  LTRIM(unicode_1),
+  LTRIM(unicode_1, NULL),
+  LTRIM(unicode_1, '🔥')
+FROM test_basic_operator;
+----
+Andrew Andrew NULL datafusion📊🔥 NULL datafusion📊🔥
+Xiangpeng (empty) NULL datafusion数据融合 NULL datafusion数据融合
+Raphael aphael NULL datafusionДатаФусион NULL datafusionДатаФусион
+NULL NULL NULL NULL NULL NULL
+
+query TTTTT
+SELECT
+  arrow_typeof(LTRIM(column1_utf8view, 'foo')) AS t1,
+  arrow_typeof(LTRIM(column1_utf8view, column2_utf8view)) AS t2,
+  arrow_typeof(LTRIM(column1_utf8view)) AS t3,
+  arrow_typeof(LTRIM(column1_utf8view, NULL)) AS t4,
+  arrow_typeof(LTRIM(column1_utf8view, 'Xiang')) AS t5
+FROM test;
+----
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
+
+# --------------------------------------
+# Test RTRIM
+# --------------------------------------
+
+# Test RTRIM outputs
+query TTTTT
+SELECT
+  RTRIM(ascii_1, 'rew'),
+  RTRIM(ascii_1, ascii_2),
+  RTRIM(ascii_1),
+  RTRIM(unicode_1, NULL),
+  RTRIM(unicode_1, '🔥')
+FROM test_basic_operator;
+----
+And Andrew Andrew NULL datafusion📊
+Xiangpeng (empty) Xiangpeng NULL datafusion数据融合
+Raphael Raphael Raphael NULL datafusionДатаФусион
+NULL NULL NULL NULL NULL
+
+query TTTTT
+SELECT
+  arrow_typeof(RTRIM(column1_utf8view, 'foo')) AS t1,
+  arrow_typeof(RTRIM(column1_utf8view, column2_utf8view)) AS t2,
+  arrow_typeof(RTRIM(column1_utf8view)) AS t3,
+  arrow_typeof(RTRIM(column1_utf8view, NULL)) AS t4,
+  arrow_typeof(RTRIM(column1_utf8view, 'peng')) As t5
+FROM test;
+----
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
+Utf8View Utf8View Utf8View Utf8View Utf8View
+
+# --------------------------------------
+# Test CONTAINS
+# --------------------------------------
+
+query BBBBBB
+SELECT
+  CONTAINS(ascii_1, 'foo') as c1,
+  CONTAINS(ascii_1, ascii_2) as c2,
+  CONTAINS(ascii_1, NULL) as c3,
+  CONTAINS(unicode_1, unicode_2) as c4,
+  CONTAINS(unicode_1, NULL) as c5,
+  CONTAINS(unicode_1, '🔥') as c6
+FROM test_basic_operator;
+----
+false false NULL true NULL true
+false true NULL true NULL false
+false true NULL true NULL false
+NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test LOWER
+# --------------------------------------
+
+query TT
+SELECT LOWER(ascii_1) as c1, LOWER(unicode_1) as c2 FROM test_basic_operator;
+----
+andrew datafusion📊🔥
+xiangpeng datafusion数据融合
+raphael datafusionдатафусион
+NULL NULL
+
+# --------------------------------------
+# Test UPPER
+# --------------------------------------
+
+query TT
+SELECT UPPER(ascii_1) as c1, UPPER(unicode_1) as c2 FROM test_basic_operator;
+----
+ANDREW DATAFUSION📊🔥
+XIANGPENG DATAFUSION数据融合
+RAPHAEL DATAFUSIONДАТАФУСИОН
+NULL NULL
+
+# --------------------------------------
+# Test Concat
+# --------------------------------------
+
+query TTTTTTTTTTTT
+SELECT
+    concat(ascii_1, ':Data'),
+    concat(ascii_1, ascii_2),
+    concat(ascii_1, NULL),
+    concat(ascii_1, unicode_1),
+    concat(ascii_1, unicode_2),
+    concat(unicode_1, ascii_1),
+    concat(unicode_1, unicode_2),
+    concat(unicode_1, NULL),
+    concat(unicode_1, '🔥'),
+    concat(NULL, '🔥'),
+    concat(NULL, NULL),
+    concat(ascii_1, ',', unicode_1)
+FROM test_basic_operator;
+----
+Andrew:Data AndrewX Andrew Andrewdatafusion📊🔥 Andrew🔥 datafusion📊🔥Andrew datafusion📊🔥🔥 datafusion📊🔥 datafusion📊🔥🔥 🔥 (empty) Andrew,datafusion📊🔥
+Xiangpeng:Data XiangpengXiangpeng Xiangpeng Xiangpengdatafusion数据融合 Xiangpengdatafusion数据融合 datafusion数据融合Xiangpeng datafusion数据融合datafusion数据融合 datafusion数据融合 datafusion数据融合🔥 🔥 (empty) Xiangpeng,datafusion数据融合
+Raphael:Data RaphaelR Raphael RaphaeldatafusionДатаФусион RaphaelаФус datafusionДатаФусионRaphael datafusionДатаФусионаФус datafusionДатаФусион datafusionДатаФусион🔥 🔥 (empty) Raphael,datafusionДатаФусион
+:Data R (empty) (empty) 🔥 (empty) 🔥 (empty) 🔥 🔥 (empty) ,
+
+# --------------------------------------
+# Test OVERLAY
+# --------------------------------------
+
+query TTTTTT
+SELECT
+    OVERLAY(ascii_1 PLACING 'foo' FROM 2 ),
+    OVERLAY(unicode_1 PLACING 'foo' FROM 2),
+    OVERLAY(ascii_1 PLACING '🔥' FROM 2),
+    OVERLAY(unicode_1 PLACING '🔥' FROM 2),
+    OVERLAY(ascii_1 PLACING NULL FROM 2),
+    OVERLAY(unicode_1 PLACING NULL FROM 2)
+FROM test_basic_operator;
+----
+Afooew dfoofusion📊🔥 A🔥drew d🔥tafusion📊🔥 NULL NULL
+Xfoogpeng dfoofusion数据融合 X🔥angpeng d🔥tafusion数据融合 NULL NULL
+Rfooael dfoofusionДатаФусион R🔥phael d🔥tafusionДатаФусион NULL NULL
+NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test REPLACE
+# --------------------------------------
+
+query TTTTTT
+SELECT
+  REPLACE(ascii_1, 'foo', 'bar'),
+  REPLACE(ascii_1, ascii_2, 'bar'),
+  REPLACE(ascii_1, NULL, 'bar'),
+  REPLACE(unicode_1, unicode_2, 'bar'),
+  REPLACE(unicode_1, NULL, 'bar'),
+  REPLACE(unicode_1, '🔥', 'bar')
+FROM test_basic_operator;
+----
+Andrew Andrew NULL datafusion📊bar NULL datafusion📊bar
+Xiangpeng bar NULL bar NULL datafusion数据融合
+Raphael baraphael NULL datafusionДатbarион NULL datafusionДатаФусион
+NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test RIGHT
+# --------------------------------------
+# Test outputs of RIGHT
+query TTTTTT
+SELECT
+  RIGHT(ascii_1, 3),
+  RIGHT(ascii_1, 0),
+  RIGHT(ascii_1, -3),
+  RIGHT(unicode_1, 3),
+  RIGHT(unicode_1, 0),
+  RIGHT(unicode_1, -3)
+FROM test_basic_operator;
+----
+rew (empty) rew n📊🔥 (empty) afusion📊🔥
+eng (empty) ngpeng 据融合 (empty) afusion数据融合
+ael (empty) hael ион (empty) afusionДатаФусион
+NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test LEFT
+# --------------------------------------
+
+# Test outputs of LEFT
+query TTTTTT
+SELECT
+  LEFT(ascii_1, 3),
+  LEFT(ascii_1, 0),
+  LEFT(ascii_1, -3),
+  LEFT(unicode_1, 3),
+  LEFT(unicode_1, 0),
+  LEFT(unicode_1, -3)
+FROM test_basic_operator;
+----
+And (empty) And dat (empty) datafusio
+Xia (empty) Xiangp dat (empty) datafusion数
+Rap (empty) Raph dat (empty) datafusionДатаФус
+NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test SUBSTR_INDEX
+# --------------------------------------
+
+query TTTT
+SELECT
+  SUBSTR_INDEX(ascii_1, 'a', 1),
+  SUBSTR_INDEX(ascii_1, 'a', 2),
+  SUBSTR_INDEX(unicode_1, 'а', 1),
+  SUBSTR_INDEX(unicode_1, 'а', 2)
+FROM test_basic_operator;
+----
+Andrew Andrew datafusion📊🔥 datafusion📊🔥
+Xi Xiangpeng datafusion数据融合 datafusion数据融合
+R Raph datafusionД datafusionДат
+NULL NULL NULL NULL
+
+# --------------------------------------
+# Test FIND_IN_SET
+# --------------------------------------
+
+query IIII
+SELECT
+  FIND_IN_SET(ascii_1, 'a,b,c,d'),
+  FIND_IN_SET(ascii_1, 'Andrew,Xiangpeng,Raphael'),
+  FIND_IN_SET(unicode_1, 'a,b,c,d'),
+  FIND_IN_SET(unicode_1, 'datafusion📊🔥,datafusion数据融合,datafusionДатаФусион')
+FROM test_basic_operator;
+----
+0 1 0 1
+0 2 0 2
+0 3 0 3
+NULL NULL NULL NULL
+
+# --------------------------------------
+# Test || operator
+# --------------------------------------
+
+# || constants
+# expect all results to be the same for each row as they all have the same values
+query TTTT
+SELECT
+    ascii_1 || 'foo',
+    ascii_1 || '🔥',
+    unicode_1 || 'foo',
+    unicode_1 || '🔥'
+FROM test_basic_operator;
+----
+Andrewfoo Andrew🔥 datafusion📊🔥foo datafusion📊🔥🔥
+Xiangpengfoo Xiangpeng🔥 datafusion数据融合foo datafusion数据融合🔥
+Raphaelfoo Raphael🔥 datafusionДатаФусионfoo datafusionДатаФусион🔥
+NULL NULL NULL NULL
+
+# || same type (column1 has null, so also tests NULL || NULL)
+# expect all results to be the same for each row as they all have the same values
+query TTTT
+SELECT
+    ascii_1 || ascii_2,
+    ascii_1 || unicode_2,
+    unicode_1 || ascii_2,
+    unicode_1 || unicode_2
+FROM test_basic_operator;
+----
+AndrewX Andrew🔥 datafusion📊🔥X datafusion📊🔥🔥
+XiangpengXiangpeng Xiangpengdatafusion数据融合 datafusion数据融合Xiangpeng datafusion数据融合datafusion数据融合
+RaphaelR RaphaelаФус datafusionДатаФусионR datafusionДатаФусионаФус
+NULL NULL NULL NULL
+
+# --------------------------------------
+# Test ~ operator
+# --------------------------------------
+
+query BB
+SELECT
+  ascii_1 ~ 'an',
+  unicode_1 ~ 'таФ'
+FROM test_basic_operator;
+----
+false false
+true false
+false true
+NULL NULL
+
+query BB
+SELECT
+  ascii_1 ~* '^a.{3}e',
+  unicode_1 ~* '^d.*Фу'
+FROM test_basic_operator;
+----
+true false
+false false
+false true
+NULL NULL
+
+query BB
+SELECT
+  ascii_1 !~~ 'xia_g%g',
+  unicode_1 !~~ 'datafusion数据融合'
+FROM test_basic_operator;
+----
+true true
+true false
+true true
+NULL NULL
+
+query BB
+SELECT
+  ascii_1 !~~* 'xia_g%g',
+  unicode_1 !~~* 'datafusion数据融合'
+FROM test_basic_operator;
+----
+true true
+false false
+true true
+NULL NULL
+
+# --------------------------------------
+# Test || operator
+# --------------------------------------
+
+query TTTTT
+select
+    ascii_1 || ' nice',
+    ascii_1 || ' and ' || ascii_2,
+    unicode_1 || ' cool',
+    unicode_1 || ' and ' || unicode_2,
+    ascii_1 || ' 🔥 ' || unicode_1
+from test_basic_operator;
+----
+Andrew nice Andrew and X datafusion📊🔥 cool datafusion📊🔥 and 🔥 Andrew 🔥 datafusion📊🔥
+Xiangpeng nice Xiangpeng and Xiangpeng datafusion数据融合 cool datafusion数据融合 and datafusion数据融合 Xiangpeng 🔥 datafusion数据融合
+Raphael nice Raphael and R datafusionДатаФусион cool datafusionДатаФусион and аФус Raphael 🔥 datafusionДатаФусион
+NULL NULL NULL NULL NULL
