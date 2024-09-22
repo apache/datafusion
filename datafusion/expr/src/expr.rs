@@ -27,11 +27,11 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
+use crate::Volatility;
 use crate::{
     built_in_window_function, udaf, BuiltInWindowFunction, ExprSchemable, Operator,
     Signature, WindowFrame, WindowUDF,
 };
-use crate::{window_frame, Volatility};
 
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::tree_node::{
@@ -40,6 +40,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
     NullTreatment, RenameSelectItem, ReplaceSelectElement,
@@ -193,7 +194,7 @@ use sqlparser::ast::{
 ///    }
 ///    // The return value controls whether to continue visiting the tree
 ///    Ok(TreeNodeRecursion::Continue)
-/// }).unwrap();;
+/// }).unwrap();
 /// // All subtrees have been visited and literals found
 /// assert_eq!(scalars.len(), 2);
 /// assert!(scalars.contains(&ScalarValue::Int32(Some(5))));
@@ -223,7 +224,7 @@ use sqlparser::ast::{
 /// assert!(rewritten.transformed);
 /// // to 42 = 5 AND b = 6
 /// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Alias),
@@ -354,7 +355,7 @@ impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
 }
 
 /// UNNEST expression.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
     pub expr: Box<Expr>,
 }
@@ -374,7 +375,7 @@ impl Unnest {
 }
 
 /// Alias expression
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
@@ -397,7 +398,7 @@ impl Alias {
 }
 
 /// Binary expression
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct BinaryExpr {
     /// Left-hand side of the expression
     pub left: Box<Expr>,
@@ -448,7 +449,7 @@ impl Display for BinaryExpr {
 }
 
 /// CASE expression
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Case {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     pub expr: Option<Box<Expr>>,
@@ -474,7 +475,7 @@ impl Case {
 }
 
 /// LIKE expression
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Like {
     pub negated: bool,
     pub expr: Box<Expr>,
@@ -504,7 +505,7 @@ impl Like {
 }
 
 /// BETWEEN expression
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Between {
     /// The value to compare
     pub expr: Box<Expr>,
@@ -529,7 +530,7 @@ impl Between {
 }
 
 /// ScalarFunction expression invokes a built-in scalar function
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct ScalarFunction {
     /// The function
     pub func: Arc<crate::ScalarUDF>,
@@ -567,7 +568,7 @@ pub enum GetFieldAccess {
 }
 
 /// Cast expression
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Cast {
     /// The expression being cast
     pub expr: Box<Expr>,
@@ -583,7 +584,7 @@ impl Cast {
 }
 
 /// TryCast Expression
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct TryCast {
     /// The expression being cast
     pub expr: Box<Expr>,
@@ -599,7 +600,7 @@ impl TryCast {
 }
 
 /// SORT expression
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Sort {
     /// The expression to sort on
     pub expr: Expr,
@@ -651,7 +652,7 @@ impl Display for Sort {
 /// See also  [`ExprFunctionExt`] to set these fields on `Expr`
 ///
 /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
     pub func: Arc<crate::AggregateUDF>,
@@ -688,7 +689,7 @@ impl AggregateFunction {
 }
 
 /// WindowFunction
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 /// Defines which implementation of an aggregate function DataFusion should call.
 pub enum WindowFunctionDefinition {
     /// A built in aggregate function that leverages an aggregate function
@@ -706,6 +707,7 @@ impl WindowFunctionDefinition {
         &self,
         input_expr_types: &[DataType],
         _input_expr_nullable: &[bool],
+        display_name: &str,
     ) -> Result<DataType> {
         match self {
             WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
@@ -714,7 +716,9 @@ impl WindowFunctionDefinition {
             WindowFunctionDefinition::AggregateUDF(fun) => {
                 fun.return_type(input_expr_types)
             }
-            WindowFunctionDefinition::WindowUDF(fun) => fun.return_type(input_expr_types),
+            WindowFunctionDefinition::WindowUDF(fun) => fun
+                .field(WindowUDFFieldArgs::new(input_expr_types, display_name))
+                .map(|field| field.data_type().clone()),
         }
     }
 
@@ -789,7 +793,7 @@ impl From<Arc<WindowUDF>> for WindowFunctionDefinition {
 ///   .build()
 ///   .unwrap();
 /// ```
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct WindowFunction {
     /// Name of the function
     pub fun: WindowFunctionDefinition,
@@ -800,7 +804,7 @@ pub struct WindowFunction {
     /// List of order by expressions
     pub order_by: Vec<Sort>,
     /// Window frame
-    pub window_frame: window_frame::WindowFrame,
+    pub window_frame: WindowFrame,
     /// Specifies how NULL value is treated: ignore or respect
     pub null_treatment: Option<NullTreatment>,
 }
@@ -840,7 +844,7 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
 }
 
 /// EXISTS expression
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Exists {
     /// subquery that will produce a single column of data
     pub subquery: Subquery,
@@ -888,7 +892,7 @@ impl AggregateUDF {
 }
 
 /// InList expression
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct InList {
     /// The expression to compare
     pub expr: Box<Expr>,
@@ -910,7 +914,7 @@ impl InList {
 }
 
 /// IN subquery
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct InSubquery {
     /// The expression to compare
     pub expr: Box<Expr>,
@@ -935,7 +939,7 @@ impl InSubquery {
 ///
 /// The type of these parameters is inferred using [`Expr::infer_placeholder_types`]
 /// or can be specified directly using `PREPARE` statements.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Placeholder {
     /// The identifier of the parameter, including the leading `$` (e.g, `"$1"` or `"$foo"`)
     pub id: String,
@@ -956,7 +960,7 @@ impl Placeholder {
 /// for Postgres definition.
 /// See <https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-groupby.html>
 /// for Apache Spark definition.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub enum GroupingSet {
     /// Rollup grouping sets
     Rollup(Vec<Expr>),
@@ -989,7 +993,7 @@ impl GroupingSet {
 }
 
 /// Additional options for wildcards, e.g. Snowflake `EXCLUDE`/`RENAME` and Bigquery `EXCEPT`.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug, Default)]
 pub struct WildcardOptions {
     /// `[ILIKE...]`.
     ///  Snowflake syntax: <https://docs.snowflake.com/en/sql-reference/sql/select#parameters>
@@ -1045,7 +1049,7 @@ impl Display for WildcardOptions {
 }
 
 /// The planned expressions for `REPLACE`
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug, Default)]
 pub struct PlannedReplaceSelectItem {
     /// The original ast nodes
     pub items: Vec<ReplaceSelectElement>,
@@ -1068,18 +1072,6 @@ impl PlannedReplaceSelectItem {
 
     pub fn expressions(&self) -> &[Expr] {
         &self.planned_expressions
-    }
-}
-
-/// Fixed seed for the hashing so that Ords are consistent across runs
-const SEED: ahash::RandomState = ahash::RandomState::with_seeds(0, 0, 0, 0);
-
-impl PartialOrd for Expr {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let s = SEED.hash_one(self);
-        let o = SEED.hash_one(other);
-
-        Some(s.cmp(&o))
     }
 }
 
@@ -2431,20 +2423,15 @@ mod test {
 
     #[test]
     fn test_partial_ord() {
-        // Test validates that partial ord is defined for Expr using hashes, not
+        // Test validates that partial ord is defined for Expr, not
         // intended to exhaustively test all possibilities
         let exp1 = col("a") + lit(1);
         let exp2 = col("a") + lit(2);
         let exp3 = !(col("a") + lit(2));
 
-        // Since comparisons are done using hash value of the expression
-        // expr < expr2 may return false, or true. There is no guaranteed result.
-        // The only guarantee is "<" operator should have the opposite result of ">=" operator
-        let greater_or_equal = exp1 >= exp2;
-        assert_eq!(exp1 < exp2, !greater_or_equal);
-
-        let greater_or_equal = exp3 >= exp2;
-        assert_eq!(exp3 < exp2, !greater_or_equal);
+        assert!(exp1 < exp2);
+        assert!(exp3 > exp2);
+        assert!(exp1 < exp3)
     }
 
     #[test]
@@ -2552,10 +2539,10 @@ mod test {
     #[test]
     fn test_first_value_return_type() -> Result<()> {
         let fun = find_df_window_func("first_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::UInt64], &[true])?;
+        let observed = fun.return_type(&[DataType::UInt64], &[true], "")?;
         assert_eq!(DataType::UInt64, observed);
 
         Ok(())
@@ -2564,10 +2551,10 @@ mod test {
     #[test]
     fn test_last_value_return_type() -> Result<()> {
         let fun = find_df_window_func("last_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64], &[true])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2576,10 +2563,10 @@ mod test {
     #[test]
     fn test_lead_return_type() -> Result<()> {
         let fun = find_df_window_func("lead").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64], &[true])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2588,10 +2575,10 @@ mod test {
     #[test]
     fn test_lag_return_type() -> Result<()> {
         let fun = find_df_window_func("lag").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64], &[true])?;
+        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2601,11 +2588,11 @@ mod test {
     fn test_nth_value_return_type() -> Result<()> {
         let fun = find_df_window_func("nth_value").unwrap();
         let observed =
-            fun.return_type(&[DataType::Utf8, DataType::UInt64], &[true, true])?;
+            fun.return_type(&[DataType::Utf8, DataType::UInt64], &[true, true], "")?;
         assert_eq!(DataType::Utf8, observed);
 
         let observed =
-            fun.return_type(&[DataType::Float64, DataType::UInt64], &[true, true])?;
+            fun.return_type(&[DataType::Float64, DataType::UInt64], &[true, true], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2614,7 +2601,7 @@ mod test {
     #[test]
     fn test_percent_rank_return_type() -> Result<()> {
         let fun = find_df_window_func("percent_rank").unwrap();
-        let observed = fun.return_type(&[], &[])?;
+        let observed = fun.return_type(&[], &[], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2623,7 +2610,7 @@ mod test {
     #[test]
     fn test_cume_dist_return_type() -> Result<()> {
         let fun = find_df_window_func("cume_dist").unwrap();
-        let observed = fun.return_type(&[], &[])?;
+        let observed = fun.return_type(&[], &[], "")?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -2632,7 +2619,7 @@ mod test {
     #[test]
     fn test_ntile_return_type() -> Result<()> {
         let fun = find_df_window_func("ntile").unwrap();
-        let observed = fun.return_type(&[DataType::Int16], &[true])?;
+        let observed = fun.return_type(&[DataType::Int16], &[true], "")?;
         assert_eq!(DataType::UInt64, observed);
 
         Ok(())

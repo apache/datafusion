@@ -17,6 +17,7 @@
 
 //! Logical plan types
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -190,7 +191,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # }
 /// ```
 ///
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
     /// SELECT with an expression list) on its input.
@@ -1393,7 +1394,7 @@ impl LogicalPlan {
     /// referenced expressions into columns.
     ///
     /// See also: [`crate::utils::columnize_expr`]
-    pub(crate) fn columnized_output_exprs(&self) -> Result<Vec<(&Expr, Column)>> {
+    pub fn columnized_output_exprs(&self) -> Result<Vec<(&Expr, Column)>> {
         match self {
             LogicalPlan::Aggregate(aggregate) => Ok(aggregate
                 .output_expressions()?
@@ -1982,7 +1983,7 @@ impl LogicalPlan {
                             .map(|i| &input_columns[*i])
                             .collect::<Vec<&Column>>();
                         // get items from input_columns indexed by list_col_indices
-                        write!(f, "Unnest: lists[{}] structs[{}]", 
+                        write!(f, "Unnest: lists[{}] structs[{}]",
                         expr_vec_fmt!(list_type_columns),
                         expr_vec_fmt!(struct_type_columns))
                     }
@@ -2014,6 +2015,13 @@ pub struct EmptyRelation {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for EmptyRelation {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.produce_one_row.partial_cmp(&other.produce_one_row)
+    }
+}
+
 /// A variadic query operation, Recursive CTE.
 ///
 /// # Recursive Query Evaluation
@@ -2036,7 +2044,7 @@ pub struct EmptyRelation {
 ///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
@@ -2061,6 +2069,13 @@ pub struct Values {
     pub values: Vec<Vec<Expr>>,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Values {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.values.partial_cmp(&other.values)
+    }
+}
+
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -2073,6 +2088,16 @@ pub struct Projection {
     pub input: Arc<LogicalPlan>,
     /// The schema description of the output
     pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Projection {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.expr.partial_cmp(&other.expr) {
+            Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+            cmp => cmp,
+        }
+    }
 }
 
 impl Projection {
@@ -2126,11 +2151,13 @@ impl Projection {
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
     let metadata = input.schema().metadata().clone();
-    let mut schema =
-        DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?;
-    schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
-        exprs, input,
-    )?)?;
+
+    let schema =
+        DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?
+            .with_functional_dependencies(calc_func_dependencies_for_project(
+                exprs, input,
+            )?)?;
+
     Ok(Arc::new(schema))
 }
 
@@ -2172,6 +2199,16 @@ impl SubqueryAlias {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for SubqueryAlias {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => self.alias.partial_cmp(&other.alias),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Filters rows from its input that do not match an
 /// expression (essentially a WHERE clause with a predicate
 /// expression).
@@ -2183,7 +2220,7 @@ impl SubqueryAlias {
 ///
 /// Filter should not be created directly but instead use `try_new()`
 /// and that these fields are only pub to support pattern matching
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 #[non_exhaustive]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
@@ -2209,6 +2246,17 @@ impl Filter {
         Self::try_new_internal(predicate, input, true)
     }
 
+    fn is_allowed_filter_type(data_type: &DataType) -> bool {
+        match data_type {
+            // Interpret NULL as a missing boolean value.
+            DataType::Boolean | DataType::Null => true,
+            DataType::Dictionary(_, value_type) => {
+                Filter::is_allowed_filter_type(value_type.as_ref())
+            }
+            _ => false,
+        }
+    }
+
     fn try_new_internal(
         predicate: Expr,
         input: Arc<LogicalPlan>,
@@ -2219,8 +2267,7 @@ impl Filter {
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
-            // Interpret NULL as a missing boolean value.
-            if predicate_type != DataType::Boolean && predicate_type != DataType::Null {
+            if !Filter::is_allowed_filter_type(&predicate_type) {
                 return plan_err!(
                     "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
                 );
@@ -2399,6 +2446,16 @@ impl Window {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Window {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => self.window_expr.partial_cmp(&other.window_expr),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Produces rows from a table provider by reference or from the context
 #[derive(Clone)]
 pub struct TableScan {
@@ -2440,6 +2497,37 @@ impl PartialEq for TableScan {
 }
 
 impl Eq for TableScan {}
+
+// Manual implementation needed because of `source` and `projected_schema` fields.
+// Comparison excludes these field.
+impl PartialOrd for TableScan {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableTableScan<'a> {
+            /// The name of the table
+            pub table_name: &'a TableReference,
+            /// Optional column indices to use as a projection
+            pub projection: &'a Option<Vec<usize>>,
+            /// Optional expressions to be used as filters by the table provider
+            pub filters: &'a Vec<Expr>,
+            /// Optional number of rows to read
+            pub fetch: &'a Option<usize>,
+        }
+        let comparable_self = ComparableTableScan {
+            table_name: &self.table_name,
+            projection: &self.projection,
+            filters: &self.filters,
+            fetch: &self.fetch,
+        };
+        let comparable_other = ComparableTableScan {
+            table_name: &other.table_name,
+            projection: &other.projection,
+            filters: &other.filters,
+            fetch: &other.fetch,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
+}
 
 impl Hash for TableScan {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -2516,8 +2604,18 @@ pub struct CrossJoin {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for CrossJoin {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.left.partial_cmp(&other.left) {
+            Some(Ordering::Equal) => self.right.partial_cmp(&other.right),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Repartition the plan based on a partitioning scheme.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Repartition {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -2534,9 +2632,16 @@ pub struct Union {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Union {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.inputs.partial_cmp(&other.inputs)
+    }
+}
+
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
 /// `Expr::Placeholder` expressions that are filled in during execution
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Prepare {
     /// The name of the statement
     pub name: String,
@@ -2576,6 +2681,15 @@ pub struct DescribeTable {
     pub output_schema: DFSchemaRef,
 }
 
+// Manual implementation of `PartialOrd`, returning none since there are no comparable types in
+// `DescribeTable`. This allows `LogicalPlan` to derive `PartialOrd`.
+impl PartialOrd for DescribeTable {
+    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+        // There is no relevant comparison for schemas
+        None
+    }
+}
+
 /// Produces a relation with string representations of
 /// various parts of the plan
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2592,6 +2706,36 @@ pub struct Explain {
     pub logical_optimization_succeeded: bool,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Explain {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableExplain<'a> {
+            /// Should extra (detailed, intermediate plans) be included?
+            pub verbose: &'a bool,
+            /// The logical plan that is being EXPLAIN'd
+            pub plan: &'a Arc<LogicalPlan>,
+            /// Represent the various stages plans have gone through
+            pub stringified_plans: &'a Vec<StringifiedPlan>,
+            /// Used by physical planner to check if should proceed with planning
+            pub logical_optimization_succeeded: &'a bool,
+        }
+        let comparable_self = ComparableExplain {
+            verbose: &self.verbose,
+            plan: &self.plan,
+            stringified_plans: &self.stringified_plans,
+            logical_optimization_succeeded: &self.logical_optimization_succeeded,
+        };
+        let comparable_other = ComparableExplain {
+            verbose: &other.verbose,
+            plan: &other.plan,
+            stringified_plans: &other.stringified_plans,
+            logical_optimization_succeeded: &other.logical_optimization_succeeded,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
+}
+
 /// Runs the actual plan, and then prints the physical plan with
 /// with execution metrics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2602,6 +2746,16 @@ pub struct Analyze {
     pub input: Arc<LogicalPlan>,
     /// The output schema of the explain (2 columns of text)
     pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Analyze {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.verbose.partial_cmp(&other.verbose) {
+            Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+            cmp => cmp,
+        }
+    }
 }
 
 /// Extension operator defined outside of DataFusion
@@ -2624,8 +2778,14 @@ impl PartialEq for Extension {
     }
 }
 
+impl PartialOrd for Extension {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.node.partial_cmp(&other.node)
+    }
+}
+
 /// Produces the first `n` tuples from its input and discards the rest.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Limit {
     /// Number of rows to skip before fetch
     pub skip: usize,
@@ -2637,7 +2797,7 @@ pub struct Limit {
 }
 
 /// Removes duplicate rows from the input
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Distinct {
     /// Plain `DISTINCT` referencing all selection expressions
     All(Arc<LogicalPlan>),
@@ -2732,6 +2892,38 @@ impl DistinctOn {
 
         self.sort_expr = Some(sort_expr);
         Ok(self)
+    }
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for DistinctOn {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableDistinctOn<'a> {
+            /// The `DISTINCT ON` clause expression list
+            pub on_expr: &'a Vec<Expr>,
+            /// The selected projection expression list
+            pub select_expr: &'a Vec<Expr>,
+            /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause when
+            /// present. Note that those matching expressions actually wrap the `ON` expressions with
+            /// additional info pertaining to the sorting procedure (i.e. ASC/DESC, and NULLS FIRST/LAST).
+            pub sort_expr: &'a Option<Vec<SortExpr>>,
+            /// The logical plan that is being DISTINCT'd
+            pub input: &'a Arc<LogicalPlan>,
+        }
+        let comparable_self = ComparableDistinctOn {
+            on_expr: &self.on_expr,
+            select_expr: &self.select_expr,
+            sort_expr: &self.sort_expr,
+            input: &self.input,
+        };
+        let comparable_other = ComparableDistinctOn {
+            on_expr: &other.on_expr,
+            select_expr: &other.select_expr,
+            sort_expr: &other.sort_expr,
+            input: &other.input,
+        };
+        comparable_self.partial_cmp(&comparable_other)
     }
 }
 
@@ -2839,6 +3031,21 @@ impl Aggregate {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Aggregate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => {
+                match self.group_expr.partial_cmp(&other.group_expr) {
+                    Some(Ordering::Equal) => self.aggr_expr.partial_cmp(&other.aggr_expr),
+                    cmp => cmp,
+                }
+            }
+            cmp => cmp,
+        }
+    }
+}
+
 /// Checks whether any expression in `group_expr` contains `Expr::GroupingSet`.
 fn contains_grouping_set(group_expr: &[Expr]) -> bool {
     group_expr
@@ -2937,7 +3144,7 @@ fn calc_func_dependencies_for_project(
 }
 
 /// Sorts its input according to a list of sort expressions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Sort {
     /// The sort expressions
     pub expr: Vec<SortExpr>,
@@ -3003,8 +3210,50 @@ impl Join {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Join {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableJoin<'a> {
+            /// Left input
+            pub left: &'a Arc<LogicalPlan>,
+            /// Right input
+            pub right: &'a Arc<LogicalPlan>,
+            /// Equijoin clause expressed as pairs of (left, right) join expressions
+            pub on: &'a Vec<(Expr, Expr)>,
+            /// Filters applied during join (non-equi conditions)
+            pub filter: &'a Option<Expr>,
+            /// Join type
+            pub join_type: &'a JoinType,
+            /// Join constraint
+            pub join_constraint: &'a JoinConstraint,
+            /// If null_equals_null is true, null == null else null != null
+            pub null_equals_null: &'a bool,
+        }
+        let comparable_self = ComparableJoin {
+            left: &self.left,
+            right: &self.right,
+            on: &self.on,
+            filter: &self.filter,
+            join_type: &self.join_type,
+            join_constraint: &self.join_constraint,
+            null_equals_null: &self.null_equals_null,
+        };
+        let comparable_other = ComparableJoin {
+            left: &other.left,
+            right: &other.right,
+            on: &other.on,
+            filter: &other.filter,
+            join_type: &other.join_type,
+            join_constraint: &other.join_constraint,
+            null_equals_null: &other.null_equals_null,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
+}
+
 /// Subquery
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Subquery {
     /// The subquery
     pub subquery: Arc<LogicalPlan>,
@@ -3040,7 +3289,7 @@ impl Debug for Subquery {
 /// See [`Partitioning`] for more details on partitioning
 ///
 /// [`Partitioning`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html#
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
@@ -3136,6 +3385,47 @@ pub struct Unnest {
     pub schema: DFSchemaRef,
     /// Options
     pub options: UnnestOptions,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Unnest {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableUnnest<'a> {
+            /// The incoming logical plan
+            pub input: &'a Arc<LogicalPlan>,
+            /// Columns to run unnest on, can be a list of (List/Struct) columns
+            pub exec_columns: &'a Vec<Column>,
+            /// refer to the indices(in the input schema) of columns
+            /// that have type list to run unnest on
+            pub list_type_columns: &'a Vec<usize>,
+            /// refer to the indices (in the input schema) of columns
+            /// that have type struct to run unnest on
+            pub struct_type_columns: &'a Vec<usize>,
+            /// Having items aligned with the output columns
+            /// representing which column in the input schema each output column depends on
+            pub dependency_indices: &'a Vec<usize>,
+            /// Options
+            pub options: &'a UnnestOptions,
+        }
+        let comparable_self = ComparableUnnest {
+            input: &self.input,
+            exec_columns: &self.exec_columns,
+            list_type_columns: &self.list_type_columns,
+            struct_type_columns: &self.struct_type_columns,
+            dependency_indices: &self.dependency_indices,
+            options: &self.options,
+        };
+        let comparable_other = ComparableUnnest {
+            input: &other.input,
+            exec_columns: &other.exec_columns,
+            list_type_columns: &other.list_type_columns,
+            struct_type_columns: &other.struct_type_columns,
+            dependency_indices: &other.dependency_indices,
+            options: &other.options,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
 }
 
 #[cfg(test)]
@@ -3749,5 +4039,41 @@ digraph {
                         \n    TableScan: ?table?";
         let actual = format!("{}", plan.display_indent());
         assert_eq!(expected.to_string(), actual)
+    }
+
+    #[test]
+    fn test_plan_partial_ord() {
+        let empty_relation = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+
+        let describe_table = LogicalPlan::DescribeTable(DescribeTable {
+            schema: Arc::new(Schema::new(vec![Field::new(
+                "foo",
+                DataType::Int32,
+                false,
+            )])),
+            output_schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+
+        let describe_table_clone = LogicalPlan::DescribeTable(DescribeTable {
+            schema: Arc::new(Schema::new(vec![Field::new(
+                "foo",
+                DataType::Int32,
+                false,
+            )])),
+            output_schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+
+        assert_eq!(
+            empty_relation.partial_cmp(&describe_table),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            describe_table.partial_cmp(&empty_relation),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(describe_table.partial_cmp(&describe_table_clone), None);
     }
 }

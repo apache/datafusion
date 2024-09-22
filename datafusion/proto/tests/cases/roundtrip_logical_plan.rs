@@ -75,6 +75,7 @@ use datafusion_functions_aggregate::expr_fn::{
 };
 use datafusion_functions_aggregate::kurtosis_pop::kurtosis_pop;
 use datafusion_functions_aggregate::string_agg::string_agg;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -841,6 +842,12 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
         array_pop_front(make_array(vec![lit(1), lit(2), lit(3)])),
         array_pop_back(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_any_value(make_array(vec![
+            lit(ScalarValue::Null),
+            lit(1),
+            lit(2),
+            lit(3),
+        ])),
         array_reverse(make_array(vec![lit(1), lit(2), lit(3)])),
         array_position(
             make_array(vec![lit(1), lit(2), lit(3), lit(4)]),
@@ -972,7 +979,7 @@ pub mod proto {
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Hash)]
 struct TopKPlanNode {
     k: usize,
     input: LogicalPlan,
@@ -2166,7 +2173,7 @@ fn roundtrip_scalar_udf() {
     let udf = create_udf(
         "dummy",
         vec![DataType::Utf8],
-        Arc::new(DataType::Utf8),
+        DataType::Utf8,
         Volatility::Immutable,
         scalar_fn,
     );
@@ -2424,19 +2431,20 @@ fn roundtrip_window() {
             &self.signature
         }
 
-        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-            if arg_types.len() != 1 {
-                return plan_err!(
-                    "dummy_udwf expects 1 argument, got {}: {:?}",
-                    arg_types.len(),
-                    arg_types
-                );
-            }
-            Ok(arg_types[0].clone())
-        }
-
         fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
             make_partition_evaluator()
+        }
+
+        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+            if let Some(return_type) = field_args.get_input_type(0) {
+                Ok(Field::new(field_args.name(), return_type, true))
+            } else {
+                plan_err!(
+                    "dummy_udwf expects 1 argument, got {}: {:?}",
+                    field_args.input_types().len(),
+                    field_args.input_types()
+                )
+            }
         }
     }
 

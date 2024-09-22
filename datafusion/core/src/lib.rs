@@ -17,24 +17,28 @@
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that
-//! uses [Apache Arrow] as its in-memory format. DataFusion help developers
-//! build fast and feature rich database and analytic systems, customized to
-//! particular workloads. See [use cases] for examples
+//! uses [Apache Arrow] as its in-memory format. DataFusion's target users are
+//! developers building fast and feature rich database and analytic systems,
+//! customized to particular workloads. See [use cases] for examples.
 //!
-//! "Out of the box," DataFusion quickly runs complex [SQL] and
-//! [`DataFrame`] queries using a full-featured query planner, a columnar,
-//! streaming, multi-threaded, vectorized execution engine, and partitioned data
-//! sources (Parquet, CSV, JSON, and Avro).
+//! "Out of the box," DataFusion offers [SQL] and [`Dataframe`] APIs,
+//! excellent [performance], built-in support for CSV, Parquet, JSON, and Avro,
+//! extensive customization, and a great community.
+//! [Python Bindings] are also available.
 //!
-//! DataFusion is designed for easy customization such as
-//! additional data sources, query languages, functions, custom
-//! operators and more. See the [Architecture] section for more details.
+//! DataFusion features a full query planner, a columnar, streaming, multi-threaded,
+//! vectorized execution engine, and partitioned data  sources. You can
+//! customize DataFusion at almost all points including additional data sources,
+//! query languages, functions, custom operators and more.
+//! See the [Architecture] section below for more details.
 //!
 //! [DataFusion]: https://datafusion.apache.org/
 //! [Apache Arrow]: https://arrow.apache.org
 //! [use cases]: https://datafusion.apache.org/user-guide/introduction.html#use-cases
 //! [SQL]: https://datafusion.apache.org/user-guide/sql/index.html
 //! [`DataFrame`]: dataframe::DataFrame
+//! [performance]: https://benchmark.clickhouse.com/
+//! [Python Bindings]: https://github.com/apache/datafusion-python
 //! [Architecture]: #architecture
 //!
 //! # Examples

@@ -367,13 +367,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                             "logical_plan::from_proto() Unsupported file format '{self:?}'"
                         ))
                     })? {
-                        #[cfg(feature = "parquet")]
+                        #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
                         FileFormatType::Parquet(protobuf::ParquetFormat {options}) => {
-                            let mut parquet = ParquetFormat::default();
-                            if let Some(options) = options {
-                                parquet = parquet.with_options(options.try_into()?)
+                            #[cfg(feature = "parquet")]
+                            {
+                                let mut parquet = ParquetFormat::default();
+                                if let Some(options) = options {
+                                    parquet = parquet.with_options(options.try_into()?)
+                                }
+                                Arc::new(parquet)
                             }
-                            Arc::new(parquet)
+                            #[cfg(not(feature = "parquet"))]
+                            panic!("Unable to process parquet file since `parquet` feature is not enabled");
                         }
                         FileFormatType::Csv(protobuf::CsvFormat {
                             options

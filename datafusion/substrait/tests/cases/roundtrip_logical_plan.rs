@@ -21,6 +21,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_substrait::logical_plan::{
     consumer::from_substrait_plan, producer::to_substrait_plan,
 };
+use std::cmp::Ordering;
 
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
@@ -84,6 +85,17 @@ struct MockUserDefinedLogicalPlan {
     empty_schema: DFSchemaRef,
 }
 
+// `PartialOrd` needed for `UserDefinedLogicalNodeCore`, manual implementation necessary due to
+// the `empty_schema` field.
+impl PartialOrd for MockUserDefinedLogicalPlan {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.validation_bytes.partial_cmp(&other.validation_bytes) {
+            Some(Ordering::Equal) => self.inputs.partial_cmp(&other.inputs),
+            cmp => cmp,
+        }
+    }
+}
+
 impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -130,6 +142,10 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
     }
 
     fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
+        unimplemented!()
+    }
+
+    fn dyn_ord(&self, _: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
         unimplemented!()
     }
 }

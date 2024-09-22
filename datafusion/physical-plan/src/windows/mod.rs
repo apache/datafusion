@@ -51,6 +51,7 @@ mod utils;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -73,7 +74,8 @@ pub fn schema_add_window_field(
         .iter()
         .map(|e| Arc::clone(e).as_ref().nullable(schema))
         .collect::<Result<Vec<_>>>()?;
-    let window_expr_return_type = window_fn.return_type(&data_types, &nullability)?;
+    let window_expr_return_type =
+        window_fn.return_type(&data_types, &nullability, fn_name)?;
     let mut window_fields = schema
         .fields()
         .iter()
@@ -141,7 +143,7 @@ fn window_expr_from_aggregate_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
-    aggregate: Arc<AggregateFunctionExpr>,
+    aggregate: AggregateFunctionExpr,
 ) -> Arc<dyn WindowExpr> {
     // Is there a potentially unlimited sized window frame?
     let unbounded_window = window_frame.start_bound.is_unbounded();
@@ -334,13 +336,11 @@ fn create_udwf_window_expr(
         .map(|arg| arg.data_type(input_schema))
         .collect::<Result<_>>()?;
 
-    // figure out the output type
-    let data_type = fun.return_type(&input_types)?;
     Ok(Arc::new(WindowUDFExpr {
         fun: Arc::clone(fun),
         args: args.to_vec(),
+        input_types,
         name,
-        data_type,
     }))
 }
 
@@ -351,8 +351,8 @@ struct WindowUDFExpr {
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Display name
     name: String,
-    /// result type
-    data_type: DataType,
+    /// Types of input expressions
+    input_types: Vec<DataType>,
 }
 
 impl BuiltInWindowFunctionExpr for WindowUDFExpr {
@@ -361,11 +361,8 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            self.data_type.clone(),
-            self.fun.nullable(),
-        ))
+        self.fun
+            .field(WindowUDFFieldArgs::new(&self.input_types, &self.name))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
