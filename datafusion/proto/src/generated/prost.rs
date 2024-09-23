@@ -1792,17 +1792,17 @@ impl BuiltInWindowFunction {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            BuiltInWindowFunction::Unspecified => "UNSPECIFIED",
-            BuiltInWindowFunction::Rank => "RANK",
-            BuiltInWindowFunction::DenseRank => "DENSE_RANK",
-            BuiltInWindowFunction::PercentRank => "PERCENT_RANK",
-            BuiltInWindowFunction::CumeDist => "CUME_DIST",
-            BuiltInWindowFunction::Ntile => "NTILE",
-            BuiltInWindowFunction::Lag => "LAG",
-            BuiltInWindowFunction::Lead => "LEAD",
-            BuiltInWindowFunction::FirstValue => "FIRST_VALUE",
-            BuiltInWindowFunction::LastValue => "LAST_VALUE",
-            BuiltInWindowFunction::NthValue => "NTH_VALUE",
+            Self::Unspecified => "UNSPECIFIED",
+            Self::Rank => "RANK",
+            Self::DenseRank => "DENSE_RANK",
+            Self::PercentRank => "PERCENT_RANK",
+            Self::CumeDist => "CUME_DIST",
+            Self::Ntile => "NTILE",
+            Self::Lag => "LAG",
+            Self::Lead => "LEAD",
+            Self::FirstValue => "FIRST_VALUE",
+            Self::LastValue => "LAST_VALUE",
+            Self::NthValue => "NTH_VALUE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1837,9 +1837,9 @@ impl WindowFrameUnits {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            WindowFrameUnits::Rows => "ROWS",
-            WindowFrameUnits::Range => "RANGE",
-            WindowFrameUnits::Groups => "GROUPS",
+            Self::Rows => "ROWS",
+            Self::Range => "RANGE",
+            Self::Groups => "GROUPS",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1866,9 +1866,9 @@ impl WindowFrameBoundType {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            WindowFrameBoundType::CurrentRow => "CURRENT_ROW",
-            WindowFrameBoundType::Preceding => "PRECEDING",
-            WindowFrameBoundType::Following => "FOLLOWING",
+            Self::CurrentRow => "CURRENT_ROW",
+            Self::Preceding => "PRECEDING",
+            Self::Following => "FOLLOWING",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1894,8 +1894,8 @@ impl DateUnit {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            DateUnit::Day => "Day",
-            DateUnit::DateMillisecond => "DateMillisecond",
+            Self::Day => "Day",
+            Self::DateMillisecond => "DateMillisecond",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1921,9 +1921,9 @@ impl PartitionMode {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            PartitionMode::CollectLeft => "COLLECT_LEFT",
-            PartitionMode::Partitioned => "PARTITIONED",
-            PartitionMode::Auto => "AUTO",
+            Self::CollectLeft => "COLLECT_LEFT",
+            Self::Partitioned => "PARTITIONED",
+            Self::Auto => "AUTO",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1949,8 +1949,8 @@ impl StreamPartitionMode {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            StreamPartitionMode::SinglePartition => "SINGLE_PARTITION",
-            StreamPartitionMode::PartitionedExec => "PARTITIONED_EXEC",
+            Self::SinglePartition => "SINGLE_PARTITION",
+            Self::PartitionedExec => "PARTITIONED_EXEC",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1978,11 +1978,11 @@ impl AggregateMode {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            AggregateMode::Partial => "PARTIAL",
-            AggregateMode::Final => "FINAL",
-            AggregateMode::FinalPartitioned => "FINAL_PARTITIONED",
-            AggregateMode::Single => "SINGLE",
-            AggregateMode::SinglePartitioned => "SINGLE_PARTITIONED",
+            Self::Partial => "PARTIAL",
+            Self::Final => "FINAL",
+            Self::FinalPartitioned => "FINAL_PARTITIONED",
+            Self::Single => "SINGLE",
+            Self::SinglePartitioned => "SINGLE_PARTITIONED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
