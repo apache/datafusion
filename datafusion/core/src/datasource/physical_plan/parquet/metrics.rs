@@ -55,6 +55,8 @@ pub struct ParquetFileMetrics {
     pub page_index_rows_matched: Count,
     /// Total time spent evaluating parquet page index filters
     pub page_index_eval_time: Time,
+    /// Total time spent reading and parsing metadata from the footer
+    pub metadata_load_time: Time,
 }
 
 impl ParquetFileMetrics {
@@ -116,6 +118,10 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .subset_time("page_index_eval_time", partition);
 
+        let metadata_load_time = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .subset_time("metadata_load_time", partition);
+
         Self {
             predicate_evaluation_errors,
             row_groups_matched_bloom_filter,
@@ -131,6 +137,7 @@ impl ParquetFileMetrics {
             statistics_eval_time,
             bloom_filter_eval_time,
             page_index_eval_time,
+            metadata_load_time,
         }
     }
 }
