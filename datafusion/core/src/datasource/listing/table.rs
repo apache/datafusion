@@ -1252,20 +1252,13 @@ mod tests {
                     col("int_col").sort(false, true),
                 ]],
                 Ok(vec![vec![
-                    PhysicalSortExpr {
-                        expr: physical_col("string_col", &schema).unwrap(),
-                        options: SortOptions {
-                            descending: false,
-                            nulls_first: false,
-                        },
-                    },
-                    PhysicalSortExpr {
-                        expr: physical_col("int_col", &schema).unwrap(),
-                        options: SortOptions {
-                            descending: true,
-                            nulls_first: true,
-                        },
-                    },
+                    PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
+                    .asc()
+                    .nulls_last(),
+
+                    PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
+                    .desc()
+                    .nulls_first()
                 ]])
             ),
         ];

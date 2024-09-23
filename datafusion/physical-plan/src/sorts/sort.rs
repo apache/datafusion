@@ -1022,9 +1022,8 @@ mod tests {
     impl SortedUnboundedExec {
         fn compute_properties(schema: SchemaRef) -> PlanProperties {
             let mut eq_properties = EquivalenceProperties::new(schema);
-            eq_properties.add_new_orderings(vec![vec![PhysicalSortExpr::new(
+            eq_properties.add_new_orderings(vec![vec![PhysicalSortExpr::new_default(
                 Arc::new(Column::new("c1", 0)),
-                SortOptions::default(),
             )]]);
             let mode = ExecutionMode::Unbounded;
             PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1), mode)
@@ -1560,10 +1559,9 @@ mod tests {
             cache: SortedUnboundedExec::compute_properties(Arc::new(schema.clone())),
         };
         let mut plan = SortExec::new(
-            vec![PhysicalSortExpr::new(
-                Arc::new(Column::new("c1", 0)),
-                SortOptions::default(),
-            )],
+            vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+                "c1", 0,
+            )))],
             Arc::new(source),
         );
         plan = plan.with_fetch(Some(9));
