@@ -40,7 +40,7 @@ use datafusion_expr::{
 use log::debug;
 
 /// Optimizer rule for rewriting predicate(IN/EXISTS) subquery to left semi/anti joins
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DecorrelatePredicateSubquery {}
 
 impl DecorrelatePredicateSubquery {
