@@ -48,7 +48,7 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
             output.push(item);
         }
     }
-    output
+    LexRequirement::new(output)
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is

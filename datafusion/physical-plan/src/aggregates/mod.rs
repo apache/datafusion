@@ -370,13 +370,15 @@ impl AggregateExec {
         // prefix requirements with this section. In this case, aggregation will
         // work more efficiently.
         let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
-        let mut new_requirement = indices
-            .iter()
-            .map(|&idx| PhysicalSortRequirement {
-                expr: Arc::clone(&groupby_exprs[idx]),
-                options: None,
-            })
-            .collect::<Vec<_>>();
+        let mut new_requirement = LexRequirement::new(
+            indices
+                .iter()
+                .map(|&idx| PhysicalSortRequirement {
+                    expr: Arc::clone(&groupby_exprs[idx]),
+                    options: None,
+                })
+                .collect::<Vec<_>>(),
+        );
 
         let req = get_finer_aggregate_exprs_requirement(
             &mut aggr_expr,
@@ -384,7 +386,7 @@ impl AggregateExec {
             input_eq_properties,
             &mode,
         )?;
-        new_requirement.extend(req);
+        new_requirement.inner.extend(req);
         new_requirement = collapse_lex_req(new_requirement);
 
         // If our aggregation has grouping sets then our base grouping exprs will

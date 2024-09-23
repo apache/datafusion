@@ -53,6 +53,7 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -961,12 +962,12 @@ impl TableProvider for ListingTable {
                 ))?
                 .clone();
             // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
-            Some(
+            Some(LexRequirement::new(
                 ordering
                     .into_iter()
                     .map(PhysicalSortRequirement::from)
                     .collect::<Vec<_>>(),
-            )
+            ))
         } else {
             None
         };

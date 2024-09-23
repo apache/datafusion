@@ -792,7 +792,9 @@ impl SortExec {
     ) -> PlanProperties {
         // Determine execution mode:
         let sort_satisfied = input.equivalence_properties().ordering_satisfy_requirement(
-            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter()).as_slice(),
+            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter())
+                .inner
+                .as_slice(),
         );
         let mode = match input.execution_mode() {
             ExecutionMode::Unbounded if sort_satisfied => ExecutionMode::Unbounded,
@@ -895,7 +897,9 @@ impl ExecutionPlan for SortExec {
             .input
             .equivalence_properties()
             .ordering_satisfy_requirement(
-                PhysicalSortRequirement::from_sort_exprs(self.expr.iter()).as_slice(),
+                PhysicalSortRequirement::from_sort_exprs(self.expr.iter())
+                    .inner
+                    .as_slice(),
             );
 
         match (sort_satisfied, self.fetch.as_ref()) {
