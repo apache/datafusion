@@ -515,8 +515,9 @@ impl EquivalenceProperties {
     ) -> Option<LexRequirement> {
         let mut lhs = self.normalize_sort_requirements(req1);
         let mut rhs = self.normalize_sort_requirements(req2);
-        lhs.iter_mut()
-            .zip(rhs.iter_mut())
+        lhs.inner
+            .iter_mut()
+            .zip(rhs.inner.iter_mut())
             .all(|(lhs, rhs)| {
                 lhs.expr.eq(&rhs.expr)
                     && match (lhs.options, rhs.options) {

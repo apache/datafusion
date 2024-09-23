@@ -173,7 +173,8 @@ fn pushdown_requirement_to_children(
         let child_plan = plan.children().swap_remove(0);
         match determine_children_requirement(parent_required, request_child, child_plan) {
             RequirementsCompatibility::Satisfy => {
-                let req = (!request_child.is_empty()).then(|| request_child.to_vec());
+                let req = (!request_child.is_empty())
+                    .then(|| LexRequirement::new(request_child.to_vec()));
                 Ok(Some(vec![req]))
             }
             RequirementsCompatibility::Compatible(adjusted) => Ok(Some(vec![adjusted])),
@@ -189,7 +190,9 @@ fn pushdown_requirement_to_children(
             .requirements_compatible(parent_required, &sort_req)
         {
             debug_assert!(!parent_required.is_empty());
-            Ok(Some(vec![Some(parent_required.to_vec())]))
+            Ok(Some(vec![Some(LexRequirement::new(
+                parent_required.to_vec(),
+            ))]))
         } else {
             Ok(None)
         }
@@ -211,7 +214,8 @@ fn pushdown_requirement_to_children(
             .eq_properties
             .requirements_compatible(parent_required, &output_req)
         {
-            let req = (!parent_required.is_empty()).then(|| parent_required.to_vec());
+            let req = (!parent_required.is_empty())
+                .then(|| LexRequirement::new(parent_required.to_vec()));
             Ok(Some(vec![req]))
         } else {
             Ok(None)
@@ -219,7 +223,8 @@ fn pushdown_requirement_to_children(
     } else if is_union(plan) {
         // UnionExec does not have real sort requirements for its input. Here we change the adjusted_request_ordering to UnionExec's output ordering and
         // propagate the sort requirements down to correct the unnecessary descendant SortExec under the UnionExec
-        let req = (!parent_required.is_empty()).then(|| parent_required.to_vec());
+        let req = (!parent_required.is_empty())
+            .then(|| LexRequirement::new(parent_required.to_vec()));
         Ok(Some(vec![req; plan.children().len()]))
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
         // If the current plan is SortMergeJoinExec
@@ -277,7 +282,8 @@ fn pushdown_requirement_to_children(
         } else {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
             // than SortPreservingMergeExec output ordering.
-            let req = (!parent_required.is_empty()).then(|| parent_required.to_vec());
+            let req = (!parent_required.is_empty())
+                .then(|| LexRequirement::new(parent_required.to_vec()));
             Ok(Some(vec![req]))
         }
     } else {
@@ -331,7 +337,8 @@ fn determine_children_requirement(
     {
         // Parent requirements are more specific, adjust child's requirements
         // and push down the new requirements:
-        let adjusted = (!parent_required.is_empty()).then(|| parent_required.to_vec());
+        let adjusted = (!parent_required.is_empty())
+            .then(|| LexRequirement::new(parent_required.to_vec()));
         RequirementsCompatibility::Compatible(adjusted)
     } else {
         RequirementsCompatibility::NonCompatible
@@ -471,7 +478,7 @@ fn shift_right_required(
         })
         .collect::<Vec<_>>();
     if new_right_required.len() == parent_required.len() {
-        Ok(new_right_required)
+        Ok(LexRequirement::new(new_right_required))
     } else {
         plan_err!(
             "Expect to shift all the parent required column indexes for SortMergeJoin"
@@ -574,7 +581,7 @@ fn handle_custom_pushdown(
             .iter()
             .map(|&maintains_order| {
                 if maintains_order {
-                    Some(updated_parent_req.clone())
+                    Some(LexRequirement::new(updated_parent_req.clone()))
                 } else {
                     None
                 }

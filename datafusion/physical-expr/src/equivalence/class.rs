@@ -418,7 +418,7 @@ impl EquivalenceGroup {
         // Normalize the requirements:
         let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
         // Convert sort requirements back to sort expressions:
-        PhysicalSortRequirement::to_sort_exprs(normalized_sort_reqs)
+        PhysicalSortRequirement::to_sort_exprs(normalized_sort_reqs.inner)
     }
 
     /// This function applies the `normalize_sort_requirement` function for all
@@ -428,12 +428,12 @@ impl EquivalenceGroup {
         &self,
         sort_reqs: LexRequirementRef,
     ) -> LexRequirement {
-        collapse_lex_req(
+        collapse_lex_req(LexRequirement::new(
             sort_reqs
                 .iter()
                 .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
                 .collect(),
-        )
+        ))
     }
 
     /// Projects `expr` according to the given projection mapping.
