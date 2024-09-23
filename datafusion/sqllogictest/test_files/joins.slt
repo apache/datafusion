@@ -4151,3 +4151,40 @@ DROP TABLE sales_global;
 
 statement ok
 DROP TABLE exchange_rates;
+
+# HashJoinExec and NestedLoopJoinExec can propagate SortExec down through its right child.
+
+statement ok
+CREATE TABLE left_table(a INT, b INT, c INT)
+
+statement ok
+CREATE TABLE right_table(x INT, y INT, z INT)
+
+query TT
+EXPLAIN SELECT * FROM left_table JOIN right_table ON left_table.a<right_table.x ORDER BY x;
+----
+logical_plan
+01)Sort: right_table.x ASC NULLS LAST
+02)--Inner Join:  Filter: left_table.a < right_table.x
+03)----TableScan: left_table projection=[a, b, c]
+04)----TableScan: right_table projection=[x, y, z]
+physical_plan
+01)NestedLoopJoinExec: join_type=Inner, filter=a@0 < x@1
+02)--MemoryExec: partitions=1, partition_sizes=[0]
+03)--SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)----MemoryExec: partitions=1, partition_sizes=[0]
+
+query TT
+EXPLAIN SELECT * FROM left_table JOIN right_table ON left_table.a<right_table.x AND left_table.b=right_table.y ORDER BY x;
+----
+logical_plan
+01)Sort: right_table.x ASC NULLS LAST
+02)--Inner Join: left_table.b = right_table.y Filter: left_table.a < right_table.x
+03)----TableScan: left_table projection=[a, b, c]
+04)----TableScan: right_table projection=[x, y, z]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b@1, y@1)], filter=a@0 < x@1
+03)----MemoryExec: partitions=1, partition_sizes=[0]
+04)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)------MemoryExec: partitions=1, partition_sizes=[0]
