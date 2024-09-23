@@ -29,7 +29,7 @@ use datafusion_expr::LogicalPlan;
 use std::sync::Arc;
 
 /// Analyzer rule that invokes [`FunctionRewrite`]s on expressions
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ApplyFunctionRewrites {
     /// Expr --> Function writes to apply
     function_rewrites: Vec<Arc<dyn FunctionRewrite + Send + Sync>>,

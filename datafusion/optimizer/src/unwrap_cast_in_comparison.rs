@@ -72,7 +72,7 @@ use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan};
 /// Filter: c1 > INT32(10)
 /// ```
 ///
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct UnwrapCastInComparison {}
 
 impl UnwrapCastInComparison {

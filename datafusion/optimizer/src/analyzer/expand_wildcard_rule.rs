@@ -28,7 +28,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ExpandWildcardRule {}
 
 impl ExpandWildcardRule {
