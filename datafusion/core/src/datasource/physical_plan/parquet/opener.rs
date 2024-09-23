@@ -187,6 +187,7 @@ impl FileOpener for ParquetOpener {
             }
             // If there is a predicate that can be evaluated against the metadata
             if let Some(predicate) = predicate.as_ref() {
+                let mut timer = file_metrics.statistics_eval_time.timer();
                 row_groups.prune_by_statistics(
                     &file_schema,
                     builder.parquet_schema(),
@@ -194,8 +195,10 @@ impl FileOpener for ParquetOpener {
                     predicate,
                     &file_metrics,
                 );
+                timer.stop();
 
                 if enable_bloom_filter && !row_groups.is_empty() {
+                    let mut timer = file_metrics.bloom_filter_eval_time.timer();
                     row_groups
                         .prune_by_bloom_filters(
                             &file_schema,
@@ -204,6 +207,7 @@ impl FileOpener for ParquetOpener {
                             &file_metrics,
                         )
                         .await;
+                    timer.stop();
                 }
             }
 
