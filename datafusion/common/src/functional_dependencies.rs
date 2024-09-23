@@ -30,7 +30,7 @@ use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
 use sqlparser::ast::TableConstraint;
 
 /// This object defines a constraint on a table.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Constraint {
     /// Columns with the given indices form a composite primary key (they are
     /// jointly unique and not nullable):
@@ -40,7 +40,7 @@ pub enum Constraint {
 }
 
 /// This object encapsulates a list of functional constraints:
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Constraints {
     inner: Vec<Constraint>,
 }

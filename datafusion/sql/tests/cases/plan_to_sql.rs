@@ -622,8 +622,11 @@ fn test_pretty_roundtrip() -> Result<()> {
     Ok(())
 }
 
-fn sql_round_trip(query: &str, expect: &str) {
-    let statement = Parser::new(&GenericDialect {})
+fn sql_round_trip<D>(dialect: D, query: &str, expect: &str)
+where
+    D: Dialect,
+{
+    let statement = Parser::new(&dialect)
         .try_with_sql(query)
         .unwrap()
         .parse_statement()
@@ -654,6 +657,10 @@ fn test_table_scan_pushdown() -> Result<()> {
         "SELECT t1.id, t1.age FROM t1"
     );
 
+    let scan_with_projection = table_scan(Some("t1"), &schema, Some(vec![1]))?.build()?;
+    let scan_with_projection = plan_to_sql(&scan_with_projection)?;
+    assert_eq!(format!("{}", scan_with_projection), "SELECT t1.age FROM t1");
+
     let scan_with_no_projection = table_scan(Some("t1"), &schema, None)?.build()?;
     let scan_with_no_projection = plan_to_sql(&scan_with_no_projection)?;
     assert_eq!(format!("{}", scan_with_no_projection), "SELECT * FROM t1");
@@ -667,6 +674,17 @@ fn test_table_scan_pushdown() -> Result<()> {
     assert_eq!(
         format!("{}", table_scan_with_projection_alias),
         "SELECT ta.id, ta.age FROM t1 AS ta"
+    );
+
+    let table_scan_with_projection_alias =
+        table_scan(Some("t1"), &schema, Some(vec![1]))?
+            .alias("ta")?
+            .build()?;
+    let table_scan_with_projection_alias =
+        plan_to_sql(&table_scan_with_projection_alias)?;
+    assert_eq!(
+        format!("{}", table_scan_with_projection_alias),
+        "SELECT ta.age FROM t1 AS ta"
     );
 
     let table_scan_with_no_projection_alias = table_scan(Some("t1"), &schema, None)?
@@ -745,6 +763,20 @@ fn test_table_scan_pushdown() -> Result<()> {
         "SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age)"
     );
 
+    let table_scan_with_projection_and_filter = table_scan_with_filters(
+        Some("t1"),
+        &schema,
+        Some(vec![1]),
+        vec![col("id").gt(col("age"))],
+    )?
+    .build()?;
+    let table_scan_with_projection_and_filter =
+        plan_to_sql(&table_scan_with_projection_and_filter)?;
+    assert_eq!(
+        format!("{}", table_scan_with_projection_and_filter),
+        "SELECT t1.age FROM t1 WHERE (t1.id > t1.age)"
+    );
+
     let table_scan_with_inline_fetch =
         table_scan_with_filter_and_fetch(Some("t1"), &schema, None, vec![], Some(10))?
             .build()?;
@@ -788,6 +820,7 @@ fn test_table_scan_pushdown() -> Result<()> {
 #[test]
 fn test_interval_lhs_eq() {
     sql_round_trip(
+        GenericDialect {},
         "select interval '2 seconds' = interval '2 seconds'",
         "SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')",
     );
@@ -796,7 +829,23 @@ fn test_interval_lhs_eq() {
 #[test]
 fn test_interval_lhs_lt() {
     sql_round_trip(
+        GenericDialect {},
         "select interval '2 seconds' < interval '2 seconds'",
         "SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')",
     );
+}
+
+#[test]
+fn test_without_offset() {
+    sql_round_trip(MySqlDialect {}, "select 1", "SELECT 1");
+}
+
+#[test]
+fn test_with_offset0() {
+    sql_round_trip(MySqlDialect {}, "select 1 offset 0", "SELECT 1");
+}
+
+#[test]
+fn test_with_offset95() {
+    sql_round_trip(MySqlDialect {}, "select 1 offset 95", "SELECT 1 OFFSET 95");
 }

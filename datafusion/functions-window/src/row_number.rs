@@ -25,9 +25,12 @@ use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::UInt64Array;
 use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
+use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+use datafusion_functions_window_common::field;
+use field::WindowUDFFieldArgs;
 
 /// Create a [`WindowFunction`](Expr::WindowFunction) expression for
 /// `row_number` user-defined window function.
@@ -84,16 +87,12 @@ impl WindowUDFImpl for RowNumber {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::UInt64)
-    }
-
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::<NumRowsEvaluator>::default())
     }
 
-    fn nullable(&self) -> bool {
-        false
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        Ok(Field::new(field_args.name(), DataType::UInt64, false))
     }
 
     fn sort_options(&self) -> Option<SortOptions> {

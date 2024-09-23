@@ -29,12 +29,13 @@ use std::{
 
 use arrow::array::AsArray;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 use datafusion::{assert_batches_eq, prelude::SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     PartitionEvaluator, Signature, Volatility, WindowUDF, WindowUDFImpl,
 };
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
 /// A query with a window function evaluated over the entire partition
 const UNBOUNDED_WINDOW_QUERY: &str = "SELECT x, y, val, \
@@ -522,7 +523,6 @@ impl OddCounter {
         #[derive(Debug, Clone)]
         struct SimpleWindowUDF {
             signature: Signature,
-            return_type: DataType,
             test_state: Arc<TestState>,
             aliases: Vec<String>,
         }
@@ -531,10 +531,8 @@ impl OddCounter {
             fn new(test_state: Arc<TestState>) -> Self {
                 let signature =
                     Signature::exact(vec![DataType::Float64], Volatility::Immutable);
-                let return_type = DataType::Int64;
                 Self {
                     signature,
-                    return_type,
                     test_state,
                     aliases: vec!["odd_counter_alias".to_string()],
                 }
@@ -554,16 +552,16 @@ impl OddCounter {
                 &self.signature
             }
 
-            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                Ok(self.return_type.clone())
-            }
-
             fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
                 Ok(Box::new(OddCounter::new(Arc::clone(&self.test_state))))
             }
 
             fn aliases(&self) -> &[String] {
                 &self.aliases
+            }
+
+            fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+                Ok(Field::new(field_args.name(), DataType::Int64, true))
             }
         }
 
