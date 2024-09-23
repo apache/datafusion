@@ -235,7 +235,7 @@ where
 }
 
 /// The size, in number of entries, of the initial hash table
-pub(super) const INITIAL_MAP_CAPACITY: usize = 128;
+const INITIAL_MAP_CAPACITY: usize = 128;
 /// The initial size, in bytes, of the string data
 pub const INITIAL_BUFFER_CAPACITY: usize = 8 * 1024;
 impl<O: OffsetSizeTrait, V> ArrowBytesMap<O, V>
