@@ -26,7 +26,7 @@ use datafusion_expr::{Aggregate, Expr, Sort, SortExpr};
 use indexmap::IndexSet;
 use std::hash::{Hash, Hasher};
 /// Optimization rule that eliminate duplicated expr.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EliminateDuplicatedExpr;
 
 impl EliminateDuplicatedExpr {

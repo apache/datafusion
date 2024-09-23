@@ -18,6 +18,7 @@
 //! This module defines the interface for logical nodes
 use crate::{Expr, LogicalPlan};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, collections::HashSet, fmt, sync::Arc};
 
@@ -193,6 +194,7 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Note: [`UserDefinedLogicalNode`] is not constrained by [`Eq`]
     /// directly because it must remain object safe.
     fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool;
+    fn dyn_ord(&self, other: &dyn UserDefinedLogicalNode) -> Option<Ordering>;
 }
 
 impl Hash for dyn UserDefinedLogicalNode {
@@ -201,9 +203,15 @@ impl Hash for dyn UserDefinedLogicalNode {
     }
 }
 
-impl std::cmp::PartialEq for dyn UserDefinedLogicalNode {
+impl PartialEq for dyn UserDefinedLogicalNode {
     fn eq(&self, other: &Self) -> bool {
         self.dyn_eq(other)
+    }
+}
+
+impl PartialOrd for dyn UserDefinedLogicalNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.dyn_ord(other)
     }
 }
 
@@ -215,7 +223,7 @@ impl Eq for dyn UserDefinedLogicalNode {}
 /// [user_defined_plan.rs](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/user_defined/user_defined_plan.rs)
 /// file for an example of how to use this extension API.
 pub trait UserDefinedLogicalNodeCore:
-    fmt::Debug + Eq + Hash + Sized + Send + Sync + 'static
+    fmt::Debug + Eq + PartialOrd + Hash + Sized + Send + Sync + 'static
 {
     /// Return the plan's name.
     fn name(&self) -> &str;
@@ -345,6 +353,13 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
             Some(o) => self == o,
             None => false,
         }
+    }
+
+    fn dyn_ord(&self, other: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .and_then(|other| self.partial_cmp(other))
     }
 }
 

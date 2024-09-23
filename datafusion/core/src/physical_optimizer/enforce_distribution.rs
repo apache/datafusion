@@ -1272,7 +1272,7 @@ fn ensure_distribution(
                         // Make sure to satisfy ordering requirement:
                         child = add_sort_above_with_check(
                             child,
-                            required_input_ordering.to_vec(),
+                            required_input_ordering.clone(),
                             None,
                         );
                     }

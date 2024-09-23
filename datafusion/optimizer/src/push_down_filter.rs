@@ -130,7 +130,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 /// reaches a plan node that does not commute with that filter, it adds the
 /// filter to that place. When it passes through a projection, it re-writes the
 /// filter's expression taking into account that projection.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PushDownFilter {}
 
 /// For a given JOIN type, determine whether each input of the join is preserved
@@ -1195,6 +1195,7 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
+    use std::cmp::Ordering;
     use std::fmt::{Debug, Formatter};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -1449,6 +1450,13 @@ mod tests {
     struct NoopPlan {
         input: Vec<LogicalPlan>,
         schema: DFSchemaRef,
+    }
+
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for NoopPlan {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            self.input.partial_cmp(&other.input)
+        }
     }
 
     impl UserDefinedLogicalNodeCore for NoopPlan {

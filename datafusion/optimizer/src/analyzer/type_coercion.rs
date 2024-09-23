@@ -57,7 +57,7 @@ use datafusion_expr::{
 
 /// Performs type coercion by determining the schema
 /// and performing the expression rewrites.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct TypeCoercion {}
 
 impl TypeCoercion {
@@ -1808,6 +1808,186 @@ mod test {
             in CASE WHEN expression"
         );
 
+        Ok(())
+    }
+
+    macro_rules! test_case_expression {
+        ($expr:expr, $when_then:expr, $case_when_type:expr, $then_else_type:expr, $schema:expr) => {
+            let case = Case {
+                expr: $expr.map(|e| Box::new(col(e))),
+                when_then_expr: $when_then,
+                else_expr: None,
+            };
+
+            let expected =
+                cast_helper(case.clone(), &$case_when_type, &$then_else_type, &$schema);
+
+            let actual = coerce_case_expression(case, &$schema)?;
+            assert_eq!(expected, actual);
+        };
+    }
+
+    #[test]
+    fn tes_case_when_list() -> Result<()> {
+        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
+            vec![
+                Field::new(
+                    "large_list",
+                    DataType::LargeList(Arc::clone(&inner_field)),
+                    true,
+                ),
+                Field::new(
+                    "fixed_list",
+                    DataType::FixedSizeList(Arc::clone(&inner_field), 3),
+                    true,
+                ),
+                Field::new("list", DataType::List(inner_field), true),
+            ]
+            .into(),
+            std::collections::HashMap::new(),
+        )?);
+
+        test_case_expression!(
+            Some("list"),
+            vec![(Box::new(col("large_list")), Box::new(lit("1")))],
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::Utf8,
+            schema
+        );
+
+        test_case_expression!(
+            Some("large_list"),
+            vec![(Box::new(col("list")), Box::new(lit("1")))],
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::Utf8,
+            schema
+        );
+
+        test_case_expression!(
+            Some("list"),
+            vec![(Box::new(col("fixed_list")), Box::new(lit("1")))],
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::Utf8,
+            schema
+        );
+
+        test_case_expression!(
+            Some("fixed_list"),
+            vec![(Box::new(col("list")), Box::new(lit("1")))],
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::Utf8,
+            schema
+        );
+
+        test_case_expression!(
+            Some("fixed_list"),
+            vec![(Box::new(col("large_list")), Box::new(lit("1")))],
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::Utf8,
+            schema
+        );
+
+        test_case_expression!(
+            Some("large_list"),
+            vec![(Box::new(col("fixed_list")), Box::new(lit("1")))],
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::Utf8,
+            schema
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_then_else_list() -> Result<()> {
+        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let schema = Arc::new(DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("boolean", DataType::Boolean, true),
+                Field::new(
+                    "large_list",
+                    DataType::LargeList(Arc::clone(&inner_field)),
+                    true,
+                ),
+                Field::new(
+                    "fixed_list",
+                    DataType::FixedSizeList(Arc::clone(&inner_field), 3),
+                    true,
+                ),
+                Field::new("list", DataType::List(inner_field), true),
+            ]
+            .into(),
+            std::collections::HashMap::new(),
+        )?);
+
+        // large list and list
+        test_case_expression!(
+            None::<String>,
+            vec![
+                (Box::new(col("boolean")), Box::new(col("large_list"))),
+                (Box::new(col("boolean")), Box::new(col("list")))
+            ],
+            DataType::Boolean,
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            schema
+        );
+
+        test_case_expression!(
+            None::<String>,
+            vec![
+                (Box::new(col("boolean")), Box::new(col("list"))),
+                (Box::new(col("boolean")), Box::new(col("large_list")))
+            ],
+            DataType::Boolean,
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            schema
+        );
+
+        // fixed list and list
+        test_case_expression!(
+            None::<String>,
+            vec![
+                (Box::new(col("boolean")), Box::new(col("fixed_list"))),
+                (Box::new(col("boolean")), Box::new(col("list")))
+            ],
+            DataType::Boolean,
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            schema
+        );
+
+        test_case_expression!(
+            None::<String>,
+            vec![
+                (Box::new(col("boolean")), Box::new(col("list"))),
+                (Box::new(col("boolean")), Box::new(col("fixed_list")))
+            ],
+            DataType::Boolean,
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            schema
+        );
+
+        // fixed list and large list
+        test_case_expression!(
+            None::<String>,
+            vec![
+                (Box::new(col("boolean")), Box::new(col("fixed_list"))),
+                (Box::new(col("boolean")), Box::new(col("large_list")))
+            ],
+            DataType::Boolean,
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            schema
+        );
+
+        test_case_expression!(
+            None::<String>,
+            vec![
+                (Box::new(col("boolean")), Box::new(col("large_list"))),
+                (Box::new(col("boolean")), Box::new(col("fixed_list")))
+            ],
+            DataType::Boolean,
+            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            schema
+        );
         Ok(())
     }
 

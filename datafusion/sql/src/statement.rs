@@ -1136,11 +1136,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Vec<SortExpr>>> {
-        // Ask user to provide a schema if schema is empty.
         if !order_exprs.is_empty() && schema.fields().is_empty() {
-            return plan_err!(
-                "Provide a schema before specifying the order while creating a table."
-            );
+            let results = order_exprs
+                .iter()
+                .map(|lex_order| {
+                    let result = lex_order
+                        .iter()
+                        .map(|order_by_expr| {
+                            let ordered_expr = &order_by_expr.expr;
+                            let ordered_expr = ordered_expr.to_owned();
+                            let ordered_expr = self
+                                .sql_expr_to_logical_expr(
+                                    ordered_expr,
+                                    schema,
+                                    planner_context,
+                                )
+                                .unwrap();
+                            let asc = order_by_expr.asc.unwrap_or(true);
+                            let nulls_first = order_by_expr.nulls_first.unwrap_or(!asc);
+
+                            SortExpr::new(ordered_expr, asc, nulls_first)
+                        })
+                        .collect::<Vec<SortExpr>>();
+                    result
+                })
+                .collect::<Vec<Vec<SortExpr>>>();
+
+            return Ok(results);
         }
 
         let mut all_results = vec![];
