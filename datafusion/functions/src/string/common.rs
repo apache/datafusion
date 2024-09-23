@@ -33,8 +33,11 @@ use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-/// Make a `u128` based on the given substr, start(offset to view.offset), and
-/// push into to the given buffers
+/// Append a new view to the views buffer with the given substr
+///
+/// raw must be a valid view
+/// substr must be a valid substring of raw
+/// start must be less than or equal to the length of the string data
 pub(crate) fn make_and_append_view(
     views_buffer: &mut Vec<u128>,
     null_builder: &mut NullBufferBuilder,
