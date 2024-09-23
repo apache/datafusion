@@ -30,6 +30,7 @@ use arrow::datatypes::ByteArrayType;
 use arrow::datatypes::DataType;
 use arrow::datatypes::GenericBinaryType;
 use arrow::datatypes::GenericStringType;
+use datafusion_common::utils::proxy::VecAllocExt;
 
 use std::sync::Arc;
 use std::vec;
@@ -50,6 +51,8 @@ pub trait ArrayRowEq: Send + Sync {
     fn append_val(&mut self, array: &ArrayRef, row: usize);
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
+    /// Returns the number of bytes used by this [`ArrayRowEq`]
+    fn size(&self) -> usize;
     /// Builds a new array from all of the stored rows
     fn build(self: Box<Self>) -> ArrayRef;
     /// Builds a new array from the first `n` stored rows, shifting the
@@ -102,20 +105,23 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
-        // non-null fast path
-        if !self.nullable || !array.is_null(row) {
-            let elem = array.as_primitive::<T>().value(row);
-            self.group_values.push(elem);
-            self.nulls.push(true);
-        } else {
+        if self.nullable && array.is_null(row) {
             self.group_values.push(T::default_value());
             self.nulls.push(false);
             self.has_null = true;
+        } else {
+            let elem = array.as_primitive::<T>().value(row);
+            self.group_values.push(elem);
+            self.nulls.push(true);
         }
     }
 
     fn len(&self) -> usize {
         self.group_values.len()
+    }
+
+    fn size(&self) -> usize {
+        self.group_values.allocated_size() + self.nulls.allocated_size()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
@@ -215,7 +221,7 @@ where
         let l = self.offsets[lhs_row].as_usize();
         let r = self.offsets[lhs_row + 1].as_usize();
         let existing_elem = unsafe { self.buffer.as_slice().get_unchecked(l..r) };
-        existing_elem.len() == rhs_elem.len() && rhs_elem == existing_elem
+        rhs_elem == existing_elem
     }
 }
 
@@ -269,6 +275,12 @@ where
         self.offsets.len() - 1
     }
 
+    fn size(&self) -> usize {
+        self.buffer.capacity() * std::mem::size_of::<u8>()
+            + self.offsets.allocated_size()
+            + self.nulls.allocated_size()
+    }
+
     fn build(self: Box<Self>) -> ArrayRef {
         let Self {
             output_type,
@@ -319,7 +331,6 @@ where
     fn take_n(&mut self, n: usize) -> ArrayRef {
         debug_assert!(self.len() >= n);
 
-        let mut nulls_count = 0;
         let null_buffer = if self.nulls.is_empty() {
             None
         } else {
@@ -330,7 +341,6 @@ where
             let mut new_nulls = vec![];
             self.nulls.iter().for_each(|null_index| {
                 if *null_index < n {
-                    nulls_count += 1;
                     bool_builder.set_bit(*null_index, false);
                 } else {
                     new_nulls.push(null_index - n);

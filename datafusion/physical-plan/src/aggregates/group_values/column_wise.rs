@@ -85,8 +85,7 @@ impl GroupValues for GroupValuesColumn {
         let n_rows = cols[0].len();
 
         if self.group_values.is_empty() {
-            let len = cols.len();
-            let mut v = Vec::with_capacity(len);
+            let mut v = Vec::with_capacity(cols.len());
 
             for f in self.schema.fields().iter() {
                 let nullable = f.is_nullable();
@@ -235,7 +234,7 @@ impl GroupValues for GroupValuesColumn {
     }
 
     fn size(&self) -> usize {
-        let group_values_size = self.group_values.len();
+        let group_values_size: usize = self.group_values.iter().map(|v| v.size()).sum();
         group_values_size + self.map_size + self.hashes_buffer.allocated_size()
     }
 
