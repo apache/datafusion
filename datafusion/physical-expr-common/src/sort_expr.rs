@@ -19,6 +19,7 @@
 
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
@@ -296,11 +297,13 @@ impl PhysicalSortRequirement {
     pub fn from_sort_exprs<'a>(
         ordering: impl IntoIterator<Item = &'a PhysicalSortExpr>,
     ) -> LexRequirement {
-        ordering
-            .into_iter()
-            .cloned()
-            .map(PhysicalSortRequirement::from)
-            .collect()
+        LexRequirement::new(
+            ordering
+                .into_iter()
+                .cloned()
+                .map(PhysicalSortRequirement::from)
+                .collect(),
+        )
     }
 
     /// Converts an iterator of [`PhysicalSortRequirement`] into a Vec
@@ -338,9 +341,55 @@ pub type LexOrdering = Vec<PhysicalSortExpr>;
 /// a reference to a lexicographical ordering.
 pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
 
-///`LexRequirement` is an alias for the type `Vec<PhysicalSortRequirement>`, which
+///`LexRequirement` is an struct containing a `Vec<PhysicalSortRequirement>`, which
 /// represents a lexicographical ordering requirement.
-pub type LexRequirement = Vec<PhysicalSortRequirement>;
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct LexRequirement {
+    pub inner: Vec<PhysicalSortRequirement>,
+}
+
+impl LexRequirement {
+    pub fn new(inner: Vec<PhysicalSortRequirement>) -> Self {
+        Self { inner }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &PhysicalSortRequirement> {
+        self.inner.iter()
+    }
+
+    pub fn push(&mut self, physical_sort_requirement: PhysicalSortRequirement) {
+        self.inner.push(physical_sort_requirement)
+    }
+}
+
+impl Deref for LexRequirement {
+    type Target = [PhysicalSortRequirement];
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_slice()
+    }
+}
+
+impl FromIterator<PhysicalSortRequirement> for LexRequirement {
+    fn from_iter<T: IntoIterator<Item = PhysicalSortRequirement>>(iter: T) -> Self {
+        let mut lex_requirement = LexRequirement::new(vec![]);
+
+        for i in iter {
+            lex_requirement.inner.push(i);
+        }
+
+        lex_requirement
+    }
+}
+
+impl IntoIterator for LexRequirement {
+    type Item = PhysicalSortRequirement;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
+    }
+}
 
 ///`LexRequirementRef` is an alias for the type &`[PhysicalSortRequirement]`, which
 /// represents a reference to a lexicographical ordering requirement.
