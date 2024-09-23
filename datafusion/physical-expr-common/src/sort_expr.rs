@@ -30,6 +30,51 @@ use datafusion_common::Result;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 /// Represents Sort operation for a column in a RecordBatch
+///
+/// Example:
+/// ```
+/// # use std::any::Any;
+/// # use std::fmt::Display;
+/// # use std::hash::Hasher;
+/// # use std::sync::Arc;
+/// # use arrow::array::RecordBatch;
+/// # use datafusion_common::Result;
+/// # use arrow::compute::SortOptions;
+/// # use arrow::datatypes::{DataType, Schema};
+/// # use datafusion_expr_common::columnar_value::ColumnarValue;
+/// # use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+/// # use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+/// # // this crate doesn't have a physical expression implementation
+/// # // so make a really simple one
+/// # #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// # struct MyPhysicalExpr;
+/// # impl PhysicalExpr for MyPhysicalExpr {
+/// #  fn as_any(&self) -> &dyn Any {todo!() }
+/// #  fn data_type(&self, input_schema: &Schema) -> Result<DataType> {todo!()}
+/// #  fn nullable(&self, input_schema: &Schema) -> Result<bool> {todo!() }
+/// #  fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {todo!() }
+/// #  fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {todo!()}
+/// #  fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> {todo!()}
+/// #  fn dyn_hash(&self, _state: &mut dyn Hasher) {todo!()}
+/// # }
+/// # impl Display for MyPhysicalExpr {
+/// #    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "a") }
+/// # }
+/// # impl PartialEq<dyn Any> for MyPhysicalExpr {
+/// #    fn eq(&self, _other: &dyn Any) -> bool { true }
+/// # }
+/// # fn col(name: &str) -> Arc<dyn PhysicalExpr> { Arc::new(MyPhysicalExpr) }
+/// // Sort by a ASC
+/// let options = SortOptions::default();
+/// let sort_expr = PhysicalSortExpr::new(col("a"), options);
+/// assert_eq!(sort_expr.to_string(), "a ASC");
+///
+/// // Sort by a DESC NULLS LAST
+/// let sort_expr = PhysicalSortExpr::new_default(col("a"))
+///   .desc()
+///   .nulls_last();
+/// assert_eq!(sort_expr.to_string(), "a DESC NULLS LAST");
+/// ```
 #[derive(Clone, Debug)]
 pub struct PhysicalSortExpr {
     /// Physical expression representing the column to sort
@@ -42,6 +87,35 @@ impl PhysicalSortExpr {
     /// Create a new PhysicalSortExpr
     pub fn new(expr: Arc<dyn PhysicalExpr>, options: SortOptions) -> Self {
         Self { expr, options }
+    }
+
+    /// Create a new PhysicalSortExpr with default [`SortOptions`]
+    pub fn new_default(expr: Arc<dyn PhysicalExpr>) -> Self {
+        Self::new(expr, SortOptions::default())
+    }
+
+    /// Set the sort sort options to ASC
+    pub fn asc(mut self) -> Self {
+        self.options.descending = false;
+        self
+    }
+
+    /// Set the sort sort options to DESC
+    pub fn desc(mut self) -> Self {
+        self.options.descending = true;
+        self
+    }
+
+    /// Set the sort sort options to NULLS FIRST
+    pub fn nulls_first(mut self) -> Self {
+        self.options.nulls_first = true;
+        self
+    }
+
+    /// Set the sort sort options to NULLS LAST
+    pub fn nulls_last(mut self) -> Self {
+        self.options.nulls_first = false;
+        self
     }
 }
 
@@ -60,7 +134,7 @@ impl Hash for PhysicalSortExpr {
     }
 }
 
-impl std::fmt::Display for PhysicalSortExpr {
+impl Display for PhysicalSortExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{} {}", self.expr, to_str(&self.options))
     }

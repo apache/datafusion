@@ -1174,9 +1174,7 @@ mod tests {
             let mut eq_properties = EquivalenceProperties::new(schema);
             eq_properties.add_new_orderings(vec![columns
                 .iter()
-                .map(|expr| {
-                    PhysicalSortExpr::new(Arc::clone(expr), SortOptions::default())
-                })
+                .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
                 .collect::<Vec<_>>()]);
             let mode = ExecutionMode::Unbounded;
             PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3), mode)
@@ -1286,10 +1284,9 @@ mod tests {
             congestion_cleared: Arc::new(Mutex::new(false)),
         };
         let spm = SortPreservingMergeExec::new(
-            vec![PhysicalSortExpr::new(
-                Arc::new(Column::new("c1", 0)),
-                SortOptions::default(),
-            )],
+            vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+                "c1", 0,
+            )))],
             Arc::new(source),
         );
         let spm_task = SpawnedTask::spawn(collect(Arc::new(spm), task_ctx));
