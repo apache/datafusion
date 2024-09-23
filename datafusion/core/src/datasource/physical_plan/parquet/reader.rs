@@ -72,7 +72,7 @@ pub trait ParquetFileReader: AsyncFileReader + Send + 'static {
     ///
     /// The default implementation is:
     ///
-    /// ```
+    /// ```ignore
     /// Box::pin(ArrowReaderMetadata::load_async(self, options))
     /// ```
     fn load_metadata(
