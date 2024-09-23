@@ -124,6 +124,7 @@ mod tests {
 
     #[test]
     fn test_functions() {
+        // String view cases for checking normal logic
         test_function!(
             BTrimFunc::new(),
             &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
@@ -185,6 +186,21 @@ mod tests {
             Utf8View,
             StringViewArray
         );
+        // Special string view case for checking unlined output(len > 12)
+        test_function!(
+            BTrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "xxxalphabetalphabetxxx"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("x")))),
+            ],
+            Ok(Some("alphabetalphabet")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        // String cases
         test_function!(
             BTrimFunc::new(),
             &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
