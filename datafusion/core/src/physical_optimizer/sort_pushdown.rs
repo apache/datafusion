@@ -581,7 +581,7 @@ fn handle_custom_pushdown(
             .iter()
             .map(|&maintains_order| {
                 if maintains_order {
-                    Some(updated_parent_req.clone())
+                    Some(LexRequirement::new(updated_parent_req.clone()))
                 } else {
                     None
                 }
