@@ -57,7 +57,7 @@ use datafusion_common::tree_node::{
 /// The rule analyzes the input logical plan, determines the necessary column
 /// indices, and then removes any unnecessary columns. It also removes any
 /// unnecessary projections from the plan tree.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct OptimizeProjections {}
 
 impl OptimizeProjections {

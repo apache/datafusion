@@ -16,6 +16,8 @@
 // under the License.
 
 //! [`Analyzer`] and [`AnalyzerRule`]
+
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use log::debug;
@@ -60,7 +62,7 @@ pub mod type_coercion;
 /// `AnalyzerRule`s.
 ///
 /// [`SessionState::add_analyzer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_analyzer_rule
-pub trait AnalyzerRule {
+pub trait AnalyzerRule: Debug {
     /// Rewrite `plan`
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan>;
 
@@ -72,7 +74,7 @@ pub trait AnalyzerRule {
 ///
 /// An `Analyzer` transforms a `LogicalPlan`
 /// prior to the rest of the DataFusion optimization process.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Analyzer {
     /// Expr --> Function writes to apply prior to analysis passes
     pub function_rewrites: Vec<Arc<dyn FunctionRewrite + Send + Sync>>,
