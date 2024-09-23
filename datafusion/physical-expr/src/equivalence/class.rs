@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Display;
 use std::sync::Arc;
 
 use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
@@ -27,6 +28,7 @@ use crate::{
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 #[derive(Debug, Clone)]
 /// A structure representing a expression known to be constant in a physical execution plan.
@@ -98,6 +100,19 @@ impl ConstExpr {
             expr,
             across_partitions: self.across_partitions,
         })
+    }
+}
+
+/// Display implementation for `ConstExpr`
+///
+/// Example `c` or `c(across_partitions)`
+impl Display for ConstExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.expr)?;
+        if self.across_partitions {
+            write!(f, "(across_partitions)")?;
+        }
+        Ok(())
     }
 }
 
@@ -221,6 +236,12 @@ impl EquivalenceClass {
             .map(|e| add_offset_to_expr(e, offset))
             .collect();
         Self::new(new_exprs)
+    }
+}
+
+impl Display for EquivalenceClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "[{}]", format_physical_expr_list(&self.exprs))
     }
 }
 
@@ -572,6 +593,20 @@ impl EquivalenceGroup {
             JoinType::LeftSemi | JoinType::LeftAnti => self.clone(),
             JoinType::RightSemi | JoinType::RightAnti => right_equivalences.clone(),
         }
+    }
+}
+
+impl Display for EquivalenceGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "[")?;
+        let mut iter = self.iter();
+        if let Some(cls) = iter.next() {
+            write!(f, "{}", cls)?;
+        }
+        for cls in iter {
+            write!(f, ", {}", cls)?;
+        }
+        write!(f, "]")
     }
 }
 

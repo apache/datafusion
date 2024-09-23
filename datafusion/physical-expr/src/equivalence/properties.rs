@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -41,11 +42,16 @@ use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
-/// A `EquivalenceProperties` object stores useful information related to a schema.
+/// A `EquivalenceProperties` object stores information known about the output
+/// of a plan node, that can be used to optimize the plan.
+///
 /// Currently, it keeps track of:
-/// - Equivalent expressions, e.g expressions that have same value.
-/// - Valid sort expressions (orderings) for the schema.
-/// - Constants expressions (e.g expressions that are known to have constant values).
+/// - Sort expressions (orderings)
+/// - Equivalent expressions: expressions that are known to have same value.
+/// - Constants expressions: expressions that are known to contain a single
+///   constant value.
+///
+/// # Example equivalent sort expressions
 ///
 /// Consider table below:
 ///
@@ -60,9 +66,13 @@ use itertools::Itertools;
 /// └---┴---┘
 /// ```
 ///
-/// where both `a ASC` and `b DESC` can describe the table ordering. With
-/// `EquivalenceProperties`, we can keep track of these different valid sort
-/// expressions and treat `a ASC` and `b DESC` on an equal footing.
+/// In this case, both `a ASC` and `b DESC` can describe the table ordering.
+/// `EquivalenceProperties`, tracks these different valid sort expressions and
+/// treat `a ASC` and `b DESC` on an equal footing. For example if the query
+/// specifies the output sorted by EITHER `a ASC` or `b DESC`, the sort can be
+/// avoided.
+///
+/// # Example equivalent expressions
 ///
 /// Similarly, consider the table below:
 ///
@@ -77,11 +87,39 @@ use itertools::Itertools;
 /// └---┴---┘
 /// ```
 ///
-/// where columns `a` and `b` always have the same value. We keep track of such
-/// equivalences inside this object. With this information, we can optimize
-/// things like partitioning. For example, if the partition requirement is
-/// `Hash(a)` and output partitioning is `Hash(b)`, then we can deduce that
-/// the existing partitioning satisfies the requirement.
+/// In this case,  columns `a` and `b` always have the same value, which can of
+/// such equivalences inside this object. With this information, Datafusion can
+/// optimize operations such as. For example, if the partition requirement is
+/// `Hash(a)` and output partitioning is `Hash(b)`, then DataFusion avoids
+/// repartitioning the data as the existing partitioning satisfies the
+/// requirement.
+///
+/// # Code Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_schema::{Schema, Field, DataType, SchemaRef};
+/// # use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
+/// # use datafusion_physical_expr::expressions::col;
+/// use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+/// # let schema: SchemaRef = Arc::new(Schema::new(vec![
+/// #   Field::new("a", DataType::Int32, false),
+/// #   Field::new("b", DataType::Int32, false),
+/// #   Field::new("c", DataType::Int32, false),
+/// # ]));
+/// # let col_a = col("a", &schema).unwrap();
+/// # let col_b = col("b", &schema).unwrap();
+/// # let col_c = col("c", &schema).unwrap();
+/// // This object represents data that is sorted by a ASC, c DESC
+/// // with a single constant value of b
+/// let mut eq_properties = EquivalenceProperties::new(schema)
+///   .with_constants(vec![ConstExpr::from(col_b)]);
+/// eq_properties.add_new_ordering(vec![
+///   PhysicalSortExpr::new_default(col_a).asc(),
+///   PhysicalSortExpr::new_default(col_c).desc(),
+/// ]);
+///
+/// assert_eq!(eq_properties.to_string(), "order: [a@0 ASC,c@2 DESC], const: [b@1]")
+/// ```
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties {
     /// Collection of equivalence classes that store expressions with the same
@@ -164,7 +202,7 @@ impl EquivalenceProperties {
     pub fn extend(mut self, other: Self) -> Self {
         self.eq_group.extend(other.eq_group);
         self.oeq_class.extend(other.oeq_class);
-        self.add_constants(other.constants)
+        self.with_constants(other.constants)
     }
 
     /// Clears (empties) the ordering equivalence class within this object.
@@ -191,6 +229,11 @@ impl EquivalenceProperties {
         orderings: impl IntoIterator<Item = LexOrdering>,
     ) {
         self.oeq_class.add_new_orderings(orderings);
+    }
+
+    /// Adds a single ordering to the existing ordering equivalence class.
+    pub fn add_new_ordering(&mut self, ordering: LexOrdering) {
+        self.add_new_orderings([ordering]);
     }
 
     /// Incorporates the given equivalence group to into the existing
@@ -231,7 +274,13 @@ impl EquivalenceProperties {
     }
 
     /// Track/register physical expressions with constant values.
-    pub fn add_constants(
+    #[deprecated(since = "43.0.0", note = "Use [`with_constants`] instead")]
+    pub fn add_constants(self, constants: impl IntoIterator<Item = ConstExpr>) -> Self {
+        self.with_constants(constants)
+    }
+
+    /// Track/register physical expressions with constant values.
+    pub fn with_constants(
         mut self,
         constants: impl IntoIterator<Item = ConstExpr>,
     ) -> Self {
@@ -427,7 +476,7 @@ impl EquivalenceProperties {
             // we add column `a` as constant to the algorithm state. This enables us
             // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
             eq_properties = eq_properties
-                .add_constants(std::iter::once(ConstExpr::from(normalized_req.expr)));
+                .with_constants(std::iter::once(ConstExpr::from(normalized_req.expr)));
         }
         true
     }
@@ -923,7 +972,7 @@ impl EquivalenceProperties {
             // an implementation strategy confined to this function.
             for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
                 eq_properties =
-                    eq_properties.add_constants(std::iter::once(ConstExpr::from(expr)));
+                    eq_properties.with_constants(std::iter::once(ConstExpr::from(expr)));
                 search_indices.shift_remove(idx);
             }
             // Add new ordered section to the state.
@@ -1046,6 +1095,41 @@ impl EquivalenceProperties {
         result.add_equivalence_group(EquivalenceGroup::new(eq_classes));
 
         Ok(result)
+    }
+}
+
+/// More readable display version of the `EquivalenceProperties`.
+///
+/// Format:
+/// ```text
+/// order: [[a ASC, b ASC], [a ASC, c ASC]], eq: [[a = b], [a = c]], const: [a = 1]
+/// ```
+impl Display for EquivalenceProperties {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.eq_group.is_empty()
+            && self.oeq_class.is_empty()
+            && self.constants.is_empty()
+        {
+            return write!(f, "No properties");
+        }
+        if !self.oeq_class.is_empty() {
+            write!(f, "order: {}", self.oeq_class)?;
+        }
+        if !self.eq_group.is_empty() {
+            write!(f, ", eq: {}", self.eq_group)?;
+        }
+        if !self.constants.is_empty() {
+            write!(f, ", const: [")?;
+            let mut iter = self.constants.iter();
+            if let Some(c) = iter.next() {
+                write!(f, "{}", c)?;
+            }
+            for c in iter {
+                write!(f, ", {}", c)?;
+            }
+            write!(f, "]")?;
+        }
+        Ok(())
     }
 }
 
@@ -1476,10 +1560,10 @@ pub fn join_equivalence_properties(
     }
     match join_type {
         JoinType::LeftAnti | JoinType::LeftSemi => {
-            result = result.add_constants(left_constants);
+            result = result.with_constants(left_constants);
         }
         JoinType::RightAnti | JoinType::RightSemi => {
-            result = result.add_constants(right_constants);
+            result = result.with_constants(right_constants);
         }
         _ => {}
     }
@@ -2288,7 +2372,7 @@ mod tests {
         let col_h = &col("h", &test_schema)?;
 
         // Add column h as constant
-        eq_properties = eq_properties.add_constants(vec![ConstExpr::from(col_h)]);
+        eq_properties = eq_properties.with_constants(vec![ConstExpr::from(col_h)]);
 
         let test_cases = vec![
             // TEST CASE 1
@@ -2562,13 +2646,13 @@ mod tests {
                     for [left, right] in &case.equal_conditions {
                         properties.add_equal_conditions(left, right)?
                     }
-                    properties.add_constants(
+                    properties.with_constants(
                         case.constants.iter().cloned().map(ConstExpr::from),
                     )
                 },
                 // Constants before equal conditions
                 {
-                    let mut properties = base_properties.clone().add_constants(
+                    let mut properties = base_properties.clone().with_constants(
                         case.constants.iter().cloned().map(ConstExpr::from),
                     );
                     for [left, right] in &case.equal_conditions {
@@ -2600,6 +2684,12 @@ mod tests {
         Ok(())
     }
 
+    /// Return a new schema with the same types, but new field names
+    ///
+    /// The new field names are the old field names with `text` appended.
+    ///
+    /// For example, the schema "a", "b", "c" becomes "a1", "b1", "c1"
+    /// if `text` is "1".
     fn append_fields(schema: &SchemaRef, text: &str) -> SchemaRef {
         Arc::new(Schema::new(
             schema
@@ -2955,7 +3045,7 @@ mod tests {
                 .map(|expr| ConstExpr::new(Arc::clone(expr)))
                 .collect::<Vec<_>>();
             let mut lhs = EquivalenceProperties::new(Arc::clone(first_schema));
-            lhs = lhs.add_constants(first_constants);
+            lhs = lhs.with_constants(first_constants);
             lhs.add_new_orderings(first_orderings);
 
             let second_orderings = second_child_orderings
@@ -2967,7 +3057,7 @@ mod tests {
                 .map(|expr| ConstExpr::new(Arc::clone(expr)))
                 .collect::<Vec<_>>();
             let mut rhs = EquivalenceProperties::new(Arc::clone(second_schema));
-            rhs = rhs.add_constants(second_constants);
+            rhs = rhs.with_constants(second_constants);
             rhs.add_new_orderings(second_orderings);
 
             let union_expected_orderings = union_orderings
@@ -2979,7 +3069,7 @@ mod tests {
                 .map(|expr| ConstExpr::new(Arc::clone(expr)))
                 .collect::<Vec<_>>();
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
-            union_expected_eq = union_expected_eq.add_constants(union_constants);
+            union_expected_eq = union_expected_eq.with_constants(union_constants);
             union_expected_eq.add_new_orderings(union_expected_orderings);
 
             let actual_union_eq = calculate_union_binary(lhs, rhs)?;
