@@ -1862,7 +1862,7 @@ mod tests {
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 5);
         assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 2);
         assert!(
-            get_value(&metrics, "pushdown_eval_time") > 0,
+            get_value(&metrics, "row_pushdown_eval_time") > 0,
             "no eval time in metrics: {metrics:#?}"
         );
     }
