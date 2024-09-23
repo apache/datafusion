@@ -210,6 +210,10 @@ fn trim_and_append_str<'a>(
         // Safety:
         // `trim_str` is computed from `str::trim_xxx_matches`,
         // and its addr is ensured to be >= `origin_str`'s
+        //
+        // TODO: remove the unsafe codes once `Pattern` get stable, related issue:
+        // https://github.com/apache/datafusion/issues/12597
+        //
         let start = unsafe { trim_str.as_ptr().offset_from(src_str.as_ptr()) as u32 };
 
         make_and_append_view(views_buf, null_builder, raw, trim_str, start);
