@@ -23,6 +23,7 @@ use bytes::Bytes;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::future::BoxFuture;
 use object_store::ObjectStore;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::file::metadata::ParquetMetaData;
 use std::fmt::Debug;
@@ -57,8 +58,48 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
-    ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>>;
+    ) -> datafusion_common::Result<Box<dyn ParquetFileReader>>;
 }
+
+/// [`AsyncFileReader`] augmented with a method to customize how file metadata is loaded.
+pub trait ParquetFileReader: AsyncFileReader + Send + 'static {
+    /// Returns a [`AsyncFileReader`] trait object
+    ///
+    /// This can usually be implemented as `Box::new(*self)`
+    fn upcast(self: Box<Self>) -> Box<dyn AsyncFileReader + 'static>;
+
+    /// Parses the file's metadata
+    ///
+    /// The default implementation is:
+    ///
+    /// ```
+    /// Box::pin(ArrowReaderMetadata::load_async(self, options))
+    /// ```
+    fn load_metadata(
+        &mut self,
+        options: ArrowReaderOptions,
+    ) -> BoxFuture<'_, parquet::errors::Result<ArrowReaderMetadata>>;
+}
+
+macro_rules! impl_ParquetFileReader {
+    ($type:ty) => {
+        impl ParquetFileReader for $type {
+            fn upcast(self: Box<Self>) -> Box<dyn AsyncFileReader + 'static> {
+                Box::new(*self)
+            }
+
+            fn load_metadata(
+                &mut self,
+                options: ArrowReaderOptions,
+            ) -> BoxFuture<'_, parquet::errors::Result<ArrowReaderMetadata>> {
+                Box::pin(ArrowReaderMetadata::load_async(self, options))
+            }
+        }
+    };
+}
+
+impl_ParquetFileReader!(ParquetObjectReader);
+impl_ParquetFileReader!(DefaultParquetFileReader);
 
 /// Default implementation of [`ParquetFileReaderFactory`]
 ///
@@ -86,12 +127,12 @@ impl DefaultParquetFileReaderFactory {
 /// This implementation does not coalesce I/O operations or cache bytes. Such
 /// optimizations can be done either at the object store level or by providing a
 /// custom implementation of [`ParquetFileReaderFactory`].
-pub(crate) struct ParquetFileReader {
+pub(crate) struct DefaultParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
     pub inner: ParquetObjectReader,
 }
 
-impl AsyncFileReader for ParquetFileReader {
+impl AsyncFileReader for DefaultParquetFileReader {
     fn get_bytes(
         &mut self,
         range: Range<usize>,
@@ -126,7 +167,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
-    ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+    ) -> datafusion_common::Result<Box<dyn ParquetFileReader>> {
         let file_metrics = ParquetFileMetrics::new(
             partition_index,
             file_meta.location().as_ref(),
@@ -139,7 +180,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
             inner = inner.with_footer_size_hint(hint)
         };
 
-        Ok(Box::new(ParquetFileReader {
+        Ok(Box::new(DefaultParquetFileReader {
             inner,
             file_metrics,
         }))

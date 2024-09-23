@@ -27,6 +27,7 @@ use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::datasource::physical_plan::parquet::ParquetFileReader;
 use datafusion::datasource::physical_plan::{
     FileMeta, FileScanConfig, ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory,
 };
@@ -41,6 +42,7 @@ use futures::{FutureExt, TryFutureExt};
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
@@ -115,7 +117,7 @@ impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
-    ) -> Result<Box<dyn AsyncFileReader + Send>> {
+    ) -> Result<Box<dyn ParquetFileReader>> {
         let metadata = file_meta
             .extensions
             .as_ref()
@@ -132,7 +134,7 @@ impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
             metrics,
         );
 
-        Ok(Box::new(ParquetFileReader {
+        Ok(Box::new(CustomParquetFileReader {
             store: Arc::clone(&self.0),
             meta: file_meta.object_meta,
             metrics: parquet_file_metrics,
@@ -202,14 +204,14 @@ async fn store_parquet_in_memory(
 }
 
 /// Implements [`AsyncFileReader`] for a parquet file in object storage
-struct ParquetFileReader {
+struct CustomParquetFileReader {
     store: Arc<dyn ObjectStore>,
     meta: ObjectMeta,
     metrics: ParquetFileMetrics,
     metadata_size_hint: Option<usize>,
 }
 
-impl AsyncFileReader for ParquetFileReader {
+impl AsyncFileReader for CustomParquetFileReader {
     fn get_bytes(
         &mut self,
         range: Range<usize>,
@@ -241,5 +243,18 @@ impl AsyncFileReader for ParquetFileReader {
             })?;
             Ok(Arc::new(metadata))
         })
+    }
+}
+
+impl ParquetFileReader for CustomParquetFileReader {
+    fn upcast(self: Box<Self>) -> Box<dyn AsyncFileReader + 'static> {
+        Box::new(*self)
+    }
+
+    fn load_metadata(
+        &mut self,
+        options: ArrowReaderOptions,
+    ) -> BoxFuture<'_, parquet::errors::Result<ArrowReaderMetadata>> {
+        Box::pin(ArrowReaderMetadata::load_async(self, options))
     }
 }

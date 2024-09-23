@@ -416,7 +416,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::datasource::physical_plan::parquet::reader::ParquetFileReader;
+    use crate::datasource::physical_plan::parquet::reader::DefaultParquetFileReader;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
 
     use arrow::datatypes::DataType::Decimal128;
@@ -1516,7 +1516,7 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
-        let reader = ParquetFileReader {
+        let reader = DefaultParquetFileReader {
             inner: ParquetObjectReader::new(Arc::new(in_memory), object_meta),
             file_metrics: file_metrics.clone(),
         };
