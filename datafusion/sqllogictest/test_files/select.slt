@@ -1756,3 +1756,7 @@ SELECT "test.a" FROM (SELECT a AS "test.a" FROM test)
 
 statement ok
 DROP TABLE test;
+
+# Can't reference an unqualified column by a qualified name
+query error DataFusion error: Schema error: No field named t1\.v1\. Valid fields are "t1\.v1"\.
+SELECT t1.v1 FROM (SELECT 1 AS "t1.v1");
