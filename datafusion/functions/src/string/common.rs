@@ -204,7 +204,10 @@ fn trim_and_append_str<'a>(
     if let (Some(src_str), Some(characters)) = (src_str_opt, trim_characters_opt) {
         let trim_str = trim_func(src_str, characters);
 
-        let start = (src_str.as_bytes().len() - trim_str.as_bytes().len()) as u32;
+        // Safety:
+        // `trim_str` is computed from `str::trim_xxx_matches`,
+        // and its addr is ensured to be >= `origin_str`'s
+        let start = unsafe { trim_str.as_ptr().offset_from(src_str.as_ptr()) as u32 };
 
         make_and_append_view(views_buf, null_builder, raw, trim_str, start);
     } else {
