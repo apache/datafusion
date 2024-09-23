@@ -355,18 +355,7 @@ impl DFSchema {
                 // qualifier and name.
                 (Some(q), Some(field_q)) => q.resolved_eq(field_q) && f.name() == name,
                 // field to lookup is qualified but current field is unqualified.
-                (Some(qq), None) => {
-                    // the original field may now be aliased with a name that matches the
-                    // original qualified name
-                    let column = Column::from_qualified_name(f.name());
-                    match column {
-                        Column {
-                            relation: Some(r),
-                            name: column_name,
-                        } => &r == qq && column_name == name,
-                        _ => false,
-                    }
-                }
+                (Some(_), None) => false,
                 // field to lookup is unqualified, no need to compare qualifier
                 (None, Some(_)) | (None, None) => f.name() == name,
             })

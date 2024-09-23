@@ -820,6 +820,20 @@ impl TableProvider for ListingTable {
             .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
             .collect::<Result<Vec<_>>>()?;
 
+        // If the filters can be resolved using only partition cols, there is no need to
+        // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
+        let table_partition_col_names = table_partition_cols
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        let filters = filters
+            .iter()
+            .filter(|filter| {
+                !expr_applicable_for_cols(&table_partition_col_names, filter)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
         let filters = conjunction(filters.to_vec())
             .map(|expr| -> Result<_> {
                 // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.

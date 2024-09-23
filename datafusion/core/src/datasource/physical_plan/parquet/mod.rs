@@ -743,7 +743,18 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(self.projected_statistics.clone())
+        // When filters are pushed down, we have no way of knowing the exact statistics.
+        // Note that pruning predicate is also a kind of filter pushdown.
+        // (bloom filters use `pruning_predicate` too)
+        let stats = if self.pruning_predicate.is_some()
+            || self.page_pruning_predicate.is_some()
+            || (self.predicate.is_some() && self.pushdown_filters())
+        {
+            self.projected_statistics.clone().to_inexact()
+        } else {
+            self.projected_statistics.clone()
+        };
+        Ok(stats)
     }
 
     fn fetch(&self) -> Option<usize> {
