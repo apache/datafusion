@@ -43,16 +43,14 @@ macro_rules! create_func {
             /// Singleton instance of [$UDAF], ensures the UDAF is only created once
             /// named STATIC_$(UDAF). For example `STATIC_FirstValue`
             #[allow(non_upper_case_globals)]
-            static [< STATIC_ $UDAF >]: std::sync::OnceLock<std::sync::Arc<crate::AggregateUDF>> =
-                std::sync::OnceLock::new();
+            static [< STATIC_ $UDAF >]: std::sync::LazyLock<std::sync::Arc<crate::AggregateUDF>> =
+                std::sync::LazyLock::new(|| {
+                        std::sync::Arc::new(crate::AggregateUDF::from(<$UDAF>::default()))
+                    });
 
             #[doc = concat!("AggregateFunction that returns a [AggregateUDF](crate::AggregateUDF) for [`", stringify!($UDAF), "`]")]
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<crate::AggregateUDF> {
-                [< STATIC_ $UDAF >]
-                    .get_or_init(|| {
-                        std::sync::Arc::new(crate::AggregateUDF::from(<$UDAF>::default()))
-                    })
-                    .clone()
+                [< STATIC_ $UDAF >].clone()
             }
         }
     }

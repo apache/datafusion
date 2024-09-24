@@ -40,17 +40,15 @@ pub fn row_number() -> Expr {
 
 /// Singleton instance of `row_number`, ensures the UDWF is only created once.
 #[allow(non_upper_case_globals)]
-static STATIC_RowNumber: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
-    std::sync::OnceLock::new();
+static STATIC_RowNumber: std::sync::LazyLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Arc::new(datafusion_expr::WindowUDF::from(RowNumber::default()))
+    });
 
 /// Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for `row_number`
 /// user-defined window function.
 pub fn row_number_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-    STATIC_RowNumber
-        .get_or_init(|| {
-            std::sync::Arc::new(datafusion_expr::WindowUDF::from(RowNumber::default()))
-        })
-        .clone()
+    STATIC_RowNumber.clone()
 }
 
 /// row_number expression

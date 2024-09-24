@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
@@ -289,25 +289,25 @@ impl ByteUnit {
 
 fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
     fn byte_suffixes() -> &'static HashMap<&'static str, ByteUnit> {
-        static BYTE_SUFFIXES: OnceLock<HashMap<&'static str, ByteUnit>> = OnceLock::new();
-        BYTE_SUFFIXES.get_or_init(|| {
-            let mut m = HashMap::new();
-            m.insert("b", ByteUnit::Byte);
-            m.insert("k", ByteUnit::KiB);
-            m.insert("kb", ByteUnit::KiB);
-            m.insert("m", ByteUnit::MiB);
-            m.insert("mb", ByteUnit::MiB);
-            m.insert("g", ByteUnit::GiB);
-            m.insert("gb", ByteUnit::GiB);
-            m.insert("t", ByteUnit::TiB);
-            m.insert("tb", ByteUnit::TiB);
-            m
-        })
+        static BYTE_SUFFIXES: LazyLock<HashMap<&'static str, ByteUnit>> =
+            LazyLock::new(|| {
+                let mut m = HashMap::new();
+                m.insert("b", ByteUnit::Byte);
+                m.insert("k", ByteUnit::KiB);
+                m.insert("kb", ByteUnit::KiB);
+                m.insert("m", ByteUnit::MiB);
+                m.insert("mb", ByteUnit::MiB);
+                m.insert("g", ByteUnit::GiB);
+                m.insert("gb", ByteUnit::GiB);
+                m.insert("t", ByteUnit::TiB);
+                m.insert("tb", ByteUnit::TiB);
+                m
+            });
     }
 
     fn suffix_re() -> &'static regex::Regex {
-        static SUFFIX_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-        SUFFIX_REGEX.get_or_init(|| regex::Regex::new(r"^(-?[0-9]+)([a-z]+)?$").unwrap())
+        static SUFFIX_REGEX: LazyLock<regex::Regex> =
+            LazyLock::new(|| regex::Regex::new(r"^(-?[0-9]+)([a-z]+)?$").unwrap());
     }
 
     let lower = size.to_lowercase();

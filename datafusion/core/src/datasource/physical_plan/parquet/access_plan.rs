@@ -345,7 +345,7 @@ mod test {
     use parquet::basic::LogicalType;
     use parquet::file::metadata::ColumnChunkMetaData;
     use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
-    use std::sync::{Arc, OnceLock};
+    use std::sync::{Arc, LazyLock};
 
     #[test]
     fn test_only_scans() {
@@ -511,31 +511,31 @@ mod test {
         assert_contains!(err, "Invalid ParquetAccessPlan Selection. Row group 1 has 20 rows but selection only specifies 22 rows");
     }
 
-    static ROW_GROUP_METADATA: OnceLock<Vec<RowGroupMetaData>> = OnceLock::new();
+    static ROW_GROUP_METADATA: LazyLock<Vec<RowGroupMetaData>> = LazyLock::new(|| {
+        let schema_descr = get_test_schema_descr();
+        let row_counts = [10, 20, 30, 40];
+
+        row_counts
+            .into_iter()
+            .map(|num_rows| {
+                let column = ColumnChunkMetaData::builder(schema_descr.column(0))
+                    .set_num_values(num_rows)
+                    .build()
+                    .unwrap();
+
+                RowGroupMetaData::builder(schema_descr.clone())
+                    .set_num_rows(num_rows)
+                    .set_column_metadata(vec![column])
+                    .build()
+                    .unwrap()
+            })
+            .collect()
+    });
 
     /// [`RowGroupMetaData`] that returns 4 row groups with 10, 20, 30, 40 rows
     /// respectively
     fn row_group_metadata() -> &'static [RowGroupMetaData] {
-        ROW_GROUP_METADATA.get_or_init(|| {
-            let schema_descr = get_test_schema_descr();
-            let row_counts = [10, 20, 30, 40];
-
-            row_counts
-                .into_iter()
-                .map(|num_rows| {
-                    let column = ColumnChunkMetaData::builder(schema_descr.column(0))
-                        .set_num_values(num_rows)
-                        .build()
-                        .unwrap();
-
-                    RowGroupMetaData::builder(schema_descr.clone())
-                        .set_num_rows(num_rows)
-                        .set_column_metadata(vec![column])
-                        .build()
-                        .unwrap()
-                })
-                .collect()
-        })
+        &ROW_GROUP_METADATA
     }
 
     /// Single column schema with a single column named "a" of type `BYTE_ARRAY`/`String`
