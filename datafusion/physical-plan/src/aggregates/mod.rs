@@ -1363,7 +1363,8 @@ mod tests {
             .build()?];
 
         let task_ctx = if spill {
-            new_spill_ctx(4, 1000)
+            // adjust the max memory size to have the partial aggregate result for spill mode.
+            new_spill_ctx(4, 500)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -1381,6 +1382,8 @@ mod tests {
             common::collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         let expected = if spill {
+            // In spill mode, we test with the limited memory, if the mem usage exceeds,
+            // we trigger the early emit rule, which turns out the partial aggregate result.
             vec![
                 "+---+-----+-----------------+",
                 "| a | b   | COUNT(1)[count] |",
