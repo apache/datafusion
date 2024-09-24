@@ -1707,6 +1707,9 @@ impl ScalarValue {
         Self::iter_to_array_of_type(scalars, &data_type)
     }
 
+    /// Same as [`Self::iter_to_array`] but the target `data_type` can be
+    /// manually specified instead of being implicitly derived from the type of
+    /// the first value of the iterator.
     pub fn iter_to_array_of_type(
         scalars: impl IntoIterator<Item = ScalarValue>,
         data_type: &DataType,
