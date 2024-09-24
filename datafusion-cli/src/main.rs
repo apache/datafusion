@@ -303,11 +303,13 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
                 m.insert("tb", ByteUnit::TiB);
                 m
             });
+        &BYTE_SUFFIXES
     }
 
     fn suffix_re() -> &'static regex::Regex {
         static SUFFIX_REGEX: LazyLock<regex::Regex> =
             LazyLock::new(|| regex::Regex::new(r"^(-?[0-9]+)([a-z]+)?$").unwrap());
+        &SUFFIX_REGEX
     }
 
     let lower = size.to_lowercase();
