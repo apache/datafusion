@@ -197,6 +197,9 @@ impl ColumnarValue {
                 kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
             )),
             ColumnarValue::Scalar(scalar) => {
+                // TODO(@notfilippo, logical vs physical): if `scalar.data_type` is *logically equivalent*
+                // to `cast_type` skip the kernel cast and only change the `data_type` of the scalar.
+
                 let scalar_array =
                     if cast_type == &DataType::Timestamp(TimeUnit::Nanosecond, None) {
                         if let ScalarValue::Float64(Some(float_ts)) = scalar.value() {
