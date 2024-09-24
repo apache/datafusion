@@ -19,7 +19,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{not_impl_err, Column, Result};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableFactor, TableWithJoins};
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn plan_table_with_joins(
@@ -34,7 +34,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
         let old_outer_from_schema = planner_context.outer_from_schema();
         for join in t.joins {
-            planner_context.extend_outer_from_schema(left.schema())?;
+            planner_context.set_outer_from_schema(Some(Arc::clone(left.schema())));
             left = self.parse_relation_join(left, join, planner_context)?;
         }
         planner_context.set_outer_from_schema(old_outer_from_schema);
