@@ -102,6 +102,8 @@ impl Scalar {
         })
     }
 
+    /// Converts an iterator of references [`Scalar`] into an [`ArrayRef`]
+    /// corresponding to those values.
     pub fn iter_to_array(scalars: impl IntoIterator<Item = Scalar>) -> Result<ArrayRef> {
         let mut scalars = scalars.into_iter().peekable();
 
