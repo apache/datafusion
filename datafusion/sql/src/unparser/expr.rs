@@ -219,12 +219,24 @@ impl Unparser<'_> {
             }
             Expr::Cast(Cast { expr, data_type }) => {
                 let inner_expr = self.expr_to_sql_inner(expr)?;
-                Ok(ast::Expr::Cast {
-                    kind: ast::CastKind::Cast,
-                    expr: Box::new(inner_expr),
-                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
-                    format: None,
-                })
+                match data_type {
+                    DataType::Dictionary(_, _) => match inner_expr {
+                        // Dictionary values don't need to be cast to other types when rewritten back to sql
+                        ast::Expr::Value(_) => Ok(inner_expr),
+                        _ => Ok(ast::Expr::Cast {
+                            kind: ast::CastKind::Cast,
+                            expr: Box::new(inner_expr),
+                            data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                            format: None,
+                        }),
+                    },
+                    _ => Ok(ast::Expr::Cast {
+                        kind: ast::CastKind::Cast,
+                        expr: Box::new(inner_expr),
+                        data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                        format: None,
+                    }),
+                }
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
@@ -2360,5 +2372,30 @@ mod tests {
             assert_eq!(actual, expected);
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_cast_value_to_dict_expr() {
+        let tests = [(
+            Expr::Cast(Cast {
+                expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                    "variation".to_string(),
+                )))),
+                data_type: DataType::Dictionary(
+                    Box::new(DataType::Int8),
+                    Box::new(DataType::Utf8),
+                ),
+            }),
+            "'variation'",
+        )];
+        for (value, expected) in tests {
+            let dialect = CustomDialectBuilder::new().build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
     }
 }
