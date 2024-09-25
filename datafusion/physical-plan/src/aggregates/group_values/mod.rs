@@ -96,36 +96,9 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
         }
     }
 
-    if schema
-        .fields()
-        .iter()
-        .map(|f| f.data_type())
-        .all(has_row_like_feature)
-    {
+    if GroupValuesColumn::supported_schema(schema.as_ref()) {
         Ok(Box::new(GroupValuesColumn::try_new(schema)?))
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
     }
-}
-
-fn has_row_like_feature(data_type: &DataType) -> bool {
-    matches!(
-        *data_type,
-        DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Binary
-            | DataType::LargeBinary
-            | DataType::Date32
-            | DataType::Date64
-    )
 }
