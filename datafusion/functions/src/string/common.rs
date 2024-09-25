@@ -94,7 +94,7 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
             let pattern = pattern.chars().collect::<Vec<char>>();
             let ltrimmed_str =
                 str::trim_start_matches::<&[char]>(input, pattern.as_ref());
-            // `ltrimmed_str` is actually `input`[start_offset..], so `start_offset`,
+            // `ltrimmed_str` is actually `input`[start_offset..],
             // so `start_offset` = len(`input`) - len(`ltrimmed_str`)
             let start_offset = input.as_bytes().len() - ltrimmed_str.as_bytes().len();
 
@@ -111,8 +111,8 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
             let pattern = pattern.chars().collect::<Vec<char>>();
             let ltrimmed_str =
                 str::trim_start_matches::<&[char]>(input, pattern.as_ref());
-            // `btrimmed_str` is actually rtrim(ltrim(`input`)),
-            // so its `start_offset` can be computed as ltrim one
+            // `btrimmed_str` can be got by rtrim(ltrim(`input`)),
+            // so its `start_offset` should be same as ltrim situation above
             let start_offset = input.as_bytes().len() - ltrimmed_str.as_bytes().len();
             let btrimmed_str =
                 str::trim_end_matches::<&[char]>(ltrimmed_str, pattern.as_ref());
