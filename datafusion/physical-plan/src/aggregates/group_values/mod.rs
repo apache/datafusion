@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`GroupValues`] trait for storing and interning group keys
+
 use arrow::record_batch::RecordBatch;
 use arrow_array::{downcast_primitive, ArrayRef};
 use arrow_schema::{DataType, SchemaRef};
@@ -37,18 +39,34 @@ use datafusion_physical_expr::binary_map::OutputType;
 
 mod group_value_row;
 
-/// An interning store for group keys
+/// Stores the group values during hash aggregation.
+///
+/// There are multiple specialized implementations of this trait optimized for
+/// different data types and number of columns, instantiated by
+/// [`new_group_values`].
+///
+/// Each distinct group in a hash aggregation is identified by a unique group id
+/// (usize) which is assigned by instances of this trait. Group ids are
+/// continuous without gaps, starting from 0.
 pub trait GroupValues: Send {
-    /// Calculates the `groups` for each input row of `cols`
+    /// Calculates the group id for each input row of `cols`, assigning new
+    /// group ids as necessary.
+    ///
+    /// When the function returns, `groups`  must contain the group id for each
+    /// row in `cols`.
+    ///
+    /// If a row has the same value as a previous row, the same group id is
+    /// assigned. If a row has a new value, the next available group id is
+    /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
-    /// Returns the number of bytes used by this [`GroupValues`]
+    /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;
 
     /// Returns true if this [`GroupValues`] is empty
     fn is_empty(&self) -> bool;
 
-    /// The number of values stored in this [`GroupValues`]
+    /// The number of values (distinct group values) stored in this [`GroupValues`]
     fn len(&self) -> usize;
 
     /// Emits the group values
@@ -58,6 +76,7 @@ pub trait GroupValues: Send {
     fn clear_shrink(&mut self, batch: &RecordBatch);
 }
 
+/// Return a specialized implementation of [`GroupValues`] for the given schema.
 pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();

@@ -37,12 +37,13 @@ use std::vec;
 
 use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
 
-/// Trait for group values column-wise row comparison
+/// Trait for storing a single column of group values in [`GroupValuesColumn`]
 ///
 /// Implementations of this trait store a in-progress collection of group values
 /// (similar to various builders in Arrow-rs) that allow for quick comparison to
 /// incoming rows.
 ///
+/// [`GroupValuesColumn`]: crate::aggregates::group_values::column_wise::GroupValuesColumn
 pub trait ArrayRowEq: Send + Sync {
     /// Returns equal if the row stored in this builder at `lhs_row` is equal to
     /// the row in `array` at `rhs_row`
@@ -60,11 +61,13 @@ pub trait ArrayRowEq: Send + Sync {
     fn take_n(&mut self, n: usize) -> ArrayRef;
 }
 
+/// An implementation of [`ArrayRowEq`] for primitive types.
 pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType> {
     group_values: Vec<T::Native>,
     nulls: Vec<bool>,
-    // whether the array contains at least one null, for fast non-null path
+    /// whether the array contains at least one null, for fast non-null path
     has_null: bool,
+    /// Can the input array contain nulls?
     nullable: bool,
 }
 
@@ -154,13 +157,14 @@ impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
     }
 }
 
+/// An implementation of [`ArrayRowEq`] for binary and utf8 types.
 pub struct ByteGroupValueBuilder<O>
 where
     O: OffsetSizeTrait,
 {
     output_type: OutputType,
     buffer: BufferBuilder<u8>,
-    /// Offsets into `buffer` for each distinct  value. These offsets as used
+    /// Offsets into `buffer` for each distinct value. These offsets as used
     /// directly to create the final `GenericBinaryArray`. The `i`th string is
     /// stored in the range `offsets[i]..offsets[i+1]` in `buffer`. Null values
     /// are stored as a zero length string.

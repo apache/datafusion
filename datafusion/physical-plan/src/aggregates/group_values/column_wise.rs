@@ -36,7 +36,7 @@ use datafusion_physical_expr::binary_map::OutputType;
 
 use hashbrown::raw::RawTable;
 
-/// Compare GroupValue Rows column by column
+/// A [`GroupValues`] that stores multiple columns of group values.
 pub struct GroupValuesColumn {
     /// The output schema
     schema: SchemaRef,
@@ -55,7 +55,7 @@ pub struct GroupValuesColumn {
     map_size: usize,
 
     /// The actual group by values, stored column-wise. Compare from
-    /// the left to right, each column is stored as `ArrayRowEq`.
+    /// the left to right, each column is stored as [`ArrayRowEq`].
     /// This is shown faster than the row format
     group_values: Vec<Box<dyn ArrayRowEq>>,
 
