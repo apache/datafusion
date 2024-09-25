@@ -5934,7 +5934,7 @@ SELECT kurtosis(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col);
 query R
 SELECT kurtosis(col) FROM VALUES (1), (2), (3), (2), (1) as tab(col);
 ----
--0.615384615385
+-0.612244897959
 
 query R
 SELECT kurtosis(col) FROM VALUES (1.0), (10.0), (100.0), (10.0), (1.0) as tab(col);
@@ -5948,6 +5948,16 @@ SELECT kurtosis(col) FROM VALUES ('1'), ('10'), ('100'), ('10'), ('1') as tab(co
 
 query R
 SELECT kurtosis(col) FROM VALUES (1.0) as tab(col);
+----
+NULL
+
+query R
+SELECT kurtosis(col) FROM VALUES (1.0), (2.0) as tab(col);
+----
+NULL
+
+query R
+SELECT kurtosis(col) FROM VALUES (1.0), (2.0), (3.0) as tab(col);
 ----
 NULL
 

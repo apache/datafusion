@@ -155,7 +155,7 @@ impl Accumulator for KurtosisAccumulator {
     }
 
     fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
-        if self.count < 3 {
+        if self.count <= 3 {
             return Ok(ScalarValue::Float64(None));
         }
 
