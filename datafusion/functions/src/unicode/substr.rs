@@ -18,11 +18,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::string::common::StringArrayType;
+use crate::string::common::{make_and_append_view, StringArrayType};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
-    make_view, Array, ArrayIter, ArrayRef, AsArray, ByteView, GenericStringArray,
-    Int64Array, OffsetSizeTrait, StringViewArray,
+    Array, ArrayIter, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
+    StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
@@ -179,27 +179,6 @@ fn get_true_start_end(
         }
     }
     (st, ed)
-}
-
-/// Make a `u128` based on the given substr, start(offset to view.offset), and
-/// push into to the given buffers
-fn make_and_append_view(
-    views_buffer: &mut Vec<u128>,
-    null_builder: &mut NullBufferBuilder,
-    raw: &u128,
-    substr: &str,
-    start: u32,
-) {
-    let substr_len = substr.len();
-    let sub_view = if substr_len > 12 {
-        let view = ByteView::from(*raw);
-        make_view(substr.as_bytes(), view.buffer_index, view.offset + start)
-    } else {
-        // inline value does not need block id or offset
-        make_view(substr.as_bytes(), 0, 0)
-    };
-    views_buffer.push(sub_view);
-    null_builder.append_non_null();
 }
 
 // String characters are variable length encoded in UTF-8, `substr()` function's
