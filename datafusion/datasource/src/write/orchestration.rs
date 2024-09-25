@@ -210,9 +210,12 @@ pub(crate) async fn stateless_serialize_and_write_files(
 
     // Finalize or abort writers as appropriate
     for mut writer in finished_writers.into_iter() {
-        writer.shutdown()
-                    .await
-                    .map_err(|_| internal_datafusion_err!("Error encountered while finalizing writes! Partial results may have been written to ObjectStore!"))?;
+        if let Err(e) = writer.shutdown().await {
+            // ignore if writer already closed
+            if e.kind() != std::io::ErrorKind::InvalidInput {
+                return Err(internal_datafusion_err!("Error encountered while finalizing writes! Partial results may have been written to ObjectStore! Error: {e}"));
+            }
+        }
     }
 
     if any_errors {
