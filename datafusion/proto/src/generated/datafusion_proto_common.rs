@@ -888,14 +888,14 @@ impl JoinType {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            JoinType::Inner => "INNER",
-            JoinType::Left => "LEFT",
-            JoinType::Right => "RIGHT",
-            JoinType::Full => "FULL",
-            JoinType::Leftsemi => "LEFTSEMI",
-            JoinType::Leftanti => "LEFTANTI",
-            JoinType::Rightsemi => "RIGHTSEMI",
-            JoinType::Rightanti => "RIGHTANTI",
+            Self::Inner => "INNER",
+            Self::Left => "LEFT",
+            Self::Right => "RIGHT",
+            Self::Full => "FULL",
+            Self::Leftsemi => "LEFTSEMI",
+            Self::Leftanti => "LEFTANTI",
+            Self::Rightsemi => "RIGHTSEMI",
+            Self::Rightanti => "RIGHTANTI",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -926,8 +926,8 @@ impl JoinConstraint {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            JoinConstraint::On => "ON",
-            JoinConstraint::Using => "USING",
+            Self::On => "ON",
+            Self::Using => "USING",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -954,10 +954,10 @@ impl TimeUnit {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            TimeUnit::Second => "Second",
-            TimeUnit::Millisecond => "Millisecond",
-            TimeUnit::Microsecond => "Microsecond",
-            TimeUnit::Nanosecond => "Nanosecond",
+            Self::Second => "Second",
+            Self::Millisecond => "Millisecond",
+            Self::Microsecond => "Microsecond",
+            Self::Nanosecond => "Nanosecond",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -985,9 +985,9 @@ impl IntervalUnit {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            IntervalUnit::YearMonth => "YearMonth",
-            IntervalUnit::DayTime => "DayTime",
-            IntervalUnit::MonthDayNano => "MonthDayNano",
+            Self::YearMonth => "YearMonth",
+            Self::DayTime => "DayTime",
+            Self::MonthDayNano => "MonthDayNano",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1013,8 +1013,8 @@ impl UnionMode {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            UnionMode::Sparse => "sparse",
-            UnionMode::Dense => "dense",
+            Self::Sparse => "sparse",
+            Self::Dense => "dense",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1042,11 +1042,11 @@ impl CompressionTypeVariant {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            CompressionTypeVariant::Gzip => "GZIP",
-            CompressionTypeVariant::Bzip2 => "BZIP2",
-            CompressionTypeVariant::Xz => "XZ",
-            CompressionTypeVariant::Zstd => "ZSTD",
-            CompressionTypeVariant::Uncompressed => "UNCOMPRESSED",
+            Self::Gzip => "GZIP",
+            Self::Bzip2 => "BZIP2",
+            Self::Xz => "XZ",
+            Self::Zstd => "ZSTD",
+            Self::Uncompressed => "UNCOMPRESSED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1074,8 +1074,8 @@ impl JoinSide {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            JoinSide::LeftSide => "LEFT_SIDE",
-            JoinSide::RightSide => "RIGHT_SIDE",
+            Self::LeftSide => "LEFT_SIDE",
+            Self::RightSide => "RIGHT_SIDE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1101,9 +1101,9 @@ impl PrecisionInfo {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            PrecisionInfo::Exact => "EXACT",
-            PrecisionInfo::Inexact => "INEXACT",
-            PrecisionInfo::Absent => "ABSENT",
+            Self::Exact => "EXACT",
+            Self::Inexact => "INEXACT",
+            Self::Absent => "ABSENT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.

@@ -74,7 +74,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
-use datafusion::physical_plan::unnest::UnnestExec;
+use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
 };
@@ -1375,6 +1375,25 @@ fn roundtrip_unnest() -> Result<()> {
         Arc::new(Schema::new(vec![fa, fb0, fc1, fc2, fd0, fe1, fe2, fe3]));
     let input = Arc::new(EmptyExec::new(input_schema));
     let options = UnnestOptions::default();
-    let unnest = UnnestExec::new(input, vec![1, 3], vec![2, 4], output_schema, options);
+    let unnest = UnnestExec::new(
+        input,
+        vec![
+            ListUnnest {
+                index_in_input_schema: 1,
+                depth: 1,
+            },
+            ListUnnest {
+                index_in_input_schema: 1,
+                depth: 2,
+            },
+            ListUnnest {
+                index_in_input_schema: 3,
+                depth: 2,
+            },
+        ],
+        vec![2, 4],
+        output_schema,
+        options,
+    );
     roundtrip_test(Arc::new(unnest))
 }
