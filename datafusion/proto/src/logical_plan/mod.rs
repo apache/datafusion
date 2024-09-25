@@ -490,7 +490,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(sort.input, ctx, extension_codec)?;
                 let sort_expr: Vec<SortExpr> =
                     from_proto::parse_sorts(&sort.expr, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input).sort(sort_expr)?.build()
+                let fetch: usize = sort.fetch.try_into().map_err(|_| {
+                    DataFusionError::Internal(String::from(
+                        "Protobuf deserialization error, invalid limit value'",
+                    ))
+                })?;
+                LogicalPlanBuilder::from(input)
+                    .sort_with_limit(sort_expr, Some(fetch))?
+                    .build()
             }
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion::logical_expr::Partitioning;
