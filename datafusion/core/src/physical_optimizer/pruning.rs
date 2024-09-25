@@ -3465,21 +3465,18 @@ mod tests {
                     if let Some(column) =
                         left.as_any().downcast_ref::<phys_expr::Column>()
                     {
-                        if column.name() == "b" {
-                            if right
+                        if column.name() == "b" && right
                                 .as_any()
                                 .downcast_ref::<phys_expr::Literal>()
-                                .is_some()
-                            {
-                                let new_column =
-                                    Arc::new(phys_expr::Column::new("c", column.index()))
-                                        as _;
-                                return Arc::new(phys_expr::BinaryExpr::new(
-                                    new_column,
-                                    *expr.op(),
-                                    right.clone(),
-                                ));
-                            }
+                                .is_some() {
+                            let new_column =
+                                Arc::new(phys_expr::Column::new("c", column.index()))
+                                    as _;
+                            return Arc::new(phys_expr::BinaryExpr::new(
+                                new_column,
+                                *expr.op(),
+                                right.clone(),
+                            ));
                         }
                     }
                 }
