@@ -298,7 +298,7 @@ fn adjust_input_keys_ordering(
                         right.clone(),
                         new_conditions.0,
                         filter.clone(),
-                        &join_type,
+                        join_type,
                         // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
                         projection.clone(),
                         PartitionMode::Partitioned,
