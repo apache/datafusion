@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::engines::output::DFColumnType;
+use arrow::array::Array;
 use arrow::datatypes::Fields;
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
@@ -22,8 +24,6 @@ use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::DataFusionError;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-
-use crate::engines::output::DFColumnType;
 
 use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
@@ -174,7 +174,7 @@ fn convert_batch(batch: RecordBatch) -> Result<Vec<Vec<String>>> {
             batch
                 .columns()
                 .iter()
-                .map(|col| cell_to_string(col, row))
+                .map(|col| cell_to_string(col, row, col.data_type()))
                 .collect::<Result<Vec<String>>>()
         })
         .collect()
@@ -198,12 +198,16 @@ macro_rules! get_row_value {
 ///
 /// Floating numbers are rounded to have a consistent representation with the Postgres runner.
 ///
-pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
+pub fn cell_to_string(
+    col: &ArrayRef,
+    row: usize,
+    data_type: &DataType,
+) -> Result<String> {
     if !col.is_valid(row) {
         // represent any null value with the string "NULL"
         Ok(NULL_STR.to_string())
     } else {
-        match col.data_type() {
+        match data_type {
             DataType::Null => Ok(NULL_STR.to_string()),
             DataType::Boolean => {
                 Ok(bool_to_str(get_row_value!(array::BooleanArray, col, row)))
@@ -275,6 +279,17 @@ pub(crate) fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
             | DataType::Time32(_)
             | DataType::Time64(_) => DFColumnType::DateTime,
             DataType::Timestamp(_, _) => DFColumnType::Timestamp,
+            DataType::Dictionary(key_type, value_type) => {
+                if key_type.is_integer() {
+                    // mapping dictionary string types to Text
+                    match value_type.as_ref() {
+                        DataType::Utf8 | DataType::LargeUtf8 => DFColumnType::Text,
+                        _ => DFColumnType::Another,
+                    }
+                } else {
+                    DFColumnType::Another
+                }
+            }
             _ => DFColumnType::Another,
         })
         .collect()
