@@ -491,9 +491,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let sort_expr: Vec<SortExpr> =
                     from_proto::parse_sorts(&sort.expr, ctx, extension_codec)?;
                 let fetch: usize = sort.fetch.try_into().map_err(|_| {
-                    DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, invalid limit value'",
-                    ))
+                    DataFusionError::Internal(String::from(format!(
+                        "Protobuf deserialization error, invalid limit value of {}, which cannot be converted to usize.",
+                        sort.fetch
+                    )))
                 })?;
                 LogicalPlanBuilder::from(input)
                     .sort_with_limit(sort_expr, Some(fetch))?
