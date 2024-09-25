@@ -543,7 +543,9 @@ impl Unparser<'_> {
                 };
 
                 let Some(query) = query.as_mut() else {
-                    return internal_err!("UNION ALL operator only valid in a statement context");
+                    return internal_err!(
+                        "UNION ALL operator only valid in a statement context"
+                    );
                 };
                 query.body(Box::new(union_expr));
 
