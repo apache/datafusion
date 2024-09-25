@@ -117,6 +117,7 @@ impl FileOpener for ParquetOpener {
         Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
 
+            let mut metadata_timer = file_metrics.metadata_load_time.timer();
             let metadata = reader.load_metadata(options.clone()).await?;
             let mut schema = metadata.schema().clone();
             // read with view types
@@ -130,6 +131,8 @@ impl FileOpener for ParquetOpener {
                 .with_schema(schema.clone());
             let metadata =
                 ArrowReaderMetadata::try_new(metadata.metadata().clone(), options)?;
+
+            metadata_timer.stop();
 
             let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
                 reader.upcast(),

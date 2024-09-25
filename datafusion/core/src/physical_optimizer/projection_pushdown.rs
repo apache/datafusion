@@ -54,12 +54,13 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
 /// remove or swap with its child.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ProjectionPushdown {}
 
 impl ProjectionPushdown {
@@ -334,10 +335,10 @@ fn try_swapping_with_output_req(
         return Ok(None);
     }
 
-    let mut updated_sort_reqs = vec![];
+    let mut updated_sort_reqs = LexRequirement::new(vec![]);
     // None or empty_vec can be treated in the same way.
     if let Some(reqs) = &output_req.required_input_ordering()[0] {
-        for req in reqs {
+        for req in &reqs.inner {
             let Some(new_expr) = update_expr(&req.expr, projection.expr(), false)? else {
                 return Ok(None);
             };
@@ -1830,6 +1831,7 @@ mod tests {
 
     #[test]
     fn test_streaming_table_after_projection() -> Result<()> {
+        #[derive(Debug)]
         struct DummyStreamPartition {
             schema: SchemaRef,
         }
@@ -1995,7 +1997,7 @@ mod tests {
         let csv = create_simple_csv_exec();
         let sort_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
             csv.clone(),
-            Some(vec![
+            Some(LexRequirement::new(vec![
                 PhysicalSortRequirement {
                     expr: Arc::new(Column::new("b", 1)),
                     options: Some(SortOptions::default()),
@@ -2008,7 +2010,7 @@ mod tests {
                     )),
                     options: Some(SortOptions::default()),
                 },
-            ]),
+            ])),
             Distribution::HashPartitioned(vec![
                 Arc::new(Column::new("a", 0)),
                 Arc::new(Column::new("b", 1)),
@@ -2041,7 +2043,7 @@ mod tests {
         ];
 
         assert_eq!(get_plan_string(&after_optimize), expected);
-        let expected_reqs = vec![
+        let expected_reqs = LexRequirement::new(vec![
             PhysicalSortRequirement {
                 expr: Arc::new(Column::new("b", 2)),
                 options: Some(SortOptions::default()),
@@ -2054,7 +2056,7 @@ mod tests {
                 )),
                 options: Some(SortOptions::default()),
             },
-        ];
+        ]);
         assert_eq!(
             after_optimize
                 .as_any()

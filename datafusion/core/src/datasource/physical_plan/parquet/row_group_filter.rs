@@ -109,6 +109,9 @@ impl RowGroupAccessPlanFilter {
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
+        // scoped timer updates on drop
+        let _timer_guard = metrics.statistics_eval_time.timer();
+
         assert_eq!(groups.len(), self.access_plan.len());
         // Indexes of row groups still to scan
         let row_group_indexes = self.access_plan.row_group_indexes();
@@ -158,6 +161,9 @@ impl RowGroupAccessPlanFilter {
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
+        // scoped timer updates on drop
+        let _timer_guard = metrics.bloom_filter_eval_time.timer();
+
         assert_eq!(builder.metadata().num_row_groups(), self.access_plan.len());
         for idx in 0..self.access_plan.len() {
             if !self.access_plan.should_scan(idx) {

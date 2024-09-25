@@ -50,7 +50,9 @@ use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
-use datafusion::physical_expr::{PhysicalSortRequirement, ScalarFunctionExpr};
+use datafusion::physical_expr::{
+    LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
+};
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -72,7 +74,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
-use datafusion::physical_plan::unnest::UnnestExec;
+use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
 };
@@ -1148,13 +1150,13 @@ fn roundtrip_json_sink() -> Result<()> {
         file_sink_config,
         JsonWriterOptions::new(CompressionTypeVariant::UNCOMPRESSED),
     ));
-    let sort_order = vec![PhysicalSortRequirement::new(
+    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )];
+    )]);
 
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
@@ -1184,13 +1186,13 @@ fn roundtrip_csv_sink() -> Result<()> {
         file_sink_config,
         CsvWriterOptions::new(WriterBuilder::default(), CompressionTypeVariant::ZSTD),
     ));
-    let sort_order = vec![PhysicalSortRequirement::new(
+    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )];
+    )]);
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
@@ -1243,13 +1245,13 @@ fn roundtrip_parquet_sink() -> Result<()> {
         file_sink_config,
         TableParquetOptions::default(),
     ));
-    let sort_order = vec![PhysicalSortRequirement::new(
+    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
         Arc::new(Column::new("plan_type", 0)),
         Some(SortOptions {
             descending: true,
             nulls_first: false,
         }),
-    )];
+    )]);
 
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
@@ -1373,6 +1375,25 @@ fn roundtrip_unnest() -> Result<()> {
         Arc::new(Schema::new(vec![fa, fb0, fc1, fc2, fd0, fe1, fe2, fe3]));
     let input = Arc::new(EmptyExec::new(input_schema));
     let options = UnnestOptions::default();
-    let unnest = UnnestExec::new(input, vec![1, 3], vec![2, 4], output_schema, options);
+    let unnest = UnnestExec::new(
+        input,
+        vec![
+            ListUnnest {
+                index_in_input_schema: 1,
+                depth: 1,
+            },
+            ListUnnest {
+                index_in_input_schema: 1,
+                depth: 2,
+            },
+            ListUnnest {
+                index_in_input_schema: 3,
+                depth: 2,
+            },
+        ],
+        vec![2, 4],
+        output_schema,
+        options,
+    );
     roundtrip_test(Arc::new(unnest))
 }

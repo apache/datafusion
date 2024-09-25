@@ -139,6 +139,7 @@ type CommonExprs<'n> = IndexMap<Identifier<'n>, (Expr, String)>;
 /// ProjectionExec(exprs=[extract (day from new_col), extract (year from new_col)]) <-- reuse here
 ///   ProjectionExec(exprs=[to_date(c1) as new_col]) <-- compute to_date once
 /// ```
+#[derive(Debug)]
 pub struct CommonSubexprEliminate {
     random_state: RandomState,
 }

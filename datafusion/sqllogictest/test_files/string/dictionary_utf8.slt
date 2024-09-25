@@ -24,37 +24,18 @@ include ./init_data.slt.part
 statement ok
 create table test_basic_operator as
 select
-    arrow_cast(column1, 'LargeUtf8') as ascii_1,
-    arrow_cast(column2, 'LargeUtf8') as ascii_2,
-    arrow_cast(column3, 'LargeUtf8') as unicode_1,
-    arrow_cast(column4, 'LargeUtf8') as unicode_2
+    arrow_cast(column1, 'Dictionary(Int32, Utf8)') as ascii_1,
+    arrow_cast(column2, 'Dictionary(Int32, Utf8)') as ascii_2,
+    arrow_cast(column3, 'Dictionary(Int32, Utf8)') as unicode_1,
+    arrow_cast(column4, 'Dictionary(Int32, Utf8)') as unicode_2
 from test_source;
 
 statement ok
 create table test_substr as
-select arrow_cast(col1, 'LargeUtf8') as c1 from test_substr_base;
+select arrow_cast(col1, 'Dictionary(Int32, Utf8)') as c1 from test_substr_base;
 
-# select
-query TTTT
-SELECT ascii_1, ascii_2, unicode_1, unicode_2 FROM test_basic_operator
-----
-Andrew X datafusion📊🔥 🔥
-Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合
-Raphael R datafusionДатаФусион аФус
-NULL R NULL 🔥
-
-# TODO: move it back to `string_query.slt.part` after fixing the issue
-# https://github.com/apache/datafusion/issues/12618
-query BB
-SELECT
-  ascii_1 ~* '^a.{3}e',
-  unicode_1 ~* '^d.*Фу'
-FROM test_basic_operator;
-----
-true false
-false false
-false true
-NULL NULL
+statement ok
+drop table test_source
 
 #
 # common test for string-like functions and operators
@@ -64,7 +45,6 @@ include ./string_query.slt.part
 #
 # Clean up
 #
-
 statement ok
 drop table test_basic_operator;
 
