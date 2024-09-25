@@ -817,7 +817,9 @@ by all 16 cores.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">pushdown_rows_pruned</span></code>: rows that were tested by any of the above filtered, and did not pass one of them (this should be sum of <code class="docutils literal notranslate"><span class="pre">page_index_rows_matched</span></code>, <code class="docutils literal notranslate"><span class="pre">row_groups_pruned_bloom_filter</span></code>, and <code class="docutils literal notranslate"><span class="pre">row_groups_pruned_statistics</span></code>)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">predicate_evaluation_errors</span></code>: number of times evaluating the filter expression failed (expected to be zero in normal operation)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">num_predicate_creation_errors</span></code>: number of errors creating predicates (expected to be zero in normal operation)</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">pushdown_eval_time</span></code>: time spent evaluating these filters</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">bloom_filter_eval_time</span></code>: time spent parsing and evaluating Bloom Filters</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">statistics_eval_time</span></code>: time spent parsing and evaluating row group-level statistics</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">row_pushdown_eval_time</span></code>: time spent evaluating row-level filters</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">page_index_eval_time</span></code>: time required to evaluate the page index filters</p></li>
 </ul>
 </section>
