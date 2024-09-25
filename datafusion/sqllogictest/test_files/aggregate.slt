@@ -4546,7 +4546,7 @@ set datafusion.sql_parser.dialect = 'Generic';
 statement ok
 create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
 
-query I?
+query IT
 select * from dict_test;
 ----
 1 foo
