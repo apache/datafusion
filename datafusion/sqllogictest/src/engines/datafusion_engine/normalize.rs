@@ -174,7 +174,7 @@ fn convert_batch(batch: RecordBatch) -> Result<Vec<Vec<String>>> {
             batch
                 .columns()
                 .iter()
-                .map(|col| cell_to_string(col, row, col.data_type()))
+                .map(|col| cell_to_string(col, row))
                 .collect::<Result<Vec<String>>>()
         })
         .collect()
@@ -201,13 +201,12 @@ macro_rules! get_row_value {
 pub fn cell_to_string(
     col: &ArrayRef,
     row: usize,
-    data_type: &DataType,
 ) -> Result<String> {
     if !col.is_valid(row) {
         // represent any null value with the string "NULL"
         Ok(NULL_STR.to_string())
     } else {
-        match data_type {
+        match col.data_type() {
             DataType::Null => Ok(NULL_STR.to_string()),
             DataType::Boolean => {
                 Ok(bool_to_str(get_row_value!(array::BooleanArray, col, row)))
