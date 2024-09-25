@@ -214,6 +214,7 @@ pub fn display_all_functions() -> Result<()> {
 }
 
 /// PARQUET_META table function
+#[derive(Debug)]
 struct ParquetMetadataTable {
     schema: SchemaRef,
     batch: RecordBatch,

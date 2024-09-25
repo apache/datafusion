@@ -219,12 +219,24 @@ impl Unparser<'_> {
             }
             Expr::Cast(Cast { expr, data_type }) => {
                 let inner_expr = self.expr_to_sql_inner(expr)?;
-                Ok(ast::Expr::Cast {
-                    kind: ast::CastKind::Cast,
-                    expr: Box::new(inner_expr),
-                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
-                    format: None,
-                })
+                match data_type {
+                    DataType::Dictionary(_, _) => match inner_expr {
+                        // Dictionary values don't need to be cast to other types when rewritten back to sql
+                        ast::Expr::Value(_) => Ok(inner_expr),
+                        _ => Ok(ast::Expr::Cast {
+                            kind: ast::CastKind::Cast,
+                            expr: Box::new(inner_expr),
+                            data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                            format: None,
+                        }),
+                    },
+                    _ => Ok(ast::Expr::Cast {
+                        kind: ast::CastKind::Cast,
+                        expr: Box::new(inner_expr),
+                        data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                        format: None,
+                    }),
+                }
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
@@ -953,11 +965,19 @@ impl Unparser<'_> {
             }
             ScalarValue::Float16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Float32(Some(f)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
+                let f_val = match f.fract() {
+                    0.0 => format!("{:.1}", f),
+                    _ => format!("{}", f),
+                };
+                Ok(ast::Expr::Value(ast::Value::Number(f_val, false)))
             }
             ScalarValue::Float32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Float64(Some(f)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
+                let f_val = match f.fract() {
+                    0.0 => format!("{:.1}", f),
+                    _ => format!("{}", f),
+                };
+                Ok(ast::Expr::Value(ast::Value::Number(f_val, false)))
             }
             ScalarValue::Float64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Decimal128(Some(value), precision, scale) => {
@@ -2184,6 +2204,28 @@ mod tests {
     }
 
     #[test]
+    fn test_float_scalar_to_expr() {
+        let tests = [
+            (Expr::Literal(ScalarValue::Float64(Some(3f64))), "3.0"),
+            (Expr::Literal(ScalarValue::Float64(Some(3.1f64))), "3.1"),
+            (Expr::Literal(ScalarValue::Float32(Some(-2f32))), "-2.0"),
+            (
+                Expr::Literal(ScalarValue::Float32(Some(-2.989f32))),
+                "-2.989",
+            ),
+        ];
+        for (value, expected) in tests {
+            let dialect = CustomDialectBuilder::new().build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
     fn custom_dialect_use_char_for_utf8_cast() -> Result<()> {
         let default_dialect = CustomDialectBuilder::default().build();
         let mysql_custom_dialect = CustomDialectBuilder::new()
@@ -2360,5 +2402,30 @@ mod tests {
             assert_eq!(actual, expected);
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_cast_value_to_dict_expr() {
+        let tests = [(
+            Expr::Cast(Cast {
+                expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                    "variation".to_string(),
+                )))),
+                data_type: DataType::Dictionary(
+                    Box::new(DataType::Int8),
+                    Box::new(DataType::Utf8),
+                ),
+            }),
+            "'variation'",
+        )];
+        for (value, expected) in tests {
+            let dialect = CustomDialectBuilder::new().build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
     }
 }

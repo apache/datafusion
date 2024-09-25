@@ -1873,8 +1873,16 @@ mod tests {
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 5);
         assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 2);
         assert!(
-            get_value(&metrics, "pushdown_eval_time") > 0,
-            "no eval time in metrics: {metrics:#?}"
+            get_value(&metrics, "row_pushdown_eval_time") > 0,
+            "no pushdown eval time in metrics: {metrics:#?}"
+        );
+        assert!(
+            get_value(&metrics, "statistics_eval_time") > 0,
+            "no statistics eval time in metrics: {metrics:#?}"
+        );
+        assert!(
+            get_value(&metrics, "bloom_filter_eval_time") > 0,
+            "no Bloom Filter eval time in metrics: {metrics:#?}"
         );
     }
 

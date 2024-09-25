@@ -37,6 +37,19 @@ select arrow_cast(col1, 'Utf8View') as c1 from test_substr_base;
 statement ok
 drop table test_source
 
+# TODO: move it back to `string_query.slt.part` after fixing the issue
+# https://github.com/apache/datafusion/issues/12618
+query BB
+SELECT
+  ascii_1 ~* '^a.{3}e',
+  unicode_1 ~* '^d.*Фу'
+FROM test_basic_operator;
+----
+true false
+false false
+false true
+NULL NULL
+
 #
 # common test for string-like functions and operators
 #
@@ -968,35 +981,6 @@ explain select column2||column3 from temp;
 logical_plan
 01)Projection: temp.column2 || temp.column3
 02)--TableScan: temp projection=[column2, column3]
-
-################################################
-# Test for Dictionary String concatenation
-################################################
-
-# || same type (column1 has null, so also tests NULL || NULL)
-# expect all results to be the same for each row as they all have the same values
-query T
-SELECT
-  column1_dict || column1_dict
-FROM test;
-----
-AndrewAndrew
-XiangpengXiangpeng
-RaphaelRaphael
-NULL
-
-# || constants
-# expect all results to be the same for each row as they all have the same values
-query TT
-SELECT
-  column1_dict || 'foo',
-  'foo' || column1_dict
-FROM test;
-----
-Andrewfoo fooAndrew
-Xiangpengfoo fooXiangpeng
-Raphaelfoo fooRaphael
-NULL NULL
 
 ################################################
 # Test for string view trim

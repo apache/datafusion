@@ -2346,8 +2346,7 @@ impl fmt::Display for Expr {
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
             Expr::Unnest(Unnest { expr }) => {
-                // TODO: use Display instead of Debug, there is non-unique expression name in projection issue.
-                write!(f, "UNNEST({expr:?})")
+                write!(f, "UNNEST({expr})")
             }
         }
     }

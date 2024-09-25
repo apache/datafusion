@@ -2672,7 +2672,7 @@ logical_plan
 05)----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
 
 # hash_join_with_date32
-query DDR?DDR? rowsort
+query DDRTDDRT rowsort
 select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1
 ----
 1970-01-02 1970-01-02T00:00:00 1.23 abc 1970-01-02 1970-01-02T00:00:00 -123.12 abc
@@ -2691,7 +2691,7 @@ logical_plan
 05)----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
 
 # hash_join_with_date64
-query DDR?DDR? rowsort
+query DDRTDDRT rowsort
 select * from hashjoin_datatype_table_t1 t1 left join hashjoin_datatype_table_t2 t2 on t1.c2 = t2.c2
 ----
 1970-01-02 1970-01-02T00:00:00 1.23 abc 1970-01-02 1970-01-02T00:00:00 -123.12 abc
@@ -2712,7 +2712,7 @@ logical_plan
 05)----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
 
 # hash_join_with_decimal
-query DDR?DDR? rowsort
+query DDRTDDRT rowsort
 select * from hashjoin_datatype_table_t1 t1 right join hashjoin_datatype_table_t1 t2 on t1.c3 = t2.c3
 ----
 1970-01-02 1970-01-02T00:00:00 1.23 abc 1970-01-02 1970-01-02T00:00:00 1.23 abc
@@ -2732,7 +2732,7 @@ logical_plan
 05)----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
 
 # hash_join_with_dictionary
-query DDR?DDR? rowsort
+query DDRTDDRT rowsort
 select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c4 = t2.c4
 ----
 1970-01-02 1970-01-02T00:00:00 1.23 abc 1970-01-02 1970-01-02T00:00:00 -123.12 abc
@@ -2783,7 +2783,7 @@ physical_plan
 11)----------MemoryExec: partitions=1, partition_sizes=[1]
 
 # sort_merge_join_on_date32 inner sort merge join on data type (Date32)
-query DDR?DDR? rowsort
+query DDRTDDRT rowsort
 select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1
 ----
 1970-01-02 1970-01-02T00:00:00 1.23 abc 1970-01-02 1970-01-02T00:00:00 -123.12 abc
@@ -2815,7 +2815,7 @@ physical_plan
 13)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # sort_merge_join_on_decimal right join on data type (Decimal)
-query DDR?DDR? rowsort
+query DDRTDDRT rowsort
 select * from hashjoin_datatype_table_t1 t1 right join hashjoin_datatype_table_t2 t2 on t1.c3 = t2.c3
 ----
 1970-01-04 NULL -123.12 jkl 1970-01-02 1970-01-02T00:00:00 -123.12 abc
@@ -4055,9 +4055,9 @@ logical_plan
 03)----TableScan: join_t1 projection=[t1_id, t1_name]
 04)--SubqueryAlias: series
 05)----Subquery:
-06)------Projection: UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int))) AS i
-07)--------Unnest: lists[UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int)))] structs[]
-08)----------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS UNNEST(generate_series(Int64(1),outer_ref(t1.t1_int)))
+06)------Projection: unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)),depth=1) AS i
+07)--------Unnest: lists[unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))|depth=1] structs[]
+08)----------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))
 09)------------EmptyRelation
 
 
@@ -4077,9 +4077,9 @@ logical_plan
 03)----TableScan: join_t1 projection=[t1_id, t1_name]
 04)--SubqueryAlias: series
 05)----Subquery:
-06)------Projection: UNNEST(generate_series(Int64(1),outer_ref(t2.t1_int))) AS i
-07)--------Unnest: lists[UNNEST(generate_series(Int64(1),outer_ref(t2.t1_int)))] structs[]
-08)----------Projection: generate_series(Int64(1), CAST(outer_ref(t2.t1_int) AS Int64)) AS UNNEST(generate_series(Int64(1),outer_ref(t2.t1_int)))
+06)------Projection: unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)),depth=1) AS i
+07)--------Unnest: lists[unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))|depth=1] structs[]
+08)----------Projection: generate_series(Int64(1), CAST(outer_ref(t2.t1_int) AS Int64)) AS unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))
 09)------------EmptyRelation
 
 

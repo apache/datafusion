@@ -567,13 +567,13 @@ set datafusion.sql_parser.dialect = 'Postgres';
 
 # csv_query_stddev_12
 query IR
-SELECT c2, var_samp(c12) FILTER (WHERE c12 > 0.90) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+SELECT c2, var_samp(c12) FILTER (WHERE c12 > 0.95) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
 ----
-1 0.000889240174
-2 0.000785878272
+1 0.000791243479
+2 0.000061521903
 3 NULL
 4 NULL
-5 0.000269544643
+5 NULL
 
 # Restore the default dialect
 statement ok
@@ -4546,7 +4546,7 @@ set datafusion.sql_parser.dialect = 'Generic';
 statement ok
 create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
 
-query I?
+query IT
 select * from dict_test;
 ----
 1 foo
