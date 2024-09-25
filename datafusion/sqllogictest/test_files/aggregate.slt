@@ -5923,3 +5923,45 @@ SELECT kurtosis_pop(c1) FROM t1;
 
 statement ok
 DROP TABLE t1;
+
+# Test for kurtosis
+
+query R
+SELECT kurtosis(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col);
+----
+4.777292927668
+
+query R
+SELECT kurtosis(col) FROM VALUES (1), (2), (3), (2), (1) as tab(col);
+----
+-0.615384615385
+
+query R
+SELECT kurtosis(col) FROM VALUES (1.0), (10.0), (100.0), (10.0), (1.0) as tab(col);
+----
+4.777292927668
+
+query R
+SELECT kurtosis(col) FROM VALUES ('1'), ('10'), ('100'), ('10'), ('1') as tab(col);
+----
+4.777292927668
+
+query R
+SELECT kurtosis(col) FROM VALUES (1.0) as tab(col);
+----
+NULL
+
+query R
+SELECT kurtosis(1);
+----
+NULL
+
+query R
+SELECT kurtosis(1.0);
+----
+NULL
+
+query R
+SELECT kurtosis(null);
+----
+NULL

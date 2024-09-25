@@ -74,6 +74,7 @@ use datafusion_functions_aggregate::expr_fn::{
     nth_value,
 };
 use datafusion_functions_aggregate::kurtosis_pop::kurtosis_pop;
+use datafusion_functions_aggregate::kurtosis::kurtosis;
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_proto::bytes::{
@@ -913,6 +914,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
         row_number(),
         kurtosis_pop(lit(1)),
+        kurtosis(lit(1)),
         nth_value(col("b"), 1, vec![]),
         nth_value(
             col("b"),
