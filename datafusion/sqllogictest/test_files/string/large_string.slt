@@ -34,6 +34,28 @@ statement ok
 create table test_substr as
 select arrow_cast(col1, 'LargeUtf8') as c1 from test_substr_base;
 
+# select
+query TTTT
+SELECT ascii_1, ascii_2, unicode_1, unicode_2 FROM test_basic_operator
+----
+Andrew X datafusion📊🔥 🔥
+Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合
+Raphael R datafusionДатаФусион аФус
+NULL R NULL 🔥
+
+# TODO: move it back to `string_query.slt.part` after fixing the issue
+# https://github.com/apache/datafusion/issues/12618
+query BB
+SELECT
+  ascii_1 ~* '^a.{3}e',
+  unicode_1 ~* '^d.*Фу'
+FROM test_basic_operator;
+----
+true false
+false false
+false true
+NULL NULL
+
 #
 # common test for string-like functions and operators
 #
