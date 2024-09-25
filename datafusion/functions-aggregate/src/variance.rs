@@ -470,7 +470,7 @@ impl VarianceGroupsAccumulator {
 
         if let StatsType::Sample = self.stats_type {
             counts.iter_mut().for_each(|count| {
-                *count -= 1;
+                *count = count.saturating_sub(1);
             });
         }
         let nulls = NullBuffer::from_iter(counts.iter().map(|&count| count != 0));
