@@ -80,7 +80,7 @@ impl GroupValuesColumn {
         })
     }
 
-    /// Returns true if [`GroupValuesColumn`] supports for the specified schema
+    /// Returns true if [`GroupValuesColumn`] supported for the specified schema
     pub fn supported_schema(schema: &Schema) -> bool {
         schema
             .fields()
