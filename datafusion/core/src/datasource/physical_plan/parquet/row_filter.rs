@@ -531,7 +531,7 @@ pub fn build_row_filter(
 ) -> Result<Option<RowFilter>> {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
-    let time = &file_metrics.pushdown_eval_time;
+    let time = &file_metrics.row_pushdown_eval_time;
 
     // Split into conjuncts:
     // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
