@@ -334,6 +334,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
             MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
                 .register(context.memory_pool());
 
+        // Initialization of reservation for processing the outer table
+        let memory_reservation =
+            MemoryConsumer::new(format!("NestedLoopJoin[{partition}]"))
+                .register(context.memory_pool());
+
+        let target_batch_size = context.session_config().batch_size();
+
         let inner_table = self.inner_table.once(|| {
             collect_left_input(
                 Arc::clone(&self.left),
@@ -344,7 +351,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 self.right().output_partitioning().partition_count(),
             )
         });
-
         let outer_table = self.right.execute(partition, context)?;
 
         let indices_cache = (UInt64Array::new_null(0), UInt32Array::new_null(0));
@@ -363,6 +369,10 @@ impl ExecutionPlan for NestedLoopJoinExec {
             join_metrics,
             indices_cache,
             right_side_ordered,
+            target_batch_size,
+            outer_record_batch: None,
+            outer_record_batch_row: 0,
+            memory_reservation,
         }))
     }
 
@@ -466,6 +476,14 @@ struct NestedLoopJoinStream {
     indices_cache: (UInt64Array, UInt32Array),
     /// Whether the right side is ordered
     right_side_ordered: bool,
+    /// Target size for output batches
+    target_batch_size: usize,
+    /// The current record batch being processed.
+    outer_record_batch: Option<RecordBatch>,
+    /// The current index of the outer record batch being processed.
+    outer_record_batch_row: usize,
+    /// The memory reservation used to track memory usage.
+    memory_reservation: MemoryReservation,
 }
 
 /// Creates a Cartesian product of two input batches, preserving the order of the right batch,
@@ -566,37 +584,18 @@ impl NestedLoopJoinStream {
             return Poll::Ready(None);
         }
 
-        self.outer_table
-            .poll_next_unpin(cx)
-            .map(|maybe_batch| match maybe_batch {
-                Some(Ok(right_batch)) => {
-                    // Setting up timer & updating input metrics
+        if self.outer_record_batch.is_none() {
+            // Get the next outer record batch
+            match ready!(self.outer_table.poll_next_unpin(cx)) {
+                Some(Ok(batch)) => {
                     self.join_metrics.input_batches.add(1);
-                    self.join_metrics.input_rows.add(right_batch.num_rows());
-                    let timer = self.join_metrics.join_time.timer();
-
-                    let result = join_left_and_right_batch(
-                        left_data.batch(),
-                        &right_batch,
-                        self.join_type,
-                        self.filter.as_ref(),
-                        &self.column_indices,
-                        &self.schema,
-                        visited_left_side,
-                        &mut self.indices_cache,
-                        self.right_side_ordered,
-                    );
-
-                    // Recording time & updating output metrics
-                    if let Ok(batch) = &result {
-                        timer.done();
-                        self.join_metrics.output_batches.add(1);
-                        self.join_metrics.output_rows.add(batch.num_rows());
-                    }
-
-                    Some(result)
+                    self.join_metrics.input_rows.add(batch.num_rows());
+                    self.memory_reservation
+                        .try_grow(batch.get_array_memory_size())?;
+                    self.outer_record_batch = Some(batch);
+                    self.outer_record_batch_row = 0;
                 }
-                Some(err) => Some(err),
+                Some(Err(e)) => return Poll::Ready(Some(Err(e))),
                 None => {
                     if need_produce_result_in_final(self.join_type) {
                         // At this stage `visited_left_side` won't be updated, so it's
@@ -606,7 +605,7 @@ impl NestedLoopJoinStream {
                         // multiple calls of `report_probe_completed()`
                         if !left_data.report_probe_completed() {
                             self.is_exhausted = true;
-                            return None;
+                            return Poll::Ready(None);
                         };
 
                         // Only setting up timer, input is exhausted
@@ -638,13 +637,60 @@ impl NestedLoopJoinStream {
                             self.join_metrics.output_rows.add(batch.num_rows());
                         }
 
-                        Some(result)
+                        return Poll::Ready(Some(result));
                     } else {
                         // end of the join loop
-                        None
+                        return Poll::Ready(None);
                     }
                 }
-            })
+            }
+        }
+
+        debug_assert!(self.outer_record_batch.is_some());
+        let right_batch = self.outer_record_batch.as_ref().unwrap();
+        let num_rows = match (self.join_type, left_data.batch().num_rows()) {
+            // An inner join will only produce 1 output row per input row.
+            (JoinType::Inner, _) | (_, 0) => self.target_batch_size,
+            // Outer joins can produce as many rows as there are in the build input for
+            // each row in the batch.
+            (_, rows) => std::cmp::max(1, self.target_batch_size / rows),
+        };
+        let num_rows = std::cmp::min(
+            num_rows,
+            right_batch.num_rows() - self.outer_record_batch_row,
+        );
+        let sliced_right_batch = right_batch.slice(self.outer_record_batch_row, num_rows);
+
+        // Setting up timer
+        let timer = self.join_metrics.join_time.timer();
+
+        let result = join_left_and_right_batch(
+            left_data.batch(),
+            &sliced_right_batch,
+            self.join_type,
+            self.filter.as_ref(),
+            &self.column_indices,
+            &self.schema,
+            visited_left_side,
+            &mut self.indices_cache,
+            self.right_side_ordered,
+        );
+
+        // Recording time & updating output metrics
+        if let Ok(batch) = &result {
+            timer.done();
+            self.outer_record_batch_row += num_rows;
+            if self.outer_record_batch_row >= right_batch.num_rows() {
+                if let Some(batch) = self.outer_record_batch.take() {
+                    self.memory_reservation
+                        .shrink(batch.get_array_memory_size())
+                }
+            }
+            self.join_metrics.output_batches.add(1);
+            self.join_metrics.output_rows.add(batch.num_rows());
+        }
+
+        Poll::Ready(Some(result))
     }
 }
 
@@ -1172,8 +1218,10 @@ mod tests {
 
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]"
+                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:"
             );
+            assert_contains!(err.to_string(), "NestedLoopJoinLoad[0] consumed 0 bytes");
+            assert_contains!(err.to_string(), "NestedLoopJoin[0] consumed 0 bytes");
         }
 
         Ok(())
