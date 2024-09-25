@@ -276,7 +276,7 @@ mod tests {
             grouping_ids: vec![],
             expr_indices: vec![5],
         };
-        let res = grouping.mask_to_id(&vec![false]);
-        assert_eq!(res.is_err(), true)
+        let res = grouping.mask_to_id(&[false]);
+        assert!(res.is_err())
     }
 }
