@@ -335,7 +335,9 @@ impl QueryPlanner for TopKQueryPlanner {
     }
 }
 
+#[derive(Default, Debug)]
 struct TopKOptimizerRule {}
+
 impl OptimizerRule for TopKOptimizerRule {
     fn name(&self) -> &str {
         "topk"
@@ -387,7 +389,7 @@ impl OptimizerRule for TopKOptimizerRule {
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Hash)]
 struct TopKPlanNode {
     k: usize,
     input: LogicalPlan,
@@ -686,6 +688,7 @@ impl RecordBatchStream for TopKReader {
     }
 }
 
+#[derive(Default, Debug)]
 struct MyAnalyzerRule {}
 
 impl AnalyzerRule for MyAnalyzerRule {

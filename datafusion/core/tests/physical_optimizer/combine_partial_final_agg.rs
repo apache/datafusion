@@ -84,7 +84,7 @@ fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
 fn partial_aggregate_exec(
     input: Arc<dyn ExecutionPlan>,
     group_by: PhysicalGroupBy,
-    aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+    aggr_expr: Vec<AggregateFunctionExpr>,
 ) -> Arc<dyn ExecutionPlan> {
     let schema = input.schema();
     let n_aggr = aggr_expr.len();
@@ -104,7 +104,7 @@ fn partial_aggregate_exec(
 fn final_aggregate_exec(
     input: Arc<dyn ExecutionPlan>,
     group_by: PhysicalGroupBy,
-    aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+    aggr_expr: Vec<AggregateFunctionExpr>,
 ) -> Arc<dyn ExecutionPlan> {
     let schema = input.schema();
     let n_aggr = aggr_expr.len();
@@ -130,7 +130,7 @@ fn count_expr(
     expr: Arc<dyn PhysicalExpr>,
     name: &str,
     schema: &Schema,
-) -> Arc<AggregateFunctionExpr> {
+) -> AggregateFunctionExpr {
     AggregateExprBuilder::new(count_udaf(), vec![expr])
         .schema(Arc::new(schema.clone()))
         .alias(name)

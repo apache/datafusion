@@ -20,7 +20,7 @@ name = "gen-common"
 description = "Code generation for proto"
 version = "0.1.0"
 edition = { workspace = true }
-rust-version = "1.76"
+rust-version = "1.78"
 authors = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
@@ -34,5 +34,5 @@ workspace = true
 
 [dependencies]
 # Pin these dependencies so that the generated output is deterministic
-pbjson-build = "=0.6.2"
-prost-build = "=0.12.6"
+pbjson-build = "=0.7.0"
+prost-build = "=0.13.3"

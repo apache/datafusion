@@ -652,6 +652,9 @@ pub struct CsvOptions {
     /// Indicates if newlines are supported in values
     #[prost(bytes = "vec", tag = "15")]
     pub newlines_in_values: ::prost::alloc::vec::Vec<u8>,
+    /// Optional terminator character as a byte
+    #[prost(bytes = "vec", tag = "16")]
+    pub terminator: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -816,7 +819,7 @@ pub struct ParquetOptions {
     pub bloom_filter_on_write: bool,
     /// default = false
     #[prost(bool, tag = "28")]
-    pub schema_force_string_view: bool,
+    pub schema_force_view_types: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]

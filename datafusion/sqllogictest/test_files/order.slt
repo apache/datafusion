@@ -653,13 +653,6 @@ physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/te
 query error DataFusion error: Error during planning: Column a is not in schema
 CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a ASC) LOCATION 'file://path/to/table';
 
-
-# Create external table with DDL ordered columns without schema
-# When schema is missing the query is expected to fail
-query error DataFusion error: Error during planning: Provide a schema before specifying the order while creating a table\.
-CREATE EXTERNAL TABLE dt STORED AS CSV WITH ORDER (a ASC) LOCATION 'file://path/to/table';
-
-
 # Sort with duplicate sort expressions
 # Table is sorted multiple times on the same column name and should not fail
 statement ok

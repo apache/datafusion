@@ -32,7 +32,6 @@ pub mod replace_with_order_preserving_variants;
 pub mod sanity_checker;
 #[cfg(test)]
 pub mod test_utils;
-pub mod topk_aggregation;
 pub mod update_aggr_exprs;
 
 mod sort_pushdown;

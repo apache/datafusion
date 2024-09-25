@@ -710,7 +710,7 @@ create table t (i interval, x int) as values (interval '5 days 3 nanoseconds', C
 query ?I
 select * from t;
 ----
-0 years 0 mons 5 days 0 hours 0 mins 0.000000003 secs 1
+5 days 0.000000003 secs 1
 
 statement ok
 drop table t;

@@ -567,13 +567,13 @@ set datafusion.sql_parser.dialect = 'Postgres';
 
 # csv_query_stddev_12
 query IR
-SELECT c2, var_samp(c12) FILTER (WHERE c12 > 0.90) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
+SELECT c2, var_samp(c12) FILTER (WHERE c12 > 0.95) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
 ----
-1 0.000889240174
-2 0.000785878272
+1 0.000791243479
+2 0.000061521903
 3 NULL
 4 NULL
-5 0.000269544643
+5 NULL
 
 # Restore the default dialect
 statement ok
@@ -1916,7 +1916,7 @@ from values
   (interval '2 month 15 days'),
   (interval '-2 month')
 ----
-Interval(MonthDayNano) 0 years -2 mons 0 days 0 hours 0 mins 0.000000000 secs 0 years 2 mons 15 days 0 hours 0 mins 0.000000000 secs
+Interval(MonthDayNano) -2 mons 2 mons 15 days
 
 # aggregate Interval(DayTime) min/max
 query T??
@@ -1927,7 +1927,7 @@ from values
   (arrow_cast('-3 minutes', 'Interval(DayTime)')),
   (arrow_cast('30 minutes', 'Interval(DayTime)'));
 ----
-Interval(DayTime) 0 years 0 mons 0 days 0 hours -3 mins 0.000 secs 0 years 0 mons 0 days 1 hours 0 mins 0.000 secs
+Interval(DayTime) -3 mins 1 hours
 
 # aggregate Interval(YearMonth) min/max
 query T??
@@ -1938,7 +1938,7 @@ from values
   (arrow_cast('13 months', 'Interval(YearMonth)')),
   (arrow_cast('1 year', 'Interval(YearMonth)'));
 ----
-Interval(YearMonth) -1 years 0 mons 0 days 0 hours 0 mins 0.00 secs 1 years 1 mons 0 days 0 hours 0 mins 0.00 secs
+Interval(YearMonth) -1 years 0 mons 1 years 1 mons
 
 # aggregate
 query II
@@ -4546,7 +4546,7 @@ set datafusion.sql_parser.dialect = 'Generic';
 statement ok
 create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
 
-query I?
+query IT
 select * from dict_test;
 ----
 1 foo
@@ -5772,15 +5772,14 @@ logical_plan
 03)----Aggregate: groupBy=[[having_test.v1, having_test.v2]], aggr=[[max(having_test.v1)]]
 04)------TableScan: having_test projection=[v1, v2]
 physical_plan
-01)ProjectionExec: expr=[v1@0 as v1, v2@1 as v2]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----FilterExec: max(having_test.v1)@2 = 3
-04)------AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
+03)----AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 query error

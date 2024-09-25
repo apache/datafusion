@@ -26,7 +26,7 @@ use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
-use datafusion_cli::catalog::DynamicFileCatalog;
+use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::ParquetMetadataFunc;
 use datafusion_cli::{
     exec,
@@ -173,11 +173,13 @@ async fn main_inner() -> Result<()> {
 
     let runtime_env = create_runtime_env(rt_config.clone())?;
 
+    // enable dynamic file query
     let ctx =
-        SessionContext::new_with_config_rt(session_config.clone(), Arc::new(runtime_env));
+        SessionContext::new_with_config_rt(session_config.clone(), Arc::new(runtime_env))
+            .enable_url_table();
     ctx.refresh_catalogs().await?;
-    // install dynamic catalog provider that knows how to open files
-    ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
+    // install dynamic catalog provider that can register required object stores
+    ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
         ctx.state().catalog_list().clone(),
         ctx.state_weak_ref(),
     )));
@@ -230,7 +232,7 @@ async fn main_inner() -> Result<()> {
 }
 
 fn create_runtime_env(rn_config: RuntimeConfig) -> Result<RuntimeEnv> {
-    RuntimeEnv::new(rn_config)
+    RuntimeEnv::try_new(rn_config)
 }
 
 fn parse_valid_file(dir: &str) -> Result<String, String> {

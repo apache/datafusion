@@ -29,6 +29,27 @@ use std::{error::Error, path::PathBuf};
 /// Expects to be called about like this:
 ///
 /// `assert_batch_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::record_batch::RecordBatch;
+/// # use arrow_array::{ArrayRef, Int32Array};
+/// # use datafusion_common::assert_batches_eq;
+/// let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+///  let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
+/// // Expected output is a vec of strings
+/// let expected = vec![
+///     "+--------+",
+///     "| column |",
+///     "+--------+",
+///     "| 1      |",
+///     "| 2      |",
+///     "+--------+",
+/// ];
+/// // compare the formatted output of the record batch with the expected output
+/// assert_batches_eq!(expected, &[batch]);
+/// ```
 #[macro_export]
 macro_rules! assert_batches_eq {
     ($EXPECTED_LINES: expr, $CHUNKS: expr) => {
@@ -56,8 +77,7 @@ macro_rules! assert_batches_eq {
 /// vector of strings in a way that order does not matter.
 /// This is a macro so errors appear on the correct line
 ///
-/// Designed so that failure output can be directly copy/pasted
-/// into the test code as expected results.
+/// See [`assert_batches_eq`] for more details and example.
 ///
 /// Expects to be called about like this:
 ///

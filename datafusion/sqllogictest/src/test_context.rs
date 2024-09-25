@@ -98,6 +98,9 @@ impl TestContext {
                     return None;
                 }
             }
+            "dynamic_file.slt" => {
+                test_ctx.ctx = test_ctx.ctx.enable_url_table();
+            }
             "joins.slt" => {
                 info!("Registering partition table tables");
                 let example_udf = create_example_udf();
@@ -204,6 +207,7 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
 
 // registers a LOCAL TEMPORARY table.
 pub async fn register_temp_table(ctx: &SessionContext) {
+    #[derive(Debug)]
     struct TestTable(TableType);
 
     #[async_trait]
@@ -356,7 +360,7 @@ fn create_example_udf() -> ScalarUDF {
         // Expects two f64 values:
         vec![DataType::Float64, DataType::Float64],
         // Returns an f64 value:
-        Arc::new(DataType::Float64),
+        DataType::Float64,
         Volatility::Immutable,
         adder,
     )

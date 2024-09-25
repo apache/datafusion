@@ -72,7 +72,7 @@ use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan};
 /// Filter: c1 > INT32(10)
 /// ```
 ///
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct UnwrapCastInComparison {}
 
 impl UnwrapCastInComparison {
@@ -117,9 +117,9 @@ impl OptimizerRule for UnwrapCastInComparison {
 
         let name_preserver = NamePreserver::new(&plan);
         plan.map_expressions(|expr| {
-            let original_name = name_preserver.save(&expr)?;
-            expr.rewrite(&mut expr_rewriter)?
-                .map_data(|expr| original_name.restore(expr))
+            let original_name = name_preserver.save(&expr);
+            expr.rewrite(&mut expr_rewriter)
+                .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
         })
     }
 }
@@ -159,20 +159,26 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                             expr: right_expr, ..
                         }),
                     ) => {
-                        // if the left_lit_value can be casted to the type of expr
+                        // if the left_lit_value can be cast to the type of expr
                         // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
                         let Ok(expr_type) = right_expr.get_type(&self.schema) else {
                             return Ok(Transformed::no(expr));
                         };
-                        let Some(value) =
-                            try_cast_literal_to_type(left_lit_value, &expr_type)
-                        else {
-                            return Ok(Transformed::no(expr));
-                        };
-                        **left = lit(value);
-                        // unwrap the cast/try_cast for the right expr
-                        **right = mem::take(right_expr);
-                        Ok(Transformed::yes(expr))
+                        match expr_type {
+                            // https://github.com/apache/datafusion/issues/12180
+                            DataType::Utf8View => Ok(Transformed::no(expr)),
+                            _ => {
+                                let Some(value) =
+                                    try_cast_literal_to_type(left_lit_value, &expr_type)
+                                else {
+                                    return Ok(Transformed::no(expr));
+                                };
+                                **left = lit(value);
+                                // unwrap the cast/try_cast for the right expr
+                                **right = mem::take(right_expr);
+                                Ok(Transformed::yes(expr))
+                            }
+                        }
                     }
                     (
                         Expr::TryCast(TryCast {
@@ -183,20 +189,26 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                         }),
                         Expr::Literal(right_lit_value),
                     ) => {
-                        // if the right_lit_value can be casted to the type of expr
+                        // if the right_lit_value can be cast to the type of expr
                         // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
                         let Ok(expr_type) = left_expr.get_type(&self.schema) else {
                             return Ok(Transformed::no(expr));
                         };
-                        let Some(value) =
-                            try_cast_literal_to_type(right_lit_value, &expr_type)
-                        else {
-                            return Ok(Transformed::no(expr));
-                        };
-                        // unwrap the cast/try_cast for the left expr
-                        **left = mem::take(left_expr);
-                        **right = lit(value);
-                        Ok(Transformed::yes(expr))
+                        match expr_type {
+                            // https://github.com/apache/datafusion/issues/12180
+                            DataType::Utf8View => Ok(Transformed::no(expr)),
+                            _ => {
+                                let Some(value) =
+                                    try_cast_literal_to_type(right_lit_value, &expr_type)
+                                else {
+                                    return Ok(Transformed::no(expr));
+                                };
+                                // unwrap the cast/try_cast for the left expr
+                                **left = mem::take(left_expr);
+                                **right = lit(value);
+                                Ok(Transformed::yes(expr))
+                            }
+                        }
                     }
                     _ => Ok(Transformed::no(expr)),
                 }

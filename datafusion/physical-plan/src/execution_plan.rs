@@ -34,7 +34,7 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, functions, udf, Distribution, Partitioning, PhysicalExpr,
+    expressions, udf, Distribution, Partitioning, PhysicalExpr,
 };
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -379,6 +379,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Returns statistics for this `ExecutionPlan` node. If statistics are not
     /// available, should return [`Statistics::new_unknown`] (the default), not
     /// an error.
+    ///
+    /// For TableScan executors, which supports filter pushdown, special attention
+    /// needs to be paid to whether the stats returned by this method are exact or not
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }

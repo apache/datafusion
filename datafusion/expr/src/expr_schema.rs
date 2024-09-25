@@ -31,6 +31,7 @@ use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema, Result,
     TableReference,
 };
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -166,49 +167,9 @@ impl ExprSchemable for Expr {
                 // expressiveness of `TypeSignature`), then infer return type
                 Ok(func.return_type_from_exprs(args, schema, &arg_data_types)?)
             }
-            Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
-                let data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                let nullability = args
-                    .iter()
-                    .map(|e| e.nullable(schema))
-                    .collect::<Result<Vec<_>>>()?;
-                match fun {
-                    WindowFunctionDefinition::AggregateUDF(udf) => {
-                        let new_types = data_types_with_aggregate_udf(&data_types, udf)
-                            .map_err(|err| {
-                            plan_datafusion_err!(
-                                "{} {}",
-                                err,
-                                utils::generate_signature_error_msg(
-                                    fun.name(),
-                                    fun.signature(),
-                                    &data_types
-                                )
-                            )
-                        })?;
-                        Ok(fun.return_type(&new_types, &nullability)?)
-                    }
-                    WindowFunctionDefinition::WindowUDF(udwf) => {
-                        let new_types = data_types_with_window_udf(&data_types, udwf)
-                            .map_err(|err| {
-                                plan_datafusion_err!(
-                                    "{} {}",
-                                    err,
-                                    utils::generate_signature_error_msg(
-                                        fun.name(),
-                                        fun.signature(),
-                                        &data_types
-                                    )
-                                )
-                            })?;
-                        Ok(fun.return_type(&new_types, &nullability)?)
-                    }
-                    _ => fun.return_type(&data_types, &nullability),
-                }
-            }
+            Expr::WindowFunction(window_function) => self
+                .data_type_and_nullable_with_window_function(schema, window_function)
+                .map(|(return_type, _)| return_type),
             Expr::AggregateFunction(AggregateFunction { func, args, .. }) => {
                 let data_types = args
                     .iter()
@@ -340,20 +301,12 @@ impl ExprSchemable for Expr {
             Expr::AggregateFunction(AggregateFunction { func, .. }) => {
                 Ok(func.is_nullable())
             }
-            Expr::WindowFunction(WindowFunction { fun, .. }) => match fun {
-                WindowFunctionDefinition::BuiltInWindowFunction(func) => {
-                    if func.name() == "RANK"
-                        || func.name() == "NTILE"
-                        || func.name() == "CUME_DIST"
-                    {
-                        Ok(false)
-                    } else {
-                        Ok(true)
-                    }
-                }
-                WindowFunctionDefinition::AggregateUDF(func) => Ok(func.is_nullable()),
-                WindowFunctionDefinition::WindowUDF(udwf) => Ok(udwf.nullable()),
-            },
+            Expr::WindowFunction(window_function) => self
+                .data_type_and_nullable_with_window_function(
+                    input_schema,
+                    window_function,
+                )
+                .map(|(_, nullable)| nullable),
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
             | Expr::Unnest(_)
@@ -450,6 +403,9 @@ impl ExprSchemable for Expr {
                 let right = right.data_type_and_nullable(schema)?;
                 Ok((get_result_type(&left.0, op, &right.0)?, left.1 || right.1))
             }
+            Expr::WindowFunction(window_function) => {
+                self.data_type_and_nullable_with_window_function(schema, window_function)
+            }
             _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
         }
     }
@@ -462,35 +418,12 @@ impl ExprSchemable for Expr {
         &self,
         input_schema: &dyn ExprSchema,
     ) -> Result<(Option<TableReference>, Arc<Field>)> {
-        match self {
-            Expr::Column(c) => {
-                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                Ok((
-                    c.relation.clone(),
-                    Field::new(&c.name, data_type, nullable)
-                        .with_metadata(self.metadata(input_schema)?)
-                        .into(),
-                ))
-            }
-            Expr::Alias(Alias { relation, name, .. }) => {
-                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                Ok((
-                    relation.clone(),
-                    Field::new(name, data_type, nullable)
-                        .with_metadata(self.metadata(input_schema)?)
-                        .into(),
-                ))
-            }
-            _ => {
-                let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-                Ok((
-                    None,
-                    Field::new(self.schema_name().to_string(), data_type, nullable)
-                        .with_metadata(self.metadata(input_schema)?)
-                        .into(),
-                ))
-            }
-        }
+        let (relation, schema_name) = self.qualified_name();
+        let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
+        let field = Field::new(schema_name, data_type, nullable)
+            .with_metadata(self.metadata(input_schema)?)
+            .into();
+        Ok((relation, field))
     }
 
     /// Wraps this expression in a cast to a target [arrow::datatypes::DataType].
@@ -518,6 +451,76 @@ impl ExprSchemable for Expr {
             }
         } else {
             plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
+        }
+    }
+}
+
+impl Expr {
+    /// Common method for window functions that applies type coercion
+    /// to all arguments of the window function to check if it matches
+    /// its signature.
+    ///
+    /// If successful, this method returns the data type and
+    /// nullability of the window function's result.
+    ///
+    /// Otherwise, returns an error if there's a type mismatch between
+    /// the window function's signature and the provided arguments.
+    fn data_type_and_nullable_with_window_function(
+        &self,
+        schema: &dyn ExprSchema,
+        window_function: &WindowFunction,
+    ) -> Result<(DataType, bool)> {
+        let WindowFunction { fun, args, .. } = window_function;
+
+        let data_types = args
+            .iter()
+            .map(|e| e.get_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+        match fun {
+            WindowFunctionDefinition::BuiltInWindowFunction(window_fun) => {
+                let return_type = window_fun.return_type(&data_types)?;
+                let nullable =
+                    !["RANK", "NTILE", "CUME_DIST"].contains(&window_fun.name());
+                Ok((return_type, nullable))
+            }
+            WindowFunctionDefinition::AggregateUDF(udaf) => {
+                let new_types = data_types_with_aggregate_udf(&data_types, udaf)
+                    .map_err(|err| {
+                        plan_datafusion_err!(
+                            "{} {}",
+                            err,
+                            utils::generate_signature_error_msg(
+                                fun.name(),
+                                fun.signature(),
+                                &data_types
+                            )
+                        )
+                    })?;
+
+                let return_type = udaf.return_type(&new_types)?;
+                let nullable = udaf.is_nullable();
+
+                Ok((return_type, nullable))
+            }
+            WindowFunctionDefinition::WindowUDF(udwf) => {
+                let new_types =
+                    data_types_with_window_udf(&data_types, udwf).map_err(|err| {
+                        plan_datafusion_err!(
+                            "{} {}",
+                            err,
+                            utils::generate_signature_error_msg(
+                                fun.name(),
+                                fun.signature(),
+                                &data_types
+                            )
+                        )
+                    })?;
+                let (_, function_name) = self.qualified_name();
+                let field_args = WindowUDFFieldArgs::new(&new_types, &function_name);
+
+                udwf.field(field_args)
+                    .map(|field| (field.data_type().clone(), field.is_nullable()))
+            }
         }
     }
 }

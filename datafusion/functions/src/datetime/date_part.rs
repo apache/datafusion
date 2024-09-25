@@ -16,13 +16,17 @@
 // under the License.
 
 use std::any::Any;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Float64Array};
+use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{binary, cast, date_part, DatePart};
 use arrow::datatypes::DataType::{
-    Date32, Date64, Float64, Time32, Time64, Timestamp, Utf8, Utf8View,
+    Date32, Date64, Duration, Float64, Interval, Time32, Time64, Timestamp, Utf8,
+    Utf8View,
 };
+use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano, YearMonth};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
@@ -107,6 +111,20 @@ impl DatePartFunc {
                     Exact(vec![Utf8View, Time64(Microsecond)]),
                     Exact(vec![Utf8, Time64(Nanosecond)]),
                     Exact(vec![Utf8View, Time64(Nanosecond)]),
+                    Exact(vec![Utf8, Interval(YearMonth)]),
+                    Exact(vec![Utf8View, Interval(YearMonth)]),
+                    Exact(vec![Utf8, Interval(DayTime)]),
+                    Exact(vec![Utf8View, Interval(DayTime)]),
+                    Exact(vec![Utf8, Interval(MonthDayNano)]),
+                    Exact(vec![Utf8View, Interval(MonthDayNano)]),
+                    Exact(vec![Utf8, Duration(Second)]),
+                    Exact(vec![Utf8View, Duration(Second)]),
+                    Exact(vec![Utf8, Duration(Millisecond)]),
+                    Exact(vec![Utf8View, Duration(Millisecond)]),
+                    Exact(vec![Utf8, Duration(Microsecond)]),
+                    Exact(vec![Utf8View, Duration(Microsecond)]),
+                    Exact(vec![Utf8, Duration(Nanosecond)]),
+                    Exact(vec![Utf8View, Duration(Nanosecond)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -161,22 +179,32 @@ impl ScalarUDFImpl for DatePartFunc {
             return exec_err!("Date part '{part}' not supported");
         }
 
-        let arr = match part_trim.to_lowercase().as_str() {
-            "year" => date_part_f64(array.as_ref(), DatePart::Year)?,
-            "quarter" => date_part_f64(array.as_ref(), DatePart::Quarter)?,
-            "month" => date_part_f64(array.as_ref(), DatePart::Month)?,
-            "week" => date_part_f64(array.as_ref(), DatePart::Week)?,
-            "day" => date_part_f64(array.as_ref(), DatePart::Day)?,
-            "doy" => date_part_f64(array.as_ref(), DatePart::DayOfYear)?,
-            "dow" => date_part_f64(array.as_ref(), DatePart::DayOfWeekSunday0)?,
-            "hour" => date_part_f64(array.as_ref(), DatePart::Hour)?,
-            "minute" => date_part_f64(array.as_ref(), DatePart::Minute)?,
-            "second" => seconds(array.as_ref(), Second)?,
-            "millisecond" => seconds(array.as_ref(), Millisecond)?,
-            "microsecond" => seconds(array.as_ref(), Microsecond)?,
-            "nanosecond" => seconds(array.as_ref(), Nanosecond)?,
-            "epoch" => epoch(array.as_ref())?,
-            _ => return exec_err!("Date part '{part}' not supported"),
+        // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
+        // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
+        let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
+            match interval_unit {
+                IntervalUnit::Year => date_part_f64(array.as_ref(), DatePart::Year)?,
+                IntervalUnit::Month => date_part_f64(array.as_ref(), DatePart::Month)?,
+                IntervalUnit::Week => date_part_f64(array.as_ref(), DatePart::Week)?,
+                IntervalUnit::Day => date_part_f64(array.as_ref(), DatePart::Day)?,
+                IntervalUnit::Hour => date_part_f64(array.as_ref(), DatePart::Hour)?,
+                IntervalUnit::Minute => date_part_f64(array.as_ref(), DatePart::Minute)?,
+                IntervalUnit::Second => seconds(array.as_ref(), Second)?,
+                IntervalUnit::Millisecond => seconds(array.as_ref(), Millisecond)?,
+                IntervalUnit::Microsecond => seconds(array.as_ref(), Microsecond)?,
+                IntervalUnit::Nanosecond => seconds(array.as_ref(), Nanosecond)?,
+                // century and decade are not supported by `DatePart`, although they are supported in postgres
+                _ => return exec_err!("Date part '{part}' not supported"),
+            }
+        } else {
+            // special cases that can be extracted (in postgres) but are not interval units
+            match part_trim.to_lowercase().as_str() {
+                "qtr" | "quarter" => date_part_f64(array.as_ref(), DatePart::Quarter)?,
+                "doy" => date_part_f64(array.as_ref(), DatePart::DayOfYear)?,
+                "dow" => date_part_f64(array.as_ref(), DatePart::DayOfWeekSunday0)?,
+                "epoch" => epoch(array.as_ref())?,
+                _ => return exec_err!("Date part '{part}' not supported"),
+            }
         };
 
         Ok(if is_scalar {
@@ -212,10 +240,28 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     let subsecs = date_part(array, DatePart::Nanosecond)?;
     let subsecs = as_int32_array(subsecs.as_ref())?;
 
-    let r: Float64Array = binary(secs, subsecs, |secs, subsecs| {
-        (secs as f64 + (subsecs as f64 / 1_000_000_000_f64)) * sf
-    })?;
-    Ok(Arc::new(r))
+    // Special case where there are no nulls.
+    if subsecs.null_count() == 0 {
+        let r: Float64Array = binary(secs, subsecs, |secs, subsecs| {
+            (secs as f64 + ((subsecs % 1_000_000_000) as f64 / 1_000_000_000_f64)) * sf
+        })?;
+        Ok(Arc::new(r))
+    } else {
+        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
+        // where the number of nanoseconds overflows.
+        let r: Float64Array = secs
+            .iter()
+            .zip(subsecs)
+            .map(|(secs, subsecs)| {
+                secs.map(|secs| {
+                    let subsecs = subsecs.unwrap_or(0);
+                    (secs as f64 + ((subsecs % 1_000_000_000) as f64 / 1_000_000_000_f64))
+                        * sf
+                })
+            })
+            .collect();
+        Ok(Arc::new(r))
+    }
 }
 
 fn epoch(array: &dyn Array) -> Result<ArrayRef> {
@@ -244,7 +290,8 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         Time64(Nanosecond) => {
             as_time64_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
         }
-        d => return exec_err!("Can not convert {d:?} to epoch"),
+        Interval(_) | Duration(_) => return seconds(array, Second),
+        d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))
 }

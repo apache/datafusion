@@ -54,12 +54,13 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
 /// remove or swap with its child.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ProjectionPushdown {}
 
 impl ProjectionPushdown {
@@ -123,7 +124,10 @@ pub fn remove_unnecessary_projections(
         } else if input.is::<CoalescePartitionsExec>() {
             try_swapping_with_coalesce_partitions(projection)?
         } else if let Some(filter) = input.downcast_ref::<FilterExec>() {
-            try_swapping_with_filter(projection, filter)?
+            try_swapping_with_filter(projection, filter)?.map_or_else(
+                || try_embed_projection(projection, filter),
+                |e| Ok(Some(e)),
+            )?
         } else if let Some(repartition) = input.downcast_ref::<RepartitionExec>() {
             try_swapping_with_repartition(projection, repartition)?
         } else if let Some(sort) = input.downcast_ref::<SortExec>() {
@@ -134,7 +138,7 @@ pub fn remove_unnecessary_projections(
             try_pushdown_through_union(projection, union)?
         } else if let Some(hash_join) = input.downcast_ref::<HashJoinExec>() {
             try_pushdown_through_hash_join(projection, hash_join)?.map_or_else(
-                || try_embed_to_hash_join(projection, hash_join),
+                || try_embed_projection(projection, hash_join),
                 |e| Ok(Some(e)),
             )?
         } else if let Some(cross_join) = input.downcast_ref::<CrossJoinExec>() {
@@ -331,10 +335,10 @@ fn try_swapping_with_output_req(
         return Ok(None);
     }
 
-    let mut updated_sort_reqs = vec![];
+    let mut updated_sort_reqs = LexRequirement::new(vec![]);
     // None or empty_vec can be treated in the same way.
     if let Some(reqs) = &output_req.required_input_ordering()[0] {
-        for req in reqs {
+        for req in &reqs.inner {
             let Some(new_expr) = update_expr(&req.expr, projection.expr(), false)? else {
                 return Ok(None);
             };
@@ -535,11 +539,27 @@ fn try_pushdown_through_union(
     Ok(Some(Arc::new(UnionExec::new(new_children))))
 }
 
+trait EmbeddedProjection: ExecutionPlan + Sized {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self>;
+}
+
+impl EmbeddedProjection for HashJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
+}
+
+impl EmbeddedProjection for FilterExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
+}
+
 /// Some projection can't be pushed down left input or right input of hash join because filter or on need may need some columns that won't be used in later.
 /// By embed those projection to hash join, we can reduce the cost of build_batch_from_indices in hash join (build_batch_from_indices need to can compute::take() for each column) and avoid unnecessary output creation.
-fn try_embed_to_hash_join(
+fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
     projection: &ProjectionExec,
-    hash_join: &HashJoinExec,
+    execution_plan: &Exec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // Collect all column indices from the given projection expressions.
     let projection_index = collect_column_indices(projection.expr());
@@ -549,20 +569,20 @@ fn try_embed_to_hash_join(
     };
 
     // If the projection indices is the same as the input columns, we don't need to embed the projection to hash join.
-    // Check the projection_index is 0..n-1 and the length of projection_index is the same as the length of hash_join schema fields.
+    // Check the projection_index is 0..n-1 and the length of projection_index is the same as the length of execution_plan schema fields.
     if projection_index.len() == projection_index.last().unwrap() + 1
-        && projection_index.len() == hash_join.schema().fields().len()
+        && projection_index.len() == execution_plan.schema().fields().len()
     {
         return Ok(None);
     }
 
-    let new_hash_join =
-        Arc::new(hash_join.with_projection(Some(projection_index.to_vec()))?);
+    let new_execution_plan =
+        Arc::new(execution_plan.with_projection(Some(projection_index.to_vec()))?);
 
-    // Build projection expressions for update_expr. Zip the projection_index with the new_hash_join output schema fields.
+    // Build projection expressions for update_expr. Zip the projection_index with the new_execution_plan output schema fields.
     let embed_project_exprs = projection_index
         .iter()
-        .zip(new_hash_join.schema().fields())
+        .zip(new_execution_plan.schema().fields())
         .map(|(index, field)| {
             (
                 Arc::new(Column::new(field.name(), *index)) as Arc<dyn PhysicalExpr>,
@@ -583,10 +603,10 @@ fn try_embed_to_hash_join(
     // Old projection may contain some alias or expression such as `a + 1` and `CAST('true' AS BOOLEAN)`, but our projection_exprs in hash join just contain column, so we need to create the new projection to keep the original projection.
     let new_projection = Arc::new(ProjectionExec::try_new(
         new_projection_exprs,
-        new_hash_join.clone(),
+        new_execution_plan.clone(),
     )?);
     if is_projection_removable(&new_projection) {
-        Ok(Some(new_hash_join))
+        Ok(Some(new_execution_plan))
     } else {
         Ok(Some(new_projection))
     }
@@ -1811,6 +1831,7 @@ mod tests {
 
     #[test]
     fn test_streaming_table_after_projection() -> Result<()> {
+        #[derive(Debug)]
         struct DummyStreamPartition {
             schema: SchemaRef,
         }
@@ -1976,7 +1997,7 @@ mod tests {
         let csv = create_simple_csv_exec();
         let sort_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
             csv.clone(),
-            Some(vec![
+            Some(LexRequirement::new(vec![
                 PhysicalSortRequirement {
                     expr: Arc::new(Column::new("b", 1)),
                     options: Some(SortOptions::default()),
@@ -1989,7 +2010,7 @@ mod tests {
                     )),
                     options: Some(SortOptions::default()),
                 },
-            ]),
+            ])),
             Distribution::HashPartitioned(vec![
                 Arc::new(Column::new("a", 0)),
                 Arc::new(Column::new("b", 1)),
@@ -2022,7 +2043,7 @@ mod tests {
         ];
 
         assert_eq!(get_plan_string(&after_optimize), expected);
-        let expected_reqs = vec![
+        let expected_reqs = LexRequirement::new(vec![
             PhysicalSortRequirement {
                 expr: Arc::new(Column::new("b", 2)),
                 options: Some(SortOptions::default()),
@@ -2035,7 +2056,7 @@ mod tests {
                 )),
                 options: Some(SortOptions::default()),
             },
-        ];
+        ]);
         assert_eq!(
             after_optimize
                 .as_any()
