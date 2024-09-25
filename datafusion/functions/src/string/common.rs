@@ -43,12 +43,16 @@ pub(crate) fn make_and_append_view(
     null_builder: &mut NullBufferBuilder,
     raw_view: &u128,
     substr: &str,
-    start: u32,
+    start_offset: u32,
 ) {
     let substr_len = substr.len();
     let sub_view = if substr_len > 12 {
         let view = ByteView::from(*raw_view);
-        make_view(substr.as_bytes(), view.buffer_index, view.offset + start)
+        make_view(
+            substr.as_bytes(),
+            view.buffer_index,
+            view.offset + start_offset,
+        )
     } else {
         // inline value does not need block id or offset
         make_view(substr.as_bytes(), 0, 0)
@@ -78,21 +82,42 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
     trim_type: TrimType,
     use_string_view: bool,
 ) -> Result<ArrayRef> {
+    // This is the function used to trim each string row, and it will return:
+    //   - trimmed str
+    //     e.g. ltrim("  abc") -> "abc"
+    //
+    //   - start offset, needed in `string_view_trim`
+    //     e.g. "abc" actually is "  abc"[2..], and the start offset here should be 2
+    //
     let func = match trim_type {
         TrimType::Left => |input, pattern: &str| {
             let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_start_matches::<&[char]>(input, pattern.as_ref())
+            let ltrimmed_str =
+                str::trim_start_matches::<&[char]>(input, pattern.as_ref());
+            // `ltrimmed_str` is actually `input`[start_offset..], so `start_offset`,
+            // so `start_offset` = len(`input`) - len(`ltrimmed_str`)
+            let start_offset = input.as_bytes().len() - ltrimmed_str.as_bytes().len();
+
+            (ltrimmed_str, start_offset as u32)
         },
         TrimType::Right => |input, pattern: &str| {
             let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_end_matches::<&[char]>(input, pattern.as_ref())
+            let rtrimmed_str = str::trim_end_matches::<&[char]>(input, pattern.as_ref());
+
+            // `ltrimmed_str` is actually `input`[0..new_len], so `start_offset` is 0
+            (rtrimmed_str, 0)
         },
         TrimType::Both => |input, pattern: &str| {
             let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_end_matches::<&[char]>(
-                str::trim_start_matches::<&[char]>(input, pattern.as_ref()),
-                pattern.as_ref(),
-            )
+            let ltrimmed_str =
+                str::trim_start_matches::<&[char]>(input, pattern.as_ref());
+            // `btrimmed_str` is actually rtrim(ltrim(`input`)),
+            // so its `start_offset` can be computed as ltrim one
+            let start_offset = input.as_bytes().len() - ltrimmed_str.as_bytes().len();
+            let btrimmed_str =
+                str::trim_end_matches::<&[char]>(ltrimmed_str, pattern.as_ref());
+
+            (btrimmed_str, start_offset as u32)
         },
     };
 
@@ -105,7 +130,7 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
 
 // removing 'a will cause compiler complaining lifetime of `func`
 fn string_view_trim<'a>(
-    trim_func: fn(&'a str, &'a str) -> &'a str,
+    trim_func: fn(&'a str, &'a str) -> (&'a str, u32),
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
     let string_view_array = as_string_view_array(&args[0])?;
@@ -199,24 +224,14 @@ fn string_view_trim<'a>(
 fn trim_and_append_str<'a>(
     src_str_opt: Option<&'a str>,
     trim_characters_opt: Option<&'a str>,
-    trim_func: fn(&'a str, &'a str) -> &'a str,
+    trim_func: fn(&'a str, &'a str) -> (&'a str, u32),
     views_buf: &mut Vec<u128>,
     null_builder: &mut NullBufferBuilder,
     raw: &u128,
 ) {
     if let (Some(src_str), Some(characters)) = (src_str_opt, trim_characters_opt) {
-        let trim_str = trim_func(src_str, characters);
-
-        // Safety:
-        // `trim_str` is computed from `str::trim_xxx_matches`,
-        // and its addr is ensured to be >= `origin_str`'s
-        //
-        // TODO: remove the unsafe codes once `Pattern` get stable, related issue:
-        // https://github.com/apache/datafusion/issues/12597
-        //
-        let start = unsafe { trim_str.as_ptr().offset_from(src_str.as_ptr()) as u32 };
-
-        make_and_append_view(views_buf, null_builder, raw, trim_str, start);
+        let (trim_str, start_offset) = trim_func(src_str, characters);
+        make_and_append_view(views_buf, null_builder, raw, trim_str, start_offset);
     } else {
         null_builder.append_null();
         views_buf.push(0);
@@ -224,7 +239,7 @@ fn trim_and_append_str<'a>(
 }
 
 fn string_trim<'a, T: OffsetSizeTrait>(
-    func: fn(&'a str, &'a str) -> &'a str,
+    func: fn(&'a str, &'a str) -> (&'a str, u32),
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
@@ -233,7 +248,7 @@ fn string_trim<'a, T: OffsetSizeTrait>(
         1 => {
             let result = string_array
                 .iter()
-                .map(|string| string.map(|string: &str| func(string, " ")))
+                .map(|string| string.map(|string: &str| func(string, " ").0))
                 .collect::<GenericStringArray<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
@@ -252,7 +267,7 @@ fn string_trim<'a, T: OffsetSizeTrait>(
                 let characters = characters_array.value(0);
                 let result = string_array
                     .iter()
-                    .map(|item| item.map(|string| func(string, characters)))
+                    .map(|item| item.map(|string| func(string, characters).0))
                     .collect::<GenericStringArray<T>>();
                 return Ok(Arc::new(result) as ArrayRef);
             }
@@ -261,7 +276,7 @@ fn string_trim<'a, T: OffsetSizeTrait>(
                 .iter()
                 .zip(characters_array.iter())
                 .map(|(string, characters)| match (string, characters) {
-                    (Some(string), Some(characters)) => Some(func(string, characters)),
+                    (Some(string), Some(characters)) => Some(func(string, characters).0),
                     _ => None,
                 })
                 .collect::<GenericStringArray<T>>();
