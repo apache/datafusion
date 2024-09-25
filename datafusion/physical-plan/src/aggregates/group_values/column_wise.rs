@@ -29,7 +29,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::{DataType, Schema, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -191,7 +191,7 @@ impl GroupValues for GroupValuesColumn {
                         v.push(Box::new(b) as _)
                     }
                     dt => {
-                        return internal_err!("{dt} not supported in GroupValuesColumn")
+                        return not_impl_err!("{dt} not supported in GroupValuesColumn")
                     }
                 }
             }
