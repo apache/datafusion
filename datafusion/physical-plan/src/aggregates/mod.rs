@@ -262,6 +262,9 @@ impl PhysicalGroupBy {
     }
 
     /// Returns the data type of the grouping id.
+    /// The grouping ID value is a bitmask where each set bit
+    /// indicates that the corresponding grouping expression is
+    /// null
     fn grouping_id_type(&self) -> DataType {
         if self.expr.len() <= 8 {
             DataType::UInt8
