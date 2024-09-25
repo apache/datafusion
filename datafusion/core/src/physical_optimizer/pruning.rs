@@ -3474,7 +3474,7 @@ mod tests {
                                         as _;
                                 return Arc::new(phys_expr::BinaryExpr::new(
                                     new_column,
-                                    expr.op().clone(),
+                                    *expr.op(),
                                     right.clone(),
                                 ));
                             }
