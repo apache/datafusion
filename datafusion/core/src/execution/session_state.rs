@@ -69,7 +69,7 @@ use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, Sq
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
-use sqlparser::ast::Expr as SQLExpr;
+use sqlparser::ast::ExprWithAlias as SQLExprWithAlias;
 use sqlparser::dialect::dialect_from_str;
 use std::any::Any;
 use std::collections::hash_map::Entry;
@@ -488,7 +488,7 @@ impl SessionState {
         &self,
         sql: &str,
         dialect: &str,
-    ) -> datafusion_common::Result<SQLExpr> {
+    ) -> datafusion_common::Result<SQLExprWithAlias> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
@@ -599,7 +599,7 @@ impl SessionState {
         };
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-        query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
+        query.sql_to_expr_with_alias(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
     /// Returns the [`Analyzer`] for this session
@@ -1872,7 +1872,7 @@ mod tests {
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
             let df_schema = DFSchema::try_from(schema)?;
             let dialect = state.config.options().sql_parser.dialect.as_str();
-            let sql_expr = state.sql_to_expr(sql, dialect)?;
+            let sql_expr = state.sql_to_expr(sql, dialect)?.expr;
 
             let query = SqlToRel::new_with_options(&provider, state.get_parser_options());
             query.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())
