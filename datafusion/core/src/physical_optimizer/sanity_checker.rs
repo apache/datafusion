@@ -41,7 +41,7 @@ use itertools::izip;
 ///    are not satisfied by their children.
 /// 2. Plans that use pipeline-breaking operators on infinite input(s),
 ///    it is impossible to execute such queries (they will never generate output nor finish)
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SanityCheckPlan {}
 
 impl SanityCheckPlan {

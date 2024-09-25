@@ -37,7 +37,7 @@ use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr};
 ///
 /// This rule should be applied after the EnforceDistribution and EnforceSorting rules
 ///
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CombinePartialFinalAggregate {}
 
 impl CombinePartialFinalAggregate {
