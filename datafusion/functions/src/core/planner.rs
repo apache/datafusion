@@ -70,6 +70,10 @@ impl ExprPlanner for CoreFunctionPlanner {
         qualifier: Option<&TableReference>,
         nested_names: &[String],
     ) -> Result<PlannerResult<Vec<Expr>>> {
+        println!(
+            "field's type is {:?} \n and qualifier is {:?}",
+            field, qualifier
+        );
         // TODO: remove when can support multiple nested identifiers
         if nested_names.len() > 1 {
             return not_impl_err!(
