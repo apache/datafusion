@@ -235,7 +235,9 @@ When predicate pushdown is enabled, `ParquetExec` gains the following metrics:
 - `pushdown_rows_pruned`: rows that were tested by any of the above filtered, and did not pass one of them (this should be sum of `page_index_rows_matched`, `row_groups_pruned_bloom_filter`, and `row_groups_pruned_statistics`)
 - `predicate_evaluation_errors`: number of times evaluating the filter expression failed (expected to be zero in normal operation)
 - `num_predicate_creation_errors`: number of errors creating predicates (expected to be zero in normal operation)
-- `pushdown_eval_time`: time spent evaluating these filters
+- `bloom_filter_eval_time`: time spent parsing and evaluating Bloom Filters
+- `statistics_eval_time`: time spent parsing and evaluating row group-level statistics
+- `row_pushdown_eval_time`: time spent evaluating row-level filters
 - `page_index_eval_time`: time required to evaluate the page index filters
 
 ## Partitions and Execution
