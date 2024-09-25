@@ -46,7 +46,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
 /// available statistical information, if there is any.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct JoinSelection {}
 
 impl JoinSelection {

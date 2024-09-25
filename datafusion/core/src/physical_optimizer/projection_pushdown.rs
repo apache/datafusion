@@ -60,7 +60,7 @@ use itertools::Itertools;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
 /// remove or swap with its child.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ProjectionPushdown {}
 
 impl ProjectionPushdown {
