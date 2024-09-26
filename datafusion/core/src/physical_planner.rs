@@ -69,7 +69,7 @@ use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
-    ScalarValue,
+    ScalarValue, SchemaExt,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
@@ -673,7 +673,9 @@ impl DefaultPhysicalPlanner {
                 let physical_input_schema_from_logical: Arc<Schema> =
                     logical_input_schema.as_ref().clone().into();
 
-                if physical_input_schema != physical_input_schema_from_logical {
+                if !physical_input_schema.logically_equivalent_names_and_types(
+                    &physical_input_schema_from_logical,
+                ) {
                     return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
                 }
 
