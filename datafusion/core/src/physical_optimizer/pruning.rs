@@ -3465,10 +3465,12 @@ mod tests {
                     if let Some(column) =
                         left.as_any().downcast_ref::<phys_expr::Column>()
                     {
-                        if column.name() == "b" && right
+                        if column.name() == "b"
+                            && right
                                 .as_any()
                                 .downcast_ref::<phys_expr::Literal>()
-                                .is_some() {
+                                .is_some()
+                        {
                             let new_column =
                                 Arc::new(phys_expr::Column::new("c", column.index()))
                                     as _;
