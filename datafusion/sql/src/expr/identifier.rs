@@ -15,17 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use arrow_schema::{DataType, Field};
+use arrow_schema::Field;
 use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_datafusion_err, Column, DFSchema,
-    DataFusionError, Result, ScalarValue, TableReference,
+    DataFusionError, Result, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
-use datafusion_expr::{lit, Case, Expr};
+use datafusion_expr::{Case, Expr};
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_expr::UNNAMED_TABLE;
