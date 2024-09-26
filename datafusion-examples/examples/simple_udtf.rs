@@ -128,6 +128,7 @@ impl TableProvider for LocalCsvTable {
     }
 }
 
+#[derive(Debug)]
 struct LocalCsvTableFunc {}
 
 impl TableFunctionImpl for LocalCsvTableFunc {
