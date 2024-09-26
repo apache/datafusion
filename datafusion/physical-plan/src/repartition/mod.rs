@@ -792,7 +792,21 @@ impl RepartitionExec {
 
             // Input is done
             let batch = match result {
-                Some(result) => result?,
+                Some(Ok(result)) => result,
+                Some(Err(e)) => {
+                    // Error from running input task. Propagate error to all output partitions
+                    let e = Arc::new(e);
+
+                    for (tx, _) in output_channels.values() {
+                        // wrap it because need to send error to all output partitions
+                        let err =
+                            Err(DataFusionError::External(Box::new(Arc::clone(&e))));
+                        tx.send(Some(err)).await.ok();
+                    }
+
+                    // Continue pulling inputs
+                    continue;
+                }
                 None => break,
             };
 
@@ -1236,23 +1250,25 @@ mod tests {
         let err = exec_err!("bad data error");
 
         let schema = batch.schema();
-        let input = MockExec::new(vec![Ok(batch), err], schema);
+        let input = MockExec::new(vec![err, Ok(batch.clone())], schema);
         let partitioning = Partitioning::RoundRobinBatch(1);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
 
         // Note: this should pass (the stream can be created) but the
         // error when the input is executed should get passed back
-        let output_stream = exec.execute(0, task_ctx).unwrap();
+        let mut output_stream = exec.execute(0, task_ctx).unwrap();
 
-        // Expect that an error is returned
-        let result_string = crate::common::collect(output_stream)
-            .await
-            .unwrap_err()
-            .to_string();
+        // Ensure the repartition could poll the stream continuously even if error happens
+        let error_string = output_stream.next().await.unwrap().unwrap_err().to_string();
         assert!(
-            result_string.contains("bad data error"),
-            "actual: {result_string}"
+            error_string.contains("bad data error"),
+            "actual: {error_string}"
         );
+
+        let result = output_stream.next().await.unwrap().unwrap();
+        assert_eq!(result, batch);
+
+        assert!(output_stream.next().await.is_none());
     }
 
     #[tokio::test]

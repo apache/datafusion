@@ -308,7 +308,9 @@ mod tests {
     use crate::metrics::{MetricValue, Timestamp};
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::exec::{
+        assert_strong_count_converges_to_zero, BlockingExec, MockExec,
+    };
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
 
@@ -316,7 +318,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{assert_batches_eq, assert_contains};
+    use datafusion_common::{assert_batches_eq, assert_contains, exec_err};
     use datafusion_execution::config::SessionConfig;
 
     use futures::{FutureExt, StreamExt};
@@ -1140,5 +1142,94 @@ mod tests {
             ],
             collected.as_slice()
         );
+    }
+
+    #[tokio::test]
+    async fn test_merge_with_error_in_stream() {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sorted", DataType::Utf8, false),
+            Field::new("payload", DataType::Int32, false),
+        ]));
+
+        // Error returned during updating the loser tree
+        let t0 = MockExec::new(
+            vec![
+                Ok(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(StringArray::from(vec!["bar", "foo"])) as ArrayRef,
+                        Arc::new(Arc::new(Int32Array::from(vec![10, 2])) as ArrayRef),
+                    ],
+                )
+                .unwrap()),
+                exec_err!("t0 bad data"),
+                Ok(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(StringArray::from(vec!["zip"])) as ArrayRef,
+                        Arc::new(Arc::new(Int32Array::from(vec![111])) as ArrayRef),
+                    ],
+                )
+                .unwrap()),
+            ],
+            Arc::clone(&schema),
+        );
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec!["arrow", "datafusion"])) as ArrayRef,
+                Arc::new(Arc::new(Int32Array::from(vec![1, 99])) as ArrayRef),
+            ],
+        )
+        .unwrap();
+
+        // Error returned when constructing the loser tree
+        let t1 = MockExec::new(
+            vec![exec_err!("t1 bad data"), Ok(batch)],
+            Arc::clone(&schema),
+        );
+
+        let sort_exprs = vec![PhysicalSortExpr {
+            expr: col("sorted", &schema).unwrap(),
+            options: Default::default(),
+        }];
+
+        let merge = SortPreservingMergeExec::new(
+            sort_exprs,
+            Arc::new(crate::union::UnionExec::new(vec![
+                Arc::new(t0),
+                Arc::new(t1),
+            ])),
+        );
+
+        let mut stream = merge.execute(0, task_ctx).unwrap();
+
+        let err = stream.next().await.unwrap().unwrap_err().to_string();
+
+        assert!(err.contains("t1 bad data"), "actual: {err}");
+
+        let err = stream.next().await.unwrap().unwrap_err().to_string();
+        assert!(err.contains("t0 bad data"), "actual: {err}");
+
+        let batch = stream.next().await.unwrap().unwrap();
+
+        assert_batches_eq!(
+            &[
+                "+------------+---------+",
+                "| sorted     | payload |",
+                "+------------+---------+",
+                "| arrow      | 1       |",
+                "| bar        | 10      |",
+                "| datafusion | 99      |",
+                "| foo        | 2       |",
+                "| zip        | 111     |",
+                "+------------+---------+",
+            ],
+            &[batch]
+        );
+
+        assert!(stream.next().await.is_none());
     }
 }

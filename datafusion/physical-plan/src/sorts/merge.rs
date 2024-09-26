@@ -155,14 +155,15 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             return Poll::Ready(None);
         }
         // try to initialize the loser tree
-        if self.loser_tree.is_empty() {
-            // Ensure all non-exhausted streams have a cursor from which
-            // rows can be pulled
-            for i in 0..self.streams.partitions() {
+        if self.loser_tree.len() != self.streams.partitions() {
+            // Loser tree is not constructed, continue to initialize the loser tree.
+            // Through this way, the ith stream will be polled until the first `OK(batch)`
+            // is returned
+            for i in self.loser_tree.len()..self.streams.partitions() {
                 if let Err(e) = ready!(self.maybe_poll_stream(cx, i)) {
-                    self.aborted = true;
                     return Poll::Ready(Some(Err(e)));
                 }
+                self.loser_tree.push(usize::MAX);
             }
             self.init_loser_tree();
         }
@@ -177,7 +178,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             if !self.loser_tree_adjusted {
                 let winner = self.loser_tree[0];
                 if let Err(e) = ready!(self.maybe_poll_stream(cx, winner)) {
-                    self.aborted = true;
+                    // Propagate the error from input. The next poll call will poll the
+                    // same stream
                     return Poll::Ready(Some(Err(e)));
                 }
                 self.update_loser_tree();
@@ -275,7 +277,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// non exhausted input, if possible
     fn init_loser_tree(&mut self) {
         // Init loser tree
-        self.loser_tree = vec![usize::MAX; self.cursors.len()];
+        assert_eq!(self.loser_tree.len(), self.cursors.len());
         for i in 0..self.cursors.len() {
             let mut winner = i;
             let mut cmp_node = self.lt_leaf_node_index(i);

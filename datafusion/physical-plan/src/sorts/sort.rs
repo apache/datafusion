@@ -52,7 +52,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 
-use futures::{StreamExt, TryStreamExt};
+use futures::{Future, StreamExt, TryStreamExt};
 use log::{debug, trace};
 
 struct ExternalSorterMetrics {
@@ -868,14 +868,14 @@ impl ExecutionPlan for SortExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        let mut input = self.input.execute(partition, Arc::clone(&context))?;
+        let input = self.input.execute(partition, Arc::clone(&context))?;
 
         let execution_options = &context.session_config().options().execution;
 
         trace!("End SortExec's input.execute for partition: {}", partition);
 
         if let Some(fetch) = self.fetch.as_ref() {
-            let mut topk = TopK::try_new(
+            let topk = TopK::try_new(
                 partition,
                 input.schema(),
                 self.expr.clone(),
@@ -888,17 +888,14 @@ impl ExecutionPlan for SortExec {
 
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 self.schema(),
-                futures::stream::once(async move {
-                    while let Some(batch) = input.next().await {
-                        let batch = batch?;
-                        topk.insert_batch(batch)?;
-                    }
-                    topk.emit()
-                })
-                .try_flatten(),
+                futures::stream::unfold(
+                    SortStreamState::new(input, topk),
+                    SortStreamState::poll_next,
+                )
+                .fuse(),
             )))
         } else {
-            let mut sorter = ExternalSorter::new(
+            let sorter = ExternalSorter::new(
                 partition,
                 input.schema(),
                 self.expr.clone(),
@@ -912,14 +909,11 @@ impl ExecutionPlan for SortExec {
 
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 self.schema(),
-                futures::stream::once(async move {
-                    while let Some(batch) = input.next().await {
-                        let batch = batch?;
-                        sorter.insert_batch(batch).await?;
-                    }
-                    sorter.sort()
-                })
-                .try_flatten(),
+                futures::stream::unfold(
+                    SortStreamState::new(input, sorter),
+                    SortStreamState::poll_next,
+                )
+                .fuse(),
             )))
         }
     }
@@ -945,6 +939,107 @@ impl ExecutionPlan for SortExec {
 
     fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+}
+
+/// Sorter that sorts a stream of batches
+trait Sorter: Send + 'static {
+    /// Sink the record batch into the sorter
+    fn sink(&mut self, batch: RecordBatch) -> impl Future<Output = Result<()>> + Send;
+
+    /// Get the source stream
+    fn source(self) -> Result<SendableRecordBatchStream>;
+}
+
+impl Sorter for TopK {
+    async fn sink(&mut self, batch: RecordBatch) -> Result<()> {
+        self.insert_batch(batch)
+    }
+
+    fn source(self) -> Result<SendableRecordBatchStream> {
+        self.emit()
+    }
+}
+
+impl Sorter for ExternalSorter {
+    fn sink(&mut self, batch: RecordBatch) -> impl Future<Output = Result<()>> + Send {
+        self.insert_batch(batch)
+    }
+
+    fn source(mut self) -> Result<SendableRecordBatchStream> {
+        self.sort()
+    }
+}
+
+enum SortStreamState<T> {
+    SinkPhase {
+        input: SendableRecordBatchStream,
+        sorter: Option<T>,
+    },
+    SourcePhase {
+        output: SendableRecordBatchStream,
+    },
+}
+
+impl<T: Sorter> SortStreamState<T> {
+    fn new(input: SendableRecordBatchStream, sorter: T) -> Self {
+        Self::SinkPhase {
+            input,
+            sorter: Some(sorter),
+        }
+    }
+
+    async fn poll_next(self) -> Option<(Result<RecordBatch>, Self)> {
+        match self {
+            Self::SinkPhase {
+                mut input,
+                mut sorter,
+            } => {
+                while let Some(sorter_) = &mut sorter {
+                    if let Some(item) = input.next().await {
+                        match item {
+                            Ok(batch) => {
+                                if let Err(e) = sorter_.sink(batch).await {
+                                    return Some((
+                                        Err(e),
+                                        Self::SinkPhase {
+                                            input,
+                                            sorter: None,
+                                        },
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                // Propagate the error
+                                return Some((Err(e), Self::SinkPhase { input, sorter }));
+                            }
+                        }
+                    } else {
+                        let sorter = sorter.take().unwrap();
+                        match sorter.source() {
+                            Ok(mut output) => {
+                                let rb = output.next().await;
+                                return rb.map(|rb| (rb, Self::SourcePhase { output }));
+                            }
+                            Err(e) => {
+                                return Some((
+                                    Err(e),
+                                    Self::SinkPhase {
+                                        input,
+                                        sorter: None,
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            Self::SourcePhase { mut output } => {
+                let rb = output.next().await;
+                rb.map(|rb| (rb, Self::SourcePhase { output }))
+            }
+        }
     }
 }
 
