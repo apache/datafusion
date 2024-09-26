@@ -36,8 +36,9 @@ use datafusion_expr::ColumnarValue;
 /// Append a new view to the views buffer with the given substr
 ///
 /// # Safety
-/// original_view must be a valid view
-/// start must be less than or equal to the length of the string data
+///
+/// original_view must be a valid view (the format described on
+/// [`GenericByteViewArray`](arrow::array::GenericByteViewArray).
 ///
 /// # Arguments
 /// - views_buffer: The buffer to append the new view to
