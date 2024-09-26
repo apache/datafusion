@@ -1550,7 +1550,7 @@ impl From<SessionContext> for SessionStateBuilder {
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
-pub trait QueryPlanner {
+pub trait QueryPlanner: Debug {
     /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
@@ -2132,6 +2132,7 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
     struct MyQueryPlanner {}
 
     #[async_trait]

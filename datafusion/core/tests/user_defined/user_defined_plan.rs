@@ -312,6 +312,7 @@ fn make_topk_context() -> SessionContext {
 
 // ------ The implementation of the TopK code follows -----
 
+#[derive(Debug)]
 struct TopKQueryPlanner {}
 
 #[async_trait]

@@ -1795,6 +1795,7 @@ impl From<&SessionState> for TaskContext {
 }
 
 /// The query planner used if no user defined planner is provided
+#[derive(Debug)]
 struct DefaultQueryPlanner {}
 
 #[async_trait]
