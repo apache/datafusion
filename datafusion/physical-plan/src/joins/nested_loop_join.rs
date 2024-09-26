@@ -20,6 +20,7 @@
 //! determined by the [`JoinType`].
 
 use std::any::Any;
+use std::collections::VecDeque;
 use std::fmt::Formatter;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -97,6 +98,144 @@ impl JoinLeftData {
     /// if caller is the last running thread
     fn report_probe_completed(&self) -> bool {
         self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
+    }
+}
+
+/// Buffer to store the output batches. The buffer is used to
+/// keep the size of output batches around the target buffer size.
+/// Output batches are either combined or split to ensure that the
+/// batches produced are as close to the target size as possible
+/// without being any bigger.
+struct OutputBuffer {
+    /// Whether the buffer has output any record batches,
+    /// used to ensure that at least one record batch is
+    /// produced even if no joins happen.
+    have_output: bool,
+    /// Output batch
+    batches: VecDeque<RecordBatch>,
+    /// Number of rows in the buffer
+    total_rows: usize,
+    /// Batch that is ready to be output.
+    next_batch: Option<(RecordBatch, usize)>,
+    /// Schema of the output batches
+    schema: SchemaRef,
+    /// Target output batch size
+    target_batch_size: usize,
+    /// Memory reservation for tracking batch memory use
+    memory_reservation: MemoryReservation,
+}
+
+impl OutputBuffer {
+    fn new(
+        schema: SchemaRef,
+        target_batch_size: usize,
+        memory_reservation: MemoryReservation,
+    ) -> Self {
+        Self {
+            have_output: false,
+            batches: VecDeque::new(),
+            total_rows: 0,
+            next_batch: None,
+            schema,
+            target_batch_size,
+            memory_reservation,
+        }
+    }
+
+    /// Pash a new batch into the output buffer.
+    fn push(&mut self, batch: RecordBatch) -> Result<()> {
+        assert!(self.next_batch.is_none());
+        assert!(self.total_rows < self.target_batch_size);
+
+        self.memory_reservation
+            .try_grow(batch.get_array_memory_size())?;
+        if self.total_rows + batch.num_rows() < self.target_batch_size {
+            // Not enough rows to fill a batch.
+            self.total_rows += batch.num_rows();
+            self.batches.push_back(batch);
+            return Ok(());
+        }
+        let mut batches = std::mem::take(&mut self.batches);
+        if self.total_rows + batch.num_rows() == self.target_batch_size {
+            self.total_rows = 0;
+            batches.push_back(batch);
+        } else {
+            self.total_rows = batch.num_rows();
+            self.batches.push_back(batch);
+        }
+        let mut total_array_memory_size = 0;
+        let batch = concat_batches(
+            &self.schema,
+            batches.iter().inspect(|batch| {
+                total_array_memory_size += batch.get_array_memory_size()
+            }),
+        )?;
+        self.next_batch = Some((batch, total_array_memory_size));
+        Ok(())
+    }
+
+    /// Return a batch if there are enough rows in the buffer.
+    fn next(&mut self) -> Option<RecordBatch> {
+        if let Some((batch, total_array_memory_size)) = self.next_batch.take() {
+            self.have_output = true;
+            self.memory_reservation.shrink(total_array_memory_size);
+            return Some(batch);
+        }
+        if self.total_rows < self.target_batch_size {
+            return None;
+        }
+        if self.total_rows == self.target_batch_size {
+            self.total_rows = 0;
+            return self.batches.pop_front().inspect(|batch| {
+                self.memory_reservation
+                    .shrink(batch.get_array_memory_size())
+            });
+        }
+        let batch = self.batches[0].slice(0, self.target_batch_size);
+        let rest = self.batches[0].slice(
+            self.target_batch_size,
+            self.total_rows - self.target_batch_size,
+        );
+        self.have_output = true;
+        self.total_rows -= self.target_batch_size;
+        self.batches[0] = rest;
+        Some(batch)
+    }
+
+    /// The number of rows needed to fill the next batch.
+    fn needed_rows(&self) -> usize {
+        if self.total_rows < self.target_batch_size {
+            self.target_batch_size - self.total_rows
+        } else {
+            0
+        }
+    }
+
+    /// Flush any remaining rows into a batch even it it's not yet full.
+    fn flush(&mut self) -> Result<Option<RecordBatch>> {
+        if self.total_rows == 0 {
+            return Ok(None);
+        }
+        let batch = std::mem::take(&mut self.batches);
+        let total_array_memory_size =
+            batch.iter().map(|b| b.get_array_memory_size()).sum();
+        self.total_rows = 0;
+        self.memory_reservation.shrink(total_array_memory_size);
+        self.have_output = true;
+        Ok(Some(concat_batches(&self.schema, batch.iter())?))
+    }
+
+    /// Finish the output buffer, returning the last batch. If the
+    /// buffer has never output a batch then create an empty batch.
+    fn finish(&mut self) -> Result<Option<RecordBatch>> {
+        Ok(self.flush()?.or_else(|| {
+            if self.have_output {
+                None
+            } else {
+                self.have_output = true;
+                Some(RecordBatch::new_empty(Arc::clone(&self.schema)))
+            }
+        }))
     }
 }
 
@@ -339,6 +478,11 @@ impl ExecutionPlan for NestedLoopJoinExec {
             MemoryConsumer::new(format!("NestedLoopJoin[{partition}]"))
                 .register(context.memory_pool());
 
+        // Initialization of reservation for buffering output
+        let buffer_memory_reservation =
+            MemoryConsumer::new(format!("NestedLoopJoinBuffer[{partition}]"))
+                .register(context.memory_pool());
+
         let target_batch_size = context.session_config().batch_size();
 
         let inner_table = self.inner_table.once(|| {
@@ -358,6 +502,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // Right side has an order and it is maintained during operation.
         let right_side_ordered =
             self.maintains_input_order()[1] && self.right.output_ordering().is_some();
+
+        let output_buffer = OutputBuffer::new(
+            Arc::clone(&self.schema),
+            target_batch_size,
+            buffer_memory_reservation,
+        );
+
         Ok(Box::pin(NestedLoopJoinStream {
             schema: Arc::clone(&self.schema),
             filter: self.filter.clone(),
@@ -369,10 +520,10 @@ impl ExecutionPlan for NestedLoopJoinExec {
             join_metrics,
             indices_cache,
             right_side_ordered,
-            target_batch_size,
             outer_record_batch: None,
             outer_record_batch_row: 0,
             memory_reservation,
+            output_buffer,
         }))
     }
 
@@ -476,14 +627,14 @@ struct NestedLoopJoinStream {
     indices_cache: (UInt64Array, UInt32Array),
     /// Whether the right side is ordered
     right_side_ordered: bool,
-    /// Target size for output batches
-    target_batch_size: usize,
-    /// The current record batch being processed.
+    /// The current record batch being processed
     outer_record_batch: Option<RecordBatch>,
-    /// The current index of the outer record batch being processed.
+    /// The current index of the outer record batch being processed
     outer_record_batch_row: usize,
-    /// The memory reservation used to track memory usage.
+    /// The memory reservation used to track memory usage
     memory_reservation: MemoryReservation,
+    /// The buffer to store the output rows
+    output_buffer: OutputBuffer,
 }
 
 /// Creates a Cartesian product of two input batches, preserving the order of the right batch,
@@ -578,119 +729,147 @@ impl NestedLoopJoinStream {
         // Get or initialize visited_left_side bitmap if required by join type
         let visited_left_side = left_data.bitmap();
 
-        // Check is_exhausted before polling the outer_table, such that when the outer table
-        // does not support `FusedStream`, Self will not poll it again
-        if self.is_exhausted {
-            return Poll::Ready(None);
-        }
+        loop {
+            if let Some(batch) = self.output_buffer.next() {
+                self.join_metrics.output_batches.add(1);
+                self.join_metrics.output_rows.add(batch.num_rows());
+                return Poll::Ready(Some(Ok(batch)));
+            }
 
-        if self.outer_record_batch.is_none() {
-            // Get the next outer record batch
-            match ready!(self.outer_table.poll_next_unpin(cx)) {
-                Some(Ok(batch)) => {
-                    self.join_metrics.input_batches.add(1);
-                    self.join_metrics.input_rows.add(batch.num_rows());
-                    self.memory_reservation
-                        .try_grow(batch.get_array_memory_size())?;
-                    self.outer_record_batch = Some(batch);
-                    self.outer_record_batch_row = 0;
+            // Check is_exhausted before polling the outer_table, such that when the outer table
+            // does not support `FusedStream`, Self will not poll it again
+            if self.is_exhausted {
+                let batch = self.output_buffer.finish()?;
+                if let Some(batch) = &batch {
+                    self.join_metrics.output_batches.add(1);
+                    self.join_metrics.output_rows.add(batch.num_rows());
                 }
-                Some(Err(e)) => return Poll::Ready(Some(Err(e))),
-                None => {
-                    if need_produce_result_in_final(self.join_type) {
-                        // At this stage `visited_left_side` won't be updated, so it's
-                        // safe to report about probe completion.
-                        //
-                        // Setting `is_exhausted` / returning None will prevent from
-                        // multiple calls of `report_probe_completed()`
-                        if !left_data.report_probe_completed() {
-                            self.is_exhausted = true;
-                            return Poll::Ready(None);
-                        };
+                return Poll::Ready(Ok(batch).transpose());
+            }
 
-                        // Only setting up timer, input is exhausted
-                        let timer = self.join_metrics.join_time.timer();
-                        // use the global left bitmap to produce the left indices and right indices
-                        let (left_side, right_side) =
-                            get_final_indices_from_shared_bitmap(
-                                visited_left_side,
-                                self.join_type,
+            if self.outer_record_batch.is_none() {
+                // Get the next outer record batch
+                match self.outer_table.poll_next_unpin(cx) {
+                    Poll::Ready(Some(Ok(batch))) => {
+                        self.join_metrics.input_batches.add(1);
+                        self.join_metrics.input_rows.add(batch.num_rows());
+                        self.memory_reservation
+                            .try_grow(batch.get_array_memory_size())?;
+                        self.outer_record_batch = Some(batch);
+                        self.outer_record_batch_row = 0;
+                    }
+                    Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                    Poll::Ready(None) => {
+                        if need_produce_result_in_final(self.join_type) {
+                            // At this stage `visited_left_side` won't be updated, so it's
+                            // safe to report about probe completion.
+                            //
+                            // Setting `is_exhausted` will prevent from multiple calls of
+                            // `report_probe_completed()`
+                            if !left_data.report_probe_completed() {
+                                self.is_exhausted = true;
+                                continue;
+                            };
+
+                            // Only setting up timer, input is exhausted
+                            let timer = self.join_metrics.join_time.timer();
+                            // use the global left bitmap to produce the left indices and right indices
+                            let (left_side, right_side) =
+                                get_final_indices_from_shared_bitmap(
+                                    visited_left_side,
+                                    self.join_type,
+                                );
+                            let empty_right_batch =
+                                RecordBatch::new_empty(self.outer_table.schema());
+                            // use the left and right indices to produce the batch result
+                            let result = build_batch_from_indices(
+                                &self.schema,
+                                left_data.batch(),
+                                &empty_right_batch,
+                                &left_side,
+                                &right_side,
+                                &self.column_indices,
+                                JoinSide::Left,
                             );
-                        let empty_right_batch =
-                            RecordBatch::new_empty(self.outer_table.schema());
-                        // use the left and right indices to produce the batch result
-                        let result = build_batch_from_indices(
-                            &self.schema,
-                            left_data.batch(),
-                            &empty_right_batch,
-                            &left_side,
-                            &right_side,
-                            &self.column_indices,
-                            JoinSide::Left,
-                        );
-                        self.is_exhausted = true;
+                            self.is_exhausted = true;
 
-                        // Recording time & updating output metrics
-                        if let Ok(batch) = &result {
-                            timer.done();
-                            self.join_metrics.output_batches.add(1);
-                            self.join_metrics.output_rows.add(batch.num_rows());
+                            // Recording time & updating output metrics
+                            match result {
+                                Ok(batch) => {
+                                    timer.done();
+                                    self.output_buffer.push(batch)?;
+                                    continue;
+                                }
+                                Err(e) => return Poll::Ready(Some(Err(e))),
+                            }
+                        } else {
+                            self.is_exhausted = true;
+                            continue;
                         }
-
-                        return Poll::Ready(Some(result));
-                    } else {
-                        // end of the join loop
-                        return Poll::Ready(None);
+                    }
+                    Poll::Pending => {
+                        return match self.output_buffer.flush() {
+                            Ok(Some(batch)) => {
+                                // If there was anything in the output buffer flush it
+                                // so that it can be processed.
+                                self.join_metrics.output_batches.add(1);
+                                self.join_metrics.output_rows.add(batch.num_rows());
+                                Poll::Ready(Some(Ok(batch)))
+                            }
+                            Ok(None) => Poll::Pending,
+                            Err(err) => Poll::Ready(Some(Err(err))),
+                        };
                     }
                 }
             }
-        }
 
-        debug_assert!(self.outer_record_batch.is_some());
-        let right_batch = self.outer_record_batch.as_ref().unwrap();
-        let num_rows = match (self.join_type, left_data.batch().num_rows()) {
-            // An inner join will only produce 1 output row per input row.
-            (JoinType::Inner, _) | (_, 0) => self.target_batch_size,
-            // Outer joins can produce as many rows as there are in the build input for
-            // each row in the batch.
-            (_, rows) => std::cmp::max(1, self.target_batch_size / rows),
-        };
-        let num_rows = std::cmp::min(
-            num_rows,
-            right_batch.num_rows() - self.outer_record_batch_row,
-        );
-        let sliced_right_batch = right_batch.slice(self.outer_record_batch_row, num_rows);
+            debug_assert!(self.outer_record_batch.is_some());
+            let right_batch = self.outer_record_batch.as_ref().unwrap();
+            let num_rows = match (self.join_type, left_data.batch().num_rows()) {
+                // An inner join will only produce 1 output row per input row.
+                (JoinType::Inner, _) | (_, 0) => self.output_buffer.needed_rows(),
+                // Outer joins can produce as many rows as there are in the build input for
+                // each row in the batch.
+                (_, rows) => std::cmp::max(1, self.output_buffer.needed_rows() / rows),
+            };
+            let num_rows = std::cmp::min(
+                num_rows,
+                right_batch.num_rows() - self.outer_record_batch_row,
+            );
+            let sliced_right_batch =
+                right_batch.slice(self.outer_record_batch_row, num_rows);
 
-        // Setting up timer
-        let timer = self.join_metrics.join_time.timer();
+            // Setting up timer
+            let timer = self.join_metrics.join_time.timer();
 
-        let result = join_left_and_right_batch(
-            left_data.batch(),
-            &sliced_right_batch,
-            self.join_type,
-            self.filter.as_ref(),
-            &self.column_indices,
-            &self.schema,
-            visited_left_side,
-            &mut self.indices_cache,
-            self.right_side_ordered,
-        );
+            let result = join_left_and_right_batch(
+                left_data.batch(),
+                &sliced_right_batch,
+                self.join_type,
+                self.filter.as_ref(),
+                &self.column_indices,
+                &self.schema,
+                visited_left_side,
+                &mut self.indices_cache,
+                self.right_side_ordered,
+            );
 
-        // Recording time & updating output metrics
-        if let Ok(batch) = &result {
-            timer.done();
-            self.outer_record_batch_row += num_rows;
-            if self.outer_record_batch_row >= right_batch.num_rows() {
-                if let Some(batch) = self.outer_record_batch.take() {
-                    self.memory_reservation
-                        .shrink(batch.get_array_memory_size())
+            // Recording time & updating output metrics
+            match result {
+                Ok(batch) => {
+                    timer.done();
+                    self.outer_record_batch_row += num_rows;
+                    if self.outer_record_batch_row >= right_batch.num_rows() {
+                        if let Some(batch) = self.outer_record_batch.take() {
+                            self.memory_reservation
+                                .shrink(batch.get_array_memory_size())
+                        }
+                    }
+                    self.output_buffer.push(batch)?;
                 }
+                Err(e) => return Poll::Ready(Some(Err(e))),
             }
-            self.join_metrics.output_batches.add(1);
-            self.join_metrics.output_rows.add(batch.num_rows());
         }
-
-        Poll::Ready(Some(result))
     }
 }
 

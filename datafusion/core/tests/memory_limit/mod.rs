@@ -141,7 +141,10 @@ async fn join_by_expression() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service != t2.service")
         .with_expected_errors(vec![
-           "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: NestedLoopJoinLoad[0]",
+           "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:",
+           "NestedLoopJoinLoad[0] consumed 0 bytes",
+           "NestedLoopJoin[0] consumed 0 bytes",
+           "NestedLoopJoinBuffer[0] consumed 0 bytes",
         ])
         .with_memory_limit(1_000)
         .run()
