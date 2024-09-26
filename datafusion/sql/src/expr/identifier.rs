@@ -19,7 +19,7 @@ use arrow_schema::Field;
 use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, Column, DFSchema,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
     DataFusionError, Result, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
@@ -135,7 +135,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             }
                         }
                     }
-                    exec_err!("could not parse compound identifier from {ids:?}")
+                    plan_err!("could not parse compound identifier from {ids:?}")
                 }
                 // found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {
@@ -161,7 +161,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     not_impl_err!(
                                         "Nested identifiers are not yet supported for OuterReferenceColumn {}",
                                         Column::from((qualifier, field)).quoted_flat_name()
-                                )
+                                    )
                                 }
                                 // found matching field with no spare identifier(s)
                                 Some((field, qualifier, _nested_names)) => {
