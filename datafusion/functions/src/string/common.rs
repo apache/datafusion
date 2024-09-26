@@ -21,16 +21,45 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ArrayRef,
-    GenericStringArray, GenericStringBuilder, LargeStringArray, OffsetSizeTrait,
-    StringArray, StringBuilder, StringViewArray, StringViewBuilder,
+    make_view, new_null_array, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter,
+    ArrayRef, ByteView, GenericStringArray, GenericStringBuilder, LargeStringArray,
+    OffsetSizeTrait, StringArray, StringBuilder, StringViewArray, StringViewBuilder,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
+use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
+
+/// Append a new view to the views buffer with the given substr
+///
+/// raw must be a valid view
+/// substr must be a valid substring of raw
+/// start must be less than or equal to the length of the string data
+pub(crate) fn make_and_append_view(
+    views_buffer: &mut Vec<u128>,
+    null_builder: &mut NullBufferBuilder,
+    raw_view: &u128,
+    substr: &str,
+    start_offset: u32,
+) {
+    let substr_len = substr.len();
+    let sub_view = if substr_len > 12 {
+        let view = ByteView::from(*raw_view);
+        make_view(
+            substr.as_bytes(),
+            view.buffer_index,
+            view.offset + start_offset,
+        )
+    } else {
+        // inline value does not need block id or offset
+        make_view(substr.as_bytes(), 0, 0)
+    };
+    views_buffer.push(sub_view);
+    null_builder.append_non_null();
+}
 
 pub(crate) enum TrimType {
     Left,
@@ -53,88 +82,164 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
     trim_type: TrimType,
     use_string_view: bool,
 ) -> Result<ArrayRef> {
+    // This is the function used to trim each string row, and it will return:
+    //   - trimmed str
+    //     e.g. ltrim("  abc") -> "abc"
+    //
+    //   - start offset, needed in `string_view_trim`
+    //     e.g. "abc" actually is "  abc"[2..], and the start offset here should be 2
+    //
     let func = match trim_type {
         TrimType::Left => |input, pattern: &str| {
             let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_start_matches::<&[char]>(input, pattern.as_ref())
+            let ltrimmed_str =
+                str::trim_start_matches::<&[char]>(input, pattern.as_ref());
+            // `ltrimmed_str` is actually `input`[start_offset..],
+            // so `start_offset` = len(`input`) - len(`ltrimmed_str`)
+            let start_offset = input.as_bytes().len() - ltrimmed_str.as_bytes().len();
+
+            (ltrimmed_str, start_offset as u32)
         },
         TrimType::Right => |input, pattern: &str| {
             let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_end_matches::<&[char]>(input, pattern.as_ref())
+            let rtrimmed_str = str::trim_end_matches::<&[char]>(input, pattern.as_ref());
+
+            // `ltrimmed_str` is actually `input`[0..new_len], so `start_offset` is 0
+            (rtrimmed_str, 0)
         },
         TrimType::Both => |input, pattern: &str| {
             let pattern = pattern.chars().collect::<Vec<char>>();
-            str::trim_end_matches::<&[char]>(
-                str::trim_start_matches::<&[char]>(input, pattern.as_ref()),
-                pattern.as_ref(),
-            )
+            let ltrimmed_str =
+                str::trim_start_matches::<&[char]>(input, pattern.as_ref());
+            // `btrimmed_str` can be got by rtrim(ltrim(`input`)),
+            // so its `start_offset` should be same as ltrim situation above
+            let start_offset = input.as_bytes().len() - ltrimmed_str.as_bytes().len();
+            let btrimmed_str =
+                str::trim_end_matches::<&[char]>(ltrimmed_str, pattern.as_ref());
+
+            (btrimmed_str, start_offset as u32)
         },
     };
 
     if use_string_view {
-        string_view_trim::<T>(func, args)
+        string_view_trim(func, args)
     } else {
         string_trim::<T>(func, args)
     }
 }
 
 // removing 'a will cause compiler complaining lifetime of `func`
-fn string_view_trim<'a, T: OffsetSizeTrait>(
-    func: fn(&'a str, &'a str) -> &'a str,
+fn string_view_trim<'a>(
+    trim_func: fn(&'a str, &'a str) -> (&'a str, u32),
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
-    let string_array = as_string_view_array(&args[0])?;
+    let string_view_array = as_string_view_array(&args[0])?;
+    let mut views_buf = Vec::with_capacity(string_view_array.len());
+    let mut null_builder = NullBufferBuilder::new(string_view_array.len());
 
     match args.len() {
         1 => {
-            let result = string_array
-                .iter()
-                .map(|string| string.map(|string: &str| func(string, " ")))
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
+            let array_iter = string_view_array.iter();
+            let views_iter = string_view_array.views().iter();
+            for (src_str_opt, raw_view) in array_iter.zip(views_iter) {
+                trim_and_append_str(
+                    src_str_opt,
+                    Some(" "),
+                    trim_func,
+                    &mut views_buf,
+                    &mut null_builder,
+                    raw_view,
+                );
+            }
         }
         2 => {
             let characters_array = as_string_view_array(&args[1])?;
 
             if characters_array.len() == 1 {
+                // Only one `trim characters` exist
                 if characters_array.is_null(0) {
                     return Ok(new_null_array(
                         // The schema is expecting utf8 as null
-                        &DataType::Utf8,
-                        string_array.len(),
+                        &DataType::Utf8View,
+                        string_view_array.len(),
                     ));
                 }
 
                 let characters = characters_array.value(0);
-                let result = string_array
-                    .iter()
-                    .map(|item| item.map(|string| func(string, characters)))
-                    .collect::<GenericStringArray<T>>();
-                return Ok(Arc::new(result) as ArrayRef);
+                let array_iter = string_view_array.iter();
+                let views_iter = string_view_array.views().iter();
+                for (src_str_opt, raw_view) in array_iter.zip(views_iter) {
+                    trim_and_append_str(
+                        src_str_opt,
+                        Some(characters),
+                        trim_func,
+                        &mut views_buf,
+                        &mut null_builder,
+                        raw_view,
+                    );
+                }
+            } else {
+                // A specific `trim characters` for a row in the string view array
+                let characters_iter = characters_array.iter();
+                let array_iter = string_view_array.iter();
+                let views_iter = string_view_array.views().iter();
+                for ((src_str_opt, raw_view), characters_opt) in
+                    array_iter.zip(views_iter).zip(characters_iter)
+                {
+                    trim_and_append_str(
+                        src_str_opt,
+                        characters_opt,
+                        trim_func,
+                        &mut views_buf,
+                        &mut null_builder,
+                        raw_view,
+                    );
+                }
             }
-
-            let result = string_array
-                .iter()
-                .zip(characters_array.iter())
-                .map(|(string, characters)| match (string, characters) {
-                    (Some(string), Some(characters)) => Some(func(string, characters)),
-                    _ => None,
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
         }
         other => {
-            exec_err!(
+            return exec_err!(
             "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
-            )
+            );
         }
+    }
+
+    let views_buf = ScalarBuffer::from(views_buf);
+    let nulls_buf = null_builder.finish();
+
+    // Safety:
+    // (1) The blocks of the given views are all provided
+    // (2) Each of the range `view.offset+start..end` of view in views_buf is within
+    // the bounds of each of the blocks
+    unsafe {
+        let array = StringViewArray::new_unchecked(
+            views_buf,
+            string_view_array.data_buffers().to_vec(),
+            nulls_buf,
+        );
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+fn trim_and_append_str<'a>(
+    src_str_opt: Option<&'a str>,
+    trim_characters_opt: Option<&'a str>,
+    trim_func: fn(&'a str, &'a str) -> (&'a str, u32),
+    views_buf: &mut Vec<u128>,
+    null_builder: &mut NullBufferBuilder,
+    raw: &u128,
+) {
+    if let (Some(src_str), Some(characters)) = (src_str_opt, trim_characters_opt) {
+        let (trim_str, start_offset) = trim_func(src_str, characters);
+        make_and_append_view(views_buf, null_builder, raw, trim_str, start_offset);
+    } else {
+        null_builder.append_null();
+        views_buf.push(0);
     }
 }
 
 fn string_trim<'a, T: OffsetSizeTrait>(
-    func: fn(&'a str, &'a str) -> &'a str,
+    func: fn(&'a str, &'a str) -> (&'a str, u32),
     args: &'a [ArrayRef],
 ) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
@@ -143,7 +248,7 @@ fn string_trim<'a, T: OffsetSizeTrait>(
         1 => {
             let result = string_array
                 .iter()
-                .map(|string| string.map(|string: &str| func(string, " ")))
+                .map(|string| string.map(|string: &str| func(string, " ").0))
                 .collect::<GenericStringArray<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
@@ -162,7 +267,7 @@ fn string_trim<'a, T: OffsetSizeTrait>(
                 let characters = characters_array.value(0);
                 let result = string_array
                     .iter()
-                    .map(|item| item.map(|string| func(string, characters)))
+                    .map(|item| item.map(|string| func(string, characters).0))
                     .collect::<GenericStringArray<T>>();
                 return Ok(Arc::new(result) as ArrayRef);
             }
@@ -171,7 +276,7 @@ fn string_trim<'a, T: OffsetSizeTrait>(
                 .iter()
                 .zip(characters_array.iter())
                 .map(|(string, characters)| match (string, characters) {
-                    (Some(string), Some(characters)) => Some(func(string, characters)),
+                    (Some(string), Some(characters)) => Some(func(string, characters).0),
                     _ => None,
                 })
                 .collect::<GenericStringArray<T>>();

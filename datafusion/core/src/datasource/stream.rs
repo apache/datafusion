@@ -293,6 +293,7 @@ impl StreamConfig {
 ///
 /// [Hadoop]: https://hadoop.apache.org/
 /// [`ListingTable`]: crate::datasource::listing::ListingTable
+#[derive(Debug)]
 pub struct StreamTable(Arc<StreamConfig>);
 
 impl StreamTable {
@@ -370,6 +371,7 @@ impl TableProvider for StreamTable {
     }
 }
 
+#[derive(Debug)]
 struct StreamRead(Arc<StreamConfig>);
 
 impl PartitionStream for StreamRead {

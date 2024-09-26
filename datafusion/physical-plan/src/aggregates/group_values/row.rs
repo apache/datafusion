@@ -83,6 +83,7 @@ impl GroupValuesRows {
         let map = RawTable::with_capacity(0);
 
         let starting_rows_capacity = 1000;
+
         let starting_data_capacity = 64 * starting_rows_capacity;
         let rows_buffer =
             row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
