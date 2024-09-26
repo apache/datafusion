@@ -177,23 +177,23 @@ impl Debug for SessionState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionState")
             .field("session_id", &self.session_id)
-            .field("analyzer", &"...")
+            .field("config", &self.config)
+            .field("runtime_env", &self.runtime_env)
+            .field("catalog_list", &"...")
+            .field("serializer_registry", &"...")
+            .field("execution_props", &self.execution_props)
+            .field("table_options", &self.table_options)
+            .field("table_factories", &"...")
+            .field("function_factory", &"...")
             .field("expr_planners", &"...")
+            .field("query_planner", &"...")
+            .field("analyzer", &"...")
             .field("optimizer", &"...")
             .field("physical_optimizers", &"...")
-            .field("query_planner", &"...")
-            .field("catalog_list", &"...")
             .field("table_functions", &"...")
             .field("scalar_functions", &self.scalar_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
-            .field("serializer_registry", &"...")
-            .field("config", &self.config)
-            .field("table_options", &self.table_options)
-            .field("execution_props", &self.execution_props)
-            .field("table_factories", &"...")
-            .field("runtime_env", &self.runtime_env)
-            .field("function_factory", &"...")
             .finish_non_exhaustive()
     }
 }
@@ -909,7 +909,6 @@ impl SessionState {
 /// be used for all values unless explicitly provided.
 ///
 /// See example on [`SessionState`]
-#[derive(Debug)]
 pub struct SessionStateBuilder {
     session_id: Option<String>,
     analyzer: Option<Analyzer>,
@@ -1517,6 +1516,37 @@ impl SessionStateBuilder {
         &mut self,
     ) -> &mut Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>> {
         &mut self.physical_optimizer_rules
+    }
+}
+
+impl Debug for SessionStateBuilder {
+    /// Prefer having short fields at the top and long vector fields near the end
+    /// Group fields by
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionStateBuilder")
+            .field("session_id", &self.session_id)
+            .field("config", &self.config)
+            .field("runtime_env", &self.runtime_env)
+            .field("catalog_list", &self.catalog_list)
+            .field("serializer_registry", &self.serializer_registry)
+            .field("file_formats", &self.file_formats)
+            .field("execution_props", &self.execution_props)
+            .field("table_options", &self.table_options)
+            .field("table_factories", &self.table_factories)
+            .field("function_factory", &self.function_factory)
+            .field("expr_planners", &self.expr_planners)
+            .field("query_planners", &self.query_planner)
+            .field("analyzer_rules", &self.analyzer_rules)
+            .field("analyzer", &self.analyzer)
+            .field("optimizer_rules", &self.optimizer_rules)
+            .field("optimizer", &self.optimizer)
+            .field("physical_optimizer_rules", &self.physical_optimizer_rules)
+            .field("physical_optimizers", &self.physical_optimizers)
+            .field("table_functions", &self.table_functions)
+            .field("scalar_functions", &self.scalar_functions)
+            .field("aggregate_functions", &self.aggregate_functions)
+            .field("window_functions", &self.window_functions)
+            .finish()
     }
 }
 
