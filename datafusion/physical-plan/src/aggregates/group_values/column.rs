@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::group_value_row::{
-    ArrayRowEq, ByteGroupValueBuilder, PrimitiveGroupValueBuilder,
+use crate::aggregates::group_values::group_column::{
+    ByteGroupValueBuilder, GroupColumn, PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
@@ -57,7 +57,7 @@ pub struct GroupValuesColumn {
     /// The actual group by values, stored column-wise. Compare from
     /// the left to right, each column is stored as `ArrayRowEq`.
     /// This is shown faster than the row format
-    group_values: Vec<Box<dyn ArrayRowEq>>,
+    group_values: Vec<Box<dyn GroupColumn>>,
 
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
@@ -218,7 +218,7 @@ impl GroupValues for GroupValuesColumn {
                 }
 
                 fn check_row_equal(
-                    array_row: &dyn ArrayRowEq,
+                    array_row: &dyn GroupColumn,
                     lhs_row: usize,
                     array: &ArrayRef,
                     rhs_row: usize,
