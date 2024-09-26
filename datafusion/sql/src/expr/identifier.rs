@@ -15,15 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::Field;
+use std::sync::Arc;
+
+use arrow_schema::{DataType, Field};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, Column, DFSchema, DataFusionError,
-    Result, TableReference,
+    exec_err, internal_err, not_impl_err, plan_datafusion_err, Column, DFSchema,
+    DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
-use datafusion_expr::{Case, Expr};
+use datafusion_expr::{lit, Case, Expr};
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_expr::UNNAMED_TABLE;
@@ -113,13 +115,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map(|id| self.ident_normalizer.normalize(id))
                 .collect::<Vec<_>>();
 
-            // Currently not supporting more than one nested level
-            // Though ideally once that support is in place, this code should work with it
-            // TODO: remove when can support multiple nested identifiers
-            if ids.len() > 5 {
-                return not_impl_err!("Compound identifier: {ids:?}");
-            }
-
             let search_result = search_dfschema(&ids, schema);
             match search_result {
                 // found matching field with spare identifier(s) for nested field(s) in structure
@@ -142,9 +137,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             }
                         }
                     }
-                    not_impl_err!(
-                        "Compound identifiers not supported by ExprPlanner: {ids:?}"
-                    )
+                    exec_err!("could not parse compound identifier from {ids:?}")
                 }
                 // found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {
@@ -170,7 +163,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     not_impl_err!(
                                         "Nested identifiers are not yet supported for OuterReferenceColumn {}",
                                         Column::from((qualifier, field)).quoted_flat_name()
-                                    )
+                                )
                                 }
                                 // found matching field with no spare identifier(s)
                                 Some((field, qualifier, _nested_names)) => {
