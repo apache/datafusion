@@ -92,7 +92,7 @@ impl GroupValuesColumn {
     /// Returns true if the specified data type is supported by [`GroupValuesColumn`]
     ///
     /// In order to be supported, there must be a specialized implementation of
-    /// [`ArrayRowEq`] for the data type, instantiated in [`Self::intern`]
+    /// [`GroupColumn`] for the data type, instantiated in [`Self::intern`]
     fn supported_type(data_type: &DataType) -> bool {
         matches!(
             *data_type,
