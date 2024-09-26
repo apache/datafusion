@@ -1586,6 +1586,7 @@ pub enum RegisterFunction {
 
 /// Default implementation of [SerializerRegistry] that throws unimplemented error
 /// for all requests.
+#[derive(Debug)]
 pub struct EmptySerializerRegistry;
 
 impl SerializerRegistry for EmptySerializerRegistry {
