@@ -730,7 +730,6 @@ async fn roundtrip_logical_plan_distinct_on() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    println!("plan {:?}", plan);
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
