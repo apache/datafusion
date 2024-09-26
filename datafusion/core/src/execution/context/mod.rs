@@ -1563,7 +1563,7 @@ pub trait QueryPlanner: Debug {
 /// and interact with [SessionState] to registers new udf, udaf or udwf.
 
 #[async_trait]
-pub trait FunctionFactory: Sync + Send {
+pub trait FunctionFactory: Debug + Sync + Send {
     /// Handles creation of user defined function specified in [CreateFunction] statement
     async fn create(
         &self,
