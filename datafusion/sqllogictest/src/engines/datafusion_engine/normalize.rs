@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::engines::output::DFColumnType;
+use arrow::array::Array;
 use arrow::datatypes::Fields;
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
@@ -22,8 +24,6 @@ use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::DataFusionError;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-
-use crate::engines::output::DFColumnType;
 
 use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
@@ -275,6 +275,17 @@ pub(crate) fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
             | DataType::Time32(_)
             | DataType::Time64(_) => DFColumnType::DateTime,
             DataType::Timestamp(_, _) => DFColumnType::Timestamp,
+            DataType::Dictionary(key_type, value_type) => {
+                if key_type.is_integer() {
+                    // mapping dictionary string types to Text
+                    match value_type.as_ref() {
+                        DataType::Utf8 | DataType::LargeUtf8 => DFColumnType::Text,
+                        _ => DFColumnType::Another,
+                    }
+                } else {
+                    DFColumnType::Another
+                }
+            }
             _ => DFColumnType::Another,
         })
         .collect()

@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::borrow::Cow;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::session::Session;
@@ -31,7 +32,7 @@ use datafusion_physical_plan::ExecutionPlan;
 
 /// Source table
 #[async_trait]
-pub trait TableProvider: Sync + Send {
+pub trait TableProvider: Debug + Sync + Send {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -193,6 +194,7 @@ pub trait TableProvider: Sync + Send {
     /// # use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
     /// # use datafusion_physical_plan::ExecutionPlan;
     /// // Define a struct that implements the TableProvider trait
+    /// #[derive(Debug)]
     /// struct TestDataSource {}
     ///
     /// #[async_trait]
@@ -212,7 +214,7 @@ pub trait TableProvider: Sync + Send {
     ///             // This example only supports a between expr with a single column named "c1".
     ///             Expr::Between(between_expr) => {
     ///                 between_expr.expr
-    ///                 .try_into_col()
+    ///                 .try_as_col()
     ///                 .map(|column| {
     ///                     if column.name == "c1" {
     ///                         TableProviderFilterPushDown::Exact
@@ -283,7 +285,7 @@ pub trait TableProvider: Sync + Send {
 /// For example, this can be used to create a table "on the fly"
 /// from a directory of files only when that name is referenced.
 #[async_trait]
-pub trait TableProviderFactory: Sync + Send {
+pub trait TableProviderFactory: Debug + Sync + Send {
     /// Create a TableProvider with the given url
     async fn create(
         &self,

@@ -207,6 +207,7 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
 
 // registers a LOCAL TEMPORARY table.
 pub async fn register_temp_table(ctx: &SessionContext) {
+    #[derive(Debug)]
     struct TestTable(TableType);
 
     #[async_trait]
