@@ -31,7 +31,6 @@ pub mod nvl;
 pub mod nvl2;
 pub mod planner;
 pub mod r#struct;
-pub mod struct_extract;
 pub mod version;
 
 // create UDFs
@@ -45,11 +44,7 @@ make_udf_function!(named_struct::NamedStructFunc, NAMED_STRUCT, named_struct);
 make_udf_function!(getfield::GetFieldFunc, GET_FIELD, get_field);
 make_udf_function!(coalesce::CoalesceFunc, COALESCE, coalesce);
 make_udf_function!(version::VersionFunc, VERSION, version);
-make_udf_function!(
-    struct_extract::StructExtractFunc,
-    STRUCTEXTRACT,
-    struct_extract
-);
+
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
 
@@ -85,10 +80,6 @@ pub mod expr_fn {
         coalesce,
         "Returns `coalesce(args...)`, which evaluates to the value of the first expr which is not NULL",
         args,
-    ),(
-        struct_extract,
-        "Return the member of a struct based on index or name",
-        arg1 arg2
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
@@ -116,6 +107,5 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         get_field(),
         coalesce(),
         version(),
-        struct_extract(),
     ]
 }
