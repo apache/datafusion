@@ -34,6 +34,7 @@ use crate::{
     make_array::make_array,
 };
 
+#[derive(Debug)]
 pub struct NestedFunctionPlanner;
 
 impl ExprPlanner for NestedFunctionPlanner {
@@ -130,6 +131,7 @@ impl ExprPlanner for NestedFunctionPlanner {
     }
 }
 
+#[derive(Debug)]
 pub struct FieldAccessPlanner;
 
 impl ExprPlanner for FieldAccessPlanner {
