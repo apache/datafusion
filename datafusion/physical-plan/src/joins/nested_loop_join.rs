@@ -959,6 +959,7 @@ mod tests {
     use arrow_array::Int32Array;
     use arrow_schema::SortOptions;
     use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
+    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
@@ -1567,5 +1568,60 @@ mod tests {
     /// Returns the column names on the schema
     fn columns(schema: &Schema) -> Vec<String> {
         schema.fields().iter().map(|f| f.name().clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn test_batch_size() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
+            ("b1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
+            ("c1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
+            None,
+            Vec::new(),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 11, 12, 13, 14]),
+            ("b2", &vec![20, 21, 22, 23, 24]),
+            ("c2", &vec![30, 31, 32, 33, 34]),
+            None,
+            Vec::new(),
+        );
+        let filter = prepare_join_filter();
+
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+        ];
+
+        for join_type in join_types {
+            let config = SessionConfig::new().with_batch_size(3);
+            let task_ctx = TaskContext::default().with_session_config(config);
+            let task_ctx = Arc::new(task_ctx);
+
+            let (_, batches) = multi_partitioned_join_collect(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                &join_type,
+                Some(filter.clone()),
+                task_ctx,
+            )
+            .await
+            .unwrap();
+
+            let max_rows = batches
+                .iter()
+                .map(|batch| batch.num_rows())
+                .max()
+                .unwrap_or(0);
+            assert!(max_rows <= 3);
+        }
+
+        Ok(())
     }
 }
