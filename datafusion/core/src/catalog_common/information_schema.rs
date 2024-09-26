@@ -57,6 +57,7 @@ pub const INFORMATION_SCHEMA_TABLES: &[&str] =
 /// demand. This means that if more tables are added to the underlying
 /// providers, they will appear the next time the `information_schema`
 /// table is queried.
+#[derive(Debug)]
 pub struct InformationSchemaProvider {
     config: InformationSchemaConfig,
 }
