@@ -376,6 +376,7 @@ impl<'a> DFParser<'a> {
         }
     }
 
+    /// parse an expression with alias
     pub fn parse_expr(&mut self) -> Result<ExprWithAlias, ParserError> {
         if let Token::Word(w) = self.parser.peek_token().token {
             match w.keyword {

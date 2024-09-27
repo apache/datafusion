@@ -69,7 +69,7 @@ use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, Sq
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
-use sqlparser::ast::ExprWithAlias as SQLExprWithAlias;
+use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
 use sqlparser::dialect::dialect_from_str;
 use std::any::Any;
 use std::collections::hash_map::Entry;
@@ -483,8 +483,22 @@ impl SessionState {
 
     /// parse a sql string into a sqlparser-rs AST [`SQLExpr`].
     ///
+    /// discard the alias information.
+    ///
     /// See [`Self::create_logical_expr`] for parsing sql to [`Expr`].
     pub fn sql_to_expr(
+        &self,
+        sql: &str,
+        dialect: &str,
+    ) -> datafusion_common::Result<SQLExpr> {
+        self.sql_to_expr_with_alias(sql, dialect)
+            .map(|expr| expr.expr)
+    }
+
+    /// parse a sql string into a sqlparser-rs AST [`SQLExprWithAlias`].
+    ///
+    /// keep the alias information if there is any.
+    pub fn sql_to_expr_with_alias(
         &self,
         sql: &str,
         dialect: &str,
@@ -591,7 +605,7 @@ impl SessionState {
     ) -> datafusion_common::Result<Expr> {
         let dialect = self.config.options().sql_parser.dialect.as_str();
 
-        let sql_expr = self.sql_to_expr(sql, dialect)?;
+        let sql_expr = self.sql_to_expr_with_alias(sql, dialect)?;
 
         let provider = SessionContextProvider {
             state: self,
@@ -1872,7 +1886,7 @@ mod tests {
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
             let df_schema = DFSchema::try_from(schema)?;
             let dialect = state.config.options().sql_parser.dialect.as_str();
-            let sql_expr = state.sql_to_expr(sql, dialect)?.expr;
+            let sql_expr = state.sql_to_expr(sql, dialect)?;
 
             let query = SqlToRel::new_with_options(&provider, state.get_parser_options());
             query.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())

@@ -3998,13 +3998,16 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
-    async fn dev_test() -> Result<()> {
+    async fn parse_sql_expr_handle_alias() -> Result<()> {
         let ctx = SessionContext::new();
         let df = ctx
             .read_csv("tests/data/example.csv", CsvReadOptions::new())
             .await?;
         let sql = df.parse_sql_expr("SUM(a) as a_sum")?;
-        println!("{:?}", sql.to_string());
+        assert_eq!(
+            "sum(a) as a_sum".to_string(),
+            sql.to_string().to_lowercase()
+        );
         Ok(())
     }
 }
