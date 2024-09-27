@@ -69,7 +69,7 @@ use datafusion_expr::{
 };
 use half::f16;
 use std::ops::Deref;
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator_view::GroupsAccumulatorMin;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator_view::StringGroupsAccumulatorMin;
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
@@ -973,7 +973,7 @@ impl AggregateUDFImpl for Min {
                 | Time32(_)
                 | Time64(_)
                 | Timestamp(_, _)
-                | Utf8View
+                | BinaryView
         )
     }
 
@@ -1034,8 +1034,8 @@ impl AggregateUDFImpl for Min {
             Decimal256(_, _) => {
                 instantiate_min_accumulator!(data_type, i256, Decimal256Type)
             }
-            Utf8View => {
-                Ok(Box::new(GroupsAccumulatorMin::new()))
+            BinaryView => {
+                Ok(Box::new(StringGroupsAccumulatorMin::new()))
             }
 
             // It would be nice to have a fast implementation for Strings as well
