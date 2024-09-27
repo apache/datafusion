@@ -385,6 +385,11 @@ impl BatchPartitioner {
 ///         `───────'                   `───────'
 ///```
 ///
+/// # Error Handling
+///
+/// If any of the input partitions return an error, the error is propagated to
+/// all output partitions and inputs are not polled again.
+///
 /// # Output Ordering
 ///
 /// If more than one stream is being repartitioned, the output will be some
