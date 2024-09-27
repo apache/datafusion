@@ -24,7 +24,7 @@ use datafusion_expr::{lit, Expr};
 
 use super::named_struct;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CoreFunctionPlanner {}
 
 impl ExprPlanner for CoreFunctionPlanner {

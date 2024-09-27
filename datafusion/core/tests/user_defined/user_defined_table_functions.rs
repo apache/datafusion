@@ -192,6 +192,7 @@ impl SimpleCsvTable {
     }
 }
 
+#[derive(Debug)]
 struct SimpleCsvTableFunc {}
 
 impl TableFunctionImpl for SimpleCsvTableFunc {
