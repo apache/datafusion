@@ -38,12 +38,11 @@ use crate::sorts::streaming_merge;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::ArrayRef;
-use arrow::datatypes::{SchemaRef, UInt64Type};
+use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{PrimitiveArray, RecordBatchOptions};
-use datafusion_common::utils::transpose;
-use datafusion_common::{arrow_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::utils::{get_arrayref_at_indices, transpose};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
@@ -280,7 +279,7 @@ impl BatchPartitioner {
                         .collect();
 
                     for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize].push(index as u64);
+                        indices[(*hash % *partitions as u64) as usize].push(index as u32);
                     }
 
                     // Finished building index-arrays for output partitions
@@ -292,7 +291,7 @@ impl BatchPartitioner {
                         .into_iter()
                         .enumerate()
                         .filter_map(|(partition, indices)| {
-                            let indices: PrimitiveArray<UInt64Type> = indices.into();
+                            let indices: PrimitiveArray<UInt32Type> = indices.into();
                             (!indices.is_empty()).then_some((partition, indices))
                         })
                         .map(move |(partition, indices)| {
@@ -300,14 +299,8 @@ impl BatchPartitioner {
                             let _timer = partitioner_timer.timer();
 
                             // Produce batches based on indices
-                            let columns = batch
-                                .columns()
-                                .iter()
-                                .map(|c| {
-                                    arrow::compute::take(c.as_ref(), &indices, None)
-                                        .map_err(|e| arrow_datafusion_err!(e))
-                                })
-                                .collect::<Result<Vec<ArrayRef>>>()?;
+                            let columns =
+                                get_arrayref_at_indices(batch.columns(), &indices)?;
 
                             let mut options = RecordBatchOptions::new();
                             options = options.with_row_count(Some(indices.len()));
@@ -1026,7 +1019,7 @@ mod tests {
         {collect, expressions::col, memory::MemoryExec},
     };
 
-    use arrow::array::{StringArray, UInt32Array};
+    use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::{assert_batches_sorted_eq, exec_err};
