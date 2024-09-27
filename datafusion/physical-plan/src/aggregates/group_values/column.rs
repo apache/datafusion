@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::group_value_row::{
-    ArrayRowEq, ByteGroupValueBuilder, PrimitiveGroupValueBuilder,
+use crate::aggregates::group_values::group_column::{
+    ByteGroupValueBuilder, GroupColumn, PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
@@ -27,9 +27,9 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ArrayRef};
-use arrow_schema::{DataType, SchemaRef};
+use arrow_schema::{DataType, Schema, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -57,7 +57,7 @@ pub struct GroupValuesColumn {
     /// The actual group by values, stored column-wise. Compare from
     /// the left to right, each column is stored as `ArrayRowEq`.
     /// This is shown faster than the row format
-    group_values: Vec<Box<dyn ArrayRowEq>>,
+    group_values: Vec<Box<dyn GroupColumn>>,
 
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
@@ -67,6 +67,7 @@ pub struct GroupValuesColumn {
 }
 
 impl GroupValuesColumn {
+    /// Create a new instance of GroupValuesColumn if supported for the specified schema
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         let map = RawTable::with_capacity(0);
         Ok(Self {
@@ -77,6 +78,41 @@ impl GroupValuesColumn {
             hashes_buffer: Default::default(),
             random_state: Default::default(),
         })
+    }
+
+    /// Returns true if [`GroupValuesColumn`] supported for the specified schema
+    pub fn supported_schema(schema: &Schema) -> bool {
+        schema
+            .fields()
+            .iter()
+            .map(|f| f.data_type())
+            .all(Self::supported_type)
+    }
+
+    /// Returns true if the specified data type is supported by [`GroupValuesColumn`]
+    ///
+    /// In order to be supported, there must be a specialized implementation of
+    /// [`GroupColumn`] for the data type, instantiated in [`Self::intern`]
+    fn supported_type(data_type: &DataType) -> bool {
+        matches!(
+            *data_type,
+            DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::Date32
+                | DataType::Date64
+        )
     }
 }
 
@@ -154,7 +190,9 @@ impl GroupValues for GroupValuesColumn {
                         let b = ByteGroupValueBuilder::<i64>::new(OutputType::Binary);
                         v.push(Box::new(b) as _)
                     }
-                    dt => todo!("{dt} not impl"),
+                    dt => {
+                        return not_impl_err!("{dt} not supported in GroupValuesColumn")
+                    }
                 }
             }
             self.group_values = v;
@@ -180,7 +218,7 @@ impl GroupValues for GroupValuesColumn {
                 }
 
                 fn check_row_equal(
-                    array_row: &dyn ArrayRowEq,
+                    array_row: &dyn GroupColumn,
                     lhs_row: usize,
                     array: &ArrayRef,
                     rhs_row: usize,

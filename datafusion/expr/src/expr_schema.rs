@@ -151,21 +151,22 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
 
                 // verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                data_types_with_scalar_udf(&arg_data_types, func).map_err(|err| {
-                    plan_datafusion_err!(
-                        "{} {}",
-                        err,
-                        utils::generate_signature_error_msg(
-                            func.name(),
-                            func.signature().clone(),
-                            &arg_data_types,
+                let new_data_types = data_types_with_scalar_udf(&arg_data_types, func)
+                    .map_err(|err| {
+                        plan_datafusion_err!(
+                            "{} {}",
+                            err,
+                            utils::generate_signature_error_msg(
+                                func.name(),
+                                func.signature().clone(),
+                                &arg_data_types,
+                            )
                         )
-                    )
-                })?;
+                    })?;
 
                 // perform additional function arguments validation (due to limited
                 // expressiveness of `TypeSignature`), then infer return type
-                Ok(func.return_type_from_exprs(args, schema, &arg_data_types)?)
+                Ok(func.return_type_from_exprs(args, schema, &new_data_types)?)
             }
             Expr::WindowFunction(window_function) => self
                 .data_type_and_nullable_with_window_function(schema, window_function)

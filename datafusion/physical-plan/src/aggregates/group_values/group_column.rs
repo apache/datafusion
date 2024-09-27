@@ -43,7 +43,7 @@ use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAP
 /// (similar to various builders in Arrow-rs) that allow for quick comparison to
 /// incoming rows.
 ///
-pub trait ArrayRowEq: Send + Sync {
+pub trait GroupColumn: Send + Sync {
     /// Returns equal if the row stored in this builder at `lhs_row` is equal to
     /// the row in `array` at `rhs_row`
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
@@ -51,7 +51,7 @@ pub trait ArrayRowEq: Send + Sync {
     fn append_val(&mut self, array: &ArrayRef, row: usize);
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
-    /// Returns the number of bytes used by this [`ArrayRowEq`]
+    /// Returns the number of bytes used by this [`GroupColumn`]
     fn size(&self) -> usize;
     /// Builds a new array from all of the stored rows
     fn build(self: Box<Self>) -> ArrayRef;
@@ -89,7 +89,7 @@ where
     }
 }
 
-impl<T: ArrowPrimitiveType> ArrayRowEq for PrimitiveGroupValueBuilder<T> {
+impl<T: ArrowPrimitiveType> GroupColumn for PrimitiveGroupValueBuilder<T> {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         // fast path when input has no nulls
         if !self.nullable {
@@ -276,7 +276,7 @@ where
     }
 }
 
-impl<O> ArrayRowEq for ByteGroupValueBuilder<O>
+impl<O> GroupColumn for ByteGroupValueBuilder<O>
 where
     O: OffsetSizeTrait,
 {
@@ -458,7 +458,7 @@ mod tests {
     use arrow_array::{ArrayRef, StringArray};
     use datafusion_physical_expr::binary_map::OutputType;
 
-    use super::{ArrayRowEq, ByteGroupValueBuilder};
+    use super::{ByteGroupValueBuilder, GroupColumn};
 
     #[test]
     fn test_take_n() {

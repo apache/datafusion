@@ -25,9 +25,9 @@ pub(crate) mod primitive;
 use datafusion_expr::EmitTo;
 use primitive::GroupValuesPrimitive;
 
-mod column_wise;
+mod column;
 mod row;
-use column_wise::GroupValuesColumn;
+use column::GroupValuesColumn;
 use row::GroupValuesRows;
 
 mod bytes;
@@ -35,7 +35,7 @@ mod bytes_view;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
-mod group_value_row;
+mod group_column;
 
 /// An interning store for group keys
 pub trait GroupValues: Send {
@@ -96,36 +96,9 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
         }
     }
 
-    if schema
-        .fields()
-        .iter()
-        .map(|f| f.data_type())
-        .all(has_row_like_feature)
-    {
+    if GroupValuesColumn::supported_schema(schema.as_ref()) {
         Ok(Box::new(GroupValuesColumn::try_new(schema)?))
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
     }
-}
-
-fn has_row_like_feature(data_type: &DataType) -> bool {
-    matches!(
-        *data_type,
-        DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Binary
-            | DataType::LargeBinary
-            | DataType::Date32
-            | DataType::Date64
-    )
 }

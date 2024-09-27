@@ -965,11 +965,19 @@ impl Unparser<'_> {
             }
             ScalarValue::Float16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Float32(Some(f)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
+                let f_val = match f.fract() {
+                    0.0 => format!("{:.1}", f),
+                    _ => format!("{}", f),
+                };
+                Ok(ast::Expr::Value(ast::Value::Number(f_val, false)))
             }
             ScalarValue::Float32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Float64(Some(f)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
+                let f_val = match f.fract() {
+                    0.0 => format!("{:.1}", f),
+                    _ => format!("{}", f),
+                };
+                Ok(ast::Expr::Value(ast::Value::Number(f_val, false)))
             }
             ScalarValue::Float64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Decimal128(Some(value), precision, scale) => {
@@ -2189,6 +2197,28 @@ mod tests {
 
             let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
 
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn test_float_scalar_to_expr() {
+        let tests = [
+            (Expr::Literal(ScalarValue::Float64(Some(3f64))), "3.0"),
+            (Expr::Literal(ScalarValue::Float64(Some(3.1f64))), "3.1"),
+            (Expr::Literal(ScalarValue::Float32(Some(-2f32))), "-2.0"),
+            (
+                Expr::Literal(ScalarValue::Float32(Some(-2.989f32))),
+                "-2.989",
+            ),
+        ];
+        for (value, expected) in tests {
+            let dialect = CustomDialectBuilder::new().build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
             let actual = format!("{ast}");
 
             assert_eq!(actual, expected);

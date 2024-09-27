@@ -17,7 +17,7 @@
 
 //! Sort expressions
 
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync::Arc;
@@ -252,11 +252,35 @@ impl PartialEq for PhysicalSortRequirement {
     }
 }
 
-impl std::fmt::Display for PhysicalSortRequirement {
+impl Display for PhysicalSortRequirement {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let opts_string = self.options.as_ref().map_or("NA", to_str);
         write!(f, "{} {}", self.expr, opts_string)
     }
+}
+
+/// Writes a list of [`PhysicalSortRequirement`]s to a `std::fmt::Formatter`.
+///
+/// Example output: `[a + 1, b]`
+pub fn format_physical_sort_requirement_list(
+    exprs: &[PhysicalSortRequirement],
+) -> impl Display + '_ {
+    struct DisplayWrapper<'a>(&'a [PhysicalSortRequirement]);
+    impl<'a> Display for DisplayWrapper<'a> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            let mut iter = self.0.iter();
+            write!(f, "[")?;
+            if let Some(expr) = iter.next() {
+                write!(f, "{}", expr)?;
+            }
+            for expr in iter {
+                write!(f, ", {}", expr)?;
+            }
+            write!(f, "]")?;
+            Ok(())
+        }
+    }
+    DisplayWrapper(exprs)
 }
 
 impl PhysicalSortRequirement {
