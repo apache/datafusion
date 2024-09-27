@@ -825,12 +825,13 @@ impl NestedLoopJoinStream {
 
             debug_assert!(self.outer_record_batch.is_some());
             let right_batch = self.outer_record_batch.as_ref().unwrap();
-            let num_rows = match (self.join_type, left_data.batch().num_rows()) {
-                // An inner join will only produce 1 output row per input row.
-                (JoinType::Inner, _) | (_, 0) => self.output_buffer.needed_rows(),
-                // Outer joins can produce as many rows as there are in the build input for
-                // each row in the batch.
-                (_, rows) => std::cmp::max(1, self.output_buffer.needed_rows() / rows),
+            let num_rows = if left_data.batch().num_rows() == 0 {
+                self.output_buffer.needed_rows()
+            } else {
+                std::cmp::max(
+                    1,
+                    self.output_buffer.needed_rows() / left_data.batch().num_rows(),
+                )
             };
             let num_rows = std::cmp::min(
                 num_rows,
@@ -1638,12 +1639,22 @@ mod tests {
                 vec![Arc::new(Int32Array::from(vec![5, 6, 7, 8, 9]))],
             )?,
         ];
-        let left = MemoryExec::try_new(&[batches.clone()], Arc::clone(&schema), None)?;
-        let right = MemoryExec::try_new(&[batches.clone()], Arc::clone(&schema), None)?;
+        let left = Arc::new(MemoryExec::try_new(
+            &[batches.clone()],
+            Arc::clone(&schema),
+            None,
+        )?) as Arc<dyn ExecutionPlan>;
+        let right = Arc::new(MemoryExec::try_new(
+            &[batches.clone()],
+            Arc::clone(&schema),
+            None,
+        )?) as Arc<dyn ExecutionPlan>;
 
-        let (schema, column_indices) =
-            build_join_schema(schema.as_ref(), schema.as_ref(), &JoinType::Full);
-
+        let column_indices = JoinFilter::build_column_indices(vec![0], vec![0]);
+        let intermediate_schema = Schema::new(vec![
+            Field::new("v", DataType::Int32, false),
+            Field::new("v", DataType::Int32, false),
+        ]);
         let filter = JoinFilter::new(
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("v", 0)),
@@ -1651,31 +1662,39 @@ mod tests {
                 Arc::new(Column::new("v", 1)),
             )),
             column_indices,
-            schema,
+            intermediate_schema,
         );
 
         let config = SessionConfig::new().with_batch_size(5);
         let task_ctx = Arc::new(TaskContext::default().with_session_config(config));
 
-        let (_, batches) = multi_partitioned_join_collect(
-            Arc::new(left),
-            Arc::new(right),
-            &JoinType::Full,
-            Some(filter),
-            task_ctx,
-        )
-        .await
-        .unwrap();
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+        ];
 
-        let rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
-        assert_eq!(rows, 90);
-        let max_rows = batches
-            .iter()
-            .map(|batch| batch.num_rows())
-            .max()
-            .unwrap_or(0);
-        assert!(max_rows <= 5);
+        for join_type in join_types {
+            let (_, batches) = multi_partitioned_join_collect(
+                Arc::clone(&left),
+                Arc::clone(&right),
+                &join_type,
+                Some(filter.clone()),
+                Arc::clone(&task_ctx),
+            )
+            .await
+            .unwrap();
 
+            let rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+            assert_eq!(rows, 90);
+            let max_rows = batches
+                .iter()
+                .map(|batch| batch.num_rows())
+                .max()
+                .unwrap_or(0);
+            assert!(max_rows <= 5);
+        }
         Ok(())
     }
 }
