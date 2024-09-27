@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 /// An optimization rule that eliminates union with one element.
 pub struct EliminateOneUnion;
 
@@ -94,10 +94,7 @@ mod tests {
     fn eliminate_nothing() -> Result<()> {
         let plan_builder = table_scan(Some("table"), &schema(), None)?;
 
-        let plan = plan_builder
-            .clone()
-            .union(plan_builder.clone().build()?)?
-            .build()?;
+        let plan = plan_builder.clone().union(plan_builder.build()?)?.build()?;
 
         let expected = "\
         Union\

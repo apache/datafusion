@@ -46,7 +46,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
 /// available statistical information, if there is any.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct JoinSelection {}
 
 impl JoinSelection {
@@ -908,7 +908,7 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(join, &ConfigOptions::new())
             .unwrap();
 
         let swapping_projection = optimized_join
@@ -964,7 +964,7 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(join, &ConfigOptions::new())
             .unwrap();
 
         let swapped_join = optimized_join
@@ -1140,7 +1140,7 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(join, &ConfigOptions::new())
             .unwrap();
 
         let swapped_join = optimized_join
@@ -1180,7 +1180,7 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(join, &ConfigOptions::new())
             .unwrap();
 
         let swapping_projection = optimized_join
@@ -1356,7 +1356,7 @@ mod tests_statistical {
             Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
-            big.clone(),
+            big,
             small.clone(),
             join_on,
             true,
@@ -1380,8 +1380,8 @@ mod tests_statistical {
             Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
-            empty.clone(),
-            small.clone(),
+            empty,
+            small,
             join_on,
             true,
             PartitionMode::CollectLeft,
@@ -1424,7 +1424,7 @@ mod tests_statistical {
             Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
-            bigger.clone(),
+            bigger,
             big.clone(),
             join_on,
             true,
@@ -1472,7 +1472,7 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(join, &ConfigOptions::new())
             .unwrap();
 
         if !is_swapped {
@@ -1913,8 +1913,7 @@ mod hash_join_tests {
             false,
         )?);
 
-        let optimized_join_plan =
-            hash_join_swap_subrule(join.clone(), &ConfigOptions::new())?;
+        let optimized_join_plan = hash_join_swap_subrule(join, &ConfigOptions::new())?;
 
         // If swap did happen
         let projection_added = optimized_join_plan.as_any().is::<ProjectionExec>();

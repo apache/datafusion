@@ -2003,6 +2003,13 @@ fn create_external_table_parquet_no_schema() {
 }
 
 #[test]
+fn create_external_table_parquet_no_schema_sort_order() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet' WITH ORDER (id)";
+    let expected = "CreateExternalTable: Bare { table: \"t\" }";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn equijoin_explicit_syntax() {
     let sql = "SELECT id, order_id \
             FROM person \
@@ -4435,4 +4442,24 @@ fn assert_field_not_found(err: DataFusionError, name: &str) {
 fn init() {
     // Enable RUST_LOG logging configuration for tests
     let _ = env_logger::try_init();
+}
+
+#[test]
+fn test_no_functions_registered() {
+    let sql = "SELECT foo()";
+
+    let options = ParserOptions::default();
+    let dialect = &GenericDialect {};
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let planner = SqlToRel::new_with_options(&context, options);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect);
+    let mut ast = result.unwrap();
+
+    let err = planner.statement_to_plan(ast.pop_front().unwrap());
+
+    assert_contains!(
+        err.unwrap_err().to_string(),
+        "Internal error: No functions registered with this context."
+    );
 }

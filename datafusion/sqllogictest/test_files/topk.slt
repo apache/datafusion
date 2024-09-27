@@ -220,7 +220,7 @@ a 1 -5 12636 794623392 2909750622865366631 15 24022 2669374863 47766797847015095
 statement ok
 create table dict as select c1, c2, c3, c13, arrow_cast(c13, 'Dictionary(Int32, Utf8)') as c13_dict from aggregate_test_100;
 
-query TIIT?
+query TIITT
 select * from dict order by c13 desc limit 5;
 ----
 a 4 -38 ydkwycaISlYSlEq3TlkS2m15I2pcp8 ydkwycaISlYSlEq3TlkS2m15I2pcp8

@@ -22,9 +22,7 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::{
-    internal_err, qualified_name, tree_node::Transformed, DataFusionError, Result,
-};
+use datafusion_common::{internal_err, tree_node::Transformed, DataFusionError, Result};
 use datafusion_expr::builder::project;
 use datafusion_expr::{
     col,
@@ -51,7 +49,7 @@ use hashbrown::HashSet;
 ///    )
 ///    GROUP BY a
 ///  ```
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
 const SINGLE_DISTINCT_ALIAS: &str = "alias1";
@@ -135,7 +133,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 // alias all original group_by exprs
                 let (mut inner_group_exprs, out_group_expr_with_alias): (
                     Vec<Expr>,
-                    Vec<(Expr, Option<String>)>,
+                    Vec<(Expr, _)>,
                 ) = group_expr
                     .into_iter()
                     .enumerate()
@@ -166,10 +164,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             let (qualifier, field) = schema.qualified_field(i);
                             (
                                 group_expr.alias(alias_str.clone()),
-                                (
-                                    col(alias_str),
-                                    Some(qualified_name(qualifier, field.name())),
-                                ),
+                                (col(alias_str), Some((qualifier, field.name()))),
                             )
                         }
                     })
@@ -253,19 +248,17 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 // - aggr expr
                 let alias_expr: Vec<_> = out_group_expr_with_alias
                     .into_iter()
-                    .map(|(group_expr, original_field)| {
-                        if let Some(name) = original_field {
-                            group_expr.alias(name)
-                        } else {
-                            group_expr
+                    .map(|(group_expr, original_name)| match original_name {
+                        Some((qualifier, name)) => {
+                            group_expr.alias_qualified(qualifier.cloned(), name)
                         }
+                        None => group_expr,
                     })
                     .chain(outer_aggr_exprs.iter().cloned().enumerate().map(
                         |(idx, expr)| {
                             let idx = idx + group_size;
                             let (qualifier, field) = schema.qualified_field(idx);
-                            let name = qualified_name(qualifier, field.name());
-                            expr.alias(name)
+                            expr.alias_qualified(qualifier.cloned(), field.name())
                         },
                     ))
                     .collect();
@@ -624,14 +617,14 @@ mod tests {
             vec![col("a")],
             false,
             None,
-            Some(vec![col("a")]),
+            Some(vec![col("a").sort(true, false)]),
             None,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![expr, count_distinct(col("b"))])?
             .build()?;
         // Do nothing
-        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a) ORDER BY [test.a], count(DISTINCT test.b)]] [c:UInt32, sum(test.a) ORDER BY [test.a]:UInt64;N, count(DISTINCT test.b):Int64]\
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[sum(test.a) ORDER BY [test.a ASC NULLS LAST], count(DISTINCT test.b)]] [c:UInt32, sum(test.a) ORDER BY [test.a ASC NULLS LAST]:UInt64;N, count(DISTINCT test.b):Int64]\
                             \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(plan, expected)

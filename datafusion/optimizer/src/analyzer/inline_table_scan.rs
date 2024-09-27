@@ -28,7 +28,7 @@ use datafusion_expr::{logical_plan::LogicalPlan, Expr, LogicalPlanBuilder};
 
 /// Analyzed rule that inlines TableScan that provide a [`LogicalPlan`]
 /// (DataFrame / ViewTable)
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct InlineTableScan;
 
 impl InlineTableScan {
@@ -109,7 +109,7 @@ mod tests {
     use crate::test::assert_analyzed_plan_eq;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, TableSource};
+    use datafusion_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder, TableSource};
 
     pub struct RawTableSource {}
 
@@ -125,12 +125,14 @@ mod tests {
             ]))
         }
 
-        fn supports_filter_pushdown(
+        fn supports_filters_pushdown(
             &self,
-            _filter: &datafusion_expr::Expr,
-        ) -> datafusion_common::Result<datafusion_expr::TableProviderFilterPushDown>
+            filters: &[&Expr],
+        ) -> datafusion_common::Result<Vec<datafusion_expr::TableProviderFilterPushDown>>
         {
-            Ok(datafusion_expr::TableProviderFilterPushDown::Inexact)
+            Ok((0..filters.len())
+                .map(|_| datafusion_expr::TableProviderFilterPushDown::Inexact)
+                .collect())
         }
     }
 
@@ -154,12 +156,14 @@ mod tests {
             self
         }
 
-        fn supports_filter_pushdown(
+        fn supports_filters_pushdown(
             &self,
-            _filter: &datafusion_expr::Expr,
-        ) -> datafusion_common::Result<datafusion_expr::TableProviderFilterPushDown>
+            filters: &[&Expr],
+        ) -> datafusion_common::Result<Vec<datafusion_expr::TableProviderFilterPushDown>>
         {
-            Ok(datafusion_expr::TableProviderFilterPushDown::Exact)
+            Ok((0..filters.len())
+                .map(|_| datafusion_expr::TableProviderFilterPushDown::Exact)
+                .collect())
         }
 
         fn schema(&self) -> arrow::datatypes::SchemaRef {

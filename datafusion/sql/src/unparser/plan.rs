@@ -15,15 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::unparser::utils::unproject_agg_exprs;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DataFusionError, Result,
+    internal_err, not_impl_err,
+    tree_node::{TransformedResult, TreeNode},
+    Column, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{
-    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan, Projection,
+    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Projection, SortExpr,
 };
 use sqlparser::ast::{self, Ident, SetExpr};
-
-use crate::unparser::utils::unproject_agg_exprs;
+use std::sync::Arc;
 
 use super::{
     ast::{
@@ -31,8 +34,9 @@ use super::{
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
     rewrite::{
-        normalize_union_schema, rewrite_plan_for_sort_on_non_projected_fields,
-        subquery_alias_inner_query_and_columns,
+        inject_column_aliases_into_subquery, normalize_union_schema,
+        rewrite_plan_for_sort_on_non_projected_fields,
+        subquery_alias_inner_query_and_columns, TableAliasRewriter,
     },
     utils::{find_agg_node_within_select, unproject_window_exprs, AggVariant},
     Unparser,
@@ -238,6 +242,19 @@ impl Unparser<'_> {
     ) -> Result<()> {
         match plan {
             LogicalPlan::TableScan(scan) => {
+                if scan.projection.is_some()
+                    || !scan.filters.is_empty()
+                    || scan.fetch.is_some()
+                {
+                    let unparsed_table_scan =
+                        Self::unparse_table_scan_pushdown(plan, None)?;
+                    return self.select_to_sql_recursively(
+                        &unparsed_table_scan,
+                        query,
+                        select,
+                        relation,
+                    );
+                }
                 let mut builder = TableRelationBuilder::default();
                 let mut table_parts = vec![];
                 if let Some(catalog_name) = scan.table_name.catalog() {
@@ -305,6 +322,21 @@ impl Unparser<'_> {
                     ))));
                 }
 
+                if limit.skip > 0 {
+                    let Some(query) = query.as_mut() else {
+                        return internal_err!(
+                            "Offset operator only valid in a statement context."
+                        );
+                    };
+                    query.offset(Some(ast::Offset {
+                        rows: ast::OffsetRows::None,
+                        value: ast::Expr::Value(ast::Value::Number(
+                            limit.skip.to_string(),
+                            false,
+                        )),
+                    }));
+                }
+
                 self.select_to_sql_recursively(
                     limit.input.as_ref(),
                     query,
@@ -318,7 +350,7 @@ impl Unparser<'_> {
                     return self.derive(plan, relation);
                 }
                 if let Some(query_ref) = query {
-                    query_ref.order_by(self.sort_to_sql(sort.expr.clone())?);
+                    query_ref.order_by(self.sorts_to_sql(sort.expr.clone())?);
                 } else {
                     return internal_err!(
                         "Sort operator only valid in a statement context."
@@ -361,7 +393,7 @@ impl Unparser<'_> {
                             .collect::<Result<Vec<_>>>()?;
                         if let Some(sort_expr) = &on.sort_expr {
                             if let Some(query_ref) = query {
-                                query_ref.order_by(self.sort_to_sql(sort_expr.clone())?);
+                                query_ref.order_by(self.sorts_to_sql(sort_expr.clone())?);
                             } else {
                                 return internal_err!(
                                     "Sort operator only valid in a statement context."
@@ -451,10 +483,38 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::SubqueryAlias(plan_alias) => {
-                // Handle bottom-up to allocate relation
-                let (plan, columns) = subquery_alias_inner_query_and_columns(plan_alias);
+                let (plan, mut columns) =
+                    subquery_alias_inner_query_and_columns(plan_alias);
+                let plan = Self::unparse_table_scan_pushdown(
+                    plan,
+                    Some(plan_alias.alias.clone()),
+                )?;
+                if !columns.is_empty()
+                    && !self.dialect.supports_column_alias_in_table_alias()
+                {
+                    // Instead of specifying column aliases as part of the outer table, inject them directly into the inner projection
+                    let rewritten_plan =
+                        match inject_column_aliases_into_subquery(plan, columns) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                return internal_err!(
+                                    "Failed to transform SubqueryAlias plan: {e}"
+                                )
+                            }
+                        };
 
-                self.select_to_sql_recursively(plan, query, select, relation)?;
+                    columns = vec![];
+
+                    self.select_to_sql_recursively(
+                        &rewritten_plan,
+                        query,
+                        select,
+                        relation,
+                    )?;
+                } else {
+                    self.select_to_sql_recursively(&plan, query, select, relation)?;
+                }
+
                 relation.alias(Some(
                     self.new_table_alias(plan_alias.alias.table().to_string(), columns),
                 ));
@@ -472,7 +532,7 @@ impl Unparser<'_> {
                 let input_exprs: Vec<SetExpr> = union
                     .inputs
                     .iter()
-                    .map(|input| self.select_to_sql_expr(input, &mut None))
+                    .map(|input| self.select_to_sql_expr(input, query))
                     .collect::<Result<Vec<_>>>()?;
 
                 let union_expr = SetExpr::SetOperation {
@@ -482,10 +542,12 @@ impl Unparser<'_> {
                     right: Box::new(input_exprs[1].clone()),
                 };
 
-                query
-                    .as_mut()
-                    .expect("to have a query builder")
-                    .body(Box::new(union_expr));
+                let Some(query) = query.as_mut() else {
+                    return internal_err!(
+                        "UNION ALL operator only valid in a statement context"
+                    );
+                };
+                query.body(Box::new(union_expr));
 
                 Ok(())
             }
@@ -507,6 +569,87 @@ impl Unparser<'_> {
         }
     }
 
+    fn unparse_table_scan_pushdown(
+        plan: &LogicalPlan,
+        alias: Option<TableReference>,
+    ) -> Result<LogicalPlan> {
+        match plan {
+            LogicalPlan::TableScan(table_scan) => {
+                let mut filter_alias_rewriter =
+                    alias.as_ref().map(|alias_name| TableAliasRewriter {
+                        table_schema: table_scan.source.schema(),
+                        alias_name: alias_name.clone(),
+                    });
+
+                let mut builder = LogicalPlanBuilder::scan(
+                    table_scan.table_name.clone(),
+                    Arc::clone(&table_scan.source),
+                    None,
+                )?;
+                if let Some(project_vec) = &table_scan.projection {
+                    let project_columns = project_vec
+                        .iter()
+                        .cloned()
+                        .map(|i| {
+                            let schema = table_scan.source.schema();
+                            let field = schema.field(i);
+                            if alias.is_some() {
+                                Column::new(alias.clone(), field.name().clone())
+                            } else {
+                                Column::new(
+                                    Some(table_scan.table_name.clone()),
+                                    field.name().clone(),
+                                )
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    if let Some(alias) = alias {
+                        builder = builder.alias(alias)?;
+                    }
+                    builder = builder.project(project_columns)?;
+                }
+
+                let filter_expr: Result<Option<Expr>> = table_scan
+                    .filters
+                    .iter()
+                    .cloned()
+                    .map(|expr| {
+                        if let Some(ref mut rewriter) = filter_alias_rewriter {
+                            expr.rewrite(rewriter).data()
+                        } else {
+                            Ok(expr)
+                        }
+                    })
+                    .reduce(|acc, expr_result| {
+                        acc.and_then(|acc_expr| {
+                            expr_result.map(|expr| acc_expr.and(expr))
+                        })
+                    })
+                    .transpose();
+
+                if let Some(filter) = filter_expr? {
+                    builder = builder.filter(filter)?;
+                }
+
+                if let Some(fetch) = table_scan.fetch {
+                    builder = builder.limit(0, Some(fetch))?;
+                }
+
+                builder.build()
+            }
+            LogicalPlan::SubqueryAlias(subquery_alias) => {
+                let new_plan = Self::unparse_table_scan_pushdown(
+                    &subquery_alias.input,
+                    Some(subquery_alias.alias.clone()),
+                )?;
+                LogicalPlanBuilder::from(new_plan)
+                    .alias(subquery_alias.alias.clone())?
+                    .build()
+            }
+            _ => Ok(plan.clone()),
+        }
+    }
+
     fn select_item_to_sql(&self, expr: &Expr) -> Result<ast::SelectItem> {
         match expr {
             Expr::Alias(Alias { expr, name, .. }) => {
@@ -525,28 +668,10 @@ impl Unparser<'_> {
         }
     }
 
-    fn sort_to_sql(&self, sort_exprs: Vec<Expr>) -> Result<Vec<ast::OrderByExpr>> {
+    fn sorts_to_sql(&self, sort_exprs: Vec<SortExpr>) -> Result<Vec<ast::OrderByExpr>> {
         sort_exprs
             .iter()
-            .map(|expr: &Expr| match expr {
-                Expr::Sort(sort_expr) => {
-                    let col = self.expr_to_sql(&sort_expr.expr)?;
-
-                    let nulls_first = if self.dialect.supports_nulls_first_in_sort() {
-                        Some(sort_expr.nulls_first)
-                    } else {
-                        None
-                    };
-
-                    Ok(ast::OrderByExpr {
-                        asc: Some(sort_expr.asc),
-                        expr: col,
-                        nulls_first,
-                        with_fill: None,
-                    })
-                }
-                _ => plan_err!("Expecting Sort expr"),
-            })
+            .map(|sort_expr| self.sort_to_sql(sort_expr))
             .collect::<Result<Vec<_>>>()
     }
 

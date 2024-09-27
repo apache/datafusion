@@ -26,13 +26,13 @@ use arrow_array::{
     UInt32Array,
 };
 use arrow_buffer::OffsetBuffer;
-use arrow_schema::Field;
+use arrow_schema::{Field, Fields};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 
 use core::any::type_name;
 use datafusion_common::DataFusionError;
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
+use datafusion_expr::ColumnarValue;
 
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
@@ -60,11 +60,13 @@ pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
 }
 
 /// array function wrapper that differentiates between scalar (length 1) and array.
-pub(crate) fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
+pub(crate) fn make_scalar_function<F>(
+    inner: F,
+) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue>
 where
-    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
+    F: Fn(&[ArrayRef]) -> Result<ArrayRef>,
 {
-    Arc::new(move |args: &[ColumnarValue]| {
+    move |args: &[ColumnarValue]| {
         // first, identify if any of the arguments is an Array. If yes, store its `len`,
         // as any scalar will need to be converted to an array of len `len`.
         let len = args
@@ -87,7 +89,7 @@ where
         } else {
             result.map(ColumnarValue::Array)
         }
-    })
+    }
 }
 
 pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(
@@ -253,6 +255,21 @@ pub(crate) fn compute_array_dims(
     }
 }
 
+pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
+    match data_type {
+        DataType::Map(field, _) => {
+            let field_data_type = field.data_type();
+            match field_data_type {
+                DataType::Struct(fields) => Ok(fields),
+                _ => {
+                    internal_err!("Expected a Struct type, got {:?}", field_data_type)
+                }
+            }
+        }
+        _ => internal_err!("Expected a Map type, got {:?}", data_type),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,8 +313,7 @@ mod tests {
         let array3d_1 = Arc::new(array_into_list_array_nullable(array2d_1)) as ArrayRef;
         let array3d_2 = array_into_list_array_nullable(array2d_2.to_owned());
         let res =
-            align_array_dimensions::<i32>(vec![array1d_1, Arc::new(array3d_2.clone())])
-                .unwrap();
+            align_array_dimensions::<i32>(vec![array1d_1, Arc::new(array3d_2)]).unwrap();
 
         let expected = as_list_array(&array3d_1).unwrap();
         let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());

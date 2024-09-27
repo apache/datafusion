@@ -18,6 +18,7 @@
 //! [`Optimizer`] and [`OptimizerRule`]
 
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -70,7 +71,7 @@ use crate::utils::log_plan;
 /// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
 /// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_optimizer_rule
 
-pub trait OptimizerRule {
+pub trait OptimizerRule: Debug {
     /// Try and rewrite `plan` to an optimized form, returning None if the plan
     /// cannot be optimized by this rule.
     ///
@@ -126,7 +127,7 @@ pub trait OptimizerConfig {
     fn query_execution_start_time(&self) -> DateTime<Utc>;
 
     /// Return alias generator used to generate unique aliases for subqueries
-    fn alias_generator(&self) -> Arc<AliasGenerator>;
+    fn alias_generator(&self) -> &Arc<AliasGenerator>;
 
     fn options(&self) -> &ConfigOptions;
 
@@ -204,8 +205,8 @@ impl OptimizerConfig for OptimizerContext {
         self.query_execution_start_time
     }
 
-    fn alias_generator(&self) -> Arc<AliasGenerator> {
-        Arc::clone(&self.alias_generator)
+    fn alias_generator(&self) -> &Arc<AliasGenerator> {
+        &self.alias_generator
     }
 
     fn options(&self) -> &ConfigOptions {
@@ -214,7 +215,7 @@ impl OptimizerConfig for OptimizerContext {
 }
 
 /// A rule-based optimizer.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Optimizer {
     /// All optimizer rules to apply
     pub rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
@@ -666,6 +667,7 @@ mod tests {
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
+    #[derive(Default, Debug)]
     struct BadRule {}
 
     impl OptimizerRule for BadRule {
@@ -687,6 +689,7 @@ mod tests {
     }
 
     /// Replaces whatever plan with a single table scan
+    #[derive(Default, Debug)]
     struct GetTableScanRule {}
 
     impl OptimizerRule for GetTableScanRule {
@@ -713,6 +716,7 @@ mod tests {
     /// A goofy rule doing rotation of columns in all projections.
     ///
     /// Useful to test cycle detection.
+    #[derive(Default, Debug)]
     struct RotateProjectionRule {
         // reverse exprs instead of rotating on the first pass
         reverse_on_first_pass: Mutex<bool>,

@@ -24,7 +24,6 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use arrow::array::*;
-use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, and_not, is_null, not, nullif, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
@@ -33,6 +32,7 @@ use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarV
 use datafusion_expr::ColumnarValue;
 
 use super::{Column, Literal};
+use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
@@ -204,7 +204,13 @@ impl CaseExpr {
                 .evaluate_selection(batch, &remainder)?;
             let when_value = when_value.into_array(batch.num_rows())?;
             // build boolean array representing which rows match the "when" value
-            let when_match = eq(&when_value, &base_value)?;
+            let when_match = compare_with_eq(
+                &when_value,
+                &base_value,
+                // The types of case and when expressions will be coerced to match.
+                // We only need to check if the base_value is nested.
+                base_value.data_type().is_nested(),
+            )?;
             // Treat nulls as false
             let when_match = match when_match.null_count() {
                 0 => Cow::Borrowed(&when_match),
@@ -380,7 +386,7 @@ impl CaseExpr {
 
         // keep `else_expr`'s data type and return type consistent
         let e = self.else_expr.as_ref().unwrap();
-        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
+        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type)
             .unwrap_or_else(|_| Arc::clone(e));
         let else_ = Scalar::new(expr.evaluate(batch)?.into_array(1)?);
 

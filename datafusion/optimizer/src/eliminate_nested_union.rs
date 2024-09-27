@@ -25,7 +25,7 @@ use datafusion_expr::{Distinct, LogicalPlan, Union};
 use itertools::Itertools;
 use std::sync::Arc;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 /// An optimization rule that replaces nested unions with a single union.
 pub struct EliminateNestedUnion;
 
@@ -144,10 +144,7 @@ mod tests {
     fn eliminate_nothing() -> Result<()> {
         let plan_builder = table_scan(Some("table"), &schema(), None)?;
 
-        let plan = plan_builder
-            .clone()
-            .union(plan_builder.clone().build()?)?
-            .build()?;
+        let plan = plan_builder.clone().union(plan_builder.build()?)?.build()?;
 
         let expected = "\
         Union\
@@ -162,7 +159,7 @@ mod tests {
 
         let plan = plan_builder
             .clone()
-            .union_distinct(plan_builder.clone().build()?)?
+            .union_distinct(plan_builder.build()?)?
             .build()?;
 
         let expected = "Distinct:\
@@ -180,7 +177,7 @@ mod tests {
             .clone()
             .union(plan_builder.clone().build()?)?
             .union(plan_builder.clone().build()?)?
-            .union(plan_builder.clone().build()?)?
+            .union(plan_builder.build()?)?
             .build()?;
 
         let expected = "\
@@ -200,7 +197,7 @@ mod tests {
             .clone()
             .union_distinct(plan_builder.clone().build()?)?
             .union(plan_builder.clone().build()?)?
-            .union(plan_builder.clone().build()?)?
+            .union(plan_builder.build()?)?
             .build()?;
 
         let expected = "Union\
@@ -222,7 +219,7 @@ mod tests {
             .union(plan_builder.clone().build()?)?
             .union_distinct(plan_builder.clone().build()?)?
             .union(plan_builder.clone().build()?)?
-            .union_distinct(plan_builder.clone().build()?)?
+            .union_distinct(plan_builder.build()?)?
             .build()?;
 
         let expected = "Distinct:\
@@ -243,7 +240,7 @@ mod tests {
             .clone()
             .union_distinct(plan_builder.clone().distinct()?.build()?)?
             .union(plan_builder.clone().distinct()?.build()?)?
-            .union_distinct(plan_builder.clone().build()?)?
+            .union_distinct(plan_builder.build()?)?
             .build()?;
 
         let expected = "Distinct:\
@@ -271,7 +268,6 @@ mod tests {
             )?
             .union(
                 plan_builder
-                    .clone()
                     .project(vec![col("id").alias("_id"), col("key"), col("value")])?
                     .build()?,
             )?
@@ -300,7 +296,6 @@ mod tests {
             )?
             .union_distinct(
                 plan_builder
-                    .clone()
                     .project(vec![col("id").alias("_id"), col("key"), col("value")])?
                     .build()?,
             )?

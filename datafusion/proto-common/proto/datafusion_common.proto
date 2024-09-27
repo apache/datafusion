@@ -423,6 +423,7 @@ message CsvOptions {
   bytes comment = 13; // Optional comment character as a byte
   bytes double_quote = 14; // Indicates if quotes are doubled
   bytes newlines_in_values = 15; // Indicates if newlines are supported in values
+  bytes terminator = 16; // Optional terminator character as a byte
 }
 
 // Options controlling CSV format
@@ -492,7 +493,7 @@ message ParquetOptions {
   uint64 maximum_buffered_record_batches_per_stream = 25; // default = 2
   bool bloom_filter_on_read = 26; // default = true
   bool bloom_filter_on_write = 27; // default = false
-  bool schema_force_string_view = 28; // default = false
+  bool schema_force_view_types = 28; // default = false
 
   oneof metadata_size_hint_opt {
     uint64 metadata_size_hint = 4;

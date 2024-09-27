@@ -27,11 +27,10 @@ use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
     PhysicalGroupBy,
 };
-use crate::common::IPCWriter;
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge;
-use crate::spill::read_spill_as_stream;
+use crate::spill::{read_spill_as_stream, spill_record_batch_by_size};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -47,13 +46,15 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{
-    AggregateExpr, GroupsAccumulatorAdapter, PhysicalSortExpr,
-};
+use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
+
+use super::order::GroupOrdering;
+use super::AggregateExec;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -70,9 +71,6 @@ pub(crate) enum ExecutionState {
     /// All input has been consumed and all groups have been emitted
     Done,
 }
-
-use super::order::GroupOrdering;
-use super::AggregateExec;
 
 /// This encapsulates the spilling state
 struct SpillState {
@@ -96,7 +94,7 @@ struct SpillState {
     // ========================================================================
     // STATES:
     // Fields changes during execution. Can be buffer, or state flags that
-    // influence the exeuction in parent `GroupedHashAggregateStream`
+    // influence the execution in parent `GroupedHashAggregateStream`
     // ========================================================================
     /// If data has previously been spilled, the locations of the
     /// spill files (in Arrow IPC format)
@@ -187,13 +185,6 @@ impl SkipAggregationProbe {
 
     fn should_skip(&self) -> bool {
         self.should_skip
-    }
-
-    /// Provides an ability to externally set `should_skip` flag
-    /// to `false` and prohibit further state updates
-    fn forbid_skipping(&mut self) {
-        self.should_skip = false;
-        self.is_locked = true;
     }
 
     /// Record the number of rows that were output directly without aggregation
@@ -396,7 +387,7 @@ pub(crate) struct GroupedHashAggregateStream {
     /// processed. Reused across batches here to avoid reallocations
     current_group_indices: Vec<usize>,
 
-    /// Accumulators, one for each `AggregateExpr` in the query
+    /// Accumulators, one for each `AggregateFunctionExpr` in the query
     ///
     /// For example, if the query has aggregates, `SUM(x)`,
     /// `COUNT(y)`, there will be two accumulators, each one
@@ -579,7 +570,7 @@ impl GroupedHashAggregateStream {
 /// that is supported by the aggregate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
-    agg_expr: &Arc<dyn AggregateExpr>,
+    agg_expr: &AggregateFunctionExpr,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     if agg_expr.groups_accumulator_supported() {
         agg_expr.create_groups_accumulator()
@@ -589,7 +580,7 @@ pub(crate) fn create_group_accumulator(
             "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
             agg_expr.name()
         );
-        let agg_expr_captured = Arc::clone(agg_expr);
+        let agg_expr_captured = agg_expr.clone();
         let factory = move || agg_expr_captured.create_accumulator();
         Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
     }
@@ -906,19 +897,13 @@ impl GroupedHashAggregateStream {
         let emit = self.emit(EmitTo::All, true)?;
         let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
         let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
-        let mut writer = IPCWriter::new(spillfile.path(), &emit.schema())?;
         // TODO: slice large `sorted` and write to multiple files in parallel
-        let mut offset = 0;
-        let total_rows = sorted.num_rows();
-
-        while offset < total_rows {
-            let length = std::cmp::min(total_rows - offset, self.batch_size);
-            let batch = sorted.slice(offset, length);
-            offset += batch.num_rows();
-            writer.write(&batch)?;
-        }
-
-        writer.finish()?;
+        spill_record_batch_by_size(
+            &sorted,
+            spillfile.path().into(),
+            sorted.schema(),
+            self.batch_size,
+        )?;
         self.spill_state.spills.push(spillfile);
         Ok(())
     }
@@ -1017,19 +1002,12 @@ impl GroupedHashAggregateStream {
     }
 
     /// Updates skip aggregation probe state.
-    ///
-    /// In case stream has any spills, the probe is forcefully set to
-    /// forbid aggregation skipping, and locked, since spilling resets
-    /// total number of unique groups.
-    ///
-    /// Note: currently spilling is not supported for Partial aggregation
     fn update_skip_aggregation_probe(&mut self, input_rows: usize) {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-            if !self.spill_state.spills.is_empty() {
-                probe.forbid_skipping();
-            } else {
-                probe.update_state(input_rows, self.group_values.len());
-            }
+            // Skip aggregation probe is not supported if stream has any spills,
+            // currently spilling is not supported for Partial aggregation
+            assert!(self.spill_state.spills.is_empty());
+            probe.update_state(input_rows, self.group_values.len());
         };
     }
 

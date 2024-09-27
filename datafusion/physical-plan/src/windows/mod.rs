@@ -37,14 +37,13 @@ use datafusion_expr::{
     BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
     WindowUDF,
 };
+use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
-    AggregateExpr, ConstExpr, EquivalenceProperties, LexOrdering,
-    PhysicalSortRequirement,
+    ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
-use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use itertools::Itertools;
 
 mod bounded_window_agg_exec;
@@ -52,6 +51,7 @@ mod utils;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -74,7 +74,8 @@ pub fn schema_add_window_field(
         .iter()
         .map(|e| Arc::clone(e).as_ref().nullable(schema))
         .collect::<Result<Vec<_>>>()?;
-    let window_expr_return_type = window_fn.return_type(&data_types, &nullability)?;
+    let window_expr_return_type =
+        window_fn.return_type(&data_types, &nullability, fn_name)?;
     let mut window_fields = schema
         .fields()
         .iter()
@@ -142,7 +143,7 @@ fn window_expr_from_aggregate_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
-    aggregate: Arc<dyn AggregateExpr>,
+    aggregate: AggregateFunctionExpr,
 ) -> Arc<dyn WindowExpr> {
     // Is there a potentially unlimited sized window frame?
     let unbounded_window = window_frame.start_bound.is_unbounded();
@@ -335,13 +336,11 @@ fn create_udwf_window_expr(
         .map(|arg| arg.data_type(input_schema))
         .collect::<Result<_>>()?;
 
-    // figure out the output type
-    let data_type = fun.return_type(&input_types)?;
     Ok(Arc::new(WindowUDFExpr {
         fun: Arc::clone(fun),
         args: args.to_vec(),
+        input_types,
         name,
-        data_type,
     }))
 }
 
@@ -352,8 +351,8 @@ struct WindowUDFExpr {
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Display name
     name: String,
-    /// result type
-    data_type: DataType,
+    /// Types of input expressions
+    input_types: Vec<DataType>,
 }
 
 impl BuiltInWindowFunctionExpr for WindowUDFExpr {
@@ -362,11 +361,8 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            self.data_type.clone(),
-            self.fun.nullable(),
-        ))
+        self.fun
+            .field(WindowUDFFieldArgs::new(&self.input_types, &self.name))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -403,12 +399,14 @@ pub(crate) fn calc_requirements<
     partition_by_exprs: impl IntoIterator<Item = T>,
     orderby_sort_exprs: impl IntoIterator<Item = S>,
 ) -> Option<LexRequirement> {
-    let mut sort_reqs = partition_by_exprs
-        .into_iter()
-        .map(|partition_by| {
-            PhysicalSortRequirement::new(Arc::clone(partition_by.borrow()), None)
-        })
-        .collect::<Vec<_>>();
+    let mut sort_reqs = LexRequirement::new(
+        partition_by_exprs
+            .into_iter()
+            .map(|partition_by| {
+                PhysicalSortRequirement::new(Arc::clone(partition_by.borrow()), None)
+            })
+            .collect::<Vec<_>>(),
+    );
     for element in orderby_sort_exprs.into_iter() {
         let PhysicalSortExpr { expr, options } = element.borrow();
         if !sort_reqs.iter().any(|e| e.expr.eq(expr)) {
@@ -572,22 +570,30 @@ pub fn get_window_mode(
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
-    let mut partition_by_reqs: LexRequirement = vec![];
+    let mut partition_by_reqs: LexRequirement = LexRequirement::new(vec![]);
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
-    partition_by_reqs.extend(indices.iter().map(|&idx| PhysicalSortRequirement {
+    vec![].extend(indices.iter().map(|&idx| PhysicalSortRequirement {
         expr: Arc::clone(&partitionby_exprs[idx]),
         options: None,
     }));
+    partition_by_reqs
+        .inner
+        .extend(indices.iter().map(|&idx| PhysicalSortRequirement {
+            expr: Arc::clone(&partitionby_exprs[idx]),
+            options: None,
+        }));
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
-    let partition_by_eqs = input_eqs.add_constants(const_exprs);
+    let partition_by_eqs = input_eqs.with_constants(const_exprs);
     let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys);
     let reverse_order_by_reqs =
         PhysicalSortRequirement::from_sort_exprs(&reverse_order_bys(orderby_keys));
     for (should_swap, order_by_reqs) in
         [(false, order_by_reqs), (true, reverse_order_by_reqs)]
     {
-        let req = [partition_by_reqs.clone(), order_by_reqs].concat();
+        let req = LexRequirement::new(
+            [partition_by_reqs.inner.clone(), order_by_reqs.inner].concat(),
+        );
         let req = collapse_lex_req(req);
         if partition_by_eqs.ordering_satisfy_requirement(&req) {
             // Window can be run with existing ordering
@@ -740,7 +746,7 @@ mod tests {
                 if let Some(expected) = &mut expected {
                     expected.push(res);
                 } else {
-                    expected = Some(vec![res]);
+                    expected = Some(LexRequirement::new(vec![res]));
                 }
             }
             assert_eq!(calc_requirements(partitionbys, orderbys), expected);

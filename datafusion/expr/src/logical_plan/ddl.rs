@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::{Expr, LogicalPlan, SortExpr, Volatility};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{
@@ -22,14 +24,13 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::{Expr, LogicalPlan, Volatility};
-
+use crate::expr::Sort;
 use arrow::datatypes::DataType;
 use datafusion_common::{Constraints, DFSchemaRef, SchemaReference, TableReference};
 use sqlparser::ast::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum DdlStatement {
     /// Creates an external table.
     CreateExternalTable(CreateExternalTable),
@@ -204,7 +205,7 @@ pub struct CreateExternalTable {
     /// SQL used to create the table, if available
     pub definition: Option<String>,
     /// Order expressions supplied by user
-    pub order_exprs: Vec<Vec<Expr>>,
+    pub order_exprs: Vec<Vec<Sort>>,
     /// Whether the table is an infinite streams
     pub unbounded: bool,
     /// Table(provider) specific options
@@ -231,8 +232,59 @@ impl Hash for CreateExternalTable {
     }
 }
 
+// Manual implementation needed because of `schema`, `options`, and `column_defaults` fields.
+// Comparison excludes these fields.
+impl PartialOrd for CreateExternalTable {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableCreateExternalTable<'a> {
+            /// The table name
+            pub name: &'a TableReference,
+            /// The physical location
+            pub location: &'a String,
+            /// The file type of physical file
+            pub file_type: &'a String,
+            /// Partition Columns
+            pub table_partition_cols: &'a Vec<String>,
+            /// Option to not error if table already exists
+            pub if_not_exists: &'a bool,
+            /// SQL used to create the table, if available
+            pub definition: &'a Option<String>,
+            /// Order expressions supplied by user
+            pub order_exprs: &'a Vec<Vec<Sort>>,
+            /// Whether the table is an infinite streams
+            pub unbounded: &'a bool,
+            /// The list of constraints in the schema, such as primary key, unique, etc.
+            pub constraints: &'a Constraints,
+        }
+        let comparable_self = ComparableCreateExternalTable {
+            name: &self.name,
+            location: &self.location,
+            file_type: &self.file_type,
+            table_partition_cols: &self.table_partition_cols,
+            if_not_exists: &self.if_not_exists,
+            definition: &self.definition,
+            order_exprs: &self.order_exprs,
+            unbounded: &self.unbounded,
+            constraints: &self.constraints,
+        };
+        let comparable_other = ComparableCreateExternalTable {
+            name: &other.name,
+            location: &other.location,
+            file_type: &other.file_type,
+            table_partition_cols: &other.table_partition_cols,
+            if_not_exists: &other.if_not_exists,
+            definition: &other.definition,
+            order_exprs: &other.order_exprs,
+            unbounded: &other.unbounded,
+            constraints: &other.constraints,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
+}
+
 /// Creates an in memory table.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct CreateMemoryTable {
     /// The table name
     pub name: TableReference,
@@ -249,7 +301,7 @@ pub struct CreateMemoryTable {
 }
 
 /// Creates a view.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Hash)]
 pub struct CreateView {
     /// The table name
     pub name: TableReference,
@@ -272,6 +324,16 @@ pub struct CreateCatalog {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for CreateCatalog {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.catalog_name.partial_cmp(&other.catalog_name) {
+            Some(Ordering::Equal) => self.if_not_exists.partial_cmp(&other.if_not_exists),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Creates a schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateCatalogSchema {
@@ -281,6 +343,16 @@ pub struct CreateCatalogSchema {
     pub if_not_exists: bool,
     /// Empty schema
     pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for CreateCatalogSchema {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.schema_name.partial_cmp(&other.schema_name) {
+            Some(Ordering::Equal) => self.if_not_exists.partial_cmp(&other.if_not_exists),
+            cmp => cmp,
+        }
+    }
 }
 
 /// Drops a table.
@@ -294,6 +366,16 @@ pub struct DropTable {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for DropTable {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Drops a view.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropView {
@@ -303,6 +385,16 @@ pub struct DropView {
     pub if_exists: bool,
     /// Dummy schema
     pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for DropView {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
+            cmp => cmp,
+        }
+    }
 }
 
 /// Drops a schema
@@ -316,6 +408,19 @@ pub struct DropCatalogSchema {
     pub cascade: bool,
     /// Dummy schema
     pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for DropCatalogSchema {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => match self.if_exists.partial_cmp(&other.if_exists) {
+                Some(Ordering::Equal) => self.cascade.partial_cmp(&other.cascade),
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
 }
 
 /// Arguments passed to `CREATE FUNCTION`
@@ -335,7 +440,40 @@ pub struct CreateFunction {
     /// Dummy schema
     pub schema: DFSchemaRef,
 }
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for CreateFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableCreateFunction<'a> {
+            pub or_replace: &'a bool,
+            pub temporary: &'a bool,
+            pub name: &'a String,
+            pub args: &'a Option<Vec<OperateFunctionArg>>,
+            pub return_type: &'a Option<DataType>,
+            pub params: &'a CreateFunctionBody,
+        }
+        let comparable_self = ComparableCreateFunction {
+            or_replace: &self.or_replace,
+            temporary: &self.temporary,
+            name: &self.name,
+            args: &self.args,
+            return_type: &self.return_type,
+            params: &self.params,
+        };
+        let comparable_other = ComparableCreateFunction {
+            or_replace: &other.or_replace,
+            temporary: &other.temporary,
+            name: &other.name,
+            args: &other.args,
+            return_type: &other.return_type,
+            params: &other.params,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct OperateFunctionArg {
     // TODO: figure out how to support mode
     // pub mode: Option<ArgMode>,
@@ -343,7 +481,7 @@ pub struct OperateFunctionArg {
     pub data_type: DataType,
     pub default_expr: Option<Expr>,
 }
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct CreateFunctionBody {
     /// LANGUAGE lang_name
     pub language: Option<Ident>,
@@ -360,13 +498,85 @@ pub struct DropFunction {
     pub schema: DFSchemaRef,
 }
 
+impl PartialOrd for DropFunction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
+            cmp => cmp,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct CreateIndex {
     pub name: Option<String>,
     pub table: TableReference,
     pub using: Option<String>,
-    pub columns: Vec<Expr>,
+    pub columns: Vec<SortExpr>,
     pub unique: bool,
     pub if_not_exists: bool,
     pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for CreateIndex {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableCreateIndex<'a> {
+            pub name: &'a Option<String>,
+            pub table: &'a TableReference,
+            pub using: &'a Option<String>,
+            pub columns: &'a Vec<SortExpr>,
+            pub unique: &'a bool,
+            pub if_not_exists: &'a bool,
+        }
+        let comparable_self = ComparableCreateIndex {
+            name: &self.name,
+            table: &self.table,
+            using: &self.using,
+            columns: &self.columns,
+            unique: &self.unique,
+            if_not_exists: &self.if_not_exists,
+        };
+        let comparable_other = ComparableCreateIndex {
+            name: &other.name,
+            table: &other.table,
+            using: &other.using,
+            columns: &other.columns,
+            unique: &other.unique,
+            if_not_exists: &other.if_not_exists,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{CreateCatalog, DdlStatement, DropView};
+    use datafusion_common::{DFSchema, DFSchemaRef, TableReference};
+    use std::cmp::Ordering;
+
+    #[test]
+    fn test_partial_ord() {
+        let catalog = DdlStatement::CreateCatalog(CreateCatalog {
+            catalog_name: "name".to_string(),
+            if_not_exists: false,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+        let catalog_2 = DdlStatement::CreateCatalog(CreateCatalog {
+            catalog_name: "name".to_string(),
+            if_not_exists: true,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+
+        assert_eq!(catalog.partial_cmp(&catalog_2), Some(Ordering::Less));
+
+        let drop_view = DdlStatement::DropView(DropView {
+            name: TableReference::from("table"),
+            if_exists: false,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+
+        assert_eq!(drop_view.partial_cmp(&catalog), Some(Ordering::Greater));
+    }
 }

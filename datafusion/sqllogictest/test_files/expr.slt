@@ -122,203 +122,197 @@ SELECT
 query ?
 SELECT interval '1'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs
+1.000000000 secs
 
 query ?
 SELECT interval '1 second'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs
+1.000000000 secs
 
 query ?
 SELECT interval '500 milliseconds'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.500000000 secs
+0.500000000 secs
 
 query ?
 SELECT interval '5 second'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs
+5.000000000 secs
 
 query ?
 SELECT interval '0.5 minute'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs
+30.000000000 secs
 
 query ?
 SELECT interval '.5 minute'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs
+30.000000000 secs
 
 query ?
 SELECT interval '5 minute'
 ----
-0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs
+5 mins
 
 query ?
 SELECT interval '5 minute 1 second'
 ----
-0 years 0 mons 0 days 0 hours 5 mins 1.000000000 secs
+5 mins 1.000000000 secs
 
 query ?
 SELECT interval '1 hour'
 ----
-0 years 0 mons 0 days 1 hours 0 mins 0.000000000 secs
+1 hours
 
 query ?
 SELECT interval '5 hour'
 ----
-0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs
+5 hours
 
 query ?
 SELECT interval '1 day'
 ----
-0 years 0 mons 1 days 0 hours 0 mins 0.000000000 secs
+1 days
 
 query ?
 SELECT interval '1 week'
 ----
-0 years 0 mons 7 days 0 hours 0 mins 0.000000000 secs
+7 days
 
 query ?
 SELECT interval '2 weeks'
 ----
-0 years 0 mons 14 days 0 hours 0 mins 0.000000000 secs
+14 days
 
 query ?
 SELECT interval '1 day 1'
 ----
-0 years 0 mons 1 days 0 hours 0 mins 1.000000000 secs
+1 days 1.000000000 secs
 
 query ?
 SELECT interval '0.5'
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.500000000 secs
+0.500000000 secs
 
 query ?
 SELECT interval '0.5 day 1'
 ----
-0 years 0 mons 0 days 12 hours 0 mins 1.000000000 secs
+12 hours 1.000000000 secs
 
 query ?
 SELECT interval '0.49 day'
 ----
-0 years 0 mons 0 days 11 hours 45 mins 36.000000000 secs
+11 hours 45 mins 36.000000000 secs
 
 query ?
 SELECT interval '0.499 day'
 ----
-0 years 0 mons 0 days 11 hours 58 mins 33.600000000 secs
+11 hours 58 mins 33.600000000 secs
 
 query ?
 SELECT interval '0.4999 day'
 ----
-0 years 0 mons 0 days 11 hours 59 mins 51.360000000 secs
+11 hours 59 mins 51.360000000 secs
 
 query ?
 SELECT interval '0.49999 day'
 ----
-0 years 0 mons 0 days 11 hours 59 mins 59.136000000 secs
+11 hours 59 mins 59.136000000 secs
 
 query ?
 SELECT interval '0.49999999999 day'
 ----
-0 years 0 mons 0 days 11 hours 59 mins 59.999999136 secs
+11 hours 59 mins 59.999999136 secs
 
 query ?
 SELECT interval '5 day'
 ----
-0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs
-
-# Hour is ignored, this matches PostgreSQL
-query ?
-SELECT interval '5 day' hour
-----
-0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs
+5 days
 
 query ?
 SELECT interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'
 ----
-0 years 0 mons 5 days 4 hours 3 mins 2.100000000 secs
+5 days 4 hours 3 mins 2.100000000 secs
 
 query ?
 SELECT interval '0.5 month'
 ----
-0 years 0 mons 15 days 0 hours 0 mins 0.000000000 secs
+15 days
 
 query ?
 SELECT interval '0.5' month
 ----
-0 years 0 mons 15 days 0 hours 0 mins 0.000000000 secs
+15 days
 
 query ?
 SELECT interval '1 month'
 ----
-0 years 1 mons 0 days 0 hours 0 mins 0.000000000 secs
+1 mons
 
 query ?
 SELECT interval '1' MONTH
 ----
-0 years 1 mons 0 days 0 hours 0 mins 0.000000000 secs
+1 mons
 
 query ?
 SELECT interval '5 month'
 ----
-0 years 5 mons 0 days 0 hours 0 mins 0.000000000 secs
+5 mons
 
 query ?
 SELECT interval '13 month'
 ----
-0 years 13 mons 0 days 0 hours 0 mins 0.000000000 secs
+13 mons
 
 query ?
 SELECT interval '0.5 year'
 ----
-0 years 6 mons 0 days 0 hours 0 mins 0.000000000 secs
+6 mons
 
 query ?
 SELECT interval '1 year'
 ----
-0 years 12 mons 0 days 0 hours 0 mins 0.000000000 secs
+12 mons
 
 query ?
 SELECT interval '1 decade'
 ----
-0 years 120 mons 0 days 0 hours 0 mins 0.000000000 secs
+120 mons
 
 query ?
 SELECT interval '2 decades'
 ----
-0 years 240 mons 0 days 0 hours 0 mins 0.000000000 secs
+240 mons
 
 query ?
 SELECT interval '1 century'
 ----
-0 years 1200 mons 0 days 0 hours 0 mins 0.000000000 secs
+1200 mons
 
 query ?
 SELECT interval '2 year'
 ----
-0 years 24 mons 0 days 0 hours 0 mins 0.000000000 secs
+24 mons
 
 query ?
 SELECT interval '1 year 1 day'
 ----
-0 years 12 mons 1 days 0 hours 0 mins 0.000000000 secs
+12 mons 1 days
 
 query ?
 SELECT interval '1 year 1 day 1 hour'
 ----
-0 years 12 mons 1 days 1 hours 0 mins 0.000000000 secs
+12 mons 1 days 1 hours
 
 query ?
 SELECT interval '1 year 1 day 1 hour 1 minute'
 ----
-0 years 12 mons 1 days 1 hours 1 mins 0.000000000 secs
+12 mons 1 days 1 hours 1 mins
 
 query ?
 SELECT interval '1 year 1 day 1 hour 1 minute 1 second'
 ----
-0 years 12 mons 1 days 1 hours 1 mins 1.000000000 secs
+12 mons 1 days 1 hours 1 mins 1.000000000 secs
 
 query I
 SELECT ascii('')
@@ -1356,6 +1350,16 @@ SELECT date_part('second', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanose
 50.123456789
 
 query R
+select extract(second from '2024-08-09T12:13:14')
+----
+14
+
+query R
+select extract(seconds from '2024-08-09T12:13:14')
+----
+14
+
+query R
 SELECT extract(second from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 50.123456789
@@ -1378,6 +1382,11 @@ SELECT date_part('microsecond', arrow_cast('23:32:50.123456789'::time, 'Time64(N
 
 query R
 SELECT extract(microsecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
+----
+50123456.789000005
+
+query R
+SELECT extract(us from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 50123456.789000005
 
@@ -1462,6 +1471,189 @@ query R
 SELECT extract(epoch from arrow_cast('1969-12-31', 'Date64'))
 ----
 -86400
+
+# test_extract_interval
+
+query R
+SELECT extract(year from arrow_cast('10 years', 'Interval(YearMonth)'))
+----
+10
+
+query R
+SELECT extract(month from arrow_cast('10 years', 'Interval(YearMonth)'))
+----
+0
+
+query R
+SELECT extract(year from arrow_cast('10 months', 'Interval(YearMonth)'))
+----
+0
+
+query R
+SELECT extract(month from arrow_cast('10 months', 'Interval(YearMonth)'))
+----
+10
+
+query R
+SELECT extract(year from arrow_cast('20 months', 'Interval(YearMonth)'))
+----
+1
+
+query R
+SELECT extract(month from arrow_cast('20 months', 'Interval(YearMonth)'))
+----
+8
+
+query error DataFusion error: Arrow error: Compute error: Year does not support: Interval\(DayTime\)
+SELECT extract(year from arrow_cast('10 days', 'Interval(DayTime)'))
+
+query error DataFusion error: Arrow error: Compute error: Month does not support: Interval\(DayTime\)
+SELECT extract(month from arrow_cast('10 days', 'Interval(DayTime)'))
+
+query R
+SELECT extract(day from arrow_cast('10 days', 'Interval(DayTime)'))
+----
+10
+
+query R
+SELECT extract(day from arrow_cast('14400 minutes', 'Interval(DayTime)'))
+----
+0
+
+query R
+SELECT extract(minute from arrow_cast('14400 minutes', 'Interval(DayTime)'))
+----
+14400
+
+query R
+SELECT extract(second from arrow_cast('5.1 seconds', 'Interval(DayTime)'))
+----
+5
+
+query R
+SELECT extract(second from arrow_cast('14400 minutes', 'Interval(DayTime)'))
+----
+864000
+
+query R
+SELECT extract(second from arrow_cast('2 months', 'Interval(MonthDayNano)'))
+----
+0
+
+query R
+SELECT extract(second from arrow_cast('2 days', 'Interval(MonthDayNano)'))
+----
+0
+
+query R
+SELECT extract(second from arrow_cast('2 seconds', 'Interval(MonthDayNano)'))
+----
+2
+
+query R
+SELECT extract(seconds from arrow_cast('2 seconds', 'Interval(MonthDayNano)'))
+----
+2
+
+query R
+SELECT extract(epoch from arrow_cast('2 seconds', 'Interval(MonthDayNano)'))
+----
+2
+
+query R
+SELECT extract(milliseconds from arrow_cast('2 seconds', 'Interval(MonthDayNano)'))
+----
+2000
+
+query R
+SELECT extract(second from arrow_cast('2030 milliseconds', 'Interval(MonthDayNano)'))
+----
+2.03
+
+query R
+SELECT extract(second from arrow_cast(NULL, 'Interval(MonthDayNano)'))
+----
+NULL
+
+statement ok
+create table t (id int, i interval) as values
+  (0, interval '5 months 1 day 10 nanoseconds'),
+  (1, interval '1 year 3 months'),
+  (2, interval '3 days 2 milliseconds'),
+  (3, interval '2 seconds'),
+  (4, interval '8 months'),
+  (5, NULL);
+
+query IRR rowsort
+select
+  id,
+  extract(second from i),
+  extract(month from i)
+from t
+order by id;
+----
+0 0.00000001 5
+1 0 15
+2 0.002 0
+3 2 0
+4 0 8
+5 NULL NULL
+
+statement ok
+drop table t;
+
+# test_extract_duration
+
+query R
+SELECT extract(second from arrow_cast(2, 'Duration(Second)'))
+----
+2
+
+query R
+SELECT extract(seconds from arrow_cast(2, 'Duration(Second)'))
+----
+2
+
+query R
+SELECT extract(epoch from arrow_cast(2, 'Duration(Second)'))
+----
+2
+
+query R
+SELECT extract(millisecond from arrow_cast(2, 'Duration(Second)'))
+----
+2000
+
+query R
+SELECT extract(second from arrow_cast(2, 'Duration(Millisecond)'))
+----
+0.002
+
+query R
+SELECT extract(second from arrow_cast(2002, 'Duration(Millisecond)'))
+----
+2.002
+
+query R
+SELECT extract(millisecond from arrow_cast(2002, 'Duration(Millisecond)'))
+----
+2002
+
+query R
+SELECT extract(day from arrow_cast(864000, 'Duration(Second)'))
+----
+10
+
+query error DataFusion error: Arrow error: Compute error: Month does not support: Duration\(Second\)
+SELECT extract(month from arrow_cast(864000, 'Duration(Second)'))
+
+query error DataFusion error: Arrow error: Compute error: Year does not support: Duration\(Second\)
+SELECT extract(year from arrow_cast(864000, 'Duration(Second)'))
+
+query R
+SELECT extract(day from arrow_cast(NULL, 'Duration(Second)'))
+----
+NULL
 
 # test_extract_date_part_func
 

@@ -33,8 +33,9 @@ use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint into grouped aggregations which don't require all
 /// rows in the group to be processed for correctness. Example queries fitting this description are:
-/// `SELECT distinct l_orderkey FROM lineitem LIMIT 10;`
-/// `SELECT l_orderkey FROM lineitem GROUP BY l_orderkey LIMIT 10;`
+/// - `SELECT distinct l_orderkey FROM lineitem LIMIT 10;`
+/// - `SELECT l_orderkey FROM lineitem GROUP BY l_orderkey LIMIT 10;`
+#[derive(Debug)]
 pub struct LimitedDistinctAggregation {}
 
 impl LimitedDistinctAggregation {

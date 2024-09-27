@@ -355,18 +355,7 @@ impl DFSchema {
                 // qualifier and name.
                 (Some(q), Some(field_q)) => q.resolved_eq(field_q) && f.name() == name,
                 // field to lookup is qualified but current field is unqualified.
-                (Some(qq), None) => {
-                    // the original field may now be aliased with a name that matches the
-                    // original qualified name
-                    let column = Column::from_qualified_name(f.name());
-                    match column {
-                        Column {
-                            relation: Some(r),
-                            name: column_name,
-                        } => &r == qq && column_name == name,
-                        _ => false,
-                    }
-                }
+                (Some(_), None) => false,
                 // field to lookup is unqualified, no need to compare qualifier
                 (None, Some(_)) | (None, None) => f.name() == name,
             })
@@ -409,6 +398,33 @@ impl DFSchema {
             self.field_with_qualified_name(qualifier, name)
         } else {
             self.field_with_unqualified_name(name)
+        }
+    }
+
+    /// Check whether the column reference is ambiguous
+    pub fn check_ambiguous_name(
+        &self,
+        qualifier: Option<&TableReference>,
+        name: &str,
+    ) -> Result<()> {
+        let count = self
+            .iter()
+            .filter(|(field_q, f)| match (field_q, qualifier) {
+                (Some(q1), Some(q2)) => q1.resolved_eq(q2) && f.name() == name,
+                (None, None) => f.name() == name,
+                _ => false,
+            })
+            .take(2)
+            .count();
+        if count > 1 {
+            _schema_err!(SchemaError::AmbiguousReference {
+                field: Column {
+                    relation: None,
+                    name: name.to_string(),
+                },
+            })
+        } else {
+            Ok(())
         }
     }
 
@@ -1242,10 +1258,9 @@ mod tests {
     #[test]
     fn into() {
         // Demonstrate how to convert back and forth between Schema, SchemaRef, DFSchema, and DFSchemaRef
-        let metadata = test_metadata();
         let arrow_schema = Schema::new_with_metadata(
             vec![Field::new("c0", DataType::Int64, true)],
-            metadata.clone(),
+            test_metadata(),
         );
         let arrow_schema_ref = Arc::new(arrow_schema.clone());
 

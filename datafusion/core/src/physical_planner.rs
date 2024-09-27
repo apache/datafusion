@@ -58,8 +58,8 @@ use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    displayable, windows, AggregateExpr, ExecutionPlan, ExecutionPlanProperties,
-    InputOrderMode, Partitioning, PhysicalExpr, WindowExpr,
+    displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
+    Partitioning, PhysicalExpr, WindowExpr,
 };
 
 use arrow::compute::SortOptions;
@@ -73,18 +73,19 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
-    self, physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
+    physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, StringifiedPlan,
-    WindowFrame, WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, SortExpr,
+    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
+use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
@@ -429,7 +430,7 @@ impl DefaultPhysicalPlanner {
         Ok(Some(plan))
     }
 
-    /// Given a single LogicalPlan node, map it to it's physical ExecutionPlan counterpart.
+    /// Given a single LogicalPlan node, map it to its physical ExecutionPlan counterpart.
     async fn map_logical_node_to_physical(
         &self,
         node: &LogicalPlan,
@@ -701,7 +702,7 @@ impl DefaultPhysicalPlanner {
                 let initial_aggr = Arc::new(AggregateExec::try_new(
                     AggregateMode::Partial,
                     groups.clone(),
-                    aggregates.clone(),
+                    aggregates,
                     filters.clone(),
                     input_exec,
                     physical_input_schema.clone(),
@@ -719,7 +720,7 @@ impl DefaultPhysicalPlanner {
                 // optimization purposes. For example, a FIRST_VALUE may turn
                 // into a LAST_VALUE with the reverse ordering requirement.
                 // To reflect such changes to subsequent stages, use the updated
-                // `AggregateExpr`/`PhysicalSortExpr` objects.
+                // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
                 let updated_aggregates = initial_aggr.aggr_expr().to_vec();
 
                 let next_partition_mode = if can_repartition {
@@ -848,9 +849,16 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let input = children.one()?;
                 let schema = SchemaRef::new(schema.as_ref().to_owned().into());
+                let list_column_indices = list_type_columns
+                    .iter()
+                    .map(|(index, unnesting)| ListUnnest {
+                        index_in_input_schema: *index,
+                        depth: unnesting.depth,
+                    })
+                    .collect();
                 Arc::new(UnnestExec::new(
                     input,
-                    list_type_columns.clone(),
+                    list_column_indices,
                     struct_type_columns.clone(),
                     schema,
                     options.clone(),
@@ -1541,7 +1549,7 @@ pub fn create_window_expr(
 }
 
 type AggregateExprWithOptionalArgs = (
-    Arc<dyn AggregateExpr>,
+    AggregateFunctionExpr,
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
     // Ordering requirements, if any
@@ -1641,31 +1649,27 @@ pub fn create_aggregate_expr_and_maybe_filter(
 
 /// Create a physical sort expression from a logical expression
 pub fn create_physical_sort_expr(
-    e: &Expr,
+    e: &SortExpr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<PhysicalSortExpr> {
-    if let Expr::Sort(expr::Sort {
+    let SortExpr {
         expr,
         asc,
         nulls_first,
-    }) = e
-    {
-        Ok(PhysicalSortExpr {
-            expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-            options: SortOptions {
-                descending: !asc,
-                nulls_first: *nulls_first,
-            },
-        })
-    } else {
-        internal_err!("Expects a sort expression")
-    }
+    } = e;
+    Ok(PhysicalSortExpr {
+        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+        options: SortOptions {
+            descending: !asc,
+            nulls_first: *nulls_first,
+        },
+    })
 }
 
 /// Create vector of physical sort expression from a vector of logical expression
 pub fn create_physical_sort_exprs(
-    exprs: &[Expr],
+    exprs: &[SortExpr],
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<LexOrdering> {
@@ -1978,6 +1982,7 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
+    use std::cmp::Ordering;
     use std::fmt::{self, Debug};
     use std::ops::{BitAnd, Not};
 
@@ -2532,6 +2537,14 @@ mod tests {
         }
     }
 
+    // Implementation needed for `UserDefinedLogicalNodeCore`, since the only field is
+    // a schema, we can't derive `PartialOrd`, and we can't compare these.
+    impl PartialOrd for NoOpExtensionNode {
+        fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+            None
+        }
+    }
+
     impl UserDefinedLogicalNodeCore for NoOpExtensionNode {
         fn name(&self) -> &str {
             "NoOp"
@@ -2569,7 +2582,7 @@ mod tests {
 
     impl NoOpExecutionPlan {
         fn new(schema: SchemaRef) -> Self {
-            let cache = Self::compute_properties(schema.clone());
+            let cache = Self::compute_properties(schema);
             Self { cache }
         }
 

@@ -149,7 +149,7 @@ where
             output_type,
             map: hashbrown::raw::RawTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
-            builder: GenericByteViewBuilder::new().with_block_size(2 * 1024 * 1024),
+            builder: GenericByteViewBuilder::new(),
             random_state: RandomState::new(),
             hashes_buffer: vec![],
             null: None,

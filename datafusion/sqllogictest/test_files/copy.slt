@@ -36,7 +36,7 @@ statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet STORED AS PARQUET 
 LOCATION 'test_files/scratch/copy/partitioned_table1/' PARTITIONED BY (col2);
 
-query I?
+query IT
 select * from validate_partitioned_parquet order by col1, col2;
 ----
 1 Foo
@@ -64,7 +64,7 @@ statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet2 STORED AS PARQUET 
 LOCATION 'test_files/scratch/copy/partitioned_table2/' PARTITIONED BY (column2, column3);
 
-query I??
+query ITT
 select * from validate_partitioned_parquet2 order by column1,column2,column3;
 ----
 1 a x
@@ -92,7 +92,7 @@ statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet3 STORED AS PARQUET 
 LOCATION 'test_files/scratch/copy/partitioned_table3/' PARTITIONED BY (column1, column3);
 
-query ?T?
+query TTT
 select column1, column2, column3 from validate_partitioned_parquet3 order by column1,column2,column3;
 ----
 1 a x
@@ -107,6 +107,28 @@ query T
 select * from validate_partitioned_parquet_1_x order by column2;
 ----
 a
+
+# Copy to directory as partitioned files
+query I
+COPY (values (1::int, 2::bigint, 19968::date, arrow_cast(1725235200000, 'Date64'), false, 'x'),
+    (11::int, 22::bigint, 19969::date, arrow_cast(1725148800000, 'Date64'), true, 'y')
+)
+TO 'test_files/scratch/copy/partitioned_table5/' STORED AS parquet PARTITIONED BY (column1, column2, column3, column4, column5)
+OPTIONS ('format.compression' 'zstd(10)');
+----
+2
+
+# validate partitioning
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_parquet5 (column1 int, column2 bigint, column3 date, column4 date, column5 boolean, column6 varchar) STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_table5/' PARTITIONED BY (column1, column2, column3, column4, column5);
+
+query IIDDBT
+select column1, column2, column3, column4, column5, column6 from validate_partitioned_parquet5 order by column1,column2,column3,column4,column5;
+----
+1 2 2024-09-02 2024-09-02 false x
+11 22 2024-09-03 2024-09-01 true y
+
 
 statement ok
 create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar); 
@@ -530,7 +552,7 @@ CREATE EXTERNAL TABLE validate_arrow_file_dict
 STORED AS arrow
 LOCATION 'test_files/scratch/copy/table_dict.arrow';
 
-query T?
+query TT
 select * from validate_arrow_file_dict;
 ----
 c foo

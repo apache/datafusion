@@ -22,11 +22,11 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::{Aggregate, Expr, Sort};
+use datafusion_expr::{Aggregate, Expr, Sort, SortExpr};
 use indexmap::IndexSet;
 use std::hash::{Hash, Hasher};
 /// Optimization rule that eliminate duplicated expr.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EliminateDuplicatedExpr;
 
 impl EliminateDuplicatedExpr {
@@ -37,29 +37,15 @@ impl EliminateDuplicatedExpr {
 }
 // use this structure to avoid initial clone
 #[derive(Eq, Clone, Debug)]
-struct SortExprWrapper {
-    expr: Expr,
-}
+struct SortExprWrapper(SortExpr);
 impl PartialEq for SortExprWrapper {
     fn eq(&self, other: &Self) -> bool {
-        match (&self.expr, &other.expr) {
-            (Expr::Sort(own_sort), Expr::Sort(other_sort)) => {
-                own_sort.expr == other_sort.expr
-            }
-            _ => self.expr == other.expr,
-        }
+        self.0.expr == other.0.expr
     }
 }
 impl Hash for SortExprWrapper {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        match &self.expr {
-            Expr::Sort(sort) => {
-                sort.expr.hash(state);
-            }
-            _ => {
-                self.expr.hash(state);
-            }
-        }
+        self.0.expr.hash(state);
     }
 }
 impl OptimizerRule for EliminateDuplicatedExpr {
@@ -82,10 +68,10 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                 let unique_exprs: Vec<_> = sort
                     .expr
                     .into_iter()
-                    .map(|e| SortExprWrapper { expr: e })
+                    .map(SortExprWrapper)
                     .collect::<IndexSet<_>>()
                     .into_iter()
-                    .map(|wrapper| wrapper.expr)
+                    .map(|wrapper| wrapper.0)
                     .collect();
 
                 let transformed = if len != unique_exprs.len() {
@@ -146,11 +132,11 @@ mod tests {
     fn eliminate_sort_expr() -> Result<()> {
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .sort(vec![col("a"), col("a"), col("b"), col("c")])?
+            .sort_by(vec![col("a"), col("a"), col("b"), col("c")])?
             .limit(5, Some(10))?
             .build()?;
         let expected = "Limit: skip=5, fetch=10\
-        \n  Sort: test.a, test.b, test.c\
+        \n  Sort: test.a ASC NULLS LAST, test.b ASC NULLS LAST, test.c ASC NULLS LAST\
         \n    TableScan: test";
         assert_optimized_plan_eq(plan, expected)
     }

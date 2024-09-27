@@ -18,12 +18,10 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::planner::{
-    idents_to_table_reference, ContextProvider, PlannerContext, SqlToRel,
-};
+use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs, transform_bottom_unnests,
+    resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -31,7 +29,7 @@ use datafusion_common::UnnestOptions;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
-    normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
+    normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
 use datafusion_expr::utils::{
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
@@ -107,7 +105,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             true,
             Some(base_plan.schema().as_ref()),
         )?;
-        let order_by_rex = normalize_cols(order_by_rex, &projected_plan)?;
+        let order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
 
         // this alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
@@ -160,6 +158,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         &combined_schema,
                         planner_context,
                     )?;
+
                     // aliases from the projection can conflict with same-named expressions in the input
                     let mut alias_map = alias_map.clone();
                     for f in base_plan.schema().fields() {
@@ -302,6 +301,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut intermediate_plan = input;
         let mut intermediate_select_exprs = select_exprs;
+
         // Each expr in select_exprs can contains multiple unnest stage
         // The transformation happen bottom up, one at a time for each iteration
         // Only exaust the loop if no more unnest transformation is found
@@ -316,7 +316,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
             // - unnest(array_col) will be transformed into unnest(array_col).element
             // - unnest(array_col) + 1 will be transformed into unnest(array_col).element +1
-            let outer_projection_exprs = transform_bottom_unnests(
+            let outer_projection_exprs = rewrite_recursive_unnests_bottom_up(
                 &intermediate_plan,
                 &mut unnest_columns,
                 &mut inner_projection_exprs,
@@ -328,22 +328,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // The original expr does not contain any unnest
                 if i == 0 {
                     return LogicalPlanBuilder::from(intermediate_plan)
-                        .project(inner_projection_exprs)?
+                        .project(intermediate_select_exprs)?
                         .build();
                 }
                 break;
             } else {
-                let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+
                 let plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(inner_projection_exprs)?
-                    .unnest_columns_with_options(columns, unnest_options)?
+                    .unnest_columns_recursive_with_options(
+                        unnest_columns,
+                        unnest_options,
+                    )?
                     .build()?;
                 intermediate_plan = plan;
                 intermediate_select_exprs = outer_projection_exprs;
             }
         }
+
         LogicalPlanBuilder::from(intermediate_plan)
             .project(intermediate_select_exprs)?
             .build()
@@ -370,8 +374,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    /// Try converting Unnest(Expr) of group by to Unnest/Projection
+    /// Try converting Unnest(Expr) of group by to Unnest/Projection.
     /// Return the new input and group_by_exprs of Aggregate.
+    /// Select exprs can be different from agg exprs, for example:
     fn try_process_group_by_unnest(
         &self,
         agg: Aggregate,
@@ -408,7 +413,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let mut unnest_columns = vec![];
             let mut inner_projection_exprs = vec![];
 
-            let outer_projection_exprs = transform_bottom_unnests(
+            let outer_projection_exprs = rewrite_recursive_unnests_bottom_up(
                 &intermediate_plan,
                 &mut unnest_columns,
                 &mut inner_projection_exprs,
@@ -418,7 +423,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if unnest_columns.is_empty() {
                 break;
             } else {
-                let columns = unnest_columns.into_iter().map(|col| col.into()).collect();
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
 
                 let mut projection_exprs = match &aggr_expr_using_columns {
@@ -443,7 +447,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(projection_exprs)?
-                    .unnest_columns_with_options(columns, unnest_options)?
+                    .unnest_columns_recursive_with_options(
+                        unnest_columns,
+                        unnest_options,
+                    )?
                     .build()?;
 
                 intermediate_select_exprs = outer_projection_exprs;
@@ -590,7 +597,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
-                let qualifier = idents_to_table_reference(object_name.0, false)?;
+                let qualifier = self.object_name_to_table_reference(object_name)?;
                 let planned_options = self.plan_wildcard_options(
                     plan,
                     empty_from,

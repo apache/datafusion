@@ -40,7 +40,7 @@ use tokio::fs::File;
 use datafusion::datasource::streaming::StreamingTable;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -509,21 +509,20 @@ impl TestCase {
 
         let table = scenario.table();
 
-        let mut rt_config = RuntimeConfig::new()
+        let mut builder = RuntimeEnvBuilder::new()
             // disk manager setting controls the spilling
             .with_disk_manager(disk_manager_config)
             .with_memory_limit(memory_limit, MEMORY_FRACTION);
 
         if let Some(pool) = memory_pool {
-            rt_config = rt_config.with_memory_pool(pool);
+            builder = builder.with_memory_pool(pool);
         };
-
-        let runtime = RuntimeEnv::new(rt_config).unwrap();
+        let runtime = builder.build_arc().unwrap();
 
         // Configure execution
         let builder = SessionStateBuilder::new()
             .with_config(config)
-            .with_runtime_env(Arc::new(runtime))
+            .with_runtime_env(runtime)
             .with_default_features();
         let builder = match scenario.rules() {
             Some(rules) => builder.with_physical_optimizer_rules(rules),
@@ -778,6 +777,7 @@ fn batches_byte_size(batches: &[RecordBatch]) -> usize {
     batches.iter().map(|b| b.get_array_memory_size()).sum()
 }
 
+#[derive(Debug)]
 struct DummyStreamPartition {
     schema: SchemaRef,
     batches: Vec<RecordBatch>,
@@ -799,6 +799,7 @@ impl PartitionStream for DummyStreamPartition {
 }
 
 ///  Wrapper over a TableProvider that can provide ordering information
+#[derive(Debug)]
 struct SortedTableProvider {
     schema: SchemaRef,
     batches: Vec<Vec<RecordBatch>>,

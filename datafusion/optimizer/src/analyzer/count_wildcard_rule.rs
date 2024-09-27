@@ -28,7 +28,7 @@ use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
 /// Resolves issue: <https://github.com/apache/datafusion/issues/5473>
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CountWildcardRule {}
 
 impl CountWildcardRule {
@@ -76,7 +76,7 @@ fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
 fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     let name_preserver = NamePreserver::new(&plan);
     plan.map_expressions(|expr| {
-        let original_name = name_preserver.save(&expr)?;
+        let original_name = name_preserver.save(&expr);
         let transformed_expr = expr.transform_up(|expr| match expr {
             Expr::WindowFunction(mut window_function)
                 if is_count_star_window_aggregate(&window_function) =>
@@ -94,7 +94,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             }
             _ => Ok(Transformed::no(expr)),
         })?;
-        transformed_expr.map_data(|data| original_name.restore(data))
+        Ok(transformed_expr.update_data(|data| original_name.restore(data)))
     })
 }
 
@@ -229,7 +229,7 @@ mod tests {
                 WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 vec![wildcard()],
             ))
-            .order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
+            .order_by(vec![Sort::new(col("a"), false, true)])
             .window_frame(WindowFrame::new_bounds(
                 WindowFrameUnits::Range,
                 WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),

@@ -32,14 +32,23 @@ Apache DataFusion
      <a class="github-button" href="https://github.com/apache/datafusion/fork" data-size="large" data-show-count="true" aria-label="Fork apache/datafusion on GitHub">Fork</a>
   </p>
 
-DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
-`Rust <http://rustlang.org>`_, using the `Apache Arrow <https://arrow.apache.org>`_
-in-memory format.
 
-DataFusion offers SQL and Dataframe APIs, excellent
-`performance <https://benchmark.clickhouse.com>`_, built-in support for
-CSV, Parquet, JSON, and Avro, extensive customization, and a great
-community.
+DataFusion is an extensible query engine written in `Rust <http://rustlang.org>`_ that
+uses `Apache Arrow <https://arrow.apache.org>`_ as its in-memory format. DataFusion's target users are
+developers building fast and feature rich database and analytic systems,
+customized to particular workloads. See `use cases <https://datafusion.apache.org/user-guide/introduction.html#use-cases>`_ for examples.
+
+"Out of the box," DataFusion offers `SQL <https://datafusion.apache.org/user-guide/sql/index.html>`_
+and `Dataframe <https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html>`_ APIs,
+excellent `performance <https://benchmark.clickhouse.com/>`_, built-in support for CSV, Parquet, JSON, and Avro,
+extensive customization, and a great community.
+`Python Bindings <https://github.com/apache/datafusion-python>`_ are also available.
+
+DataFusion features a full query planner, a columnar, streaming, multi-threaded,
+vectorized execution engine, and partitioned data sources. You can
+customize DataFusion at almost all points including additional data sources,
+query languages, functions, custom operators and more.
+See the `Architecture <https://datafusion.apache.org/contributor-guide/architecture.html>`_ section for more details.
 
 To get started, see
 
@@ -89,6 +98,7 @@ To get started, see
    user-guide/expressions
    user-guide/sql/index
    user-guide/configs
+   user-guide/explain-usage
    user-guide/faq
 
 .. _toc.library-user-guide:
@@ -98,6 +108,7 @@ To get started, see
    :caption: Library User Guide
    
    library-user-guide/index
+   library-user-guide/extensions
    library-user-guide/using-the-sql-api
    library-user-guide/working-with-exprs
    library-user-guide/using-the-dataframe-api

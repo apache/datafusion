@@ -516,7 +516,8 @@ mod tests {
             Field::new("c3", DataType::Float64, true),
         ]));
 
-        let adapter = DefaultSchemaAdapterFactory::default().create(table_schema.clone());
+        let adapter = DefaultSchemaAdapterFactory
+            .create(table_schema.clone(), table_schema.clone());
 
         let file_schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
@@ -573,7 +574,7 @@ mod tests {
 
         let indices = vec![1, 2, 4];
         let schema = SchemaRef::from(table_schema.project(&indices).unwrap());
-        let adapter = DefaultSchemaAdapterFactory::default().create(schema);
+        let adapter = DefaultSchemaAdapterFactory.create(schema, table_schema.clone());
         let (mapping, projection) = adapter.map_schema(&file_schema).unwrap();
 
         let id = Int32Array::from(vec![Some(1), Some(2), Some(3)]);

@@ -48,7 +48,7 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
             output.push(item);
         }
     }
-    output
+    LexRequirement::new(output)
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
@@ -207,7 +207,7 @@ mod tests {
         // Define a and f are aliases
         eq_properties.add_equal_conditions(col_a, col_f)?;
         // Column e has constant value.
-        eq_properties = eq_properties.add_constants([ConstExpr::from(col_e)]);
+        eq_properties = eq_properties.with_constants([ConstExpr::from(col_e)]);
 
         // Randomly order columns for sorting
         let mut rng = StdRng::seed_from_u64(seed);

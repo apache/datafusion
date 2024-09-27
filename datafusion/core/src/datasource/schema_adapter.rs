@@ -35,7 +35,13 @@ use std::sync::Arc;
 /// other than null)
 pub trait SchemaAdapterFactory: Debug + Send + Sync + 'static {
     /// Provides `SchemaAdapter`.
-    fn create(&self, schema: SchemaRef) -> Box<dyn SchemaAdapter>;
+    // The design of this function is mostly modeled for the needs of DefaultSchemaAdapterFactory,
+    // read its implementation docs for the reasoning
+    fn create(
+        &self,
+        projected_table_schema: SchemaRef,
+        table_schema: SchemaRef,
+    ) -> Box<dyn SchemaAdapter>;
 }
 
 /// Adapt file-level [`RecordBatch`]es to a table schema, which may have a schema
@@ -73,17 +79,18 @@ pub trait SchemaAdapter: Send + Sync {
     ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)>;
 }
 
-/// Creates a `SchemaMapping` that can be used to cast or map the columns
-/// from the file schema to the table schema.
+/// Maps, by casting or reordering columns from the file schema to the table
+/// schema.
 pub trait SchemaMapper: Debug + Send + Sync {
-    /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
+    /// Adapts a `RecordBatch` to match the `table_schema` using the stored
+    /// mapping and conversions.
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch>;
 
-    /// Adapts a [`RecordBatch`] that does not  have all the columns from the
+    /// Adapts a [`RecordBatch`] that does not have all the columns from the
     /// file schema.
     ///
-    /// This method is used when applying a filter to a subset of the columns during
-    /// an `ArrowPredicate`.
+    /// This method is used when applying a filter to a subset of the columns as
+    /// part of `DataFusionArrowPredicate` when `filter_pushdown` is enabled.
     ///
     /// This method is slower than `map_batch` as it looks up columns by name.
     fn map_partial_batch(
@@ -92,20 +99,36 @@ pub trait SchemaMapper: Debug + Send + Sync {
     ) -> datafusion_common::Result<RecordBatch>;
 }
 
-/// Basic implementation of [`SchemaAdapterFactory`] that maps columns by name
+/// Implementation of [`SchemaAdapterFactory`] that maps columns by name
 /// and casts columns to the expected type.
 #[derive(Clone, Debug, Default)]
-pub struct DefaultSchemaAdapterFactory {}
+pub struct DefaultSchemaAdapterFactory;
 
 impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
-    fn create(&self, table_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
-        Box::new(DefaultSchemaAdapter { table_schema })
+    fn create(
+        &self,
+        projected_table_schema: SchemaRef,
+        table_schema: SchemaRef,
+    ) -> Box<dyn SchemaAdapter> {
+        Box::new(DefaultSchemaAdapter {
+            projected_table_schema,
+            table_schema,
+        })
     }
 }
 
+/// This SchemaAdapter requires both the table schema and the projected table schema because of the
+/// needs of the [`SchemaMapping`] it creates. Read its documentation for more details
 #[derive(Clone, Debug)]
 pub(crate) struct DefaultSchemaAdapter {
-    /// Schema for the table
+    /// The schema for the table, projected to include only the fields being output (projected) by the
+    /// associated ParquetExec
+    projected_table_schema: SchemaRef,
+    /// The entire table schema for the table we're using this to adapt.
+    ///
+    /// This is used to evaluate any filters pushed down into the scan
+    /// which may refer to columns that are not referred to anywhere
+    /// else in the plan.
     table_schema: SchemaRef,
 }
 
@@ -115,7 +138,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
     ///
     /// Panics if index is not in range for the table schema
     fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
-        let field = self.table_schema.field(index);
+        let field = self.projected_table_schema.field(index);
         Some(file_schema.fields.find(field.name())?.0)
     }
 
@@ -132,11 +155,11 @@ impl SchemaAdapter for DefaultSchemaAdapter {
         file_schema: &Schema,
     ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
         let mut projection = Vec::with_capacity(file_schema.fields().len());
-        let mut field_mappings = vec![None; self.table_schema.fields().len()];
+        let mut field_mappings = vec![None; self.projected_table_schema.fields().len()];
 
         for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
             if let Some((table_idx, table_field)) =
-                self.table_schema.fields().find(file_field.name())
+                self.projected_table_schema.fields().find(file_field.name())
             {
                 match can_cast_types(file_field.data_type(), table_field.data_type()) {
                     true => {
@@ -157,8 +180,9 @@ impl SchemaAdapter for DefaultSchemaAdapter {
 
         Ok((
             Arc::new(SchemaMapping {
-                table_schema: self.table_schema.clone(),
+                projected_table_schema: self.projected_table_schema.clone(),
                 field_mappings,
+                table_schema: self.table_schema.clone(),
             }),
             projection,
         ))
@@ -167,39 +191,81 @@ impl SchemaAdapter for DefaultSchemaAdapter {
 
 /// The SchemaMapping struct holds a mapping from the file schema to the table schema
 /// and any necessary type conversions that need to be applied.
+///
+/// This needs both the projected table schema and full table schema because its different
+/// functions have different needs. The [`map_batch`] function is only used by the ParquetOpener to
+/// produce a RecordBatch which has the projected schema, since that's the schema which is supposed
+/// to come out of the execution of this query. [`map_partial_batch`], however, is used to create a
+/// RecordBatch with a schema that can be used for Parquet pushdown, meaning that it may contain
+/// fields which are not in the projected schema (as the fields that parquet pushdown filters
+/// operate can be completely distinct from the fields that are projected (output) out of the
+/// ParquetExec).
+///
+/// [`map_partial_batch`] uses `table_schema` to create the resulting RecordBatch (as it could be
+/// operating on any fields in the schema), while [`map_batch`] uses `projected_table_schema` (as
+/// it can only operate on the projected fields).
+///
+/// [`map_batch`]: Self::map_batch
+/// [`map_partial_batch`]: Self::map_partial_batch
 #[derive(Debug)]
 pub struct SchemaMapping {
-    /// The schema of the table. This is the expected schema after conversion and it should match the schema of the query result.
-    table_schema: SchemaRef,
-    /// Mapping from field index in `table_schema` to index in projected file_schema
+    /// The schema of the table. This is the expected schema after conversion and it should match
+    /// the schema of the query result.
+    projected_table_schema: SchemaRef,
+    /// Mapping from field index in `projected_table_schema` to index in projected file_schema.
+    /// They are Options instead of just plain `usize`s because the table could have fields that
+    /// don't exist in the file.
     field_mappings: Vec<Option<usize>>,
+    /// The entire table schema, as opposed to the projected_table_schema (which only contains the
+    /// columns that we are projecting out of this query). This contains all fields in the table,
+    /// regardless of if they will be projected out or not.
+    table_schema: SchemaRef,
 }
 
 impl SchemaMapper for SchemaMapping {
-    /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
+    /// Adapts a `RecordBatch` to match the `projected_table_schema` using the stored mapping and
+    /// conversions. The produced RecordBatch has a schema that contains only the projected
+    /// columns, so if one needs a RecordBatch with a schema that references columns which are not
+    /// in the projected, it would be better to use `map_partial_batch`
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch> {
         let batch_rows = batch.num_rows();
         let batch_cols = batch.columns().to_vec();
 
         let cols = self
-            .table_schema
+            .projected_table_schema
+            // go through each field in the projected schema
             .fields()
             .iter()
+            // and zip it with the index that maps fields from the projected table schema to the
+            // projected file schema in `batch`
             .zip(&self.field_mappings)
-            .map(|(field, file_idx)| match file_idx {
-                Some(batch_idx) => cast(&batch_cols[*batch_idx], field.data_type()),
-                None => Ok(new_null_array(field.data_type(), batch_rows)),
+            // and for each one...
+            .map(|(field, file_idx)| {
+                file_idx.map_or_else(
+                    // If this field only exists in the table, and not in the file, then we know
+                    // that it's null, so just return that.
+                    || Ok(new_null_array(field.data_type(), batch_rows)),
+                    // However, if it does exist in both, then try to cast it to the correct output
+                    // type
+                    |batch_idx| cast(&batch_cols[batch_idx], field.data_type()),
+                )
             })
             .collect::<datafusion_common::Result<Vec<_>, _>>()?;
 
         // Necessary to handle empty batches
         let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
 
-        let schema = self.table_schema.clone();
+        let schema = self.projected_table_schema.clone();
         let record_batch = RecordBatch::try_new_with_options(schema, cols, &options)?;
         Ok(record_batch)
     }
 
+    /// Adapts a [`RecordBatch`]'s schema into one that has all the correct output types and only
+    /// contains the fields that exist in both the file schema and table schema.
+    ///
+    /// Unlike `map_batch` this method also preserves the columns that
+    /// may not appear in the final output (`projected_table_schema`) but may
+    /// appear in push down predicates
     fn map_partial_batch(
         &self,
         batch: RecordBatch,
@@ -207,15 +273,33 @@ impl SchemaMapper for SchemaMapping {
         let batch_cols = batch.columns().to_vec();
         let schema = batch.schema();
 
-        let mut cols = vec![];
-        let mut fields = vec![];
-        for (i, f) in schema.fields().iter().enumerate() {
-            let table_field = self.table_schema.field_with_name(f.name());
-            if let Ok(tf) = table_field {
-                cols.push(cast(&batch_cols[i], tf.data_type())?);
-                fields.push(tf.clone());
-            }
-        }
+        // for each field in the batch's schema (which is based on a file, not a table)...
+        let (cols, fields) = schema
+            .fields()
+            .iter()
+            .zip(batch_cols.iter())
+            .flat_map(|(field, batch_col)| {
+                self.table_schema
+                    // try to get the same field from the table schema that we have stored in self
+                    .field_with_name(field.name())
+                    // and if we don't have it, that's fine, ignore it. This may occur when we've
+                    // created an external table whose fields are a subset of the fields in this
+                    // file, then tried to read data from the file into this table. If that is the
+                    // case here, it's fine to ignore because we don't care about this field
+                    // anyways
+                    .ok()
+                    // but if we do have it,
+                    .map(|table_field| {
+                        // try to cast it into the correct output type. we don't want to ignore this
+                        // error, though, so it's propagated.
+                        cast(batch_col, table_field.data_type())
+                            // and if that works, return the field and column.
+                            .map(|new_col| (new_col, table_field.clone()))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .unzip::<_, _, Vec<_>, Vec<_>>();
 
         // Necessary to handle empty batches
         let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
@@ -321,12 +405,16 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct TestSchemaAdapterFactory {}
+    struct TestSchemaAdapterFactory;
 
     impl SchemaAdapterFactory for TestSchemaAdapterFactory {
-        fn create(&self, schema: SchemaRef) -> Box<dyn SchemaAdapter> {
+        fn create(
+            &self,
+            projected_table_schema: SchemaRef,
+            _table_schema: SchemaRef,
+        ) -> Box<dyn SchemaAdapter> {
             Box::new(TestSchemaAdapter {
-                table_schema: schema,
+                table_schema: projected_table_schema,
             })
         }
     }
@@ -369,7 +457,7 @@ mod tests {
             let f1 = Field::new("id", DataType::Int32, true);
             let f2 = Field::new("extra_column", DataType::Utf8, true);
 
-            let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
+            let schema = Arc::new(Schema::new(vec![f1, f2]));
 
             let extra_column = Arc::new(StringArray::from(vec!["foo"]));
             let mut new_columns = batch.columns().to_vec();

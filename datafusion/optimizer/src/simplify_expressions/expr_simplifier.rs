@@ -591,7 +591,6 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::WindowFunction { .. }
-            | Expr::Sort { .. }
             | Expr::GroupingSet(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
@@ -731,7 +730,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Eq,
                 right,
             }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                Transformed::yes(match as_bool_lit(*left)? {
+                Transformed::yes(match as_bool_lit(&left)? {
                     Some(true) => *right,
                     Some(false) => Expr::Not(right),
                     None => lit_bool_null(),
@@ -745,7 +744,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Eq,
                 right,
             }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                Transformed::yes(match as_bool_lit(*right)? {
+                Transformed::yes(match as_bool_lit(&right)? {
                     Some(true) => *left,
                     Some(false) => Expr::Not(left),
                     None => lit_bool_null(),
@@ -762,7 +761,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: NotEq,
                 right,
             }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                Transformed::yes(match as_bool_lit(*left)? {
+                Transformed::yes(match as_bool_lit(&left)? {
                     Some(true) => Expr::Not(right),
                     Some(false) => *right,
                     None => lit_bool_null(),
@@ -776,7 +775,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: NotEq,
                 right,
             }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                Transformed::yes(match as_bool_lit(*right)? {
+                Transformed::yes(match as_bool_lit(&right)? {
                     Some(true) => Expr::Not(left),
                     Some(false) => *left,
                     None => lit_bool_null(),
@@ -1570,7 +1569,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_intersection(l1, l2, false).map(Transformed::yes);
+                        return inlist_intersection(l1, &l2, false).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1610,7 +1609,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_except(l1, l2).map(Transformed::yes);
+                        return inlist_except(l1, &l2).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1630,7 +1629,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_except(l2, l1).map(Transformed::yes);
+                        return inlist_except(l2, &l1).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1650,7 +1649,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_intersection(l1, l2, true).map(Transformed::yes);
+                        return inlist_intersection(l1, &l2, true).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1760,7 +1759,7 @@ fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
 
 /// Return the intersection of two inlist expressions
 /// maintaining the order of the elements in the two lists
-fn inlist_intersection(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
+fn inlist_intersection(mut l1: InList, l2: &InList, negated: bool) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
     // remove all items from l1 that are not in l2
@@ -1776,7 +1775,7 @@ fn inlist_intersection(mut l1: InList, l2: InList, negated: bool) -> Result<Expr
 
 /// Return the all items in l1 that are not in l2
 /// maintaining the order of the elements in the two lists
-fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
+fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
     // keep only items from l1 that are not in l2
@@ -1799,6 +1798,7 @@ mod tests {
         interval_arithmetic::Interval,
         *,
     };
+    use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
@@ -3407,32 +3407,32 @@ mod tests {
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], false),
         );
-        assert_eq!(simplify(expr.clone()), lit(false));
+        assert_eq!(simplify(expr), lit(false));
 
         // 2. c1 IN (1,2,3,4) AND c1 IN (4,5,6,7) -> c1 = 4
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], false),
         );
-        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(4)));
+        assert_eq!(simplify(expr), col("c1").eq(lit(4)));
 
         // 3. c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) -> true
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
         );
-        assert_eq!(simplify(expr.clone()), lit(true));
+        assert_eq!(simplify(expr), lit(true));
 
         // 3.5 c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (4, 5, 6, 7) -> c1 != 4 (4 overlaps)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
         );
-        assert_eq!(simplify(expr.clone()), col("c1").not_eq(lit(4)));
+        assert_eq!(simplify(expr), col("c1").not_eq(lit(4)));
 
         // 4. c1 NOT IN (1,2,3,4) AND c1 NOT IN (4,5,6,7) -> c1 NOT IN (1,2,3,4,5,6,7)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
         );
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             in_list(
                 col("c1"),
                 vec![lit(1), lit(2), lit(3), lit(4), lit(5), lit(6), lit(7)],
@@ -3445,7 +3445,7 @@ mod tests {
             in_list(col("c1"), vec![lit(2), lit(3), lit(4), lit(5)], false),
         );
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             in_list(
                 col("c1"),
                 vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
@@ -3459,7 +3459,7 @@ mod tests {
             vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
             true,
         ));
-        assert_eq!(simplify(expr.clone()), lit(false));
+        assert_eq!(simplify(expr), lit(false));
 
         // 7. c1 NOT IN (1,2,3,4) AND c1 IN (1,2,3,4,5) -> c1 = 5
         let expr =
@@ -3468,14 +3468,14 @@ mod tests {
                 vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
                 false,
             ));
-        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(5)));
+        assert_eq!(simplify(expr), col("c1").eq(lit(5)));
 
         // 8. c1 IN (1,2,3,4) AND c1 NOT IN (5,6,7,8) -> c1 IN (1,2,3,4)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
         );
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false)
         );
 
@@ -3493,7 +3493,7 @@ mod tests {
         ))
         .and(in_list(col("c1"), vec![lit(3), lit(6)], false));
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             col("c1").eq(lit(3)).or(col("c1").eq(lit(6)))
         );
 
@@ -3507,7 +3507,7 @@ mod tests {
                 ))
                 .and(in_list(col("c1"), vec![lit(8), lit(9), lit(10)], false)),
         );
-        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(8)));
+        assert_eq!(simplify(expr), col("c1").eq(lit(8)));
 
         // Contains non-InList expression
         // c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9) -> c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9)
@@ -3622,7 +3622,7 @@ mod tests {
         let expr_x = col("c3").gt(lit(3_i64));
         let expr_y = (col("c4") + lit(2_u32)).lt(lit(10_u32));
         let expr_z = col("c1").in_list(vec![lit("a"), lit("b")], true);
-        let expr = expr_x.clone().and(expr_y.clone().or(expr_z));
+        let expr = expr_x.clone().and(expr_y.or(expr_z));
 
         // All guaranteed null
         let guarantees = vec![
@@ -3698,7 +3698,7 @@ mod tests {
             col("c4"),
             NullableInterval::from(ScalarValue::UInt32(Some(3))),
         )];
-        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        let output = simplify_with_guarantee(expr, guarantees);
         assert_eq!(&output, &expr_x);
     }
 
@@ -3902,10 +3902,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            unimplemented!("not needed for tests")
-        }
-
         fn simplify(&self) -> Option<WindowFunctionSimplification> {
             if self.simplify {
                 Some(Box::new(|_, _| Ok(col("result_column"))))
@@ -3915,6 +3911,10 @@ mod tests {
         }
 
         fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+            unimplemented!("not needed for tests")
+        }
+
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
             unimplemented!("not needed for tests")
         }
     }

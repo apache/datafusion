@@ -18,19 +18,23 @@
 //! Merge that deals with an arbitrary size of streaming inputs.
 //! This is an order-preserving merge.
 
+use std::collections::VecDeque;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{ready, Context, Poll};
+
 use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
 use crate::RecordBatchStream;
+
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
+
 use futures::Stream;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{ready, Context, Poll};
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
 type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
@@ -86,7 +90,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// been updated
     loser_tree_adjusted: bool,
 
-    /// target batch size
+    /// Target batch size
     batch_size: usize,
 
     /// Cursors for each input partition. `None` means the input is exhausted
@@ -97,6 +101,12 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
 
     /// number of rows produced
     produced: usize,
+
+    /// This queue contains partition indices in order. When a partition is polled and returns `Poll::Ready`,
+    /// it is removed from the vector. If a partition returns `Poll::Pending`, it is moved to the end of the
+    /// vector to ensure the next iteration starts with a different partition, preventing the same partition
+    /// from being continuously polled.
+    uninitiated_partitions: VecDeque<usize>,
 }
 
 impl<C: CursorValues> SortPreservingMergeStream<C> {
@@ -121,6 +131,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             batch_size,
             fetch,
             produced: 0,
+            uninitiated_partitions: (0..stream_count).collect(),
         }
     }
 
@@ -154,16 +165,37 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         if self.aborted {
             return Poll::Ready(None);
         }
-        // try to initialize the loser tree
-        if self.loser_tree.len() != self.streams.partitions() {
-            // Loser tree is not constructed, continue to initialize the loser tree.
-            // Through this way, the ith stream will be polled until the first `OK(batch)`
-            // is returned
-            for i in self.loser_tree.len()..self.streams.partitions() {
-                if let Err(e) = ready!(self.maybe_poll_stream(cx, i)) {
-                    return Poll::Ready(Some(Err(e)));
+        // Once all partitions have set their corresponding cursors for the loser tree,
+        // we skip the following block. Until then, this function may be called multiple
+        // times and can return Poll::Pending if any partition returns Poll::Pending.
+        if self.loser_tree.is_empty() {
+            let remaining_partitions = self.uninitiated_partitions.clone();
+            for i in remaining_partitions {
+                match self.maybe_poll_stream(cx, i) {
+                    Poll::Ready(Err(e)) => {
+                        // Propagating the input error
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    Poll::Pending => {
+                        // If a partition returns Poll::Pending, to avoid continuously polling it
+                        // and potentially increasing upstream buffer sizes, we move it to the
+                        // back of the polling queue.
+                        if let Some(front) = self.uninitiated_partitions.pop_front() {
+                            // This pop_front can never return `None`.
+                            self.uninitiated_partitions.push_back(front);
+                        }
+                        // This function could remain in a pending state, so we manually wake it here.
+                        // However, this approach can be investigated further to find a more natural way
+                        // to avoid disrupting the runtime scheduler.
+                        cx.waker().wake_by_ref();
+                        return Poll::Pending;
+                    }
+                    _ => {
+                        // If the polling result is Poll::Ready(Some(batch)) or Poll::Ready(None),
+                        // we remove this partition from the queue so it is not polled again.
+                        self.uninitiated_partitions.retain(|idx| *idx != i);
+                    }
                 }
-                self.loser_tree.push(usize::MAX);
             }
             self.init_loser_tree();
         }
@@ -277,7 +309,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// non exhausted input, if possible
     fn init_loser_tree(&mut self) {
         // Init loser tree
-        assert_eq!(self.loser_tree.len(), self.cursors.len());
+        self.loser_tree = vec![usize::MAX; self.cursors.len()];
         for i in 0..self.cursors.len() {
             let mut winner = i;
             let mut cmp_node = self.lt_leaf_node_index(i);

@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use arrow_schema::SortOptions;
-
 use crate::equivalence::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
+use arrow_schema::SortOptions;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
@@ -102,6 +102,11 @@ impl OrderingEquivalenceClass {
         self.orderings.extend(orderings);
         // Make sure that there are no redundant orderings:
         self.remove_redundant_entries();
+    }
+
+    /// Adds a single ordering to the existing ordering equivalence class.
+    pub fn add_new_ordering(&mut self, ordering: LexOrdering) {
+        self.add_new_orderings([ordering]);
     }
 
     /// Removes redundant orderings from this equivalence class. For instance,
@@ -219,6 +224,21 @@ fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) ->
     false
 }
 
+impl Display for OrderingEquivalenceClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[")?;
+        let mut iter = self.orderings.iter();
+        if let Some(ordering) = iter.next() {
+            write!(f, "{}", PhysicalSortExpr::format_list(ordering))?;
+        }
+        for ordering in iter {
+            write!(f, "{}", PhysicalSortExpr::format_list(ordering))?;
+        }
+        write!(f, "]")?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -272,7 +292,7 @@ mod tests {
         // Crude ordering doesn't satisfy finer ordering. should return false
         let mut eq_properties_crude =
             EquivalenceProperties::new(Arc::clone(&input_schema));
-        eq_properties_crude.oeq_class.push(crude.clone());
+        eq_properties_crude.oeq_class.push(crude);
         assert!(!eq_properties_crude.ordering_satisfy(&finer));
         Ok(())
     }
@@ -559,7 +579,7 @@ mod tests {
             let constants = constants
                 .into_iter()
                 .map(|expr| ConstExpr::from(expr).with_across_partitions(true));
-            eq_properties = eq_properties.add_constants(constants);
+            eq_properties = eq_properties.with_constants(constants);
 
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(

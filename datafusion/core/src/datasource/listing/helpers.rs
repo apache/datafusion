@@ -51,69 +51,66 @@ use object_store::{ObjectMeta, ObjectStore};
 /// - the table provider can filter the table partition values with this expression
 /// - the expression can be marked as `TableProviderFilterPushDown::Exact` once this filtering
 ///   was performed
-pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
+pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
     let mut is_applicable = true;
-    expr.apply(|expr| {
-        match expr {
-            Expr::Column(Column { ref name, .. }) => {
-                is_applicable &= col_names.contains(name);
-                if is_applicable {
-                    Ok(TreeNodeRecursion::Jump)
-                } else {
+    expr.apply(|expr| match expr {
+        Expr::Column(Column { ref name, .. }) => {
+            is_applicable &= col_names.contains(&name.as_str());
+            if is_applicable {
+                Ok(TreeNodeRecursion::Jump)
+            } else {
+                Ok(TreeNodeRecursion::Stop)
+            }
+        }
+        Expr::Literal(_)
+        | Expr::Alias(_)
+        | Expr::OuterReferenceColumn(_, _)
+        | Expr::ScalarVariable(_, _)
+        | Expr::Not(_)
+        | Expr::IsNotNull(_)
+        | Expr::IsNull(_)
+        | Expr::IsTrue(_)
+        | Expr::IsFalse(_)
+        | Expr::IsUnknown(_)
+        | Expr::IsNotTrue(_)
+        | Expr::IsNotFalse(_)
+        | Expr::IsNotUnknown(_)
+        | Expr::Negative(_)
+        | Expr::Cast(_)
+        | Expr::TryCast(_)
+        | Expr::BinaryExpr(_)
+        | Expr::Between(_)
+        | Expr::Like(_)
+        | Expr::SimilarTo(_)
+        | Expr::InList(_)
+        | Expr::Exists(_)
+        | Expr::InSubquery(_)
+        | Expr::ScalarSubquery(_)
+        | Expr::GroupingSet(_)
+        | Expr::Case(_) => Ok(TreeNodeRecursion::Continue),
+
+        Expr::ScalarFunction(scalar_function) => {
+            match scalar_function.func.signature().volatility {
+                Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
+                // TODO: Stable functions could be `applicable`, but that would require access to the context
+                Volatility::Stable | Volatility::Volatile => {
+                    is_applicable = false;
                     Ok(TreeNodeRecursion::Stop)
                 }
             }
-            Expr::Literal(_)
-            | Expr::Alias(_)
-            | Expr::OuterReferenceColumn(_, _)
-            | Expr::ScalarVariable(_, _)
-            | Expr::Not(_)
-            | Expr::IsNotNull(_)
-            | Expr::IsNull(_)
-            | Expr::IsTrue(_)
-            | Expr::IsFalse(_)
-            | Expr::IsUnknown(_)
-            | Expr::IsNotTrue(_)
-            | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown(_)
-            | Expr::Negative(_)
-            | Expr::Cast { .. }
-            | Expr::TryCast { .. }
-            | Expr::BinaryExpr { .. }
-            | Expr::Between { .. }
-            | Expr::Like { .. }
-            | Expr::SimilarTo { .. }
-            | Expr::InList { .. }
-            | Expr::Exists { .. }
-            | Expr::InSubquery(_)
-            | Expr::ScalarSubquery(_)
-            | Expr::GroupingSet(_)
-            | Expr::Case { .. } => Ok(TreeNodeRecursion::Continue),
+        }
 
-            Expr::ScalarFunction(scalar_function) => {
-                match scalar_function.func.signature().volatility {
-                    Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
-                    // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        Ok(TreeNodeRecursion::Stop)
-                    }
-                }
-            }
-
-            // TODO other expressions are not handled yet:
-            // - AGGREGATE, WINDOW and SORT should not end up in filter conditions, except maybe in some edge cases
-            // - Can `Wildcard` be considered as a `Literal`?
-            // - ScalarVariable could be `applicable`, but that would require access to the context
-            Expr::AggregateFunction { .. }
-            | Expr::Sort { .. }
-            | Expr::WindowFunction { .. }
-            | Expr::Wildcard { .. }
-            | Expr::Unnest { .. }
-            | Expr::Placeholder(_) => {
-                is_applicable = false;
-                Ok(TreeNodeRecursion::Stop)
-            }
+        // TODO other expressions are not handled yet:
+        // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
+        // - Can `Wildcard` be considered as a `Literal`?
+        // - ScalarVariable could be `applicable`, but that would require access to the context
+        Expr::AggregateFunction { .. }
+        | Expr::WindowFunction { .. }
+        | Expr::Wildcard { .. }
+        | Expr::Unnest { .. }
+        | Expr::Placeholder(_) => {
+            is_applicable = false;
+            Ok(TreeNodeRecursion::Stop)
         }
     })
     .unwrap();
@@ -282,7 +279,7 @@ async fn prune_partitions(
         Default::default(),
     )?;
 
-    let batch = RecordBatch::try_new(schema.clone(), arrays)?;
+    let batch = RecordBatch::try_new(schema, arrays)?;
 
     // TODO: Plumb this down
     let props = ExecutionProps::new();
@@ -746,27 +743,27 @@ mod tests {
     #[test]
     fn test_expr_applicable_for_cols() {
         assert!(expr_applicable_for_cols(
-            &[String::from("c1")],
+            &["c1"],
             &Expr::eq(col("c1"), lit("value"))
         ));
         assert!(!expr_applicable_for_cols(
-            &[String::from("c1")],
+            &["c1"],
             &Expr::eq(col("c2"), lit("value"))
         ));
         assert!(!expr_applicable_for_cols(
-            &[String::from("c1")],
+            &["c1"],
             &Expr::eq(col("c1"), col("c2"))
         ));
         assert!(expr_applicable_for_cols(
-            &[String::from("c1"), String::from("c2")],
+            &["c1", "c2"],
             &Expr::eq(col("c1"), col("c2"))
         ));
         assert!(expr_applicable_for_cols(
-            &[String::from("c1"), String::from("c2")],
+            &["c1", "c2"],
             &(Expr::eq(col("c1"), col("c2").alias("c2_alias"))).not()
         ));
         assert!(expr_applicable_for_cols(
-            &[String::from("c1"), String::from("c2")],
+            &["c1", "c2"],
             &(case(col("c1"))
                 .when(lit("v1"), lit(true))
                 .otherwise(lit(false))

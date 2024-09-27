@@ -72,7 +72,7 @@ use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan};
 /// Filter: c1 > INT32(10)
 /// ```
 ///
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct UnwrapCastInComparison {}
 
 impl UnwrapCastInComparison {
@@ -99,7 +99,7 @@ impl OptimizerRule for UnwrapCastInComparison {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let mut schema = merge_schema(plan.inputs());
+        let mut schema = merge_schema(&plan.inputs());
 
         if let LogicalPlan::TableScan(ts) = &plan {
             let source_schema = DFSchema::try_from_qualified_schema(
@@ -117,9 +117,9 @@ impl OptimizerRule for UnwrapCastInComparison {
 
         let name_preserver = NamePreserver::new(&plan);
         plan.map_expressions(|expr| {
-            let original_name = name_preserver.save(&expr)?;
-            expr.rewrite(&mut expr_rewriter)?
-                .map_data(|expr| original_name.restore(expr))
+            let original_name = name_preserver.save(&expr);
+            expr.rewrite(&mut expr_rewriter)
+                .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
         })
     }
 }
@@ -159,20 +159,26 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                             expr: right_expr, ..
                         }),
                     ) => {
-                        // if the left_lit_value can be casted to the type of expr
+                        // if the left_lit_value can be cast to the type of expr
                         // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
                         let Ok(expr_type) = right_expr.get_type(&self.schema) else {
                             return Ok(Transformed::no(expr));
                         };
-                        let Some(value) =
-                            try_cast_literal_to_type(left_lit_value, &expr_type)
-                        else {
-                            return Ok(Transformed::no(expr));
-                        };
-                        **left = lit(value);
-                        // unwrap the cast/try_cast for the right expr
-                        **right = mem::take(right_expr);
-                        Ok(Transformed::yes(expr))
+                        match expr_type {
+                            // https://github.com/apache/datafusion/issues/12180
+                            DataType::Utf8View => Ok(Transformed::no(expr)),
+                            _ => {
+                                let Some(value) =
+                                    try_cast_literal_to_type(left_lit_value, &expr_type)
+                                else {
+                                    return Ok(Transformed::no(expr));
+                                };
+                                **left = lit(value);
+                                // unwrap the cast/try_cast for the right expr
+                                **right = mem::take(right_expr);
+                                Ok(Transformed::yes(expr))
+                            }
+                        }
                     }
                     (
                         Expr::TryCast(TryCast {
@@ -183,20 +189,26 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                         }),
                         Expr::Literal(right_lit_value),
                     ) => {
-                        // if the right_lit_value can be casted to the type of expr
+                        // if the right_lit_value can be cast to the type of expr
                         // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
                         let Ok(expr_type) = left_expr.get_type(&self.schema) else {
                             return Ok(Transformed::no(expr));
                         };
-                        let Some(value) =
-                            try_cast_literal_to_type(right_lit_value, &expr_type)
-                        else {
-                            return Ok(Transformed::no(expr));
-                        };
-                        // unwrap the cast/try_cast for the left expr
-                        **left = mem::take(left_expr);
-                        **right = lit(value);
-                        Ok(Transformed::yes(expr))
+                        match expr_type {
+                            // https://github.com/apache/datafusion/issues/12180
+                            DataType::Utf8View => Ok(Transformed::no(expr)),
+                            _ => {
+                                let Some(value) =
+                                    try_cast_literal_to_type(right_lit_value, &expr_type)
+                                else {
+                                    return Ok(Transformed::no(expr));
+                                };
+                                // unwrap the cast/try_cast for the left expr
+                                **left = mem::take(left_expr);
+                                **right = lit(value);
+                                Ok(Transformed::yes(expr))
+                            }
+                        }
                     }
                     _ => Ok(Transformed::no(expr)),
                 }
@@ -414,32 +426,32 @@ fn try_cast_numeric_literal(
                     DataType::UInt64 => ScalarValue::UInt64(Some(value as u64)),
                     DataType::Timestamp(TimeUnit::Second, tz) => {
                         let value = cast_between_timestamp(
-                            lit_data_type,
-                            DataType::Timestamp(TimeUnit::Second, tz.clone()),
+                            &lit_data_type,
+                            &DataType::Timestamp(TimeUnit::Second, tz.clone()),
                             value,
                         );
                         ScalarValue::TimestampSecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Millisecond, tz) => {
                         let value = cast_between_timestamp(
-                            lit_data_type,
-                            DataType::Timestamp(TimeUnit::Millisecond, tz.clone()),
+                            &lit_data_type,
+                            &DataType::Timestamp(TimeUnit::Millisecond, tz.clone()),
                             value,
                         );
                         ScalarValue::TimestampMillisecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Microsecond, tz) => {
                         let value = cast_between_timestamp(
-                            lit_data_type,
-                            DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
+                            &lit_data_type,
+                            &DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
                             value,
                         );
                         ScalarValue::TimestampMicrosecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
                         let value = cast_between_timestamp(
-                            lit_data_type,
-                            DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
+                            &lit_data_type,
+                            &DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
                             value,
                         );
                         ScalarValue::TimestampNanosecond(value, tz.clone())
@@ -505,7 +517,7 @@ fn try_cast_dictionary(
 }
 
 /// Cast a timestamp value from one unit to another
-fn cast_between_timestamp(from: DataType, to: DataType, value: i128) -> Option<i64> {
+fn cast_between_timestamp(from: &DataType, to: &DataType, value: i128) -> Option<i64> {
     let value = value as i64;
     let from_scale = match from {
         DataType::Timestamp(TimeUnit::Second, _) => 1,
@@ -627,7 +639,7 @@ mod tests {
             Box::new(DataType::Int32),
             Box::new(ScalarValue::LargeUtf8(Some("value".to_owned()))),
         );
-        let expr_input = cast(col("largestr"), dict.data_type()).eq(lit(dict.clone()));
+        let expr_input = cast(col("largestr"), dict.data_type()).eq(lit(dict));
         let expected =
             col("largestr").eq(lit(ScalarValue::LargeUtf8(Some("value".to_owned()))));
         assert_eq!(optimize_test(expr_input, &schema), expected);

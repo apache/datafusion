@@ -120,7 +120,7 @@ async fn scalar_udf() -> Result<()> {
     ctx.register_udf(create_udf(
         "my_add",
         vec![DataType::Int32, DataType::Int32],
-        Arc::new(DataType::Int32),
+        DataType::Int32,
         Volatility::Immutable,
         myfunc,
     ));
@@ -237,7 +237,7 @@ async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
     ctx.register_udf(create_udf(
         "buggy_func",
         vec![DataType::Int32],
-        Arc::new(DataType::Int32),
+        DataType::Int32,
         Volatility::Immutable,
         buggy_udf,
     ));
@@ -321,7 +321,7 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
     ctx.register_udf(create_udf(
         "abs",
         vec![DataType::Int32],
-        Arc::new(DataType::Int32),
+        DataType::Int32,
         Volatility::Immutable,
         Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(1))))),
     ));
@@ -414,7 +414,7 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     ctx.register_udf(create_udf(
         "MY_FUNC",
         vec![DataType::Int32],
-        Arc::new(DataType::Int32),
+        DataType::Int32,
         Volatility::Immutable,
         myfunc,
     ));
@@ -459,7 +459,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     let udf = create_udf(
         "dummy",
         vec![DataType::Int32],
-        Arc::new(DataType::Int32),
+        DataType::Int32,
         Volatility::Immutable,
         myfunc,
     )
@@ -594,7 +594,7 @@ async fn deregister_udf() -> Result<()> {
     let cast2i64 = ScalarUDF::from(CastToI64UDF::new());
     let ctx = SessionContext::new();
 
-    ctx.register_udf(cast2i64.clone());
+    ctx.register_udf(cast2i64);
 
     assert!(ctx.udfs().contains("cast_to_i64"));
 
@@ -1149,7 +1149,7 @@ fn create_udf_context() -> SessionContext {
     ctx.register_udf(create_udf(
         "custom_sqrt",
         vec![DataType::Float64],
-        Arc::new(DataType::Float64),
+        DataType::Float64,
         Volatility::Immutable,
         Arc::new(custom_sqrt),
     ));

@@ -984,6 +984,26 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
     }
 }
 
+/// This will be deprecated when binary operators native support
+/// for Utf8View (use `string_coercion` instead).
+fn regex_comparison_string_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        // If Utf8View is in any side, we coerce to Utf8.
+        (Utf8View, Utf8View | Utf8 | LargeUtf8) | (Utf8 | LargeUtf8, Utf8View) => {
+            Some(Utf8)
+        }
+        // Then, if LargeUtf8 is in any side, we coerce to LargeUtf8.
+        (LargeUtf8, Utf8 | LargeUtf8) | (Utf8, LargeUtf8) => Some(LargeUtf8),
+        // Utf8 coerces to Utf8
+        (Utf8, Utf8) => Some(Utf8),
+        _ => None,
+    }
+}
+
 fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
@@ -1001,6 +1021,22 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (List(_), List(_)) => Some(lhs_type.clone()),
+        (LargeList(_), List(_)) => Some(lhs_type.clone()),
+        (List(_), LargeList(_)) => Some(rhs_type.clone()),
+        (LargeList(_), LargeList(_)) => Some(lhs_type.clone()),
+        (List(_), FixedSizeList(_, _)) => Some(lhs_type.clone()),
+        (FixedSizeList(_, _), List(_)) => Some(rhs_type.clone()),
+        // Coerce to the left side FixedSizeList type if the list lengths are the same,
+        // otherwise coerce to list with the left type for dynamic length
+        (FixedSizeList(lf, ls), FixedSizeList(_, rs)) => {
+            if ls == rs {
+                Some(lhs_type.clone())
+            } else {
+                Some(List(Arc::clone(lf)))
+            }
+        }
+        (LargeList(_), FixedSizeList(_, _)) => Some(lhs_type.clone()),
+        (FixedSizeList(_, _), LargeList(_)) => Some(rhs_type.clone()),
         _ => None,
     }
 }
@@ -1072,10 +1108,10 @@ fn regex_null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
     }
 }
 
-/// coercion rules for regular expression comparison operations.
+/// Coercion rules for regular expression comparison operations.
 /// This is a union of string coercion rules and dictionary coercion rules
 pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    string_coercion(lhs_type, rhs_type)
+    regex_comparison_string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, false))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
 }
@@ -1881,9 +1917,66 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
-            DataType::Timestamp(TimeUnit::Second, utc.clone()),
+            DataType::Timestamp(TimeUnit::Second, utc),
             Operator::Eq,
             DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into()))
+        );
+
+        // list
+        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        test_coercion_binary_rule!(
+            DataType::List(Arc::clone(&inner_field)),
+            DataType::List(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::List(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::List(Arc::clone(&inner_field)),
+            DataType::LargeList(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeList(Arc::clone(&inner_field)),
+            DataType::List(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeList(Arc::clone(&inner_field)),
+            DataType::LargeList(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            Operator::Eq,
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10)
+        );
+        test_coercion_binary_rule!(
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            DataType::LargeList(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeList(Arc::clone(&inner_field)),
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::List(Arc::clone(&inner_field)),
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            Operator::Eq,
+            DataType::List(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            DataType::List(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::List(Arc::clone(&inner_field))
         );
 
         // TODO add other data type
