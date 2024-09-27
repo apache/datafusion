@@ -35,19 +35,27 @@ use datafusion_expr::ColumnarValue;
 
 /// Append a new view to the views buffer with the given substr
 ///
-/// raw must be a valid view
-/// substr must be a valid substring of raw
-/// start must be less than or equal to the length of the string data
+/// # Safety
+///
+/// original_view must be a valid view (the format described on
+/// [`GenericByteViewArray`](arrow::array::GenericByteViewArray).
+///
+/// # Arguments
+/// - views_buffer: The buffer to append the new view to
+/// - null_builder: The buffer to append the null value to
+/// - original_view: The original view value
+/// - substr: The substring to append. Must be a valid substring of the original view
+/// - start_offset: The start offset of the substring in the view
 pub(crate) fn make_and_append_view(
     views_buffer: &mut Vec<u128>,
     null_builder: &mut NullBufferBuilder,
-    raw_view: &u128,
+    original_view: &u128,
     substr: &str,
     start_offset: u32,
 ) {
     let substr_len = substr.len();
     let sub_view = if substr_len > 12 {
-        let view = ByteView::from(*raw_view);
+        let view = ByteView::from(*original_view);
         make_view(
             substr.as_bytes(),
             view.buffer_index,
@@ -82,13 +90,6 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
     trim_type: TrimType,
     use_string_view: bool,
 ) -> Result<ArrayRef> {
-    // This is the function used to trim each string row, and it will return:
-    //   - trimmed str
-    //     e.g. ltrim("  abc") -> "abc"
-    //
-    //   - start offset, needed in `string_view_trim`
-    //     e.g. "abc" actually is "  abc"[2..], and the start offset here should be 2
-    //
     let func = match trim_type {
         TrimType::Left => |input, pattern: &str| {
             let pattern = pattern.chars().collect::<Vec<char>>();
@@ -128,6 +129,28 @@ pub(crate) fn general_trim<T: OffsetSizeTrait>(
     }
 }
 
+/// Applies the trim function to the given string view array(s)
+/// and returns a new string view array with the trimmed values.
+///
+/// # `trim_func`: The function to apply to each string view.
+///
+/// ## Arguments
+/// - The original string
+/// - the pattern to trim
+///
+/// ## Returns
+///  - trimmed str (must be a substring of the first argument)
+///  - start offset, needed in `string_view_trim`
+///
+/// ## Examples
+///
+/// For `ltrim`:
+/// - `fn("  abc", " ") -> ("abc", 2)`
+/// - `fn("abd", " ") -> ("abd", 0)`
+///
+/// For `btrim`:
+/// - `fn("  abc  ", " ") -> ("abc", 2)`
+/// - `fn("abd", " ") -> ("abd", 0)`
 // removing 'a will cause compiler complaining lifetime of `func`
 fn string_view_trim<'a>(
     trim_func: fn(&'a str, &'a str) -> (&'a str, u32),
@@ -221,23 +244,46 @@ fn string_view_trim<'a>(
     }
 }
 
+/// Trims the given string and appends the trimmed string to the views buffer
+/// and the null buffer.
+///
+/// Calls `trim_func` on the string value in `original_view`, for non_null
+/// values and appends the updated view to the views buffer / null_builder.
+///
+/// Arguments
+/// - `src_str_opt`: The original string value (represented by the view)
+/// - `trim_characters_opt`: The characters to trim from the string
+/// - `trim_func`: The function to apply to the string (see [`string_view_trim`] for details)
+/// - `views_buf`: The buffer to append the updated views to
+/// - `null_builder`: The buffer to append the null values to
+/// - `original_view`: The original view value (that contains src_str_opt)
 fn trim_and_append_str<'a>(
     src_str_opt: Option<&'a str>,
     trim_characters_opt: Option<&'a str>,
     trim_func: fn(&'a str, &'a str) -> (&'a str, u32),
     views_buf: &mut Vec<u128>,
     null_builder: &mut NullBufferBuilder,
-    raw: &u128,
+    original_view: &u128,
 ) {
     if let (Some(src_str), Some(characters)) = (src_str_opt, trim_characters_opt) {
         let (trim_str, start_offset) = trim_func(src_str, characters);
-        make_and_append_view(views_buf, null_builder, raw, trim_str, start_offset);
+        make_and_append_view(
+            views_buf,
+            null_builder,
+            original_view,
+            trim_str,
+            start_offset,
+        );
     } else {
         null_builder.append_null();
         views_buf.push(0);
     }
 }
 
+/// Applies the trim function to the given string array(s)
+/// and returns a new string array with the trimmed values.
+///
+/// See [`string_view_trim`] for details on `func`
 fn string_trim<'a, T: OffsetSizeTrait>(
     func: fn(&'a str, &'a str) -> (&'a str, u32),
     args: &'a [ArrayRef],
