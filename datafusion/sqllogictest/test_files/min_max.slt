@@ -1,0 +1,10 @@
+statement ok
+set datafusion.execution.parquet.schema_force_view_types = true;
+
+statement ok
+CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION '/Users/devan/Documents/OSS/datafusion/parquet-testing/data/alltypes_plain.parquet'
+
+statement ok
+SELECT REGEXP_REPLACE(t.string_col, '1', '0') AS k, AVG(length(t.string_col)) AS l, COUNT(*) AS c, MIN(t.string_col)
+FROM t
+GROUP BY k;

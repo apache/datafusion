@@ -52,7 +52,6 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
-
 use super::order::GroupOrdering;
 use super::AggregateExec;
 
@@ -575,7 +574,7 @@ impl GroupedHashAggregateStream {
 
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
 /// that is supported by the aggregate, or a
-/// [`GroupsAccumulatorAdapter`] if not.
+/// [`GroupsAccumulatorMin`] if not.
 pub(crate) fn create_group_accumulator(
     agg_expr: &AggregateFunctionExpr,
 ) -> Result<Box<dyn GroupsAccumulator>> {

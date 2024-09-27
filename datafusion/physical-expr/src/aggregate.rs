@@ -23,6 +23,7 @@ pub(crate) mod groups_accumulator {
     pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
         accumulate::NullState, GroupsAccumulatorAdapter,
     };
+    pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator_view::GroupsAccumulatorMin;
 }
 pub(crate) mod stats {
     pub use datafusion_functions_aggregate_common::stats::StatsType;
