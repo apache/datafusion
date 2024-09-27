@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -62,6 +63,23 @@ impl PartialEq for CopyTo {
 
 // Implement Eq (no need for additional logic over PartialEq)
 impl Eq for CopyTo {}
+
+// Manual implementation needed because of `file_type` and `options` fields.
+// Comparison excludes these field.
+impl PartialOrd for CopyTo {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => match self.output_url.partial_cmp(&other.output_url)
+            {
+                Some(Ordering::Equal) => {
+                    self.partition_by.partial_cmp(&other.partition_by)
+                }
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
+}
 
 // Implement Hash manually
 impl Hash for CopyTo {
@@ -112,7 +130,21 @@ impl DmlStatement {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+// Manual implementation needed because of `table_schema` and `output_schema` fields.
+// Comparison excludes these fields.
+impl PartialOrd for DmlStatement {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.table_name.partial_cmp(&other.table_name) {
+            Some(Ordering::Equal) => match self.op.partial_cmp(&other.op) {
+                Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+                cmp => cmp,
+            },
+            cmp => cmp,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum WriteOp {
     InsertOverwrite,
     InsertInto,

@@ -730,7 +730,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Eq,
                 right,
             }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                Transformed::yes(match as_bool_lit(*left)? {
+                Transformed::yes(match as_bool_lit(&left)? {
                     Some(true) => *right,
                     Some(false) => Expr::Not(right),
                     None => lit_bool_null(),
@@ -744,7 +744,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Eq,
                 right,
             }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                Transformed::yes(match as_bool_lit(*right)? {
+                Transformed::yes(match as_bool_lit(&right)? {
                     Some(true) => *left,
                     Some(false) => Expr::Not(left),
                     None => lit_bool_null(),
@@ -761,7 +761,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: NotEq,
                 right,
             }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                Transformed::yes(match as_bool_lit(*left)? {
+                Transformed::yes(match as_bool_lit(&left)? {
                     Some(true) => Expr::Not(right),
                     Some(false) => *right,
                     None => lit_bool_null(),
@@ -775,7 +775,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: NotEq,
                 right,
             }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                Transformed::yes(match as_bool_lit(*right)? {
+                Transformed::yes(match as_bool_lit(&right)? {
                     Some(true) => Expr::Not(left),
                     Some(false) => *left,
                     None => lit_bool_null(),
@@ -1569,7 +1569,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_intersection(l1, l2, false).map(Transformed::yes);
+                        return inlist_intersection(l1, &l2, false).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1609,7 +1609,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_except(l1, l2).map(Transformed::yes);
+                        return inlist_except(l1, &l2).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1629,7 +1629,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_except(l2, l1).map(Transformed::yes);
+                        return inlist_except(l2, &l1).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1649,7 +1649,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_intersection(l1, l2, true).map(Transformed::yes);
+                        return inlist_intersection(l1, &l2, true).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1759,7 +1759,7 @@ fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
 
 /// Return the intersection of two inlist expressions
 /// maintaining the order of the elements in the two lists
-fn inlist_intersection(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
+fn inlist_intersection(mut l1: InList, l2: &InList, negated: bool) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
     // remove all items from l1 that are not in l2
@@ -1775,7 +1775,7 @@ fn inlist_intersection(mut l1: InList, l2: InList, negated: bool) -> Result<Expr
 
 /// Return the all items in l1 that are not in l2
 /// maintaining the order of the elements in the two lists
-fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
+fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
     // keep only items from l1 that are not in l2
@@ -1798,6 +1798,7 @@ mod tests {
         interval_arithmetic::Interval,
         *,
     };
+    use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
@@ -3901,10 +3902,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            unimplemented!("not needed for tests")
-        }
-
         fn simplify(&self) -> Option<WindowFunctionSimplification> {
             if self.simplify {
                 Some(Box::new(|_, _| Ok(col("result_column"))))
@@ -3914,6 +3911,10 @@ mod tests {
         }
 
         fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+            unimplemented!("not needed for tests")
+        }
+
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
             unimplemented!("not needed for tests")
         }
     }

@@ -67,7 +67,7 @@ AS SELECT arrow_cast(x, 'Dictionary(Int32, Utf8)') as d1,
 y as d2,
 arrow_cast(z, 'LargeUtf8') as d3 FROM window_null_string_value_prepare;
 
-query ?I
+query TI
 SELECT d1, row_number() OVER (partition by d1) as rn1 FROM window_null_string_table order by d1 asc;
 ----
 one 1
@@ -241,7 +241,7 @@ AS SELECT arrow_cast(x, 'Dictionary(Int32, Utf8)') as d1,
 arrow_cast(y, 'Dictionary(Int32, Utf8)') as d2,
 z as d3 FROM value;
 
-query ?
+query T
 SELECT d1 FROM string_dictionary_table;
 ----
 one
@@ -249,38 +249,38 @@ NULL
 three
 
 # basic filtering
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 IS NOT NULL;
 ----
 one
 three
 
 # comparison with constant
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 = 'three';
 ----
 three
 
 # comparison with another dictionary column
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 = d2;
 ----
 three
 
 # order comparison with another dictionary column
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 <= d2;
 ----
 three
 
 # comparison with a non dictionary column
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 = d3;
 ----
 three
 
 # filtering with constant
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 = 'three';
 ----
 three
@@ -320,7 +320,7 @@ SELECT MAX(d1) FROM string_dictionary_table;
 three
 
 # grouping
-query ?I
+query TI
 SELECT d1, COUNT(*) FROM string_dictionary_table group by d1 order by d1;
 ----
 one 1
@@ -328,7 +328,7 @@ three 1
 NULL 1
 
 # window functions
-query ?I
+query TI
 SELECT d1, row_number() OVER (partition by d1) as rn1 FROM string_dictionary_table order by d1;
 ----
 one 1
@@ -374,7 +374,7 @@ NULL a
 NULL b
 3 c
 
-query TT
+query ?T
 VALUES (NULL,'a'),(NULL,'b'),(NULL,'c')
 ----
 NULL a
@@ -395,7 +395,7 @@ VALUES (1,NULL),(2,NULL),(3,'c')
 2 NULL
 3 c
 
-query IIIIIIIIIIIIITTR
+query IIIIIIIIIIIII?TR
 VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,NULL,'F',3.5)
 ----
 1 2 3 4 5 6 7 8 9 10 11 12 13 NULL F 3.5
@@ -482,6 +482,21 @@ CREATE TABLE foo2(c1 double, c2 double) AS VALUES
 (1.1, 4.1),
 (2, 5),
 (3, 6);
+
+query T
+SELECT arrow_typeof(COALESCE(column1, column2)) FROM VALUES (null, 1.2);
+----
+Float64
+
+# multiple rows and columns with null need type coercion
+query TTT
+select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from (SELECT column1, column2, column3 FROM VALUES
+(null, 2, 'a'),
+(1.1, null, 'b'),
+(2, 5, null)) LIMIT 1;
+----
+Float64 Int64 Utf8
+
 
 # foo distinct
 query T
@@ -1685,6 +1700,9 @@ SELECT i + i FROM test WHERE i > 2;
 ----
 6
 
+statement ok
+DROP TABLE test;
+
 query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from 'I AM NOT A TIMESTAMP': error parsing date
 SELECT to_timestamp('I AM NOT A TIMESTAMP');
 
@@ -1741,3 +1759,19 @@ select a from t;
 
 statement ok
 set datafusion.optimizer.max_passes=3;
+
+# Test issue: https://github.com/apache/datafusion/issues/12183
+statement ok
+CREATE TABLE test(a BIGINT) AS VALUES (1);
+
+query I
+SELECT "test.a" FROM (SELECT a AS "test.a" FROM test)
+----
+1
+
+statement ok
+DROP TABLE test;
+
+# Can't reference an unqualified column by a qualified name
+query error DataFusion error: Schema error: No field named t1\.v1\. Valid fields are "t1\.v1"\.
+SELECT t1.v1 FROM (SELECT 1 AS "t1.v1");

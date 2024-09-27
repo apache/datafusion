@@ -29,7 +29,7 @@ pub enum EmitTo {
     /// indexes down by `n`.
     ///
     /// For example, if `n=10`, group_index `0, 1, ... 9` are emitted
-    /// and group indexes '`10, 11, 12, ...` become `0, 1, 2, ...`.
+    /// and group indexes `10, 11, 12, ...` become `0, 1, 2, ...`.
     First(usize),
 }
 
@@ -56,8 +56,31 @@ impl EmitTo {
     }
 }
 
-/// `GroupAccumulator` implements a single aggregate (e.g. AVG) and
+/// `GroupsAccumulator` implements a single aggregate (e.g. AVG) and
 /// stores the state for *all* groups internally.
+///
+/// Logically, a [`GroupsAccumulator`] stores a mapping from each group index to
+/// the state of the aggregate for that group. For example an implementation for
+/// `min` might look like
+///
+/// ```text
+///    ┌─────┐
+///    │  0  │───────────▶   100
+///    ├─────┤
+///    │  1  │───────────▶   200
+///    └─────┘
+///      ...                 ...
+///    ┌─────┐
+///    │ N-2 │───────────▶    50
+///    ├─────┤
+///    │ N-1 │───────────▶   200
+///    └─────┘
+///
+///
+///  Logical group      Current Min
+///     number          value for that
+///                     group
+/// ```
 ///
 /// # Notes on Implementing `GroupAccumulator`
 ///
@@ -113,7 +136,7 @@ pub trait GroupsAccumulator: Send {
     /// each group, and `evaluate` will produce that running sum as
     /// its output for all groups, in group_index order
     ///
-    /// If `emit_to`` is [`EmitTo::All`], the accumulator should
+    /// If `emit_to` is [`EmitTo::All`], the accumulator should
     /// return all groups and release / reset its internal state
     /// equivalent to when it was first created.
     ///

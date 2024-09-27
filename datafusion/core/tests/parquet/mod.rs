@@ -171,7 +171,7 @@ impl TestOutput {
 
     /// The number of row pages pruned
     fn row_pages_pruned(&self) -> Option<usize> {
-        self.metric_value("page_index_rows_filtered")
+        self.metric_value("page_index_rows_pruned")
     }
 
     fn description(&self) -> String {

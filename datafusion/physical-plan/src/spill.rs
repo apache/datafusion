@@ -88,7 +88,6 @@ fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
 
 /// Spill the `RecordBatch` to disk as smaller batches
 /// split by `batch_size_rows`
-/// Return `total_rows` what is spilled
 pub fn spill_record_batch_by_size(
     batch: &RecordBatch,
     path: PathBuf,

@@ -792,7 +792,9 @@ impl SortExec {
     ) -> PlanProperties {
         // Determine execution mode:
         let sort_satisfied = input.equivalence_properties().ordering_satisfy_requirement(
-            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter()).as_slice(),
+            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter())
+                .inner
+                .as_slice(),
         );
         let mode = match input.execution_mode() {
             ExecutionMode::Unbounded if sort_satisfied => ExecutionMode::Unbounded,
@@ -895,7 +897,9 @@ impl ExecutionPlan for SortExec {
             .input
             .equivalence_properties()
             .ordering_satisfy_requirement(
-                PhysicalSortRequirement::from_sort_exprs(self.expr.iter()).as_slice(),
+                PhysicalSortRequirement::from_sort_exprs(self.expr.iter())
+                    .inner
+                    .as_slice(),
             );
 
         match (sort_satisfied, self.fetch.as_ref()) {
@@ -1022,9 +1026,8 @@ mod tests {
     impl SortedUnboundedExec {
         fn compute_properties(schema: SchemaRef) -> PlanProperties {
             let mut eq_properties = EquivalenceProperties::new(schema);
-            eq_properties.add_new_orderings(vec![vec![PhysicalSortExpr::new(
+            eq_properties.add_new_orderings(vec![vec![PhysicalSortExpr::new_default(
                 Arc::new(Column::new("c1", 0)),
-                SortOptions::default(),
             )]]);
             let mode = ExecutionMode::Unbounded;
             PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1), mode)
@@ -1148,11 +1151,9 @@ mod tests {
             .options()
             .execution
             .sort_spill_reservation_bytes;
-        let runtime = Arc::new(
-            RuntimeEnvBuilder::new()
-                .with_memory_limit(sort_spill_reservation_bytes + 12288, 1.0)
-                .build()?,
-        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(sort_spill_reservation_bytes + 12288, 1.0)
+            .build_arc()?;
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(session_config)
@@ -1226,14 +1227,12 @@ mod tests {
                 .execution
                 .sort_spill_reservation_bytes;
 
-            let runtime = Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_limit(
-                        sort_spill_reservation_bytes + avg_batch_size * (partitions - 1),
-                        1.0,
-                    )
-                    .build()?,
-            );
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(
+                    sort_spill_reservation_bytes + avg_batch_size * (partitions - 1),
+                    1.0,
+                )
+                .build_arc()?;
             let task_ctx = Arc::new(
                 TaskContext::default()
                     .with_runtime(runtime)
@@ -1564,10 +1563,9 @@ mod tests {
             cache: SortedUnboundedExec::compute_properties(Arc::new(schema.clone())),
         };
         let mut plan = SortExec::new(
-            vec![PhysicalSortExpr::new(
-                Arc::new(Column::new("c1", 0)),
-                SortOptions::default(),
-            )],
+            vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+                "c1", 0,
+            )))],
             Arc::new(source),
         );
         plan = plan.with_fetch(Some(9));

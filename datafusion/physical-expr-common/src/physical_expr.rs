@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -31,8 +31,27 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
 
-/// See [create_physical_expr](https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html)
-/// for examples of creating `PhysicalExpr` from `Expr`
+/// [`PhysicalExpr`]s represent expressions such as `A + 1` or `CAST(c1 AS int)`.
+///
+/// `PhysicalExpr` knows its type, nullability and can be evaluated directly on
+/// a [`RecordBatch`] (see [`Self::evaluate`]).
+///
+/// `PhysicalExpr` are the physical counterpart to [`Expr`] used in logical
+/// planning. They are typically created from [`Expr`] by a [`PhysicalPlanner`]
+/// invoked from a higher level API
+///
+/// Some important examples of `PhysicalExpr` are:
+/// * [`Column`]: Represents a column at a given index in a RecordBatch
+///
+/// To create `PhysicalExpr` from  `Expr`, see
+/// * [`SessionContext::create_physical_expr`]: A high level API
+/// * [`create_physical_expr`]: A low level API
+///
+/// [`SessionContext::create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.create_physical_expr
+/// [`PhysicalPlanner`]: https://docs.rs/datafusion/latest/datafusion/physical_planner/trait.PhysicalPlanner.html
+/// [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
+/// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
+/// [`Column`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/expressions/struct.Column.html
 pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// Returns the physical expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
@@ -203,4 +222,26 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     } else {
         any
     }
+}
+
+/// Returns [`Display`] able a list of [`PhysicalExpr`]
+///
+/// Example output: `[a + 1, b]`
+pub fn format_physical_expr_list(exprs: &[Arc<dyn PhysicalExpr>]) -> impl Display + '_ {
+    struct DisplayWrapper<'a>(&'a [Arc<dyn PhysicalExpr>]);
+    impl<'a> Display for DisplayWrapper<'a> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            let mut iter = self.0.iter();
+            write!(f, "[")?;
+            if let Some(expr) = iter.next() {
+                write!(f, "{}", expr)?;
+            }
+            for expr in iter {
+                write!(f, ", {}", expr)?;
+            }
+            write!(f, "]")?;
+            Ok(())
+        }
+    }
+    DisplayWrapper(exprs)
 }

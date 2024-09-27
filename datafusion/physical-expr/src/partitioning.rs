@@ -17,10 +17,14 @@
 
 //! [`Partitioning`] and [`Distribution`] for `ExecutionPlans`
 
+use crate::{
+    equivalence::ProjectionMapping, expressions::UnKnownColumn, physical_exprs_equal,
+    EquivalenceProperties, PhysicalExpr,
+};
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use std::fmt;
+use std::fmt::Display;
 use std::sync::Arc;
-
-use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
 
 /// Output partitioning supported by [`ExecutionPlan`]s.
 ///
@@ -191,6 +195,29 @@ impl Partitioning {
             _ => false,
         }
     }
+
+    /// Calculate the output partitioning after applying the given projection.
+    pub fn project(
+        &self,
+        projection_mapping: &ProjectionMapping,
+        input_eq_properties: &EquivalenceProperties,
+    ) -> Self {
+        if let Partitioning::Hash(exprs, part) = self {
+            let normalized_exprs = exprs
+                .iter()
+                .map(|expr| {
+                    input_eq_properties
+                        .project_expr(expr, projection_mapping)
+                        .unwrap_or_else(|| {
+                            Arc::new(UnKnownColumn::new(&expr.to_string()))
+                        })
+                })
+                .collect();
+            Partitioning::Hash(normalized_exprs, *part)
+        } else {
+            self.clone()
+        }
+    }
 }
 
 impl PartialEq for Partitioning {
@@ -233,6 +260,18 @@ impl Distribution {
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
             Distribution::HashPartitioned(expr) => {
                 Partitioning::Hash(expr, partition_count)
+            }
+        }
+    }
+}
+
+impl Display for Distribution {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Distribution::UnspecifiedDistribution => write!(f, "Unspecified"),
+            Distribution::SinglePartition => write!(f, "SinglePartition"),
+            Distribution::HashPartitioned(exprs) => {
+                write!(f, "HashPartitioned[{}])", format_physical_expr_list(exprs))
             }
         }
     }

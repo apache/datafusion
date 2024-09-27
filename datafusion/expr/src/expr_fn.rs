@@ -38,6 +38,7 @@ use arrow::compute::kernels::cast_utils::{
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, Column, Result, ScalarValue, TableReference};
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
@@ -390,11 +391,10 @@ pub fn unnest(expr: Expr) -> Expr {
 pub fn create_udf(
     name: &str,
     input_types: Vec<DataType>,
-    return_type: Arc<DataType>,
+    return_type: DataType,
     volatility: Volatility,
     fun: ScalarFunctionImplementation,
 ) -> ScalarUDF {
-    let return_type = Arc::unwrap_or_clone(return_type);
     ScalarUDF::from(SimpleScalarUDF::new(
         name,
         input_types,
@@ -658,12 +658,16 @@ impl WindowUDFImpl for SimpleWindowUDF {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(self.return_type.clone())
-    }
-
     fn partition_evaluator(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
         (self.partition_evaluator_factory)()
+    }
+
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        Ok(Field::new(
+            field_args.name(),
+            self.return_type.clone(),
+            true,
+        ))
     }
 }
 

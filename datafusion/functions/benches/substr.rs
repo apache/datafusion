@@ -30,7 +30,7 @@ fn create_args_without_count<O: OffsetSizeTrait>(
     size: usize,
     str_len: usize,
     start_half_way: bool,
-    use_string_view: bool,
+    force_view_types: bool,
 ) -> Vec<ColumnarValue> {
     let start_array = Arc::new(Int64Array::from(
         (0..size)
@@ -44,7 +44,7 @@ fn create_args_without_count<O: OffsetSizeTrait>(
             .collect::<Vec<_>>(),
     ));
 
-    if use_string_view {
+    if force_view_types {
         let string_array =
             Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false));
         vec![
@@ -66,7 +66,7 @@ fn create_args_with_count<O: OffsetSizeTrait>(
     size: usize,
     str_len: usize,
     count_max: usize,
-    use_string_view: bool,
+    force_view_types: bool,
 ) -> Vec<ColumnarValue> {
     let start_array =
         Arc::new(Int64Array::from((0..size).map(|_| 1).collect::<Vec<_>>()));
@@ -75,7 +75,7 @@ fn create_args_with_count<O: OffsetSizeTrait>(
         (0..size).map(|_| count).collect::<Vec<_>>(),
     ));
 
-    if use_string_view {
+    if force_view_types {
         let string_array =
             Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false));
         vec![
@@ -106,19 +106,19 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_without_count::<i32>(size, len, true, true);
         group.bench_function(
-            &format!("substr_string_view [size={}, strlen={}]", size, len),
+            format!("substr_string_view [size={}, strlen={}]", size, len),
             |b| b.iter(|| black_box(substr.invoke(&args))),
         );
 
         let args = create_args_without_count::<i32>(size, len, false, false);
         group.bench_function(
-            &format!("substr_string [size={}, strlen={}]", size, len),
+            format!("substr_string [size={}, strlen={}]", size, len),
             |b| b.iter(|| black_box(substr.invoke(&args))),
         );
 
         let args = create_args_without_count::<i64>(size, len, true, false);
         group.bench_function(
-            &format!("substr_large_string [size={}, strlen={}]", size, len),
+            format!("substr_large_string [size={}, strlen={}]", size, len),
             |b| b.iter(|| black_box(substr.invoke(&args))),
         );
 
@@ -133,7 +133,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i32>(size, len, count, true);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_string_view [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
@@ -142,7 +142,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i32>(size, len, count, false);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
@@ -151,7 +151,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i64>(size, len, count, false);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_large_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
@@ -169,7 +169,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i32>(size, len, count, true);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_string_view [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
@@ -178,7 +178,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i32>(size, len, count, false);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
@@ -187,7 +187,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args_with_count::<i64>(size, len, count, false);
         group.bench_function(
-            &format!(
+            format!(
                 "substr_large_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),

@@ -17,6 +17,7 @@
 
 //! Define a plan for unnesting values in columns that contain a list type.
 
+use std::cmp::{self, Ordering};
 use std::collections::HashMap;
 use std::{any::Any, sync::Arc};
 
@@ -42,7 +43,6 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, Result, UnnestOptions,
 };
 use datafusion_execution::TaskContext;
-use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
@@ -63,7 +63,7 @@ pub struct UnnestExec {
     /// The schema once the unnest is applied
     schema: SchemaRef,
     /// indices of the list-typed columns in the input schema
-    list_column_indices: Vec<usize>,
+    list_column_indices: Vec<ListUnnest>,
     /// indices of the struct-typed columns in the input schema
     struct_column_indices: Vec<usize>,
     /// Options
@@ -78,7 +78,7 @@ impl UnnestExec {
     /// Create a new [UnnestExec].
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        list_column_indices: Vec<usize>,
+        list_column_indices: Vec<ListUnnest>,
         struct_column_indices: Vec<usize>,
         schema: SchemaRef,
         options: UnnestOptions,
@@ -108,6 +108,25 @@ impl UnnestExec {
             input.output_partitioning().clone(),
             input.execution_mode(),
         )
+    }
+
+    /// Input execution plan
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    /// indices of the list-typed columns in the input schema
+    pub fn list_column_indices(&self) -> &[ListUnnest] {
+        &self.list_column_indices
+    }
+
+    /// indices of the struct-typed columns in the input schema
+    pub fn struct_column_indices(&self) -> &[usize] {
+        &self.struct_column_indices
+    }
+
+    pub fn options(&self) -> &UnnestOptions {
+        &self.options
     }
 }
 
@@ -226,8 +245,10 @@ struct UnnestStream {
     input: SendableRecordBatchStream,
     /// Unnested schema
     schema: Arc<Schema>,
-    /// The unnest columns
-    list_type_columns: Vec<usize>,
+    /// represents all unnest operations to be applied to the input (input index, depth)
+    /// e.g unnest(col1),unnest(unnest(col1)) where col1 has index 1 in original input schema
+    /// then list_type_columns = [ListUnnest{1,1},ListUnnest{1,2}]
+    list_type_columns: Vec<ListUnnest>,
     struct_column_indices: HashSet<usize>,
     /// Options
     options: UnnestOptions,
@@ -339,61 +360,292 @@ fn flatten_struct_cols(
     Ok(RecordBatch::try_new(Arc::clone(schema), columns_expanded)?)
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub struct ListUnnest {
+    pub index_in_input_schema: usize,
+    pub depth: usize,
+}
+
+/// This function is used to execute the unnesting on multiple columns all at once, but
+/// one level at a time, and is called n times, where n is the highest recursion level among
+/// the unnest exprs in the query.
+///
+/// For example giving the following query:
+/// ```sql
+/// select unnest(colA, max_depth:=3) as P1, unnest(colA,max_depth:=2) as P2, unnest(colB, max_depth:=1) as P3 from temp;
+/// ```
+/// Then the total times this function being called is 3
+///
+/// It needs to be aware of which level the current unnesting is, because if there exists
+/// multiple unnesting on the same column, but with different recursion levels, say
+/// **unnest(colA, max_depth:=3)** and **unnest(colA, max_depth:=2)**, then the unnesting
+/// of expr **unnest(colA, max_depth:=3)** will start at level 3, while unnesting for expr
+/// **unnest(colA, max_depth:=2)** has to start at level 2
+///
+/// Set *colA* as a 3-dimension columns and *colB* as an array (1-dimension). As stated,
+/// this function is called with the descending order of recursion depth
+///
+/// Depth = 3
+/// - colA(3-dimension) unnest into temp column temp_P1(2_dimension) (unnesting of P1 starts
+///   from this level)
+/// - colA(3-dimension) having indices repeated by the unnesting operation above
+/// - colB(1-dimension) having indices repeated by the unnesting operation above
+///
+/// Depth = 2
+/// - temp_P1(2-dimension) unnest into temp column temp_P1(1-dimension)
+/// - colA(3-dimension) unnest into temp column temp_P2(2-dimension) (unnesting of P2 starts
+///   from this level)
+/// - colB(1-dimension) having indices repeated by the unnesting operation above
+///
+/// Depth = 1
+/// - temp_P1(1-dimension) unnest into P1
+/// - temp_P2(2-dimension) unnest into P2
+/// - colB(1-dimension) unnest into P3 (unnesting of P3 starts from this level)
+///
+/// The returned array will has the same size as the input batch
+/// and only contains original columns that are not being unnested.
+fn list_unnest_at_level(
+    batch: &[ArrayRef],
+    list_type_unnests: &[ListUnnest],
+    temp_unnested_arrs: &mut HashMap<ListUnnest, ArrayRef>,
+    level_to_unnest: usize,
+    options: &UnnestOptions,
+) -> Result<(Vec<ArrayRef>, usize)> {
+    // extract unnestable columns at this level
+    let (arrs_to_unnest, list_unnest_specs): (Vec<Arc<dyn Array>>, Vec<_>) =
+        list_type_unnests
+            .iter()
+            .filter_map(|unnesting| {
+                if level_to_unnest == unnesting.depth {
+                    return Some((
+                        Arc::clone(&batch[unnesting.index_in_input_schema]),
+                        *unnesting,
+                    ));
+                }
+                // this means the unnesting on this item has started at higher level
+                // and need to continue until depth reaches 1
+                if level_to_unnest < unnesting.depth {
+                    return Some((
+                        Arc::clone(temp_unnested_arrs.get(unnesting).unwrap()),
+                        *unnesting,
+                    ));
+                }
+                None
+            })
+            .unzip();
+
+    // filter out so that list_arrays only contain column with the highest depth
+    // at the same time, during iteration remove this depth so next time we don't have to unnest them again
+    let longest_length = find_longest_length(&arrs_to_unnest, options)?;
+    let unnested_length = longest_length.as_primitive::<Int64Type>();
+    let total_length = if unnested_length.is_empty() {
+        0
+    } else {
+        sum(unnested_length).ok_or_else(|| {
+            exec_datafusion_err!("Failed to calculate the total unnested length")
+        })? as usize
+    };
+    if total_length == 0 {
+        return Ok((vec![], 0));
+    }
+
+    // Unnest all the list arrays
+    let unnested_temp_arrays =
+        unnest_list_arrays(arrs_to_unnest.as_ref(), unnested_length, total_length)?;
+
+    // Create the take indices array for other columns
+    let take_indices = create_take_indicies(unnested_length, total_length);
+
+    // dimension of arrays in batch is untouch, but the values are repeated
+    // as the side effect of unnesting
+    let ret = repeat_arrs_from_indices(batch, &take_indices)?;
+    unnested_temp_arrays
+        .into_iter()
+        .zip(list_unnest_specs.iter())
+        .for_each(|(flatten_arr, unnesting)| {
+            temp_unnested_arrs.insert(*unnesting, flatten_arr);
+        });
+    Ok((ret, total_length))
+}
+struct UnnestingResult {
+    arr: ArrayRef,
+    depth: usize,
+}
+
 /// For each row in a `RecordBatch`, some list/struct columns need to be unnested.
 /// - For list columns: We will expand the values in each list into multiple rows,
 ///   taking the longest length among these lists, and shorter lists are padded with NULLs.
 /// - For struct columns: We will expand the struct columns into multiple subfield columns.
 ///
 /// For columns that don't need to be unnested, repeat their values until reaching the longest length.
+///
+/// Note: unnest has a big difference in behavior between Postgres and DuckDB
+///
+/// Take this example
+///
+/// 1. Postgres
+/// ```ignored
+/// create table temp (
+///     i integer[][][], j integer[]
+/// )
+/// insert into temp values ('{{{1,2},{3,4}},{{5,6},{7,8}}}', '{1,2}');
+/// select unnest(i), unnest(j) from temp;
+/// ```
+///
+/// Result
+/// ```text
+///     1   1
+///     2   2
+///     3
+///     4
+///     5
+///     6
+///     7
+///     8
+/// ```
+/// 2. DuckDB
+/// ```ignore
+///     create table temp (i integer[][][], j integer[]);
+///     insert into temp values ([[[1,2],[3,4]],[[5,6],[7,8]]], [1,2]);
+///     select unnest(i,recursive:=true), unnest(j,recursive:=true) from temp;
+/// ```
+/// Result:
+/// ```text
+///
+///     ┌────────────────────────────────────────────────┬────────────────────────────────────────────────┐
+///     │ unnest(i, "recursive" := CAST('t' AS BOOLEAN)) │ unnest(j, "recursive" := CAST('t' AS BOOLEAN)) │
+///     │                     int32                      │                     int32                      │
+///     ├────────────────────────────────────────────────┼────────────────────────────────────────────────┤
+///     │                                              1 │                                              1 │
+///     │                                              2 │                                              2 │
+///     │                                              3 │                                              1 │
+///     │                                              4 │                                              2 │
+///     │                                              5 │                                              1 │
+///     │                                              6 │                                              2 │
+///     │                                              7 │                                              1 │
+///     │                                              8 │                                              2 │
+///     └────────────────────────────────────────────────┴────────────────────────────────────────────────┘
+/// ```
+///
+/// The following implementation refer to DuckDB's implementation
 fn build_batch(
     batch: &RecordBatch,
     schema: &SchemaRef,
-    list_type_columns: &[usize],
+    list_type_columns: &[ListUnnest],
     struct_column_indices: &HashSet<usize>,
     options: &UnnestOptions,
 ) -> Result<RecordBatch> {
     let transformed = match list_type_columns.len() {
         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
         _ => {
-            let list_arrays: Vec<ArrayRef> = list_type_columns
+            let mut temp_unnested_result = HashMap::new();
+            let max_recursion = list_type_columns
                 .iter()
-                .map(|index| {
-                    ColumnarValue::Array(Arc::clone(batch.column(*index)))
-                        .into_array(batch.num_rows())
-                })
-                .collect::<Result<_>>()?;
+                .fold(0, |highest_depth, ListUnnest { depth, .. }| {
+                    cmp::max(highest_depth, *depth)
+                });
 
-            let longest_length = find_longest_length(&list_arrays, options)?;
-            let unnested_length = longest_length.as_primitive::<Int64Type>();
-            let total_length = if unnested_length.is_empty() {
-                0
-            } else {
-                sum(unnested_length).ok_or_else(|| {
-                    exec_datafusion_err!("Failed to calculate the total unnested length")
-                })? as usize
-            };
-            if total_length == 0 {
-                return Ok(RecordBatch::new_empty(Arc::clone(schema)));
+            // This arr always has the same column count with the input batch
+            let mut flatten_arrs = vec![];
+
+            // original batch has the same columns
+            // all unnesting results are written to temp_batch
+            for depth in (1..=max_recursion).rev() {
+                let input = match depth == max_recursion {
+                    true => batch.columns(),
+                    false => &flatten_arrs,
+                };
+                let (temp_result, num_rows) = list_unnest_at_level(
+                    input,
+                    list_type_columns,
+                    &mut temp_unnested_result,
+                    depth,
+                    options,
+                )?;
+                if num_rows == 0 {
+                    return Ok(RecordBatch::new_empty(Arc::clone(schema)));
+                }
+                flatten_arrs = temp_result;
             }
-
-            // Unnest all the list arrays
-            let unnested_arrays =
-                unnest_list_arrays(&list_arrays, unnested_length, total_length)?;
-            let unnested_array_map: HashMap<_, _> = unnested_arrays
-                .into_iter()
-                .zip(list_type_columns.iter())
-                .map(|(array, column)| (*column, array))
+            let unnested_array_map: HashMap<usize, Vec<UnnestingResult>> =
+                temp_unnested_result.into_iter().fold(
+                    HashMap::new(),
+                    |mut acc,
+                     (
+                        ListUnnest {
+                            index_in_input_schema,
+                            depth,
+                        },
+                        flattened_array,
+                    )| {
+                        acc.entry(index_in_input_schema).or_default().push(
+                            UnnestingResult {
+                                arr: flattened_array,
+                                depth,
+                            },
+                        );
+                        acc
+                    },
+                );
+            let output_order: HashMap<ListUnnest, usize> = list_type_columns
+                .iter()
+                .enumerate()
+                .map(|(order, unnest_def)| (*unnest_def, order))
                 .collect();
 
-            // Create the take indices array for other columns
-            let take_indicies = create_take_indicies(unnested_length, total_length);
+            // one original column may be unnested multiple times into separate columns
+            let mut multi_unnested_per_original_index = unnested_array_map
+                .into_iter()
+                .map(
+                    // each item in unnested_columns is the result of unnesting the same input column
+                    // we need to sort them to conform with the original expression order
+                    // e.g unnest(unnest(col)) must goes before unnest(col)
+                    |(original_index, mut unnested_columns)| {
+                        unnested_columns.sort_by(
+                            |UnnestingResult { depth: depth1, .. },
+                             UnnestingResult { depth: depth2, .. }|
+                             -> Ordering {
+                                output_order
+                                    .get(&ListUnnest {
+                                        depth: *depth1,
+                                        index_in_input_schema: original_index,
+                                    })
+                                    .unwrap()
+                                    .cmp(
+                                        output_order
+                                            .get(&ListUnnest {
+                                                depth: *depth2,
+                                                index_in_input_schema: original_index,
+                                            })
+                                            .unwrap(),
+                                    )
+                            },
+                        );
+                        (
+                            original_index,
+                            unnested_columns
+                                .into_iter()
+                                .map(|result| result.arr)
+                                .collect::<Vec<_>>(),
+                        )
+                    },
+                )
+                .collect::<HashMap<_, _>>();
 
-            // vertical expansion because of list unnest
-            let ret = flatten_list_cols_from_indices(
-                batch,
-                &unnested_array_map,
-                &take_indicies,
-            )?;
+            let ret = flatten_arrs
+                .into_iter()
+                .enumerate()
+                .flat_map(|(col_idx, arr)| {
+                    // convert original column into its unnested version(s)
+                    // Plural because one column can be unnested with different recursion level
+                    // and into separate output columns
+                    match multi_unnested_per_original_index.remove(&col_idx) {
+                        Some(unnested_arrays) => unnested_arrays,
+                        None => vec![arr],
+                    }
+                })
+                .collect::<Vec<_>>();
+
             flatten_struct_cols(&ret, schema, struct_column_indices)
         }
     };
@@ -609,10 +861,10 @@ fn create_take_indicies(
     builder.finish()
 }
 
-/// Create the final batch given the unnested column arrays and a `indices` array
+/// Create the batch given an arrays and a `indices` array
 /// that is used by the take kernel to copy values.
 ///
-/// For example if we have the following `RecordBatch`:
+/// For example if we have the following batch:
 ///
 /// ```ignore
 /// c1: [1], null, [2, 3, 4], null, [5, 6]
@@ -640,27 +892,23 @@ fn create_take_indicies(
 /// c2: 'a', 'b', 'c', 'c', 'c', null, 'd', 'd'
 /// ```
 ///
-fn flatten_list_cols_from_indices(
-    batch: &RecordBatch,
-    unnested_list_arrays: &HashMap<usize, ArrayRef>,
+fn repeat_arrs_from_indices(
+    batch: &[ArrayRef],
     indices: &PrimitiveArray<Int64Type>,
 ) -> Result<Vec<Arc<dyn Array>>> {
-    let arrays = batch
-        .columns()
+    batch
         .iter()
-        .enumerate()
-        .map(|(col_idx, arr)| match unnested_list_arrays.get(&col_idx) {
-            Some(unnested_array) => Ok(Arc::clone(unnested_array)),
-            None => Ok(kernels::take::take(arr, indices, None)?),
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(arrays)
+        .map(|arr| Ok(kernels::take::take(arr, indices, None)?))
+        .collect::<Result<_>>()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
+    use arrow::{
+        datatypes::{Field, Int32Type},
+        util::pretty::pretty_format_batches,
+    };
     use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 
@@ -743,6 +991,139 @@ mod tests {
         let unnested_array = unnest_list_array(list_array, &length_array, 3 * 6)?;
         let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
         assert_eq!(strs, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_batch_list_arr_recursive() -> datafusion_common::Result<()> {
+        // col1                             | col2
+        // [[1,2,3],null,[4,5]]             | ['a','b']
+        // [[7,8,9,10], null, [11,12,13]]   | ['c','d']
+        // null                             | ['e']
+        let list_arr1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
+            Some(vec![Some(7), Some(8), Some(9), Some(10)]),
+            None,
+            Some(vec![Some(11), Some(12), Some(13)]),
+        ]);
+
+        let list_arr1_ref = Arc::new(list_arr1) as ArrayRef;
+        let offsets = OffsetBuffer::from_lengths([3, 3, 0]);
+        let mut nulls = BooleanBufferBuilder::new(3);
+        nulls.append(true);
+        nulls.append(true);
+        nulls.append(false);
+        // list<list<int32>>
+        let col1_field = Field::new_list_field(
+            DataType::List(Arc::new(Field::new_list_field(
+                list_arr1_ref.data_type().to_owned(),
+                true,
+            ))),
+            true,
+        );
+        let col1 = ListArray::new(
+            Arc::new(Field::new_list_field(
+                list_arr1_ref.data_type().to_owned(),
+                true,
+            )),
+            offsets,
+            list_arr1_ref,
+            Some(NullBuffer::new(nulls.finish())),
+        );
+
+        let list_arr2 = StringArray::from(vec![
+            Some("a"),
+            Some("b"),
+            Some("c"),
+            Some("d"),
+            Some("e"),
+        ]);
+
+        let offsets = OffsetBuffer::from_lengths([2, 2, 1]);
+        let mut nulls = BooleanBufferBuilder::new(3);
+        nulls.append_n(3, true);
+        let col2_field = Field::new(
+            "col2",
+            DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+            true,
+        );
+        let col2 = GenericListArray::<i32>::new(
+            Arc::new(Field::new_list_field(DataType::Utf8, true)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(list_arr2),
+            Some(NullBuffer::new(nulls.finish())),
+        );
+        // convert col1 and col2 to a record batch
+        let schema = Arc::new(Schema::new(vec![col1_field, col2_field]));
+        let out_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "col1_unnest_placeholder_depth_1",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            ),
+            Field::new("col1_unnest_placeholder_depth_2", DataType::Int32, true),
+            Field::new("col2_unnest_placeholder_depth_1", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(col1) as ArrayRef, Arc::new(col2) as ArrayRef],
+        )
+        .unwrap();
+        let list_type_columns = vec![
+            ListUnnest {
+                index_in_input_schema: 0,
+                depth: 1,
+            },
+            ListUnnest {
+                index_in_input_schema: 0,
+                depth: 2,
+            },
+            ListUnnest {
+                index_in_input_schema: 1,
+                depth: 1,
+            },
+        ];
+        let ret = build_batch(
+            &batch,
+            &out_schema,
+            list_type_columns.as_ref(),
+            &HashSet::default(),
+            &UnnestOptions {
+                preserve_nulls: true,
+            },
+        )?;
+        let actual =
+            format!("{}", pretty_format_batches(vec![ret].as_ref())?).to_lowercase();
+        let expected = r#"
++---------------------------------+---------------------------------+---------------------------------+
+| col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
++---------------------------------+---------------------------------+---------------------------------+
+| [1, 2, 3]                       | 1                               | a                               |
+|                                 | 2                               | b                               |
+| [4, 5]                          | 3                               |                                 |
+| [1, 2, 3]                       |                                 | a                               |
+|                                 |                                 | b                               |
+| [4, 5]                          |                                 |                                 |
+| [1, 2, 3]                       | 4                               | a                               |
+|                                 | 5                               | b                               |
+| [4, 5]                          |                                 |                                 |
+| [7, 8, 9, 10]                   | 7                               | c                               |
+|                                 | 8                               | d                               |
+| [11, 12, 13]                    | 9                               |                                 |
+|                                 | 10                              |                                 |
+| [7, 8, 9, 10]                   |                                 | c                               |
+|                                 |                                 | d                               |
+| [11, 12, 13]                    |                                 |                                 |
+| [7, 8, 9, 10]                   | 11                              | c                               |
+|                                 | 12                              | d                               |
+| [11, 12, 13]                    | 13                              |                                 |
+|                                 |                                 | e                               |
++---------------------------------+---------------------------------+---------------------------------+
+        "#
+        .trim();
+        assert_eq!(actual, expected);
         Ok(())
     }
 

@@ -68,6 +68,7 @@ use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
 use itertools::Itertools;
 use log::{debug, info};
+use object_store::ObjectStore;
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::dialect::dialect_from_str;
 use std::any::Any;
@@ -75,6 +76,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
+use url::Url;
 use uuid::Uuid;
 
 /// `SessionState` contains all the necessary state to plan and execute queries,
@@ -259,36 +261,9 @@ impl SessionState {
     }
 
     /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionStateBuilder")]
-    pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_default_features()
-            .build()
-    }
-
-    /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogProviderList`]
     #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     pub fn new_with_config_rt_and_catalog_list(
-        config: SessionConfig,
-        runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogProviderList>,
-    ) -> Self {
-        SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_catalog_list(catalog_list)
-            .with_default_features()
-            .build()
-    }
-
-    /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionStateBuilder")]
-    pub fn with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
         catalog_list: Arc<dyn CatalogProviderList>,
@@ -801,6 +776,11 @@ impl SessionState {
         &mut self.config
     }
 
+    /// Return the logical optimizers
+    pub fn optimizers(&self) -> &[Arc<dyn OptimizerRule + Send + Sync>] {
+        &self.optimizer.rules
+    }
+
     /// Return the physical optimizers
     pub fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
         &self.physical_optimizers.rules
@@ -1035,17 +1015,15 @@ impl SessionStateBuilder {
         }
     }
 
-    /// Set defaults for table_factories, file formats, expr_planners and builtin
-    /// scalar and aggregate functions.
-    pub fn with_default_features(mut self) -> Self {
-        self.table_factories = Some(SessionStateDefaults::default_table_factories());
-        self.file_formats = Some(SessionStateDefaults::default_file_formats());
-        self.expr_planners = Some(SessionStateDefaults::default_expr_planners());
-        self.scalar_functions = Some(SessionStateDefaults::default_scalar_functions());
-        self.aggregate_functions =
-            Some(SessionStateDefaults::default_aggregate_functions());
-        self.window_functions = Some(SessionStateDefaults::default_window_functions());
-        self
+    /// Create default builder with defaults for table_factories, file formats, expr_planners and builtin
+    /// scalar, aggregate and windows functions.
+    pub fn with_default_features(self) -> Self {
+        self.with_table_factories(SessionStateDefaults::default_table_factories())
+            .with_file_formats(SessionStateDefaults::default_file_formats())
+            .with_expr_planners(SessionStateDefaults::default_expr_planners())
+            .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
+            .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
+            .with_window_functions(SessionStateDefaults::default_window_functions())
     }
 
     /// Set the session id.
@@ -1217,6 +1195,18 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Add a [`TableProviderFactory`] to the map of factories
+    pub fn with_table_factory(
+        mut self,
+        key: String,
+        table_factory: Arc<dyn TableProviderFactory>,
+    ) -> Self {
+        let mut table_factories = self.table_factories.unwrap_or_default();
+        table_factories.insert(key, table_factory);
+        self.table_factories = Some(table_factories);
+        self
+    }
+
     /// Set the map of [`TableProviderFactory`]s
     pub fn with_table_factories(
         mut self,
@@ -1238,6 +1228,41 @@ impl SessionStateBuilder {
         function_factory: Option<Arc<dyn FunctionFactory>>,
     ) -> Self {
         self.function_factory = function_factory;
+        self
+    }
+
+    /// Register an `ObjectStore` to the [`RuntimeEnv`]. See [`RuntimeEnv::register_object_store`]
+    /// for more details.
+    ///
+    /// Note that this creates a default [`RuntimeEnv`] if  there isn't one passed in already.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::execution::session_state::SessionStateBuilder;
+    /// # use datafusion_execution::runtime_env::RuntimeEnv;
+    /// # use url::Url;
+    /// # use std::sync::Arc;
+    /// # let http_store = object_store::local::LocalFileSystem::new();
+    /// let url = Url::try_from("file://").unwrap();
+    /// let object_store = object_store::local::LocalFileSystem::new();
+    /// let state = SessionStateBuilder::new()
+    ///     .with_config(SessionConfig::new())  
+    ///     .with_object_store(&url, Arc::new(object_store))
+    ///     .with_default_features()
+    ///     .build();
+    /// ```
+    pub fn with_object_store(
+        mut self,
+        url: &Url,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Self {
+        if self.runtime_env.is_none() {
+            self.runtime_env = Some(Arc::new(RuntimeEnv::default()));
+        }
+        self.runtime_env
+            .as_ref()
+            .unwrap()
+            .register_object_store(url, object_store);
         self
     }
 
@@ -1740,8 +1765,8 @@ impl OptimizerConfig for SessionState {
         self.execution_props.query_execution_start_time
     }
 
-    fn alias_generator(&self) -> Arc<AliasGenerator> {
-        self.execution_props.alias_generator.clone()
+    fn alias_generator(&self) -> &Arc<AliasGenerator> {
+        &self.execution_props.alias_generator
     }
 
     fn options(&self) -> &ConfigOptions {
@@ -1828,6 +1853,8 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
+    use datafusion_optimizer::optimizer::OptimizerRule;
+    use datafusion_optimizer::Optimizer;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1922,6 +1949,52 @@ mod tests {
         let new_state =
             SessionStateBuilder::new_from_existing(without_default_state).build();
         assert!(new_state.catalog_list().catalog(&default_catalog).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_state_with_optimizer_rules() {
+        #[derive(Default, Debug)]
+        struct DummyRule {}
+
+        impl OptimizerRule for DummyRule {
+            fn name(&self) -> &str {
+                "dummy_rule"
+            }
+        }
+        // test building sessions with fresh set of rules
+        let state = SessionStateBuilder::new()
+            .with_optimizer_rules(vec![Arc::new(DummyRule {})])
+            .build();
+
+        assert_eq!(state.optimizers().len(), 1);
+
+        // test adding rules to default recommendations
+        let state = SessionStateBuilder::new()
+            .with_optimizer_rule(Arc::new(DummyRule {}))
+            .build();
+
+        assert_eq!(
+            state.optimizers().len(),
+            Optimizer::default().rules.len() + 1
+        );
+    }
+
+    #[test]
+    fn test_with_table_factories() -> Result<()> {
+        use crate::test_util::TestTableFactory;
+
+        let state = SessionStateBuilder::new().build();
+        let table_factories = state.table_factories();
+        assert!(table_factories.is_empty());
+
+        let table_factory = Arc::new(TestTableFactory {});
+        let state = SessionStateBuilder::new()
+            .with_table_factory("employee".to_string(), table_factory)
+            .build();
+        let table_factories = state.table_factories();
+        assert_eq!(table_factories.len(), 1);
+        assert!(table_factories.contains_key("employee"));
         Ok(())
     }
 }

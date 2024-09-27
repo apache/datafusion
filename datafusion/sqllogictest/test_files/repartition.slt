@@ -127,3 +127,23 @@ physical_plan
 04)------FilterExec: c3@2 > 0
 05)--------RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
 06)----------StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
+
+# Start repratition on empty column test.
+# See https://github.com/apache/datafusion/issues/12057
+
+statement ok
+CREATE TABLE t1(v1 int);
+
+statement ok
+INSERT INTO t1 values(42);
+
+query I
+SELECT sum(1) OVER (PARTITION BY false=false) 
+FROM t1 WHERE ((false > (v1 = v1)) IS DISTINCT FROM true);
+----
+1
+
+statement ok
+DROP TABLE t1;
+
+# End repartition on empty columns test

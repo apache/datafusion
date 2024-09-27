@@ -28,7 +28,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ExpandWildcardRule {}
 
 impl ExpandWildcardRule {
@@ -84,7 +84,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     // If there is a REPLACE statement, replace that column with the given
                     // replace expression. Column name remains the same.
                     let replaced = if let Some(replace) = options.replace {
-                        replace_columns(expanded, replace)?
+                        replace_columns(expanded, &replace)?
                     } else {
                         expanded
                     };
@@ -95,7 +95,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     // If there is a REPLACE statement, replace that column with the given
                     // replace expression. Column name remains the same.
                     let replaced = if let Some(replace) = options.replace {
-                        replace_columns(expanded, replace)?
+                        replace_columns(expanded, &replace)?
                     } else {
                         expanded
                     };
@@ -139,7 +139,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
 /// Multiple REPLACEs are also possible with comma separations.
 fn replace_columns(
     mut exprs: Vec<Expr>,
-    replace: PlannedReplaceSelectItem,
+    replace: &PlannedReplaceSelectItem,
 ) -> Result<Vec<Expr>> {
     for expr in exprs.iter_mut() {
         if let Expr::Column(Column { name, .. }) = expr {

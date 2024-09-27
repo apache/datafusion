@@ -22,9 +22,7 @@ use std::{
     borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc, vec,
 };
 
-use super::{
-    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
-};
+use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 
@@ -260,7 +258,7 @@ impl FileScanConfig {
         (projected_schema, table_stats, projected_output_ordering)
     }
 
-    #[allow(unused)] // Only used by avro
+    #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
     pub(crate) fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()
@@ -294,19 +292,6 @@ impl FileScanConfig {
                 .copied()
                 .collect()
         })
-    }
-
-    #[allow(missing_docs)]
-    #[deprecated(since = "33.0.0", note = "Use SessionContext::new_with_config")]
-    pub fn repartition_file_groups(
-        file_groups: Vec<Vec<PartitionedFile>>,
-        target_partitions: usize,
-        repartition_file_min_size: usize,
-    ) -> Option<Vec<Vec<PartitionedFile>>> {
-        FileGroupPartitioner::new()
-            .with_target_partitions(target_partitions)
-            .with_repartition_file_min_size(repartition_file_min_size)
-            .repartition_file_groups(&file_groups)
     }
 
     /// Attempts to do a bin-packing on files into file groups, such that any two files
