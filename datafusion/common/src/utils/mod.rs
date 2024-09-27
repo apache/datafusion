@@ -98,7 +98,7 @@ pub fn get_record_batch_at_indices(
     record_batch: &RecordBatch,
     indices: &PrimitiveArray<UInt32Type>,
 ) -> Result<RecordBatch> {
-    let new_columns = get_arrayref_at_indices(record_batch.columns(), indices)?;
+    let new_columns = take_arrays(record_batch.columns(), indices)?;
     RecordBatch::try_new_with_options(
         record_batch.schema(),
         new_columns,
@@ -291,10 +291,7 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
 }
 
 /// Construct a new [`Vec`] of [`ArrayRef`] from the rows of the `arrays` at the `indices`.
-pub fn get_arrayref_at_indices(
-    arrays: &[ArrayRef],
-    indices: &PrimitiveArray<UInt32Type>,
-) -> Result<Vec<ArrayRef>> {
+pub fn take_arrays(arrays: &[ArrayRef], indices: &dyn Array) -> Result<Vec<ArrayRef>> {
     arrays
         .iter()
         .map(|array| {
@@ -1023,8 +1020,9 @@ mod tests {
             vec![2, 4],
         ];
         for row_indices in row_indices_vec {
-            let indices = PrimitiveArray::from_iter_values(row_indices.iter().cloned());
-            let chunk = get_arrayref_at_indices(&arrays, &indices)?;
+            let indices: PrimitiveArray<UInt32Type> =
+                PrimitiveArray::from_iter_values(row_indices.iter().cloned());
+            let chunk = take_arrays(&arrays, &indices)?;
             for (arr_orig, arr_chunk) in arrays.iter().zip(&chunk) {
                 for (idx, orig_idx) in row_indices.iter().enumerate() {
                     let res1 = ScalarValue::try_from_array(arr_orig, *orig_idx as usize)?;

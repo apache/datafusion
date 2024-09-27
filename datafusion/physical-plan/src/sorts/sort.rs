@@ -46,7 +46,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use arrow_array::{Array, RecordBatchOptions, UInt32Array};
 use arrow_schema::DataType;
-use datafusion_common::utils::get_arrayref_at_indices;
+use datafusion_common::utils::take_arrays;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -617,7 +617,7 @@ pub fn sort_batch(
         lexsort_to_indices(&sort_columns, fetch)?
     };
 
-    let columns = get_arrayref_at_indices(batch.columns(), &indices)?;
+    let columns = take_arrays(batch.columns(), &indices)?;
 
     let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
     Ok(RecordBatch::try_new_with_options(

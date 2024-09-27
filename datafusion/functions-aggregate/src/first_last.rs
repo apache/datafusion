@@ -24,7 +24,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
+use datafusion_common::utils::{compare_rows, get_row_at_idx, take_arrays};
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
@@ -310,7 +310,7 @@ impl Accumulator for FirstValueAccumulator {
             filtered_states
         } else {
             let indices = lexsort_to_indices(&sort_cols, None)?;
-            get_arrayref_at_indices(&filtered_states, &indices)?
+            take_arrays(&filtered_states, &indices)?
         };
         if !ordered_states[0].is_empty() {
             let first_row = get_row_at_idx(&ordered_states, 0)?;
@@ -613,7 +613,7 @@ impl Accumulator for LastValueAccumulator {
             filtered_states
         } else {
             let indices = lexsort_to_indices(&sort_cols, None)?;
-            get_arrayref_at_indices(&filtered_states, &indices)?
+            take_arrays(&filtered_states, &indices)?
         };
 
         if !ordered_states[0].is_empty() {
