@@ -56,13 +56,12 @@ pub struct MemoryExec {
 
 impl fmt::Debug for MemoryExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "partitions: [...]")?;
-        write!(f, "schema: {:?}", self.projected_schema)?;
-        write!(f, "projection: {:?}", self.projection)?;
-        if let Some(sort_info) = &self.sort_information.first() {
-            write!(f, ", output_ordering: {:?}", sort_info)?;
-        }
-        Ok(())
+        f.debug_struct("MemoryExec")
+            .field("partitions", &"[...]")
+            .field("schema", &self.schema)
+            .field("projection", &self.projection)
+            .field("sort_information", &self.sort_information)
+            .finish()
     }
 }
 

@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::{
     assert_batches_sorted_eq,
     datasource::{
@@ -36,6 +37,7 @@ use datafusion::{
     prelude::SessionContext,
     test_util::{self, arrow_test_data, parquet_test_data},
 };
+use datafusion_catalog::TableProvider;
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
@@ -43,6 +45,9 @@ use datafusion_execution::config::SessionConfig;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
+use datafusion_expr::{col, lit, Expr, Operator};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::{self, BoxStream};
 use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
@@ -50,6 +55,52 @@ use object_store::{
 };
 use object_store::{Attributes, MultipartUpload, PutMultipartOpts, PutPayload};
 use url::Url;
+
+#[tokio::test]
+async fn parquet_partition_pruning_filter() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let table = create_partitioned_alltypes_parquet_table(
+        &ctx,
+        &[
+            "year=2021/month=09/day=09/file.parquet",
+            "year=2021/month=10/day=09/file.parquet",
+            "year=2021/month=10/day=28/file.parquet",
+        ],
+        &[
+            ("year", DataType::Int32),
+            ("month", DataType::Int32),
+            ("day", DataType::Int32),
+        ],
+        "mirror:///",
+        "alltypes_plain.parquet",
+    )
+    .await;
+
+    // The first three filters can be resolved using only the partition columns.
+    let filters = [
+        Expr::eq(col("year"), lit(2021)),
+        Expr::eq(col("month"), lit(10)),
+        Expr::eq(col("day"), lit(28)),
+        Expr::gt(col("id"), lit(1)),
+    ];
+    let exec = table.scan(&ctx.state(), None, &filters, None).await?;
+    let parquet_exec = exec.as_any().downcast_ref::<ParquetExec>().unwrap();
+    let pred = parquet_exec.predicate().unwrap();
+    // Only the last filter should be pushdown to TableScan
+    let expected = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
+        Operator::Gt,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+    ));
+
+    assert!(pred.as_any().is::<BinaryExpr>());
+    let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
+
+    assert_eq!(pred, expected.as_any());
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn parquet_distinct_partition_col() -> Result<()> {
@@ -491,7 +542,7 @@ async fn parquet_statistics() -> Result<()> {
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Precision::Exact(1));
     // TODO assert partition column stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::new_unknown(),);
+    assert_eq!(stat_cols[1], ColumnStatistics::new_unknown());
 
     Ok(())
 }
@@ -563,6 +614,25 @@ async fn register_partitioned_alltypes_parquet(
     table_path: &str,
     source_file: &str,
 ) {
+    let table = create_partitioned_alltypes_parquet_table(
+        ctx,
+        store_paths,
+        partition_cols,
+        table_path,
+        source_file,
+    )
+    .await;
+    ctx.register_table("t", table)
+        .expect("registering listing table failed");
+}
+
+async fn create_partitioned_alltypes_parquet_table(
+    ctx: &SessionContext,
+    store_paths: &[&str],
+    partition_cols: &[(&str, DataType)],
+    table_path: &str,
+    source_file: &str,
+) -> Arc<dyn TableProvider> {
     let testdata = parquet_test_data();
     let parquet_file_path = format!("{testdata}/{source_file}");
     let url = Url::parse("mirror://").unwrap();
@@ -591,11 +661,7 @@ async fn register_partitioned_alltypes_parquet(
     let config = ListingTableConfig::new(table_path)
         .with_listing_options(options)
         .with_schema(file_schema);
-
-    let table = ListingTable::try_new(config).unwrap();
-
-    ctx.register_table("t", Arc::new(table))
-        .expect("registering listing table failed");
+    Arc::new(ListingTable::try_new(config).unwrap())
 }
 
 #[derive(Debug)]

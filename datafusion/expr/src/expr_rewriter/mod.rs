@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, Unnest};
@@ -42,7 +43,7 @@ pub use order_by::rewrite_sort_cols_by_aggs;
 /// `Operator::ArrowAt`, but can be implemented by calling a function
 /// `array_concat` from the `functions-nested` crate.
 // This is not used in datafusion internally, but it is still helpful for downstream project so don't remove it.
-pub trait FunctionRewrite {
+pub trait FunctionRewrite: Debug {
     /// Return a human readable name for this rewrite
     fn name(&self) -> &str;
 

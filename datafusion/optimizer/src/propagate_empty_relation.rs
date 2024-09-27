@@ -29,7 +29,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that bottom-up to eliminate plan by propagating empty_relation.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PropagateEmptyRelation;
 
 impl PropagateEmptyRelation {

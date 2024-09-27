@@ -28,7 +28,7 @@ use datafusion_expr::{logical_plan::LogicalPlan, Expr, LogicalPlanBuilder};
 
 /// Analyzed rule that inlines TableScan that provide a [`LogicalPlan`]
 /// (DataFrame / ViewTable)
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct InlineTableScan;
 
 impl InlineTableScan {

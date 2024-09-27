@@ -25,6 +25,8 @@
 # This file be run directly:
 # $ ./pre-commit.sh
 
+set -e
+
 function RED() {
 	echo "\033[0;31m$@\033[0m"
 }

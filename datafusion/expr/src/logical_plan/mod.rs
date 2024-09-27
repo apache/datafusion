@@ -35,11 +35,11 @@ pub use ddl::{
 };
 pub use dml::{DmlStatement, WriteOp};
 pub use plan::{
-    projection_schema, Aggregate, Analyze, CrossJoin, DescribeTable, Distinct,
-    DistinctOn, EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint,
-    JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare, Projection,
-    RecursiveQuery, Repartition, Sort, StringifiedPlan, Subquery, SubqueryAlias,
-    TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
+    projection_schema, Aggregate, Analyze, ColumnUnnestList, ColumnUnnestType, CrossJoin,
+    DescribeTable, Distinct, DistinctOn, EmptyRelation, Explain, Extension, Filter, Join,
+    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
+    Projection, RecursiveQuery, Repartition, Sort, StringifiedPlan, Subquery,
+    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
 };
 pub use statement::{
     SetVariable, Statement, TransactionAccessMode, TransactionConclusion, TransactionEnd,

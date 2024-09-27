@@ -62,7 +62,7 @@ FROM (
     ('1000', 32, 'foo', 'True', 10.0, 1703035800000000000)
 );
 
-query ?RTTRP
+query TRTTRP
 SELECT * FROM m1;
 ----
 1000 32 foo True 1 2023-12-20T00:00:00
@@ -137,7 +137,7 @@ FROM (
     ('passive', '1000', 1000, 1701653400000000000)
 );
 
-query ??RP
+query TTRP
 SELECT * FROM m2;
 ----
 active 1000 100 2023-12-04T00:00:00
@@ -208,7 +208,7 @@ true false NULL true true false true NULL
 
 # Reproducer for https://github.com/apache/datafusion/issues/8738
 # This query should work correctly
-query P?TT rowsort
+query PTTT rowsort
 SELECT
   "data"."timestamp" as "time",
   "data"."tag_id",
@@ -264,7 +264,7 @@ ORDER BY
 
 
 # deterministic sort (so we can avoid rowsort)
-query P?TT
+query PTTT
 SELECT
   "data"."timestamp" as "time",
   "data"."tag_id",
@@ -348,7 +348,7 @@ create table m3 as
 from m3_source;
 
 # there are two values in column2
-query T?I rowsort
+query TTI rowsort
 SELECT *
 FROM m3;
 ----
@@ -397,7 +397,7 @@ create table test as values
 ;
 
 # query using an string '1' which must be coerced into a dictionary string
-query T?
+query TT
 SELECT * from test where column2 = '1';
 ----
 row1 1
@@ -429,7 +429,7 @@ physical_plan
 
 
 # Now query using an integer which must be coerced into a dictionary string
-query T?
+query TT
 SELECT * from test where column2 = 1;
 ----
 row1 1

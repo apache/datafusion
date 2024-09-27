@@ -73,6 +73,7 @@ async fn main() -> Result<()> {
 /// Usage: `read_csv(filename, [limit])`
 ///
 /// [`read_csv`]: https://duckdb.org/docs/data/csv/overview.html
+#[derive(Debug)]
 struct LocalCsvTable {
     schema: SchemaRef,
     limit: Option<usize>,

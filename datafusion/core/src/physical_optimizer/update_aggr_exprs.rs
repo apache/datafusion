@@ -48,7 +48,7 @@ use datafusion_physical_plan::{
 /// This rule analyzes aggregate expressions of type `Beneficial` to see whether
 /// their input ordering requirements are satisfied. If this is the case, the
 /// aggregators are modified to run in a more efficient mode.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct OptimizeAggregateOrder {}
 
 impl OptimizeAggregateOrder {

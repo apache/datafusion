@@ -2858,7 +2858,7 @@ statement error
 select to_local_time('2024-04-01T00:00:20Z'::timestamp, 'some string');
 
 # invalid argument data type
-statement error DataFusion error: Execution error: The to_local_time function can only accept timestamp as the arg, got Utf8
+statement error The to_local_time function can only accept Timestamp as the arg got Utf8
 select to_local_time('2024-04-01T00:00:20Z');
 
 # invalid timezone

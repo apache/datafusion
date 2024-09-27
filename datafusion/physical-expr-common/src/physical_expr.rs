@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -222,4 +222,26 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     } else {
         any
     }
+}
+
+/// Returns [`Display`] able a list of [`PhysicalExpr`]
+///
+/// Example output: `[a + 1, b]`
+pub fn format_physical_expr_list(exprs: &[Arc<dyn PhysicalExpr>]) -> impl Display + '_ {
+    struct DisplayWrapper<'a>(&'a [Arc<dyn PhysicalExpr>]);
+    impl<'a> Display for DisplayWrapper<'a> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            let mut iter = self.0.iter();
+            write!(f, "[")?;
+            if let Some(expr) = iter.next() {
+                write!(f, "{}", expr)?;
+            }
+            for expr in iter {
+                write!(f, ", {}", expr)?;
+            }
+            write!(f, "]")?;
+            Ok(())
+        }
+    }
+    DisplayWrapper(exprs)
 }

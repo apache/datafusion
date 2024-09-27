@@ -255,11 +255,11 @@ impl FilterExec {
                 ConstExpr::new(expr).with_across_partitions(true)
             });
         // this is for statistics
-        eq_properties = eq_properties.add_constants(constants);
+        eq_properties = eq_properties.with_constants(constants);
         // this is for logical constant (for example: a = '1', then a could be marked as a constant)
         // to do: how to deal with multiple situation to represent = (for example c1 between 0 and 0)
         eq_properties =
-            eq_properties.add_constants(Self::extend_constants(input, predicate));
+            eq_properties.with_constants(Self::extend_constants(input, predicate));
 
         let mut output_partitioning = input.output_partitioning().clone();
         // If contains projection, update the PlanProperties.

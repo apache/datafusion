@@ -19,7 +19,7 @@
 
 use crate::expr::Alias;
 use crate::expr_rewriter::normalize_col;
-use crate::{expr::Sort, Cast, Expr, ExprSchemable, LogicalPlan, TryCast};
+use crate::{expr::Sort, Cast, Expr, LogicalPlan, TryCast};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
@@ -77,11 +77,8 @@ fn rewrite_in_terms_of_projection(
     expr.transform(|expr| {
         // search for unnormalized names first such as "c1" (such as aliases)
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
-            let col = Expr::Column(
-                found
-                    .to_field(input.schema())
-                    .map(|(qualifier, field)| Column::new(qualifier, field.name()))?,
-            );
+            let (qualifier, field_name) = found.qualified_name();
+            let col = Expr::Column(Column::new(qualifier, field_name));
             return Ok(Transformed::yes(col));
         }
 

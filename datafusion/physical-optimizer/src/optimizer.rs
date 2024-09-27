@@ -20,6 +20,7 @@
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_physical_plan::ExecutionPlan;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
@@ -29,7 +30,7 @@ use std::sync::Arc;
 /// `PhysicalOptimizerRule`s.
 ///
 /// [`SessionState::add_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_physical_optimizer_rule
-pub trait PhysicalOptimizerRule {
+pub trait PhysicalOptimizerRule: Debug {
     /// Rewrite `plan` to an optimized form
     fn optimize(
         &self,

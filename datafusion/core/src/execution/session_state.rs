@@ -68,6 +68,7 @@ use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
 use itertools::Itertools;
 use log::{debug, info};
+use object_store::ObjectStore;
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::dialect::dialect_from_str;
 use std::any::Any;
@@ -75,6 +76,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
+use url::Url;
 use uuid::Uuid;
 
 /// `SessionState` contains all the necessary state to plan and execute queries,
@@ -1193,6 +1195,18 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Add a [`TableProviderFactory`] to the map of factories
+    pub fn with_table_factory(
+        mut self,
+        key: String,
+        table_factory: Arc<dyn TableProviderFactory>,
+    ) -> Self {
+        let mut table_factories = self.table_factories.unwrap_or_default();
+        table_factories.insert(key, table_factory);
+        self.table_factories = Some(table_factories);
+        self
+    }
+
     /// Set the map of [`TableProviderFactory`]s
     pub fn with_table_factories(
         mut self,
@@ -1214,6 +1228,41 @@ impl SessionStateBuilder {
         function_factory: Option<Arc<dyn FunctionFactory>>,
     ) -> Self {
         self.function_factory = function_factory;
+        self
+    }
+
+    /// Register an `ObjectStore` to the [`RuntimeEnv`]. See [`RuntimeEnv::register_object_store`]
+    /// for more details.
+    ///
+    /// Note that this creates a default [`RuntimeEnv`] if  there isn't one passed in already.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::execution::session_state::SessionStateBuilder;
+    /// # use datafusion_execution::runtime_env::RuntimeEnv;
+    /// # use url::Url;
+    /// # use std::sync::Arc;
+    /// # let http_store = object_store::local::LocalFileSystem::new();
+    /// let url = Url::try_from("file://").unwrap();
+    /// let object_store = object_store::local::LocalFileSystem::new();
+    /// let state = SessionStateBuilder::new()
+    ///     .with_config(SessionConfig::new())  
+    ///     .with_object_store(&url, Arc::new(object_store))
+    ///     .with_default_features()
+    ///     .build();
+    /// ```
+    pub fn with_object_store(
+        mut self,
+        url: &Url,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Self {
+        if self.runtime_env.is_none() {
+            self.runtime_env = Some(Arc::new(RuntimeEnv::default()));
+        }
+        self.runtime_env
+            .as_ref()
+            .unwrap()
+            .register_object_store(url, object_store);
         self
     }
 
@@ -1905,6 +1954,7 @@ mod tests {
 
     #[test]
     fn test_session_state_with_optimizer_rules() {
+        #[derive(Default, Debug)]
         struct DummyRule {}
 
         impl OptimizerRule for DummyRule {
@@ -1928,5 +1978,23 @@ mod tests {
             state.optimizers().len(),
             Optimizer::default().rules.len() + 1
         );
+    }
+
+    #[test]
+    fn test_with_table_factories() -> Result<()> {
+        use crate::test_util::TestTableFactory;
+
+        let state = SessionStateBuilder::new().build();
+        let table_factories = state.table_factories();
+        assert!(table_factories.is_empty());
+
+        let table_factory = Arc::new(TestTableFactory {});
+        let state = SessionStateBuilder::new()
+            .with_table_factory("employee".to_string(), table_factory)
+            .build();
+        let table_factories = state.table_factories();
+        assert_eq!(table_factories.len(), 1);
+        assert!(table_factories.contains_key("employee"));
+        Ok(())
     }
 }

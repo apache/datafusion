@@ -36,7 +36,7 @@ use datafusion_expr::utils::conjunction;
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 
 /// Optimizer rule for rewriting subquery filters to joins
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ScalarSubqueryToJoin {}
 
 impl ScalarSubqueryToJoin {

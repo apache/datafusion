@@ -72,7 +72,7 @@ use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
 /// ones it can prove unnecessary.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EnforceSorting {}
 
 impl EnforceSorting {

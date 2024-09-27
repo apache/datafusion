@@ -301,8 +301,12 @@ impl MetricsSet {
 
     /// Sort the order of metrics so the "most useful" show up first
     pub fn sorted_for_display(mut self) -> Self {
-        self.metrics
-            .sort_unstable_by_key(|metric| metric.value().display_sort_key());
+        self.metrics.sort_unstable_by_key(|metric| {
+            (
+                metric.value().display_sort_key(),
+                metric.value().name().to_owned(),
+            )
+        });
         self
     }
 
@@ -665,7 +669,9 @@ mod tests {
         MetricBuilder::new(&metrics).end_timestamp(0);
         MetricBuilder::new(&metrics).start_timestamp(0);
         MetricBuilder::new(&metrics).elapsed_compute(0);
+        MetricBuilder::new(&metrics).counter("the_second_counter", 0);
         MetricBuilder::new(&metrics).counter("the_counter", 0);
+        MetricBuilder::new(&metrics).counter("the_third_counter", 0);
         MetricBuilder::new(&metrics).subset_time("the_time", 0);
         MetricBuilder::new(&metrics).output_rows(0);
         let metrics = metrics.clone_inner();
@@ -675,9 +681,9 @@ mod tests {
             n.join(", ")
         }
 
-        assert_eq!("end_timestamp, start_timestamp, elapsed_compute, the_counter, the_time, output_rows", metric_names(&metrics));
+        assert_eq!("end_timestamp, start_timestamp, elapsed_compute, the_second_counter, the_counter, the_third_counter, the_time, output_rows", metric_names(&metrics));
 
         let metrics = metrics.sorted_for_display();
-        assert_eq!("output_rows, elapsed_compute, the_counter, the_time, start_timestamp, end_timestamp", metric_names(&metrics));
+        assert_eq!("output_rows, elapsed_compute, the_counter, the_second_counter, the_third_counter, the_time, start_timestamp, end_timestamp", metric_names(&metrics));
     }
 }

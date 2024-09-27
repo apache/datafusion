@@ -30,7 +30,7 @@ use std::sync::Arc;
 /// plan with an empty relation.
 ///
 /// This rule also removes OFFSET 0 from the [LogicalPlan]
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EliminateLimit;
 
 impl EliminateLimit {

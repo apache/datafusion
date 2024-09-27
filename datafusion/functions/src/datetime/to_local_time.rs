@@ -22,22 +22,16 @@ use std::sync::Arc;
 use arrow::array::timezone::Tz;
 use arrow::array::{Array, ArrayRef, PrimitiveBuilder};
 use arrow::datatypes::DataType::Timestamp;
+use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     ArrowTimestampType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::datatypes::{
-    TimeUnit,
-    TimeUnit::{Microsecond, Millisecond, Nanosecond, Second},
-};
 
 use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
-};
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 /// A UDF function that converts a timezone-aware timestamp to local time (with no offset or
 /// timezone information). In other words, this function strips off the timezone from the timestamp,
@@ -55,20 +49,8 @@ impl Default for ToLocalTimeFunc {
 
 impl ToLocalTimeFunc {
     pub fn new() -> Self {
-        let base_sig = |array_type: TimeUnit| {
-            [
-                Exact(vec![Timestamp(array_type, None)]),
-                Exact(vec![Timestamp(array_type, Some(TIMEZONE_WILDCARD.into()))]),
-            ]
-        };
-
-        let full_sig = [Nanosecond, Microsecond, Millisecond, Second]
-            .into_iter()
-            .flat_map(base_sig)
-            .collect::<Vec<_>>();
-
         Self {
-            signature: Signature::one_of(full_sig, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 
@@ -328,13 +310,10 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
 
         match &arg_types[0] {
-            Timestamp(Nanosecond, _) => Ok(Timestamp(Nanosecond, None)),
-            Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
-            Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
-            Timestamp(Second, _) => Ok(Timestamp(Second, None)),
+            Timestamp(timeunit, _) => Ok(Timestamp(*timeunit, None)),
             _ => exec_err!(
                 "The to_local_time function can only accept timestamp as the arg, got {:?}", arg_types[0]
-            ),
+            )
         }
     }
 
@@ -347,6 +326,30 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
 
         self.to_local_time(args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return plan_err!(
+                "to_local_time function requires 1 argument, got {:?}",
+                arg_types.len()
+            );
+        }
+
+        let first_arg = arg_types[0].clone();
+        match &first_arg {
+            Timestamp(Nanosecond, timezone) => {
+                Ok(vec![Timestamp(Nanosecond, timezone.clone())])
+            }
+            Timestamp(Microsecond, timezone) => {
+                Ok(vec![Timestamp(Microsecond, timezone.clone())])
+            }
+            Timestamp(Millisecond, timezone) => {
+                Ok(vec![Timestamp(Millisecond, timezone.clone())])
+            }
+            Timestamp(Second, timezone) => Ok(vec![Timestamp(Second, timezone.clone())]),
+            _ => plan_err!("The to_local_time function can only accept Timestamp as the arg got {first_arg}"),
+        }
     }
 }
 

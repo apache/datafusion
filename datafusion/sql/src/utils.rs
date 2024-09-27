@@ -17,21 +17,27 @@
 
 //! SQL Utility Functions
 
+use std::collections::HashMap;
+use std::vec;
+
 use arrow_schema::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    exec_err, internal_err, plan_err, Column, DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, Result,
+    ScalarValue,
 };
-use datafusion_expr::builder::get_unnested_columns;
+use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
-use datafusion_expr::{expr_vec_fmt, Expr, ExprSchemable, LogicalPlan};
+use datafusion_expr::{
+    col, expr_vec_fmt, ColumnUnnestList, ColumnUnnestType, Expr, ExprSchemable,
+    LogicalPlan,
+};
 use sqlparser::ast::{Ident, Value};
-use std::collections::HashMap;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -287,16 +293,16 @@ pub(crate) fn value_to_string(value: &Value) -> Option<String> {
     }
 }
 
-pub(crate) fn transform_bottom_unnests(
+pub(crate) fn rewrite_recursive_unnests_bottom_up(
     input: &LogicalPlan,
-    unnest_placeholder_columns: &mut Vec<String>,
+    unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
     inner_projection_exprs: &mut Vec<Expr>,
     original_exprs: &[Expr],
 ) -> Result<Vec<Expr>> {
     Ok(original_exprs
         .iter()
         .map(|expr| {
-            transform_bottom_unnest(
+            rewrite_recursive_unnest_bottom_up(
                 input,
                 unnest_placeholder_columns,
                 inner_projection_exprs,
@@ -309,6 +315,269 @@ pub(crate) fn transform_bottom_unnests(
         .collect::<Vec<_>>())
 }
 
+/*
+This is only usedful when used with transform down up
+A full example of how the transformation works:
+ */
+struct RecursiveUnnestRewriter<'a> {
+    input_schema: &'a DFSchemaRef,
+    root_expr: &'a Expr,
+    // useful to detect which child expr is a part of/ not a part of unnest operation
+    top_most_unnest: Option<Unnest>,
+    consecutive_unnest: Vec<Option<Unnest>>,
+    inner_projection_exprs: &'a mut Vec<Expr>,
+    columns_unnestings: &'a mut Vec<(Column, ColumnUnnestType)>,
+    transformed_root_exprs: Option<Vec<Expr>>,
+}
+impl<'a> RecursiveUnnestRewriter<'a> {
+    /// This struct stores the history of expr
+    /// during its tree-traversal with a notation of
+    /// \[None,**Unnest(exprA)**,**Unnest(exprB)**,None,None\]
+    /// then this function will returns \[**Unnest(exprA)**,**Unnest(exprB)**\]
+    ///
+    /// The first item will be the inner most expr
+    fn get_latest_consecutive_unnest(&self) -> Vec<Unnest> {
+        self.consecutive_unnest
+            .iter()
+            .rev()
+            .skip_while(|item| item.is_none())
+            .take_while(|item| item.is_some())
+            .to_owned()
+            .cloned()
+            .map(|item| item.unwrap())
+            .collect()
+    }
+
+    fn transform(
+        &mut self,
+        level: usize,
+        alias_name: String,
+        expr_in_unnest: &Expr,
+        struct_allowed: bool,
+    ) -> Result<Vec<Expr>> {
+        let inner_expr_name = expr_in_unnest.schema_name().to_string();
+
+        // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
+        // inside unnest execution, each column inside the inner projection
+        // will be transformed into new columns. Thus we need to keep track of these placeholding column names
+        // let placeholder_name = unnest_expr.display_name()?;
+        let placeholder_name = format!("unnest_placeholder({})", inner_expr_name);
+        let post_unnest_name =
+            format!("unnest_placeholder({},depth={})", inner_expr_name, level);
+        // This is due to the fact that unnest transformation should keep the original
+        // column name as is, to comply with group by and order by
+        // let post_unnest_alias = print_unnest(&inner_expr_name, level);
+        let placeholder_column = Column::from_name(placeholder_name.clone());
+
+        let (data_type, _) = expr_in_unnest.data_type_and_nullable(self.input_schema)?;
+
+        match data_type {
+            DataType::Struct(inner_fields) => {
+                if !struct_allowed {
+                    return internal_err!("unnest on struct can only be applied at the root level of select expression");
+                }
+                push_projection_dedupl(
+                    self.inner_projection_exprs,
+                    expr_in_unnest.clone().alias(placeholder_name.clone()),
+                );
+                self.columns_unnestings.push((
+                    Column::from_name(placeholder_name.clone()),
+                    ColumnUnnestType::Struct,
+                ));
+                Ok(
+                    get_struct_unnested_columns(&placeholder_name, &inner_fields)
+                        .into_iter()
+                        .map(Expr::Column)
+                        .collect(),
+                )
+            }
+            DataType::List(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::LargeList(_) => {
+                push_projection_dedupl(
+                    self.inner_projection_exprs,
+                    expr_in_unnest.clone().alias(placeholder_name.clone()),
+                );
+
+                // let post_unnest_column = Column::from_name(post_unnest_name);
+                let post_unnest_expr = col(post_unnest_name.clone()).alias(alias_name);
+                match self
+                    .columns_unnestings
+                    .iter_mut()
+                    .find(|(inner_col, _)| inner_col == &placeholder_column)
+                {
+                    // there is not unnesting done on this column yet
+                    None => {
+                        self.columns_unnestings.push((
+                            Column::from_name(placeholder_name.clone()),
+                            ColumnUnnestType::List(vec![ColumnUnnestList {
+                                output_column: Column::from_name(post_unnest_name),
+                                depth: level,
+                            }]),
+                        ));
+                    }
+                    // some unnesting(at some level) has been done on this column
+                    // e.g select unnest(column3), unnest(unnest(column3))
+                    Some((_, unnesting)) => match unnesting {
+                        ColumnUnnestType::List(list) => {
+                            let unnesting = ColumnUnnestList {
+                                output_column: Column::from_name(post_unnest_name),
+                                depth: level,
+                            };
+                            if !list.contains(&unnesting) {
+                                list.push(unnesting);
+                            }
+                        }
+                        _ => {
+                            return internal_err!("not reached");
+                        }
+                    },
+                }
+                Ok(vec![post_unnest_expr])
+            }
+            _ => {
+                internal_err!("unnest on non-list or struct type is not supported")
+            }
+        }
+    }
+}
+
+impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
+    type Node = Expr;
+
+    /// This downward traversal needs to keep track of:
+    /// - Whether or not some unnest expr has been visited from the top util the current node
+    /// - If some unnest expr has been visited, maintain a stack of such information, this
+    ///   is used to detect if some recursive unnest expr exists (e.g **unnest(unnest(unnest(3d column))))**
+    fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        if let Expr::Unnest(ref unnest_expr) = expr {
+            let (data_type, _) =
+                unnest_expr.expr.data_type_and_nullable(self.input_schema)?;
+            self.consecutive_unnest.push(Some(unnest_expr.clone()));
+            // if expr inside unnest is a struct, do not consider
+            // the next unnest as consecutive unnest (if any)
+            // meaning unnest(unnest(struct_arr_col)) can't
+            // be interpreted as unest(struct_arr_col, depth:=2)
+            // but has to be split into multiple unnest logical plan instead
+            // a.k.a:
+            // - unnest(struct_col)
+            //      unnest(struct_arr_col) as struct_col
+
+            if let DataType::Struct(_) = data_type {
+                self.consecutive_unnest.push(None);
+            }
+            if self.top_most_unnest.is_none() {
+                self.top_most_unnest = Some(unnest_expr.clone());
+            }
+
+            Ok(Transformed::no(expr))
+        } else {
+            self.consecutive_unnest.push(None);
+            Ok(Transformed::no(expr))
+        }
+    }
+
+    /// The rewriting only happens when the traversal has reached the top-most unnest expr
+    /// within a sequence of consecutive unnest exprs.
+    /// node, for example given a stack of expr
+    ///
+    /// For example an expr of **unnest(unnest(column1)) + unnest(unnest(unnest(column2)))**
+    /// ```text
+    ///                         ┌──────────────────┐           
+    ///                         │    binaryexpr    │           
+    ///                         │                  │           
+    ///                         └──────────────────┘           
+    ///                f_down  / /            │ │              
+    ///                       / / f_up        │ │              
+    ///                      / /        f_down│ │f_up          
+    ///                  unnest               │ │              
+    ///                                       │ │              
+    ///       f_down  / / f_up(rewriting)     │ │              
+    ///              / /                                       
+    ///             / /                      unnest            
+    ///         unnest                                         
+    ///                           f_down  / / f_up(rewriting)  
+    /// f_down / /f_up                   / /                   
+    ///       / /                       / /                    
+    ///      / /                    unnest                     
+    ///   column1                                              
+    ///                     f_down / /f_up                     
+    ///                           / /                          
+    ///                          / /                           
+    ///                       column2                          
+    /// ```
+    ///         
+    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        if let Expr::Unnest(ref traversing_unnest) = expr {
+            if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {
+                self.top_most_unnest = None;
+            }
+            // find inside consecutive_unnest, the sequence of continous unnest exprs
+
+            // Get the latest consecutive unnest exprs
+            // and check if current upward traversal is the returning to the root expr
+            // for example given a expr `unnest(unnest(col))` then the traversal happens like:
+            // down(unnest) -> down(unnest) -> down(col) -> up(col) -> up(unnest) -> up(unnest)
+            // the result of such traversal is unnest(col, depth:=2)
+            let unnest_stack = self.get_latest_consecutive_unnest();
+
+            // This traversal has reached the top most unnest again
+            // e.g Unnest(top) -> Unnest(2nd) -> Column(bottom)
+            // -> Unnest(2nd) -> Unnest(top) a.k.a here
+            // Thus
+            // Unnest(Unnest(some_col)) is rewritten into Unnest(some_col, depth:=2)
+            if traversing_unnest == unnest_stack.last().unwrap() {
+                let most_inner = unnest_stack.first().unwrap();
+                let inner_expr = most_inner.expr.as_ref();
+                // unnest(unnest(struct_arr_col)) is not allow to be done recursively
+                // it needs to be splitted into multiple unnest logical plan
+                // unnest(struct_arr)
+                //  unnest(struct_arr_col) as struct_arr
+                // instead of unnest(struct_arr_col, depth = 2)
+
+                let unnest_recursion = unnest_stack.len();
+                let struct_allowed = (&expr == self.root_expr) && unnest_recursion == 1;
+
+                let mut transformed_exprs = self.transform(
+                    unnest_recursion,
+                    expr.schema_name().to_string(),
+                    inner_expr,
+                    struct_allowed,
+                )?;
+                if struct_allowed {
+                    self.transformed_root_exprs = Some(transformed_exprs.clone());
+                }
+                return Ok(Transformed::new(
+                    transformed_exprs.swap_remove(0),
+                    true,
+                    TreeNodeRecursion::Continue,
+                ));
+            }
+        } else {
+            self.consecutive_unnest.push(None);
+        }
+
+        // For column exprs that are not descendants of any unnest node
+        // retain their projection
+        // e.g given expr tree unnest(col_a) + col_b, we have to retain projection of col_b
+        // this condition can be checked by maintaining an Option<current ancestor unnest>
+        if matches!(&expr, Expr::Column(_)) && self.top_most_unnest.is_none() {
+            push_projection_dedupl(self.inner_projection_exprs, expr.clone());
+        }
+
+        Ok(Transformed::no(expr))
+    }
+}
+
+fn push_projection_dedupl(projection: &mut Vec<Expr>, expr: Expr) {
+    let schema_name = expr.schema_name().to_string();
+    if !projection
+        .iter()
+        .any(|e| e.schema_name().to_string() == schema_name)
+    {
+        projection.push(expr);
+    }
+}
 /// The context is we want to rewrite unnest() into InnerProjection->Unnest->OuterProjection
 /// Given an expression which contains unnest expr as one of its children,
 /// Try transform depends on unnest type
@@ -318,37 +587,22 @@ pub(crate) fn transform_bottom_unnests(
 /// The transformed exprs will be used in the outer projection
 /// If along the path from root to bottom, there are multiple unnest expressions, the transformation
 /// is done only for the bottom expression
-pub(crate) fn transform_bottom_unnest(
+pub(crate) fn rewrite_recursive_unnest_bottom_up(
     input: &LogicalPlan,
-    unnest_placeholder_columns: &mut Vec<String>,
+    unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
     inner_projection_exprs: &mut Vec<Expr>,
     original_expr: &Expr,
 ) -> Result<Vec<Expr>> {
-    let mut transform =
-        |unnest_expr: &Expr, expr_in_unnest: &Expr| -> Result<Vec<Expr>> {
-            // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
-            // inside unnest execution, each column inside the inner projection
-            // will be transformed into new columns. Thus we need to keep track of these placeholding column names
-            let placeholder_name = unnest_expr.schema_name().to_string();
+    let mut rewriter = RecursiveUnnestRewriter {
+        input_schema: input.schema(),
+        root_expr: original_expr,
+        top_most_unnest: None,
+        consecutive_unnest: vec![],
+        inner_projection_exprs,
+        columns_unnestings: unnest_placeholder_columns,
+        transformed_root_exprs: None,
+    };
 
-            unnest_placeholder_columns.push(placeholder_name.clone());
-            // Add alias for the argument expression, to avoid naming conflicts
-            // with other expressions in the select list. For example: `select unnest(col1), col1 from t`.
-            // this extra projection is used to unnest transforming
-            inner_projection_exprs
-                .push(expr_in_unnest.clone().alias(placeholder_name.clone()));
-            let schema = input.schema();
-
-            let (data_type, _) = expr_in_unnest.data_type_and_nullable(schema)?;
-
-            let outer_projection_columns =
-                get_unnested_columns(&placeholder_name, &data_type)?;
-            let expr = outer_projection_columns
-                .iter()
-                .map(|col| Expr::Column(col.0.clone()))
-                .collect::<Vec<_>>();
-            Ok(expr)
-        };
     // This transformation is only done for list unnest
     // struct unnest is done at the root level, and at the later stage
     // because the syntax of TreeNode only support transform into 1 Expr, while
@@ -362,68 +616,151 @@ pub(crate) fn transform_bottom_unnest(
         data: transformed_expr,
         transformed,
         tnr: _,
-    } = original_expr.clone().transform_up(|expr: Expr| {
-        let is_root_expr = &expr == original_expr;
-        // Root expr is transformed separately
-        if is_root_expr {
-            return Ok(Transformed::no(expr));
-        }
-        if let Expr::Unnest(Unnest { expr: ref arg }) = expr {
-            let (data_type, _) = arg.data_type_and_nullable(input.schema())?;
-
-            if let DataType::Struct(_) = data_type {
-                return internal_err!("unnest on struct can only be applied at the root level of select expression");
-            }
-
-            let mut transformed_exprs = transform(&expr, arg)?;
-            // root_expr.push(transformed_exprs[0].clone());
-            Ok(Transformed::new(
-                transformed_exprs.swap_remove(0),
-                true,
-                TreeNodeRecursion::Stop,
-            ))
-        } else {
-            Ok(Transformed::no(expr))
-        }
-    })?;
+    } = original_expr.clone().rewrite(&mut rewriter)?;
 
     if !transformed {
-        // Because root expr need to transform separately
-        // unnest struct is only possible here
-        // The transformation looks like
-        // - unnest(struct_col) will be transformed into unnest(struct_col).field1, unnest(struct_col).field2
-        if let Expr::Unnest(Unnest { expr: ref arg }) = transformed_expr {
-            return transform(&transformed_expr, arg);
-        }
-
         if matches!(&transformed_expr, Expr::Column(_)) {
-            inner_projection_exprs.push(transformed_expr.clone());
+            push_projection_dedupl(inner_projection_exprs, transformed_expr.clone());
             Ok(vec![transformed_expr])
         } else {
             // We need to evaluate the expr in the inner projection,
             // outer projection just select its name
             let column_name = transformed_expr.schema_name().to_string();
-            inner_projection_exprs.push(transformed_expr);
+            push_projection_dedupl(inner_projection_exprs, transformed_expr);
             Ok(vec![Expr::Column(Column::from_name(column_name))])
         }
     } else {
+        if let Some(transformed_root_exprs) = rewriter.transformed_root_exprs {
+            return Ok(transformed_root_exprs);
+        }
         Ok(vec![transformed_expr])
     }
 }
 
-// write test for recursive_transform_unnest
 #[cfg(test)]
 mod tests {
     use std::{ops::Add, sync::Arc};
 
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;
-    use datafusion_common::{DFSchema, Result};
-    use datafusion_expr::{col, lit, unnest, EmptyRelation, LogicalPlan};
+    use datafusion_common::{Column, DFSchema, Result};
+    use datafusion_expr::{
+        col, lit, unnest, ColumnUnnestType, EmptyRelation, LogicalPlan,
+    };
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
 
-    use crate::utils::{resolve_positions_to_exprs, transform_bottom_unnest};
+    use crate::utils::{resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up};
+    fn column_unnests_eq(l: Vec<(&str, &str)>, r: &[(Column, ColumnUnnestType)]) {
+        let r_formatted: Vec<String> =
+            r.iter().map(|i| format!("{}|{}", i.0, i.1)).collect();
+        let l_formatted: Vec<String> =
+            l.iter().map(|i| format!("{}|{}", i.0, i.1)).collect();
+        assert_eq!(l_formatted, r_formatted);
+    }
+
+    #[test]
+    fn test_transform_bottom_unnest_recursive() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new(
+                "3d_col",
+                ArrowDataType::List(Arc::new(Field::new(
+                    "2d_col",
+                    ArrowDataType::List(Arc::new(Field::new(
+                        "elements",
+                        ArrowDataType::Int64,
+                        true,
+                    ))),
+                    true,
+                ))),
+                true,
+            ),
+            Field::new("i64_col", ArrowDataType::Int64, true),
+        ]);
+
+        let dfschema = DFSchema::try_from(schema)?;
+
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(dfschema),
+        });
+
+        let mut unnest_placeholder_columns = vec![];
+        let mut inner_projection_exprs = vec![];
+
+        // unnest(unnest(3d_col)) + unnest(unnest(3d_col))
+        let original_expr = unnest(unnest(col("3d_col")))
+            .add(unnest(unnest(col("3d_col"))))
+            .add(col("i64_col"));
+        let transformed_exprs = rewrite_recursive_unnest_bottom_up(
+            &input,
+            &mut unnest_placeholder_columns,
+            &mut inner_projection_exprs,
+            &original_expr,
+        )?;
+        // only the bottom most unnest exprs are transformed
+        assert_eq!(
+            transformed_exprs,
+            vec![col("unnest_placeholder(3d_col,depth=2)")
+                .alias("UNNEST(UNNEST(3d_col))")
+                .add(
+                    col("unnest_placeholder(3d_col,depth=2)")
+                        .alias("UNNEST(UNNEST(3d_col))")
+                )
+                .add(col("i64_col"))]
+        );
+        column_unnests_eq(
+            vec![(
+                "unnest_placeholder(3d_col)",
+                "List([unnest_placeholder(3d_col,depth=2)|depth=2])",
+            )],
+            &unnest_placeholder_columns,
+        );
+
+        // still reference struct_col in original schema but with alias,
+        // to avoid colliding with the projection on the column itself if any
+        assert_eq!(
+            inner_projection_exprs,
+            vec![
+                col("3d_col").alias("unnest_placeholder(3d_col)"),
+                col("i64_col")
+            ]
+        );
+
+        // unnest(3d_col) as 2d_col
+        let original_expr_2 = unnest(col("3d_col")).alias("2d_col");
+        let transformed_exprs = rewrite_recursive_unnest_bottom_up(
+            &input,
+            &mut unnest_placeholder_columns,
+            &mut inner_projection_exprs,
+            &original_expr_2,
+        )?;
+
+        assert_eq!(
+            transformed_exprs,
+            vec![
+                (col("unnest_placeholder(3d_col,depth=1)").alias("UNNEST(3d_col)"))
+                    .alias("2d_col")
+            ]
+        );
+        column_unnests_eq(
+            vec![("unnest_placeholder(3d_col)",
+             "List([unnest_placeholder(3d_col,depth=2)|depth=2, unnest_placeholder(3d_col,depth=1)|depth=1])"),
+             ],
+            &unnest_placeholder_columns,
+        );
+        // still reference struct_col in original schema but with alias,
+        // to avoid colliding with the projection on the column itself if any
+        assert_eq!(
+            inner_projection_exprs,
+            vec![
+                col("3d_col").alias("unnest_placeholder(3d_col)"),
+                col("i64_col")
+            ]
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_transform_bottom_unnest() -> Result<()> {
@@ -460,7 +797,7 @@ mod tests {
 
         // unnest(struct_col)
         let original_expr = unnest(col("struct_col"));
-        let transformed_exprs = transform_bottom_unnest(
+        let transformed_exprs = rewrite_recursive_unnest_bottom_up(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -469,34 +806,45 @@ mod tests {
         assert_eq!(
             transformed_exprs,
             vec![
-                col("UNNEST(struct_col).field1"),
-                col("UNNEST(struct_col).field2"),
+                col("unnest_placeholder(struct_col).field1"),
+                col("unnest_placeholder(struct_col).field2"),
             ]
         );
-        assert_eq!(unnest_placeholder_columns, vec!["UNNEST(struct_col)"]);
+        column_unnests_eq(
+            vec![("unnest_placeholder(struct_col)", "Struct")],
+            &unnest_placeholder_columns,
+        );
         // still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
             inner_projection_exprs,
-            vec![col("struct_col").alias("UNNEST(struct_col)"),]
+            vec![col("struct_col").alias("unnest_placeholder(struct_col)"),]
         );
 
         // unnest(array_col) + 1
         let original_expr = unnest(col("array_col")).add(lit(1i64));
-        let transformed_exprs = transform_bottom_unnest(
+        let transformed_exprs = rewrite_recursive_unnest_bottom_up(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
             &original_expr,
         )?;
-        assert_eq!(
-            unnest_placeholder_columns,
-            vec!["UNNEST(struct_col)", "UNNEST(array_col)"]
+        column_unnests_eq(
+            vec![
+                ("unnest_placeholder(struct_col)", "Struct"),
+                (
+                    "unnest_placeholder(array_col)",
+                    "List([unnest_placeholder(array_col,depth=1)|depth=1])",
+                ),
+            ],
+            &unnest_placeholder_columns,
         );
         // only transform the unnest children
         assert_eq!(
             transformed_exprs,
-            vec![col("UNNEST(array_col)").add(lit(1i64))]
+            vec![col("unnest_placeholder(array_col,depth=1)")
+                .alias("UNNEST(array_col)")
+                .add(lit(1i64))]
         );
 
         // keep appending to the current vector
@@ -505,8 +853,8 @@ mod tests {
         assert_eq!(
             inner_projection_exprs,
             vec![
-                col("struct_col").alias("UNNEST(struct_col)"),
-                col("array_col").alias("UNNEST(array_col)")
+                col("struct_col").alias("unnest_placeholder(struct_col)"),
+                col("array_col").alias("unnest_placeholder(array_col)")
             ]
         );
 
@@ -544,7 +892,7 @@ mod tests {
 
         // An expr with multiple unnest
         let original_expr = unnest(unnest(col("struct_col").field("matrix")));
-        let transformed_exprs = transform_bottom_unnest(
+        let transformed_exprs = rewrite_recursive_unnest_bottom_up(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
@@ -553,17 +901,25 @@ mod tests {
         // Only the inner most/ bottom most unnest is transformed
         assert_eq!(
             transformed_exprs,
-            vec![unnest(col("UNNEST(struct_col[matrix])"))]
+            vec![col("unnest_placeholder(struct_col[matrix],depth=2)")
+                .alias("UNNEST(UNNEST(struct_col[matrix]))")]
         );
-        assert_eq!(
-            unnest_placeholder_columns,
-            vec!["UNNEST(struct_col[matrix])"]
+        // TODO: add a test case where
+        // unnest -> field access -> unnest
+
+        column_unnests_eq(
+            vec![(
+                "unnest_placeholder(struct_col[matrix])",
+                "List([unnest_placeholder(struct_col[matrix],depth=2)|depth=2])",
+            )],
+            &unnest_placeholder_columns,
         );
+
         assert_eq!(
             inner_projection_exprs,
             vec![col("struct_col")
                 .field("matrix")
-                .alias("UNNEST(struct_col[matrix])"),]
+                .alias("unnest_placeholder(struct_col[matrix])"),]
         );
 
         Ok(())

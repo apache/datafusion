@@ -32,6 +32,7 @@ use crate::physical_plan::{empty::EmptyExec, ExecutionPlan};
 
 /// An empty plan that is useful for testing and generating plans
 /// without mapping them to actual data.
+#[derive(Debug)]
 pub struct EmptyTable {
     schema: SchemaRef,
     partitions: usize,

@@ -36,6 +36,7 @@ use datafusion_optimizer::Analyzer;
 use crate::datasource::{TableProvider, TableType};
 
 /// An implementation of `TableProvider` that uses another logical plan.
+#[derive(Debug)]
 pub struct ViewTable {
     /// LogicalPlan of the view
     logical_plan: LogicalPlan,

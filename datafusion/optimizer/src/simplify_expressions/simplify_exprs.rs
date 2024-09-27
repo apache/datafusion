@@ -45,7 +45,7 @@ use super::ExprSimplifier;
 /// `Filter: b > 2`
 ///
 /// [`Expr`]: datafusion_expr::Expr
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SimplifyExpressions {}
 
 impl OptimizerRule for SimplifyExpressions {

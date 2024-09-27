@@ -25,7 +25,7 @@ use datafusion_expr::{Distinct, LogicalPlan, Union};
 use itertools::Itertools;
 use std::sync::Arc;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 /// An optimization rule that replaces nested unions with a single union.
 pub struct EliminateNestedUnion;
 

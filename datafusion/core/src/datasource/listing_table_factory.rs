@@ -17,6 +17,7 @@
 
 //! Factory for creating ListingTables with default options
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -27,7 +28,7 @@ use crate::datasource::listing::{
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::{arrow_datafusion_err, DataFusionError};
+use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, ToDFSchema};
 use datafusion_common::{config_datafusion_err, Result};
 use datafusion_expr::CreateExternalTable;
 
@@ -113,19 +114,39 @@ impl TableProviderFactory for ListingTableFactory {
             .with_collect_stat(state.config().collect_statistics())
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
-            .with_table_partition_cols(table_partition_cols)
-            .with_file_sort_order(cmd.order_exprs.clone());
+            .with_table_partition_cols(table_partition_cols);
 
         options
             .validate_partitions(session_state, &table_path)
             .await?;
 
         let resolved_schema = match provided_schema {
-            None => options.infer_schema(session_state, &table_path).await?,
+            // We will need to check the table columns against the schema
+            // this is done so that we can do an ORDER BY for external table creation
+            // specifically for parquet file format.
+            // See: https://github.com/apache/datafusion/issues/7317
+            None => {
+                let schema = options.infer_schema(session_state, &table_path).await?;
+                let df_schema = schema.clone().to_dfschema()?;
+                let column_refs: HashSet<_> = cmd
+                    .order_exprs
+                    .iter()
+                    .flat_map(|sort| sort.iter())
+                    .flat_map(|s| s.expr.column_refs())
+                    .collect();
+
+                for column in &column_refs {
+                    if !df_schema.has_column(column) {
+                        return plan_err!("Column {column} is not in schema");
+                    }
+                }
+
+                schema
+            }
             Some(s) => s,
         };
         let config = ListingTableConfig::new(table_path)
-            .with_listing_options(options)
+            .with_listing_options(options.with_file_sort_order(cmd.order_exprs.clone()))
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?
             .with_cache(state.runtime_env().cache_manager.get_file_statistic_cache());

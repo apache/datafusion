@@ -75,6 +75,7 @@ use datafusion_functions_aggregate::expr_fn::{
 };
 use datafusion_functions_aggregate::kurtosis_pop::kurtosis_pop;
 use datafusion_functions_aggregate::string_agg::string_agg;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -331,6 +332,32 @@ async fn roundtrip_logical_plan_aggregation() -> Result<()> {
     .await?;
 
     let query = "SELECT a, SUM(b + 1) as b_sum FROM t1 GROUP BY a ORDER BY b_sum DESC";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_sort() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Decimal128(15, 2), true),
+    ]);
+
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+
+    let query = "SELECT a, b FROM t1 ORDER BY b LIMIT 5";
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -978,7 +1005,7 @@ pub mod proto {
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Hash)]
 struct TopKPlanNode {
     k: usize,
     input: LogicalPlan,
@@ -2430,19 +2457,20 @@ fn roundtrip_window() {
             &self.signature
         }
 
-        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-            if arg_types.len() != 1 {
-                return plan_err!(
-                    "dummy_udwf expects 1 argument, got {}: {:?}",
-                    arg_types.len(),
-                    arg_types
-                );
-            }
-            Ok(arg_types[0].clone())
-        }
-
         fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
             make_partition_evaluator()
+        }
+
+        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+            if let Some(return_type) = field_args.get_input_type(0) {
+                Ok(Field::new(field_args.name(), return_type, true))
+            } else {
+                plan_err!(
+                    "dummy_udwf expects 1 argument, got {}: {:?}",
+                    field_args.input_types().len(),
+                    field_args.input_types()
+                )
+            }
         }
     }
 

@@ -268,7 +268,9 @@ pub(crate) fn coerce_file_schema_to_view_type(
         .iter()
         .map(|f| {
             let dt = f.data_type();
-            if dt.equals_datatype(&DataType::Utf8View) {
+            if dt.equals_datatype(&DataType::Utf8View)
+                || dt.equals_datatype(&DataType::BinaryView)
+            {
                 transform = true;
             }
             (f.name(), dt)

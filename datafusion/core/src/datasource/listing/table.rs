@@ -53,6 +53,7 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -645,6 +646,7 @@ impl ListingOptions {
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
     /// File fields only
@@ -819,6 +821,20 @@ impl TableProvider for ListingTable {
             .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
             .collect::<Result<Vec<_>>>()?;
 
+        // If the filters can be resolved using only partition cols, there is no need to
+        // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
+        let table_partition_col_names = table_partition_cols
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        let filters = filters
+            .iter()
+            .filter(|filter| {
+                !expr_applicable_for_cols(&table_partition_col_names, filter)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
         let filters = conjunction(filters.to_vec())
             .map(|expr| -> Result<_> {
                 // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
@@ -907,9 +923,21 @@ impl TableProvider for ListingTable {
             .schema()
             .logically_equivalent_names_and_types(&input.schema())
         {
+            // Return an error if schema of the input query does not match with the table schema.
             return plan_err!(
-                // Return an error if schema of the input query does not match with the table schema.
-                "Inserting query must have the same schema with the table."
+                "Inserting query must have the same schema with the table. \
+                Expected: {:?}, got: {:?}",
+                self.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>(),
+                input
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>()
             );
         }
 
@@ -961,12 +989,12 @@ impl TableProvider for ListingTable {
                 ))?
                 .clone();
             // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
-            Some(
+            Some(LexRequirement::new(
                 ordering
                     .into_iter()
                     .map(PhysicalSortRequirement::from)
                     .collect::<Vec<_>>(),
-            )
+            ))
         } else {
             None
         };
@@ -1226,20 +1254,13 @@ mod tests {
                     col("int_col").sort(false, true),
                 ]],
                 Ok(vec![vec![
-                    PhysicalSortExpr {
-                        expr: physical_col("string_col", &schema).unwrap(),
-                        options: SortOptions {
-                            descending: false,
-                            nulls_first: false,
-                        },
-                    },
-                    PhysicalSortExpr {
-                        expr: physical_col("int_col", &schema).unwrap(),
-                        options: SortOptions {
-                            descending: true,
-                            nulls_first: true,
-                        },
-                    },
+                    PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
+                    .asc()
+                    .nulls_last(),
+
+                    PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
+                    .desc()
+                    .nulls_first()
                 ]])
             ),
         ];
@@ -1709,7 +1730,7 @@ mod tests {
             "100".into(),
         );
         config_map.insert(
-            "datafusion.execution.parquet.staistics_enabled".into(),
+            "datafusion.execution.parquet.statistics_enabled".into(),
             "none".into(),
         );
         config_map.insert(
@@ -1783,7 +1804,7 @@ mod tests {
             "100".into(),
         );
         config_map.insert(
-            "datafusion.execution.parquet.staistics_enabled".into(),
+            "datafusion.execution.parquet.statistics_enabled".into(),
             "none".into(),
         );
         config_map.insert(

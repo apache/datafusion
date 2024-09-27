@@ -27,7 +27,7 @@ use std::{
 
 /// Represents which type of plan, when storing multiple
 /// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
@@ -96,7 +96,7 @@ impl Display for PlanType {
 }
 
 /// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct StringifiedPlan {
     /// An identifier of what type of plan this string represents
     pub plan_type: PlanType,

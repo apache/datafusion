@@ -33,7 +33,7 @@ pub fn new(input: LogicalPlan) -> LogicalPlan {
     LogicalPlan::Extension(Extension { node })
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Hash)]
 struct TestUserDefinedPlanNode {
     input: LogicalPlan,
 }

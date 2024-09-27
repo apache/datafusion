@@ -258,7 +258,7 @@ impl GroupsAccumulatorAdapter {
                 opt_filter.as_ref().map(|f| f.as_boolean()),
                 offsets,
             )?;
-            (f)(state.accumulator.as_mut(), &values_to_accumulate)?;
+            f(state.accumulator.as_mut(), &values_to_accumulate)?;
 
             // clear out the state so they are empty for next
             // iteration

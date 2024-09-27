@@ -297,6 +297,7 @@ pub fn csv_exec_sorted(
 }
 
 // construct a stream partition for test purposes
+#[derive(Debug)]
 pub(crate) struct TestStreamPartition {
     pub schema: SchemaRef,
 }

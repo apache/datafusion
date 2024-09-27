@@ -33,6 +33,7 @@ use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supp
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
+use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
 
@@ -41,7 +42,7 @@ use itertools::izip;
 ///    are not satisfied by their children.
 /// 2. Plans that use pipeline-breaking operators on infinite input(s),
 ///    it is impossible to execute such queries (they will never generate output nor finish)
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SanityCheckPlan {}
 
 impl SanityCheckPlan {
@@ -130,9 +131,9 @@ pub fn check_plan_sanity(
             if !child_eq_props.ordering_satisfy_requirement(sort_req) {
                 let plan_str = get_plan_string(&plan);
                 return plan_err!(
-                    "Plan: {:?} does not satisfy order requirements: {:?}. Child-{} order: {:?}",
+                    "Plan: {:?} does not satisfy order requirements: {}. Child-{} order: {}",
                     plan_str,
-                    sort_req,
+                    format_physical_sort_requirement_list(sort_req),
                     idx,
                     child_eq_props.oeq_class
                 );
@@ -145,7 +146,7 @@ pub fn check_plan_sanity(
         {
             let plan_str = get_plan_string(&plan);
             return plan_err!(
-                "Plan: {:?} does not satisfy distribution requirements: {:?}. Child-{} output partitioning: {:?}",
+                "Plan: {:?} does not satisfy distribution requirements: {}. Child-{} output partitioning: {}",
                 plan_str,
                 dist_req,
                 idx,

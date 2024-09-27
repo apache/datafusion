@@ -27,6 +27,8 @@ pub use datafusion_functions_aggregate_common::accumulator::{
     AccumulatorArgs, AccumulatorFactoryFunction, StateFieldsArgs,
 };
 
+pub use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+
 #[derive(Debug, Clone, Copy)]
 pub enum Hint {
     /// Indicates the argument needs to be padded if it is scalar

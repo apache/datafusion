@@ -33,7 +33,7 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct LimitPushdown {}
 
 /// This is a "data class" we use within the [`LimitPushdown`] rule to push

@@ -17,13 +17,14 @@
 
 //! [`Partitioning`] and [`Distribution`] for `ExecutionPlans`
 
-use std::fmt;
-use std::sync::Arc;
-
 use crate::{
     equivalence::ProjectionMapping, expressions::UnKnownColumn, physical_exprs_equal,
     EquivalenceProperties, PhysicalExpr,
 };
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use std::fmt;
+use std::fmt::Display;
+use std::sync::Arc;
 
 /// Output partitioning supported by [`ExecutionPlan`]s.
 ///
@@ -259,6 +260,18 @@ impl Distribution {
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
             Distribution::HashPartitioned(expr) => {
                 Partitioning::Hash(expr, partition_count)
+            }
+        }
+    }
+}
+
+impl Display for Distribution {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Distribution::UnspecifiedDistribution => write!(f, "Unspecified"),
+            Distribution::SinglePartition => write!(f, "SinglePartition"),
+            Distribution::HashPartitioned(exprs) => {
+                write!(f, "HashPartitioned[{}])", format_physical_expr_list(exprs))
             }
         }
     }

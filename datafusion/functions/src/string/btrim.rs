@@ -82,7 +82,11 @@ impl ScalarUDFImpl for BTrimFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "btrim")
+        if arg_types[0] == DataType::Utf8View {
+            Ok(DataType::Utf8View)
+        } else {
+            utf8_to_str_type(&arg_types[0], "btrim")
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -104,5 +108,151 @@ impl ScalarUDFImpl for BTrimFunc {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Array, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{Utf8, Utf8View};
+
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    use crate::string::btrim::BTrimFunc;
+    use crate::utils::test::test_function;
+
+    #[test]
+    fn test_functions() {
+        // String view cases for checking normal logic
+        test_function!(
+            BTrimFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                String::from("alphabet  ")
+            ))),],
+            Ok(Some("alphabet")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            BTrimFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                String::from("  alphabet  ")
+            ))),],
+            Ok(Some("alphabet")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            BTrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("t")))),
+            ],
+            Ok(Some("alphabe")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            BTrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabe"
+                )))),
+            ],
+            Ok(Some("t")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            BTrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+            ],
+            Ok(None),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        // Special string view case for checking unlined output(len > 12)
+        test_function!(
+            BTrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "xxxalphabetalphabetxxx"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("x")))),
+            ],
+            Ok(Some("alphabetalphabet")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        // String cases
+        test_function!(
+            BTrimFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                String::from("alphabet  ")
+            ))),],
+            Ok(Some("alphabet")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            BTrimFunc::new(),
+            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                String::from("alphabet  ")
+            ))),],
+            Ok(Some("alphabet")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            BTrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("t")))),
+            ],
+            Ok(Some("alphabe")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            BTrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabe")))),
+            ],
+            Ok(Some("t")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            BTrimFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+            ],
+            Ok(None),
+            &str,
+            Utf8,
+            StringArray
+        );
     }
 }

@@ -262,12 +262,34 @@ message CopyToNode {
 
 message UnnestNode {
   LogicalPlanNode input = 1;
-  repeated datafusion_common.Column exec_columns = 2;
-  repeated uint64 list_type_columns = 3;
+  repeated ColumnUnnestExec exec_columns = 2;
+  repeated ColumnUnnestListItem list_type_columns = 3;
   repeated uint64 struct_type_columns = 4;
   repeated uint64 dependency_indices = 5;
   datafusion_common.DfSchema schema = 6;
   UnnestOptions options = 7;
+}
+message ColumnUnnestListItem {
+  uint32 input_index = 1;
+  ColumnUnnestListRecursion recursion = 2;
+}
+
+message ColumnUnnestListRecursions {
+  repeated ColumnUnnestListRecursion recursions = 2;
+}
+
+message ColumnUnnestListRecursion {
+  datafusion_common.Column output_column = 1;
+  uint32 depth = 2;
+}
+
+message ColumnUnnestExec {
+  datafusion_common.Column column = 1;
+  oneof UnnestType {
+    ColumnUnnestListRecursions list = 2;
+    datafusion_common.EmptyMessage struct = 3;
+    datafusion_common.EmptyMessage inferred = 4;
+  }
 }
 
 message UnnestOptions {
@@ -758,9 +780,14 @@ message ParquetSinkExecNode {
 message UnnestExecNode {
   PhysicalPlanNode input = 1;
   datafusion_common.Schema schema = 2;
-  repeated uint64 list_type_columns = 3;
+  repeated ListUnnest list_type_columns = 3;
   repeated uint64 struct_type_columns = 4;
   UnnestOptions options = 5;
+}
+
+message ListUnnest {
+  uint32 index_in_input_schema = 1;
+  uint32 depth = 2;
 }
 
 message PhysicalExtensionNode {

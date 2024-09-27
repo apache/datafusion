@@ -33,7 +33,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 
 /// Optimizer that uses available statistics for aggregate functions
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct AggregateStatistics {}
 
 impl AggregateStatistics {
