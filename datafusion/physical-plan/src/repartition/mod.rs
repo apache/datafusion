@@ -403,8 +403,6 @@ impl BatchPartitioner {
 pub struct RepartitionExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
-    /// Partitioning scheme to use
-    partitioning: Partitioning,
     /// Inner state that is initialized when the first output stream is created.
     state: LazyState,
     /// Execution metrics
@@ -469,7 +467,7 @@ impl RepartitionExec {
 
     /// Partitioning scheme to use
     pub fn partitioning(&self) -> &Partitioning {
-        &self.partitioning
+        &self.cache.partitioning
     }
 
     /// Get preserve_order flag of the RepartitionExecutor
@@ -496,7 +494,7 @@ impl DisplayAs for RepartitionExec {
                     f,
                     "{}: partitioning={}, input_partitions={}",
                     self.name(),
-                    self.partitioning,
+                    self.partitioning(),
                     self.input.output_partitioning().partition_count()
                 )?;
 
@@ -539,8 +537,10 @@ impl ExecutionPlan for RepartitionExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut repartition =
-            RepartitionExec::try_new(children.swap_remove(0), self.partitioning.clone())?;
+        let mut repartition = RepartitionExec::try_new(
+            children.swap_remove(0),
+            self.partitioning().clone(),
+        )?;
         if self.preserve_order {
             repartition = repartition.with_preserve_order();
         }
@@ -548,7 +548,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        vec![matches!(self.partitioning, Partitioning::Hash(_, _))]
+        vec![matches!(self.partitioning(), Partitioning::Hash(_, _))]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -568,7 +568,7 @@ impl ExecutionPlan for RepartitionExec {
 
         let lazy_state = Arc::clone(&self.state);
         let input = Arc::clone(&self.input);
-        let partitioning = self.partitioning.clone();
+        let partitioning = self.partitioning().clone();
         let metrics = self.metrics.clone();
         let preserve_order = self.preserve_order;
         let name = self.name().to_owned();
@@ -687,7 +687,6 @@ impl RepartitionExec {
             Self::compute_properties(&input, partitioning.clone(), preserve_order);
         Ok(RepartitionExec {
             input,
-            partitioning,
             state: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
@@ -1134,7 +1133,7 @@ mod tests {
 
         // execute and collect results
         let mut output_partitions = vec![];
-        for i in 0..exec.partitioning.partition_count() {
+        for i in 0..exec.partitioning().partition_count() {
             // execute this *output* partition and collect all batches
             let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
             let mut batches = vec![];
@@ -1524,7 +1523,7 @@ mod tests {
         let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
 
         // pull partitions
-        for i in 0..exec.partitioning.partition_count() {
+        for i in 0..exec.partitioning().partition_count() {
             let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
             let err =
                 arrow_datafusion_err!(stream.next().await.unwrap().unwrap_err().into());
