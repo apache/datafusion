@@ -1054,7 +1054,9 @@ mod tests {
     use crate::memory::MemoryExec;
     use crate::test;
     use crate::test::assert_is_pending;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::exec::{
+        assert_strong_count_converges_to_zero, BlockingExec, MockExec,
+    };
 
     use arrow::array::*;
     use arrow::compute::SortOptions;
@@ -1063,7 +1065,7 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeConfig;
 
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{assert_batches_eq, exec_err, ScalarValue};
     use datafusion_physical_expr::expressions::Literal;
     use futures::FutureExt;
 
@@ -1503,5 +1505,69 @@ mod tests {
 
         let result = sort_batch(&batch, &expressions, None).unwrap();
         assert_eq!(result.num_rows(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_sort_with_error_in_stream() {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("payload", DataType::Int32, false),
+        ]));
+
+        let mock_exec = MockExec::new(
+            vec![
+                exec_err!("bad data 0"),
+                Ok(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(StringArray::from(vec!["datafusion", "arrow"]))
+                            as ArrayRef,
+                        Arc::new(Arc::new(Int32Array::from(vec![10, 2])) as ArrayRef),
+                    ],
+                )
+                .unwrap()),
+                exec_err!("bad data 1"),
+                Ok(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(StringArray::from(vec!["parquet", "comet"])) as ArrayRef,
+                        Arc::new(Arc::new(Int32Array::from(vec![7, 99])) as ArrayRef),
+                    ],
+                )
+                .unwrap()),
+            ],
+            Arc::clone(&schema),
+        );
+
+        let sort_exprs = vec![PhysicalSortExpr {
+            expr: col("key", &schema).unwrap(),
+            options: Default::default(),
+        }];
+
+        let sort = SortExec::new(sort_exprs, Arc::new(mock_exec));
+        let mut stream = sort.execute(0, task_ctx).unwrap();
+
+        let err = stream.next().await.unwrap().unwrap_err().to_string();
+        assert!(err.contains("bad data 0"), "actual: {err}");
+
+        let err = stream.next().await.unwrap().unwrap_err().to_string();
+        assert!(err.contains("bad data 1"), "actual: {err}");
+
+        let batch = stream.next().await.unwrap().unwrap();
+
+        assert_batches_eq!(
+            &[
+                "+------------+---------+",
+                "| key        | payload |",
+                "+------------+---------+",
+                "| arrow      | 2       |",
+                "| comet      | 99      |",
+                "| datafusion | 10      |",
+                "| parquet    | 7       |",
+                "+------------+---------+",
+            ],
+            &[batch]
+        );
     }
 }
