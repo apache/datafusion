@@ -1004,9 +1004,11 @@ impl GroupedHashAggregateStream {
     /// Updates skip aggregation probe state.
     fn update_skip_aggregation_probe(&mut self, input_rows: usize) {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-            // Skip aggregation probe is not supported if stream has any spills,
-            // currently spilling is not supported for Partial aggregation
-            assert!(self.spill_state.spills.is_empty());
+            // Skip aggregation probe is only supported in Partial aggregation.
+            // And it is not supported if stream has any spills even in Partial aggregation.
+            // Although currently spilling is actually not supported in Partial aggregation,
+            // it is possible to be supported in future, so we also add an assertion for it.
+            assert!(self.mode == AggregateMode::Partial && self.spill_state.spills.is_empty());
             probe.update_state(input_rows, self.group_values.len());
         };
     }
