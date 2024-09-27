@@ -212,8 +212,6 @@ pub fn resolve_table_references(
         .into_iter()
         .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
         .collect::<datafusion_common::Result<_>>()?;
-    println!("Table refs: {:?}", table_refs);
-    println!("ctes : {:?}", ctes);
     Ok((table_refs, ctes))
 }
 
