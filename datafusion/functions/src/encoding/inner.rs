@@ -32,7 +32,6 @@ use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
-use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
@@ -49,17 +48,8 @@ impl Default for EncodeFunc {
 
 impl EncodeFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![Binary, Utf8]),
-                    Exact(vec![LargeBinary, Utf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -77,22 +67,38 @@ impl ScalarUDFImpl for EncodeFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-
-        Ok(match arg_types[0] {
-            Utf8 => Utf8,
-            LargeUtf8 => LargeUtf8,
-            Binary => Utf8,
-            LargeBinary => LargeUtf8,
-            Null => Null,
-            _ => {
-                return plan_err!("The encode function can only accept utf8 or binary.");
-            }
-        })
+        Ok(arg_types[0].to_owned())
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         encode(args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return plan_err!(
+                "{} expects to get 2 arguments, but got {}",
+                self.name(),
+                arg_types.len()
+            );
+        }
+
+        if arg_types[1] != DataType::Utf8 {
+            return Err(DataFusionError::Plan("2nd argument should be Utf8".into()));
+        }
+
+        match arg_types[0] {
+            DataType::Utf8 | DataType::Binary | DataType::Null => {
+                Ok(vec![DataType::Utf8; 2])
+            }
+            DataType::LargeUtf8 | DataType::LargeBinary => {
+                Ok(vec![DataType::LargeUtf8, DataType::Utf8])
+            }
+            _ => plan_err!(
+                "1st argument should be Utf8 or Binary or Null, got {:?}",
+                arg_types[0]
+            ),
+        }
     }
 }
 
@@ -109,17 +115,8 @@ impl Default for DecodeFunc {
 
 impl DecodeFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![Binary, Utf8]),
-                    Exact(vec![LargeBinary, Utf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -137,22 +134,38 @@ impl ScalarUDFImpl for DecodeFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-
-        Ok(match arg_types[0] {
-            Utf8 => Binary,
-            LargeUtf8 => LargeBinary,
-            Binary => Binary,
-            LargeBinary => LargeBinary,
-            Null => Null,
-            _ => {
-                return plan_err!("The decode function can only accept utf8 or binary.");
-            }
-        })
+        Ok(arg_types[0].to_owned())
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         decode(args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return plan_err!(
+                "{} expects to get 2 arguments, but got {}",
+                self.name(),
+                arg_types.len()
+            );
+        }
+
+        if arg_types[1] != DataType::Utf8 {
+            return plan_err!("2nd argument should be Utf8");
+        }
+
+        match arg_types[0] {
+            DataType::Utf8 | DataType::Binary | DataType::Null => {
+                Ok(vec![DataType::Binary, DataType::Utf8])
+            }
+            DataType::LargeUtf8 | DataType::LargeBinary => {
+                Ok(vec![DataType::LargeBinary, DataType::Utf8])
+            }
+            _ => plan_err!(
+                "1st argument should be Utf8 or Binary or Null, got {:?}",
+                arg_types[0]
+            ),
+        }
     }
 }
 
