@@ -216,7 +216,9 @@ impl LogicalPlanBuilder {
                     common_type = Some(data_type);
                 }
             }
-            field_types.push(common_type.unwrap_or(DataType::Utf8));
+            // assuming common_type was not set, and no error, therefore the type should be NULL
+            // since the code loop skips NULL
+            field_types.push(common_type.unwrap_or(DataType::Null));
         }
         // wrap cast if data type is not same as common type.
         for row in &mut values {
