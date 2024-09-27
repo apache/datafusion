@@ -25,7 +25,8 @@ use crate::parser::{
     LexOrdering, Statement as DFStatement,
 };
 use crate::planner::{
-    object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
+    object_name_to_qualifier, object_name_to_table_reference, ContextProvider,
+    PlannerContext, SqlToRel,
 };
 use crate::utils::normalize_ident;
 
@@ -1240,7 +1241,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
 
         // External tables do not support schemas at the moment, so the name is just a table name
-        let name = TableReference::bare(name);
+        //
+        let idents: Vec<Ident> = name.split('.').map(Ident::from).collect();
+        let obj = ObjectName(idents);
+        let name = object_name_to_table_reference(obj, false)?;
+        // let name = TableReference::bare(name);
         let constraints =
             Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(

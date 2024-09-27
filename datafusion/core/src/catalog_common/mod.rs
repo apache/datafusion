@@ -185,9 +185,8 @@ pub fn resolve_table_references(
                 let _ = s.as_ref().visit(visitor);
             }
             DFStatement::CreateExternalTable(table) => {
-                visitor
-                    .relations
-                    .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
+                let idents: Vec<Ident> = table.name.split('.').map(Ident::from).collect();
+                visitor.relations.insert(ObjectName(idents));
             }
             DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
                 CopyToSource::Relation(table_name) => {
@@ -213,6 +212,8 @@ pub fn resolve_table_references(
         .into_iter()
         .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
         .collect::<datafusion_common::Result<_>>()?;
+    println!("Table refs: {:?}", table_refs);
+    println!("ctes : {:?}", ctes);
     Ok((table_refs, ctes))
 }
 
