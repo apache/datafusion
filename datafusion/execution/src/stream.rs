@@ -42,7 +42,7 @@ pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
 ///
 /// # Error Handling
 ///
-/// One a stream returns an error, it should not be polled again (the caller
+/// Once a stream returns an error, it should not be polled again (the caller
 /// should stop calling `next`) and handle the error.
 ///
 /// However, returning `Ready(None)` (end of stream) is likely the safest
