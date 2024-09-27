@@ -162,7 +162,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a logical plan from an DataFusion SQL statement
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
         match statement {
-            DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
+            DFStatement::CreateExternalTable(stmt, sql) => {
+                self.external_table_to_plan(stmt, sql)
+            }
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::CopyTo(s) => self.copy_to_plan(s),
             DFStatement::Explain(ExplainStatement {
@@ -1189,8 +1191,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn external_table_to_plan(
         &self,
         statement: CreateExternalTable,
+        sql: Option<String>,
     ) -> Result<LogicalPlan> {
-        let definition = Some(statement.to_string());
+        let definition = sql.or(Some(statement.to_string()));
         let CreateExternalTable {
             name,
             columns,
