@@ -1630,16 +1630,16 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
         let batches = vec![
             RecordBatch::try_new(
-                schema.clone(),
+                Arc::clone(&schema),
                 vec![Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4]))],
             )?,
             RecordBatch::try_new(
-                schema.clone(),
+                Arc::clone(&schema),
                 vec![Arc::new(Int32Array::from(vec![5, 6, 7, 8, 9]))],
             )?,
         ];
-        let left = MemoryExec::try_new(&[batches.clone()], schema.clone(), None)?;
-        let right = MemoryExec::try_new(&[batches.clone()], schema.clone(), None)?;
+        let left = MemoryExec::try_new(&[batches.clone()], Arc::clone(&schema), None)?;
+        let right = MemoryExec::try_new(&[batches.clone()], Arc::clone(&schema), None)?;
 
         let (schema, column_indices) =
             build_join_schema(schema.as_ref(), schema.as_ref(), &JoinType::Full);
