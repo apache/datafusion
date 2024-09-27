@@ -123,10 +123,10 @@ SELECT substr('Hello🌏世界', 5, 3)
 ----
 o🌏世
 
-statement error The SUBSTR function can only accept strings, but got Int64.
+statement error The first argument of the substr function can only be a string, but got Int64
 SELECT substr(1, 3)
 
-statement error The SUBSTR function can only accept strings, but got Int64.
+statement error The first argument of the substr function can only be a string, but got Int64
 SELECT substr(1, 3, 4)
 
 statement error Execution error: negative substring length not allowed
@@ -145,3 +145,25 @@ select
   arrow_cast('Xiangpeng', 'Utf8View') <> arrow_cast('Andrew', 'Utf8View');
 ----
 false true true true
+
+
+query II
+SELECT
+  ASCII('hello'),
+  ASCII(arrow_cast('world', 'Utf8View'))
+----
+104 119
+
+query III
+SELECT
+  ASCII(arrow_cast('äöüß', 'Utf8View')) as c1,
+  ASCII(arrow_cast('', 'Utf8View')) as c2,
+  ASCII(arrow_cast(NULL, 'Utf8View')) as c3
+----
+228 0 NULL
+
+# coercion from stringview to integer, as input to make_date
+query D
+select make_date(arrow_cast('2024', 'Utf8View'), arrow_cast('01', 'Utf8View'), arrow_cast('23', 'Utf8View'))
+----
+2024-01-23

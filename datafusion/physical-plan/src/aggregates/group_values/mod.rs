@@ -25,13 +25,17 @@ pub(crate) mod primitive;
 use datafusion_expr::EmitTo;
 use primitive::GroupValuesPrimitive;
 
+mod column;
 mod row;
+use column::GroupValuesColumn;
 use row::GroupValuesRows;
 
 mod bytes;
 mod bytes_view;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
+
+mod group_column;
 
 /// An interning store for group keys
 pub trait GroupValues: Send {
@@ -92,5 +96,9 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
         }
     }
 
-    Ok(Box::new(GroupValuesRows::try_new(schema)?))
+    if GroupValuesColumn::supported_schema(schema.as_ref()) {
+        Ok(Box::new(GroupValuesColumn::try_new(schema)?))
+    } else {
+        Ok(Box::new(GroupValuesRows::try_new(schema)?))
+    }
 }

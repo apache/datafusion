@@ -28,7 +28,7 @@ use datafusion_expr::{
 
 /// Eliminates joins when join condition is false.
 /// Replaces joins when inner join condition is true with a cross join.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EliminateJoin;
 
 impl EliminateJoin {

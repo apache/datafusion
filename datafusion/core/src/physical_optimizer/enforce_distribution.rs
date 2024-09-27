@@ -176,7 +176,7 @@ use itertools::izip;
 ///
 /// This rule only chooses the exact match and satisfies the Distribution(a, b, c)
 /// by a HashPartition(a, b, c).
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EnforceDistribution {}
 
 impl EnforceDistribution {
@@ -1272,7 +1272,7 @@ fn ensure_distribution(
                         // Make sure to satisfy ordering requirement:
                         child = add_sort_above_with_check(
                             child,
-                            required_input_ordering.to_vec(),
+                            required_input_ordering.clone(),
                             None,
                         );
                     }

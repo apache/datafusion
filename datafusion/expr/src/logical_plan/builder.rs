@@ -55,6 +55,7 @@ use datafusion_common::{
 };
 
 use super::dml::InsertOp;
+use super::plan::{ColumnUnnestList, ColumnUnnestType};
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -216,7 +217,9 @@ impl LogicalPlanBuilder {
                     common_type = Some(data_type);
                 }
             }
-            field_types.push(common_type.unwrap_or(DataType::Utf8));
+            // assuming common_type was not set, and no error, therefore the type should be NULL
+            // since the code loop skips NULL
+            field_types.push(common_type.unwrap_or(DataType::Null));
         }
         // wrap cast if data type is not same as common type.
         for row in &mut values {
@@ -562,10 +565,18 @@ impl LogicalPlanBuilder {
         )
     }
 
-    /// Apply a sort
     pub fn sort(
         self,
         sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
+    ) -> Result<Self> {
+        self.sort_with_limit(sorts, None)
+    }
+
+    /// Apply a sort
+    pub fn sort_with_limit(
+        self,
+        sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
+        fetch: Option<usize>,
     ) -> Result<Self> {
         let sorts = rewrite_sort_cols_by_aggs(sorts, &self.plan)?;
 
@@ -589,7 +600,7 @@ impl LogicalPlanBuilder {
             return Ok(Self::new(LogicalPlan::Sort(Sort {
                 expr: normalize_sorts(sorts, &self.plan)?,
                 input: self.plan,
-                fetch: None,
+                fetch,
             })));
         }
 
@@ -605,7 +616,7 @@ impl LogicalPlanBuilder {
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
             input: Arc::new(plan),
-            fetch: None,
+            fetch,
         });
 
         Projection::try_new(new_expr, Arc::new(sort_plan))
@@ -1169,7 +1180,7 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         unnest_with_options(
             Arc::unwrap_or_clone(self.plan),
-            vec![column.into()],
+            vec![(column.into(), ColumnUnnestType::Inferred)],
             options,
         )
         .map(Self::new)
@@ -1179,6 +1190,26 @@ impl LogicalPlanBuilder {
     pub fn unnest_columns_with_options(
         self,
         columns: Vec<Column>,
+        options: UnnestOptions,
+    ) -> Result<Self> {
+        unnest_with_options(
+            Arc::unwrap_or_clone(self.plan),
+            columns
+                .into_iter()
+                .map(|c| (c, ColumnUnnestType::Inferred))
+                .collect(),
+            options,
+        )
+        .map(Self::new)
+    }
+
+    /// Unnest the given columns with the given [`UnnestOptions`]
+    /// if one column is a list type, it can be recursively and simultaneously
+    /// unnested into the desired recursion levels
+    /// e.g select unnest(list_col,depth=1), unnest(list_col,depth=2)
+    pub fn unnest_columns_recursive_with_options(
+        self,
+        columns: Vec<(Column, ColumnUnnestType)>,
         options: UnnestOptions,
     ) -> Result<Self> {
         unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
@@ -1557,7 +1588,61 @@ impl TableSource for LogicalTableSource {
 
 /// Create a [`LogicalPlan::Unnest`] plan
 pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
-    unnest_with_options(input, columns, UnnestOptions::default())
+    let unnestings = columns
+        .into_iter()
+        .map(|c| (c, ColumnUnnestType::Inferred))
+        .collect();
+    unnest_with_options(input, unnestings, UnnestOptions::default())
+}
+
+pub fn get_unnested_list_datatype_recursive(
+    data_type: &DataType,
+    depth: usize,
+) -> Result<DataType> {
+    match data_type {
+        DataType::List(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::LargeList(field) => {
+            if depth == 1 {
+                return Ok(field.data_type().clone());
+            }
+            return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
+        }
+        _ => {}
+    };
+
+    internal_err!("trying to unnest on invalid data type {:?}", data_type)
+}
+
+/// Infer the unnest type based on the data type:
+/// - list type: infer to unnest(list(col, depth=1))
+/// - struct type: infer to unnest(struct)
+fn infer_unnest_type(
+    col_name: &String,
+    data_type: &DataType,
+) -> Result<ColumnUnnestType> {
+    match data_type {
+        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
+            Ok(ColumnUnnestType::List(vec![ColumnUnnestList {
+                output_column: Column::from_name(col_name),
+                depth: 1,
+            }]))
+        }
+        DataType::Struct(_) => Ok(ColumnUnnestType::Struct),
+        _ => {
+            internal_err!("trying to unnest on invalid data type {:?}", data_type)
+        }
+    }
+}
+
+pub fn get_struct_unnested_columns(
+    col_name: &String,
+    inner_fields: &Fields,
+) -> Vec<Column> {
+    inner_fields
+        .iter()
+        .map(|f| Column::from_name(format!("{}.{}", col_name, f.name())))
+        .collect()
 }
 
 // Based on data type, either struct or a variant of list
@@ -1566,19 +1651,20 @@ pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
 // For example, given a column with name "a",
 // - List(Element) returns ["a"] with data type Element
 // - Struct(field1, field2) returns ["a.field1","a.field2"]
+// For list data type, an argument depth is used to specify
+// the recursion level
 pub fn get_unnested_columns(
     col_name: &String,
     data_type: &DataType,
+    depth: usize,
 ) -> Result<Vec<(Column, Arc<Field>)>> {
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type {
-        DataType::List(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => {
+        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
+            let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
             let new_field = Arc::new(Field::new(
-                col_name,
-                field.data_type().clone(),
+                col_name, data_type,
                 // Unnesting may produce NULLs even if the list is not null.
                 // For example: unnset([1], []) -> 1, null
                 true,
@@ -1607,52 +1693,126 @@ pub fn get_unnested_columns(
 }
 
 /// Create a [`LogicalPlan::Unnest`] plan with options
+/// This function receive a list of columns to be unnested
+/// because multiple unnest can be performed on the same column (e.g unnest with different depth)
+/// The new schema will contains post-unnest fields replacing the original field
+///
+/// For example:
+/// Input schema as
+/// ```text
+/// +---------------------+-------------------+
+/// | col1                | col2              |
+/// +---------------------+-------------------+
+/// | Struct(INT64,INT32) | List(List(Int64)) |
+/// +---------------------+-------------------+
+/// ```
+///
+///
+///
+/// Then unnesting columns with:
+/// - (col1,Struct)
+/// - (col2,List(\[depth=1,depth=2\]))
+///
+/// will generate a new schema as
+/// ```text
+/// +---------+---------+---------------------+---------------------+
+/// | col1.c0 | col1.c1 | unnest_col2_depth_1 | unnest_col2_depth_2 |
+/// +---------+---------+---------------------+---------------------+
+/// | Int64   | Int32   | List(Int64)         |  Int64              |
+/// +---------+---------+---------------------+---------------------+
+/// ```
 pub fn unnest_with_options(
     input: LogicalPlan,
-    columns: Vec<Column>,
+    columns_to_unnest: Vec<(Column, ColumnUnnestType)>,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
-    let mut list_columns = Vec::with_capacity(columns.len());
-    let mut struct_columns = Vec::with_capacity(columns.len());
-    let column_by_original_index = columns
+    let mut list_columns: Vec<(usize, ColumnUnnestList)> = vec![];
+    let mut struct_columns = vec![];
+    let indices_to_unnest = columns_to_unnest
         .iter()
-        .map(|c| Ok((input.schema().index_of_column(c)?, c)))
-        .collect::<Result<HashMap<usize, &Column>>>()?;
+        .map(|col_unnesting| {
+            Ok((
+                input.schema().index_of_column(&col_unnesting.0)?,
+                col_unnesting,
+            ))
+        })
+        .collect::<Result<HashMap<usize, &(Column, ColumnUnnestType)>>>()?;
 
     let input_schema = input.schema();
 
     let mut dependency_indices = vec![];
     // Transform input schema into new schema
-    // e.g int, unnest([]int), unnest(struct(varchar,varchar))
-    // becomes int, int, varchar, varchar
+    // Given this comprehensive example
+    //
+    // input schema:
+    // 1.col1_unnest_placeholder: list[list[int]],
+    // 2.col1: list[list[int]]
+    // 3.col2: list[int]
+    // with unnest on unnest(col1,depth=2), unnest(col1,depth=1) and unnest(col2,depth=1)
+    // output schema:
+    // 1.unnest_col1_depth_2: int
+    // 2.unnest_col1_depth_1: list[int]
+    // 3.col1: list[list[int]]
+    // 4.unnest_col2_depth_1: int
+    // Meaning the placeholder column will be replaced by its unnested variation(s), note
+    // the plural.
     let fields = input_schema
         .iter()
         .enumerate()
         .map(|(index, (original_qualifier, original_field))| {
-            match column_by_original_index.get(&index) {
-                Some(&column_to_unnest) => {
-                    let flatten_columns = get_unnested_columns(
-                        &column_to_unnest.name,
-                        original_field.data_type(),
-                    )?;
-                    match original_field.data_type() {
-                        DataType::List(_)
-                        | DataType::FixedSizeList(_, _)
-                        | DataType::LargeList(_) => list_columns.push(index),
-                        DataType::Struct(_) => struct_columns.push(index),
-                        _ => {
-                            panic!(
-                                "not reachable, should be caught by get_unnested_columns"
-                            )
-                        }
+            match indices_to_unnest.get(&index) {
+                Some((column_to_unnest, unnest_type)) => {
+                    let mut inferred_unnest_type = unnest_type.clone();
+                    if let ColumnUnnestType::Inferred = unnest_type {
+                        inferred_unnest_type = infer_unnest_type(
+                            &column_to_unnest.name,
+                            original_field.data_type(),
+                        )?;
                     }
+                    let transformed_columns: Vec<(Column, Arc<Field>)> =
+                        match inferred_unnest_type {
+                            ColumnUnnestType::Struct => {
+                                struct_columns.push(index);
+                                get_unnested_columns(
+                                    &column_to_unnest.name,
+                                    original_field.data_type(),
+                                    1,
+                                )?
+                            }
+                            ColumnUnnestType::List(unnest_lists) => {
+                                list_columns.extend(
+                                    unnest_lists
+                                        .iter()
+                                        .map(|ul| (index, ul.to_owned().clone())),
+                                );
+                                unnest_lists
+                                    .iter()
+                                    .map(
+                                        |ColumnUnnestList {
+                                             output_column,
+                                             depth,
+                                         }| {
+                                            get_unnested_columns(
+                                                &output_column.name,
+                                                original_field.data_type(),
+                                                *depth,
+                                            )
+                                        },
+                                    )
+                                    .collect::<Result<Vec<Vec<(Column, Arc<Field>)>>>>()?
+                                    .into_iter()
+                                    .flatten()
+                                    .collect::<Vec<_>>()
+                            }
+                            _ => return internal_err!("Invalid unnest type"),
+                        };
                     // new columns dependent on the same original index
                     dependency_indices
-                        .extend(std::iter::repeat(index).take(flatten_columns.len()));
-                    Ok(flatten_columns
+                        .extend(std::iter::repeat(index).take(transformed_columns.len()));
+                    Ok(transformed_columns
                         .iter()
-                        .map(|col: &(Column, Arc<Field>)| {
-                            (col.0.relation.to_owned(), col.1.to_owned())
+                        .map(|(col, data_type)| {
+                            (col.relation.to_owned(), data_type.to_owned())
                         })
                         .collect())
                 }
@@ -1678,7 +1838,7 @@ pub fn unnest_with_options(
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),
-        exec_columns: columns,
+        exec_columns: columns_to_unnest,
         list_type_columns: list_columns,
         struct_type_columns: struct_columns,
         dependency_indices,
@@ -1689,6 +1849,7 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
@@ -2035,7 +2196,7 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Unnest: lists[test_table.strings] structs[]\
+        Unnest: lists[test_table.strings|depth=1] structs[]\
         \n  TableScan: test_table";
         assert_eq!(expected, format!("{plan}"));
 
@@ -2071,8 +2232,8 @@ mod tests {
 
         let expected = "\
         Unnest: lists[] structs[test_table.struct_singular]\
-        \n  Unnest: lists[test_table.structs] structs[]\
-        \n    Unnest: lists[test_table.strings] structs[]\
+        \n  Unnest: lists[test_table.structs|depth=1] structs[]\
+        \n    Unnest: lists[test_table.strings|depth=1] structs[]\
         \n      TableScan: test_table";
         assert_eq!(expected, format!("{plan}"));
 
@@ -2080,23 +2241,75 @@ mod tests {
         let field = plan.schema().field_with_name(None, "structs").unwrap();
         assert!(matches!(field.data_type(), DataType::Struct(_)));
 
-        // Unnesting multiple fields at the same time
+        // Unnesting multiple fields at the same time, using infer syntax
         let cols = vec!["strings", "structs", "struct_singular"]
             .into_iter()
             .map(|c| c.into())
             .collect();
+
         let plan = nested_table_scan("test_table")?
             .unnest_columns_with_options(cols, UnnestOptions::default())?
             .build()?;
 
         let expected = "\
-        Unnest: lists[test_table.strings, test_table.structs] structs[test_table.struct_singular]\
+        Unnest: lists[test_table.strings|depth=1, test_table.structs|depth=1] structs[test_table.struct_singular]\
         \n  TableScan: test_table";
         assert_eq!(expected, format!("{plan}"));
 
         // Unnesting missing column should fail.
         let plan = nested_table_scan("test_table")?.unnest_column("missing");
         assert!(plan.is_err());
+
+        // Simultaneously unnesting a list (with different depth) and a struct column
+        let plan = nested_table_scan("test_table")?
+            .unnest_columns_recursive_with_options(
+                vec![
+                    (
+                        "stringss".into(),
+                        ColumnUnnestType::List(vec![
+                            ColumnUnnestList {
+                                output_column: Column::from_name("stringss_depth_1"),
+                                depth: 1,
+                            },
+                            ColumnUnnestList {
+                                output_column: Column::from_name("stringss_depth_2"),
+                                depth: 2,
+                            },
+                        ]),
+                    ),
+                    ("struct_singular".into(), ColumnUnnestType::Inferred),
+                ],
+                UnnestOptions::default(),
+            )?
+            .build()?;
+
+        let expected = "\
+        Unnest: lists[test_table.stringss|depth=1, test_table.stringss|depth=2] structs[test_table.struct_singular]\
+        \n  TableScan: test_table";
+        assert_eq!(expected, format!("{plan}"));
+
+        // Check output columns has correct type
+        let field = plan
+            .schema()
+            .field_with_name(None, "stringss_depth_1")
+            .unwrap();
+        assert_eq!(
+            &DataType::new_list(DataType::Utf8, false),
+            field.data_type()
+        );
+        let field = plan
+            .schema()
+            .field_with_name(None, "stringss_depth_2")
+            .unwrap();
+        assert_eq!(&DataType::Utf8, field.data_type());
+        // unnesting struct is still correct
+        for field_name in &["a", "b"] {
+            let field = plan
+                .schema()
+                .field_with_name(None, &format!("struct_singular.{}", field_name))
+                .unwrap();
+            assert_eq!(&DataType::UInt32, field.data_type());
+        }
 
         Ok(())
     }
@@ -2113,6 +2326,7 @@ mod tests {
             false,
         );
         let string_field = Field::new("item", DataType::Utf8, false);
+        let strings_field = Field::new_list("item", string_field.clone(), false);
         let schema = Schema::new(vec![
             Field::new("scalar", DataType::UInt32, false),
             Field::new_list("strings", string_field, false),
@@ -2125,6 +2339,7 @@ mod tests {
                 ])),
                 false,
             ),
+            Field::new_list("stringss", strings_field, false),
         ]);
 
         table_scan(Some(table_name), &schema, None)

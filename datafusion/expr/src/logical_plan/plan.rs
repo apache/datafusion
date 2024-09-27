@@ -1974,8 +1974,10 @@ impl LogicalPlan {
                         let input_columns = plan.schema().columns();
                         let list_type_columns = list_col_indices
                             .iter()
-                            .map(|i| &input_columns[*i])
-                            .collect::<Vec<&Column>>();
+                            .map(|(i,unnest_info)|
+                                format!("{}|depth={}", &input_columns[*i].to_string(),
+                                unnest_info.depth))
+                            .collect::<Vec<String>>();
                         let struct_type_columns = struct_col_indices
                             .iter()
                             .map(|i| &input_columns[*i])
@@ -3298,6 +3300,70 @@ pub enum Partitioning {
     DistributeBy(Vec<Expr>),
 }
 
+/// Represents the unnesting operation on a column based on the context (a known struct
+/// column, a list column, or let the planner infer the unnesting type).
+///
+/// The inferred unnesting type works for both struct and list column, but the unnesting
+/// will only be done once (depth = 1). In case recursion is needed on a multi-dimensional
+/// list type, use [`ColumnUnnestList`]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+pub enum ColumnUnnestType {
+    // Unnesting a list column, a vector of ColumnUnnestList is used because
+    // a column can be unnested at different levels, resulting different output columns
+    List(Vec<ColumnUnnestList>),
+    // for struct, there can only be one unnest performed on one column at a time
+    Struct,
+    // Infer the unnest type based on column schema
+    // If column is a list column, the unnest depth will be 1
+    // This value is to support sugar syntax of old api in Dataframe (unnest(either_list_or_struct_column))
+    Inferred,
+}
+
+impl fmt::Display for ColumnUnnestType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ColumnUnnestType::List(lists) => {
+                let list_strs: Vec<String> =
+                    lists.iter().map(|list| list.to_string()).collect();
+                write!(f, "List([{}])", list_strs.join(", "))
+            }
+            ColumnUnnestType::Struct => write!(f, "Struct"),
+            ColumnUnnestType::Inferred => write!(f, "Inferred"),
+        }
+    }
+}
+
+/// Represent the unnesting operation on a list column, such as the recursion depth and
+/// the output column name after unnesting
+///
+/// Example: given `ColumnUnnestList { output_column: "output_name", depth: 2 }`
+///
+/// ```text
+///   input             output_name
+///  ┌─────────┐      ┌─────────┐
+///  │{{1,2}}  │      │ 1       │
+///  ├─────────┼─────►├─────────┤           
+///  │{{3}}    │      │ 2       │           
+///  ├─────────┤      ├─────────┤           
+///  │{{4},{5}}│      │ 3       │           
+///  └─────────┘      ├─────────┤           
+///                   │ 4       │           
+///                   ├─────────┤           
+///                   │ 5       │           
+///                   └─────────┘           
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+pub struct ColumnUnnestList {
+    pub output_column: Column,
+    pub depth: usize,
+}
+
+impl fmt::Display for ColumnUnnestList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}|depth={}", self.output_column, self.depth)
+    }
+}
+
 /// Unnest a column that contains a nested list type. See
 /// [`UnnestOptions`] for more details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -3305,10 +3371,10 @@ pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// Columns to run unnest on, can be a list of (List/Struct) columns
-    pub exec_columns: Vec<Column>,
+    pub exec_columns: Vec<(Column, ColumnUnnestType)>,
     /// refer to the indices(in the input schema) of columns
     /// that have type list to run unnest on
-    pub list_type_columns: Vec<usize>,
+    pub list_type_columns: Vec<(usize, ColumnUnnestList)>,
     /// refer to the indices (in the input schema) of columns
     /// that have type struct to run unnest on
     pub struct_type_columns: Vec<usize>,
@@ -3329,10 +3395,10 @@ impl PartialOrd for Unnest {
             /// The incoming logical plan
             pub input: &'a Arc<LogicalPlan>,
             /// Columns to run unnest on, can be a list of (List/Struct) columns
-            pub exec_columns: &'a Vec<Column>,
+            pub exec_columns: &'a Vec<(Column, ColumnUnnestType)>,
             /// refer to the indices(in the input schema) of columns
             /// that have type list to run unnest on
-            pub list_type_columns: &'a Vec<usize>,
+            pub list_type_columns: &'a Vec<(usize, ColumnUnnestList)>,
             /// refer to the indices (in the input schema) of columns
             /// that have type struct to run unnest on
             pub struct_type_columns: &'a Vec<usize>,

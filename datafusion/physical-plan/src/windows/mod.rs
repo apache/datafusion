@@ -399,12 +399,14 @@ pub(crate) fn calc_requirements<
     partition_by_exprs: impl IntoIterator<Item = T>,
     orderby_sort_exprs: impl IntoIterator<Item = S>,
 ) -> Option<LexRequirement> {
-    let mut sort_reqs = partition_by_exprs
-        .into_iter()
-        .map(|partition_by| {
-            PhysicalSortRequirement::new(Arc::clone(partition_by.borrow()), None)
-        })
-        .collect::<Vec<_>>();
+    let mut sort_reqs = LexRequirement::new(
+        partition_by_exprs
+            .into_iter()
+            .map(|partition_by| {
+                PhysicalSortRequirement::new(Arc::clone(partition_by.borrow()), None)
+            })
+            .collect::<Vec<_>>(),
+    );
     for element in orderby_sort_exprs.into_iter() {
         let PhysicalSortExpr { expr, options } = element.borrow();
         if !sort_reqs.iter().any(|e| e.expr.eq(expr)) {
@@ -568,22 +570,30 @@ pub fn get_window_mode(
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
-    let mut partition_by_reqs: LexRequirement = vec![];
+    let mut partition_by_reqs: LexRequirement = LexRequirement::new(vec![]);
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
-    partition_by_reqs.extend(indices.iter().map(|&idx| PhysicalSortRequirement {
+    vec![].extend(indices.iter().map(|&idx| PhysicalSortRequirement {
         expr: Arc::clone(&partitionby_exprs[idx]),
         options: None,
     }));
+    partition_by_reqs
+        .inner
+        .extend(indices.iter().map(|&idx| PhysicalSortRequirement {
+            expr: Arc::clone(&partitionby_exprs[idx]),
+            options: None,
+        }));
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
-    let partition_by_eqs = input_eqs.add_constants(const_exprs);
+    let partition_by_eqs = input_eqs.with_constants(const_exprs);
     let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys);
     let reverse_order_by_reqs =
         PhysicalSortRequirement::from_sort_exprs(&reverse_order_bys(orderby_keys));
     for (should_swap, order_by_reqs) in
         [(false, order_by_reqs), (true, reverse_order_by_reqs)]
     {
-        let req = [partition_by_reqs.clone(), order_by_reqs].concat();
+        let req = LexRequirement::new(
+            [partition_by_reqs.inner.clone(), order_by_reqs.inner].concat(),
+        );
         let req = collapse_lex_req(req);
         if partition_by_eqs.ordering_satisfy_requirement(&req) {
             // Window can be run with existing ordering
@@ -736,7 +746,7 @@ mod tests {
                 if let Some(expected) = &mut expected {
                     expected.push(res);
                 } else {
-                    expected = Some(vec![res]);
+                    expected = Some(LexRequirement::new(vec![res]));
                 }
             }
             assert_eq!(calc_requirements(partitionbys, orderbys), expected);

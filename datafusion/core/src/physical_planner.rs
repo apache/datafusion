@@ -85,6 +85,7 @@ use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctio
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
@@ -832,9 +833,16 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let input = children.one()?;
                 let schema = SchemaRef::new(schema.as_ref().to_owned().into());
+                let list_column_indices = list_type_columns
+                    .iter()
+                    .map(|(index, unnesting)| ListUnnest {
+                        index_in_input_schema: *index,
+                        depth: unnesting.depth,
+                    })
+                    .collect();
                 Arc::new(UnnestExec::new(
                     input,
-                    list_type_columns.clone(),
+                    list_column_indices,
                     struct_type_columns.clone(),
                     schema,
                     options.clone(),
