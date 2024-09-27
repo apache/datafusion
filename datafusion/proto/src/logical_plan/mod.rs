@@ -490,7 +490,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(sort.input, ctx, extension_codec)?;
                 let sort_expr: Vec<SortExpr> =
                     from_proto::parse_sorts(&sort.expr, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input).sort(sort_expr)?.build()
+                let fetch: Option<usize> = sort.fetch.try_into().ok();
+                LogicalPlanBuilder::from(input)
+                    .sort_with_limit(sort_expr, fetch)?
+                    .build()
             }
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion::logical_expr::Partitioning;
@@ -498,9 +501,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
                 let pb_partition_method = repartition.partition_method.as_ref().ok_or_else(|| {
-                    DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, RepartitionNode was missing required field 'partition_method'",
-                    ))
+                    internal_datafusion_err!(
+                        "Protobuf deserialization error, RepartitionNode was missing required field 'partition_method'"
+                    )
                 })?;
 
                 let partitioning_scheme = match pb_partition_method {
@@ -526,7 +529,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::CreateExternalTable(create_extern_table) => {
                 let pb_schema = (create_extern_table.schema.clone()).ok_or_else(|| {
                     DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, CreateExternalTableNode was missing required field schema.",
+                        "Protobuf deserialization error, CreateExternalTableNode was missing required field schema."
                     ))
                 })?;
 
