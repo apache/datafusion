@@ -1966,9 +1966,9 @@ impl InsertOp {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            InsertOp::Append => "Append",
-            InsertOp::Overwrite => "Overwrite",
-            InsertOp::Replace => "Replace",
+            Self::Append => "Append",
+            Self::Overwrite => "Overwrite",
+            Self::Replace => "Replace",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
