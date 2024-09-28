@@ -920,10 +920,10 @@ impl GroupedHashAggregateStream {
         if self.group_values.len() > 0
             && batch.num_rows() > 0
             && matches!(self.group_ordering, GroupOrdering::None)
-            && !matches!(self.mode, AggregateMode::Partial)
             && !self.spill_state.is_stream_merging
             && self.update_memory_reservation().is_err()
         {
+            assert_ne!(self.mode, AggregateMode::Partial);
             // Use input batch (Partial mode) schema for spilling because
             // the spilled data will be merged and re-evaluated later.
             self.spill_state.spill_schema = batch.schema();
@@ -968,9 +968,9 @@ impl GroupedHashAggregateStream {
     fn emit_early_if_necessary(&mut self) -> Result<()> {
         if self.group_values.len() >= self.batch_size
             && matches!(self.group_ordering, GroupOrdering::None)
-            && matches!(self.mode, AggregateMode::Partial)
             && self.update_memory_reservation().is_err()
         {
+            assert_eq!(self.mode, AggregateMode::Partial);
             let n = self.group_values.len() / self.batch_size * self.batch_size;
             let batch = self.emit(EmitTo::First(n), false)?;
             self.exec_state = ExecutionState::ProducingOutput(batch);
