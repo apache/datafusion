@@ -32,8 +32,10 @@ use datafusion_common::{not_impl_err, Result};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
 use crate::expr::WindowFunction;
+use crate::udf_docs::DOCUMENTATION_NONE;
 use crate::{
-    function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
+    function::WindowFunctionSimplification, Documentation, Expr, PartitionEvaluator,
+    Signature,
 };
 
 /// Logical representation of a user-defined window function (UDWF)
@@ -172,6 +174,11 @@ impl WindowUDF {
     pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
     }
+
+    /// Returns this UDF's documentation that will be used to generate public documentation
+    pub fn documentation(&self) -> &Documentation {
+        self.inner.documentation()
+    }
 }
 
 impl<F> From<F> for WindowUDF
@@ -198,28 +205,40 @@ where
 /// # use std::any::Any;
 /// # use arrow::datatypes::{DataType, Field};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt};
+/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
-/// use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// # use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
+/// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// # use indexmap::IndexMap;
+///
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
-///   signature: Signature
+///   signature: Signature,
+///   documentation: Documentation,
 /// }
 ///
 /// impl SmoothIt {
 ///   fn new() -> Self {
 ///     Self {
-///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable)
+///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
+///       documentation: Documentation {
+///             doc_section: DOC_SECTION_ANALYTICAL,
+///             description: "smooths the windows",
+///             syntax_example: "smooth_it(2)",
+///             sql_example: None,    
+///             arguments: Some(IndexMap::from([("arg_1", "The int32 number to smooth by")])),
+///             related_udfs: None,
+///         }    
 ///      }
 ///   }
 /// }
 ///
-/// /// Implement the WindowUDFImpl trait for AddOne
+/// /// Implement the WindowUDFImpl trait for SmoothIt
 /// impl WindowUDFImpl for SmoothIt {
 ///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "smooth_it" }
 ///    fn signature(&self) -> &Signature { &self.signature }
-///    // The actual implementation would add one to the argument
+///    // The actual implementation would smooth the window
 ///    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
 ///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
 ///      if let Some(DataType::Int32) = field_args.get_input_type(0) {
@@ -227,6 +246,9 @@ where
 ///      } else {
 ///        plan_err!("smooth_it only accepts Int32 arguments")
 ///      }
+///    }
+///    fn documentation(&self) -> &Documentation {
+///      &self.documentation     
 ///    }
 /// }
 ///
@@ -351,6 +373,12 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
+
+    /// Returns the documentation for this window UDF for use
+    /// in generating publicly facing documentation.
+    fn documentation(&self) -> &Documentation {
+        &DOCUMENTATION_NONE
+    }
 }
 
 impl PartialEq for dyn WindowUDFImpl {
@@ -439,6 +467,41 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
     }
+
+    fn documentation(&self) -> &Documentation {
+        self.inner.documentation()
+    }
+}
+
+// Window UDF doc sections for use in public documentation
+pub mod window_doc_sections {
+    use crate::DocSection;
+
+    pub fn doc_sections() -> Vec<DocSection> {
+        vec![
+            DOC_SECTION_AGGREGATE,
+            DOC_SECTION_RANKING,
+            DOC_SECTION_ANALYTICAL,
+        ]
+    }
+
+    pub const DOC_SECTION_AGGREGATE: DocSection = DocSection {
+        include: true,
+        label: "Aggregate Functions",
+        description: Some("All aggregate functions can be used as window functions."),
+    };
+
+    pub const DOC_SECTION_RANKING: DocSection = DocSection {
+        include: true,
+        label: "Ranking Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_ANALYTICAL: DocSection = DocSection {
+        include: true,
+        label: "Analytical Functions",
+        description: None,
+    };
 }
 
 #[cfg(test)]

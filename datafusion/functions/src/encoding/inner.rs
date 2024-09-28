@@ -28,16 +28,19 @@ use datafusion_common::{
 };
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Documentation};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_BINARY_STRING;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use indexmap::IndexMap;
 use std::any::Any;
 
 #[derive(Debug)]
 pub struct EncodeFunc {
     signature: Signature,
+    documentation: Documentation,
 }
 
 impl Default for EncodeFunc {
@@ -50,6 +53,17 @@ impl EncodeFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            documentation: Documentation {
+                doc_section: DOC_SECTION_BINARY_STRING,
+                description: "Encode binary data into a textual representation.",
+                syntax_example: "encode(expression, format)",
+                sql_example: None,
+                arguments: Some(IndexMap::from([
+                    ("expression", "Expression containing string or binary data"),
+                    ("format", "Supported formats are: `base64`, `hex`"),
+                ])),
+                related_udfs: Some(vec!["decode"]),
+            },
         }
     }
 }
@@ -100,11 +114,16 @@ impl ScalarUDFImpl for EncodeFunc {
             ),
         }
     }
+
+    fn documentation(&self) -> &Documentation {
+        &self.documentation
+    }
 }
 
 #[derive(Debug)]
 pub struct DecodeFunc {
     signature: Signature,
+    documentation: Documentation,
 }
 
 impl Default for DecodeFunc {
@@ -117,6 +136,17 @@ impl DecodeFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            documentation: Documentation {
+                doc_section: DOC_SECTION_BINARY_STRING,
+                description: "Decode binary data from textual representation in string.",
+                syntax_example: "decode(expression, format)",
+                sql_example: None,
+                arguments: Some(IndexMap::from([
+                    ("expression", "Expression containing encoded string data"),
+                    ("format", "Same arguments as [encode](#encode)"),
+                ])),
+                related_udfs: Some(vec!["encode"]),
+            },
         }
     }
 }
@@ -166,6 +196,10 @@ impl ScalarUDFImpl for DecodeFunc {
                 arg_types[0]
             ),
         }
+    }
+
+    fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 }
 

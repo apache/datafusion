@@ -28,7 +28,10 @@ use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::expr::WindowFunction;
-use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
+use datafusion_expr::{
+    Documentation, Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+};
 use datafusion_functions_window_common::field;
 use field::WindowUDFFieldArgs;
 
@@ -57,6 +60,7 @@ pub fn row_number_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
 #[derive(Debug)]
 pub struct RowNumber {
     signature: Signature,
+    documentation: Documentation,
 }
 
 impl RowNumber {
@@ -64,6 +68,15 @@ impl RowNumber {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(0, Volatility::Immutable),
+            documentation: Documentation {
+                doc_section: DOC_SECTION_RANKING,
+                description:
+                    "Number of the current row within its partition, counting from 1.",
+                syntax_example: "row_number()",
+                sql_example: None,
+                arguments: None,
+                related_udfs: None,
+            },
         }
     }
 }
@@ -100,6 +113,10 @@ impl WindowUDFImpl for RowNumber {
             descending: false,
             nulls_first: false,
         })
+    }
+
+    fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 }
 

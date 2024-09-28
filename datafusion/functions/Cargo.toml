@@ -76,6 +76,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 hashbrown = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }
+indexmap = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 md-5 = { version = "^0.10.0", optional = true }

@@ -29,14 +29,19 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{lit, ColumnarValue, Expr, ScalarUDF, TypeSignature::*};
+use datafusion_expr::{
+    lit, ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature::*,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use indexmap::IndexMap;
 
 #[derive(Debug)]
 pub struct LogFunc {
     signature: Signature,
+    documentation: Documentation,
 }
 
 impl Default for LogFunc {
@@ -58,6 +63,24 @@ impl LogFunc {
                 ],
                 Volatility::Immutable,
             ),
+            documentation: Documentation {
+                doc_section: DOC_SECTION_MATH,
+                description: "Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.",
+                syntax_example: r#"log(base, numeric_expression)
+log(numeric_expression)"#,
+                sql_example: None,
+                arguments: Some(IndexMap::from([
+                    (
+                        "base",
+                        "Base numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+                    ),
+                    (
+                        "numeric_expression",
+                        "Numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+                    ),
+                ])),
+                related_udfs: None,
+            }
         }
     }
 }
@@ -162,6 +185,10 @@ impl ScalarUDFImpl for LogFunc {
         };
 
         Ok(ColumnarValue::Array(arr))
+    }
+
+    fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 
     /// Simplify the `log` function by the relevant rules:

@@ -25,15 +25,18 @@ use datafusion_common::{arrow_datafusion_err, plan_err};
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_REGEX;
 use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use indexmap::IndexMap;
 use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct RegexpLikeFunc {
     signature: Signature,
+    documentation: Documentation,
 }
 impl Default for RegexpLikeFunc {
     fn default() -> Self {
@@ -54,6 +57,46 @@ impl RegexpLikeFunc {
                 ],
                 Volatility::Immutable,
             ),
+            documentation: Documentation {
+                doc_section: DOC_SECTION_REGEX,
+                description: "Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.",
+                syntax_example: "regexp_like(str, regexp[, flags])",
+                sql_example: Some(
+                    r#"```sql
+select regexp_like('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
++--------------------------------------------------------+
+| regexp_like(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
++--------------------------------------------------------+
+| true                                                   |
++--------------------------------------------------------+
+SELECT regexp_like('aBc', '(b|d)', 'i');
++--------------------------------------------------+
+| regexp_like(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
++--------------------------------------------------+
+| true                                             |
++--------------------------------------------------+
+```
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+"#),
+                arguments: Some(IndexMap::from([
+                    (
+                        "str",
+                        "String expression to operate on. Can be a constant, column, or function, and any combination of string operators."
+                    ),
+                    (    "regexp",
+                         "Regular expression to test against the string expression. Can be a constant, column, or function."
+                    ),
+                    ("flags",
+                     r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?"#
+                    )
+                ])),
+                related_udfs: None,
+            }
         }
     }
 }
@@ -104,6 +147,10 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         } else {
             result.map(ColumnarValue::Array)
         }
+    }
+
+    fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 }
 fn regexp_like_func(args: &[ArrayRef]) -> Result<ArrayRef> {

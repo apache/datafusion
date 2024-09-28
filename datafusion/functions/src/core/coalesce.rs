@@ -22,14 +22,17 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, ExprSchema, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
 use datafusion_expr::type_coercion::binary::type_union_resolution;
-use datafusion_expr::{ColumnarValue, Expr, ExprSchemable};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use indexmap::IndexMap;
 use itertools::Itertools;
 
 #[derive(Debug)]
 pub struct CoalesceFunc {
     signature: Signature,
+    documentation: Documentation,
 }
 
 impl Default for CoalesceFunc {
@@ -42,6 +45,19 @@ impl CoalesceFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            documentation: Documentation {
+                doc_section: DOC_SECTION_CONDITIONAL,
+                description: "Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.",
+                syntax_example: "coalesce(expression1[, ..., expression_n])",
+                sql_example: None,
+                arguments: Some(IndexMap::from([
+                    (
+                        "expression1, expression_n",
+                        "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
+                    ),
+                ])),
+                related_udfs: None,
+            },
         }
     }
 }
@@ -139,6 +155,10 @@ impl ScalarUDFImpl for CoalesceFunc {
         let new_type = type_union_resolution(arg_types)
             .unwrap_or(arg_types.first().unwrap().clone());
         Ok(vec![new_type; arg_types.len()])
+    }
+
+    fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 }
 

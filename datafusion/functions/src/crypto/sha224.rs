@@ -19,12 +19,17 @@
 use super::basic::{sha224, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_HASHING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use indexmap::IndexMap;
 use std::any::Any;
 
 #[derive(Debug)]
 pub struct SHA224Func {
     signature: Signature,
+    documentation: Documentation,
 }
 impl Default for SHA224Func {
     fn default() -> Self {
@@ -41,6 +46,19 @@ impl SHA224Func {
                 vec![Utf8, LargeUtf8, Binary, LargeBinary],
                 Volatility::Immutable,
             ),
+            documentation: Documentation {
+                doc_section: DOC_SECTION_HASHING,
+                description: "Computes the SHA-224 hash of a binary string.",
+                syntax_example: "sha224(expression)",
+                sql_example: None,
+                arguments: Some(IndexMap::from([
+                    (
+                        "expression",
+                        "String expression to operate on. Can be a constant, column, or function, and any combination of string operators."
+                    ),
+                ])),
+                related_udfs: None,
+            }
         }
     }
 }
@@ -60,7 +78,12 @@ impl ScalarUDFImpl for SHA224Func {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         utf8_or_binary_to_binary_type(&arg_types[0], self.name())
     }
+
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         sha224(args)
+    }
+
+    fn documentation(&self) -> &Documentation {
+        &self.documentation
     }
 }
