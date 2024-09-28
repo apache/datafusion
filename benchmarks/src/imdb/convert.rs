@@ -65,7 +65,7 @@ impl ConvertOpt {
                 .delimiter(b',')
                 .escape(b'\\')
                 .file_extension(".csv");
-            
+
             let mut csv = ctx.read_csv(&input_path, options).await?;
 
             // Select all apart from the padding column
