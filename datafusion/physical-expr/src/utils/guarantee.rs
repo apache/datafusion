@@ -93,18 +93,18 @@ impl LiteralGuarantee {
     /// Create a new instance of the guarantee if the provided operator is
     /// supported. Returns None otherwise. See [`LiteralGuarantee::analyze`] to
     /// create these structures from an predicate (boolean expression).
-    fn try_new<'a>(
+    fn new<'a>(
         column_name: impl Into<String>,
         guarantee: Guarantee,
         literals: impl IntoIterator<Item = &'a ScalarValue>,
-    ) -> Option<Self> {
+    ) -> Self {
         let literals: HashSet<_> = literals.into_iter().cloned().collect();
 
-        Some(Self {
+        Self {
             column: Column::from_name(column_name),
             guarantee,
             literals,
-        })
+        }
     }
 
     /// Return a list of [`LiteralGuarantee`]s that must be satisfied for `expr`
@@ -338,13 +338,11 @@ impl<'a> GuaranteeBuilder<'a> {
             // This is a new guarantee
             let new_values: HashSet<_> = new_values.into_iter().collect();
 
-            if let Some(guarantee) =
-                LiteralGuarantee::try_new(col.name(), guarantee, new_values)
-            {
-                // add it to the list of guarantees
-                self.guarantees.push(Some(guarantee));
-                self.map.insert(key, self.guarantees.len() - 1);
-            }
+            let guarantee = LiteralGuarantee::new(col.name(), guarantee, new_values);
+            // add it to the list of guarantees
+            self.guarantees.push(Some(guarantee));
+            self.map.insert(key, self.guarantees.len() - 1);
+
         }
 
         self
@@ -851,7 +849,7 @@ mod test {
         S: Into<ScalarValue> + 'a,
     {
         let literals: Vec<_> = literals.into_iter().map(|s| s.into()).collect();
-        LiteralGuarantee::try_new(column, Guarantee::In, literals.iter()).unwrap()
+        LiteralGuarantee::new(column, Guarantee::In, literals.iter())
     }
 
     /// Guarantee that the expression is true if the column is NOT any of the specified values
@@ -861,7 +859,7 @@ mod test {
         S: Into<ScalarValue> + 'a,
     {
         let literals: Vec<_> = literals.into_iter().map(|s| s.into()).collect();
-        LiteralGuarantee::try_new(column, Guarantee::NotIn, literals.iter()).unwrap()
+        LiteralGuarantee::new(column, Guarantee::NotIn, literals.iter())
     }
 
     // Schema for testing
