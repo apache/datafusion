@@ -125,7 +125,6 @@ Here are some active projects using DataFusion:
 Here are some less active projects that used DataFusion:
 
 - [bdt](https://github.com/datafusion-contrib/bdt) Boring Data Tool
-- [Blaze](https://github.com/blaze-init/blaze) Spark accelerator with DataFusion at its core
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
 - [Flock](https://github.com/flock-lab/flock)
