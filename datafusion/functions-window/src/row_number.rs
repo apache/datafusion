@@ -35,8 +35,7 @@ use field::WindowUDFFieldArgs;
 create_udwf!(
     RowNumber,
     row_number,
-    "Returns a unique row number for each row in window partition beginning at 1.",
-    RowNumber::default
+    "Returns a unique row number for each row in window partition beginning at 1."
 );
 
 /// Create a [`WindowFunction`](Expr::WindowFunction) expression for

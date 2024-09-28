@@ -25,6 +25,10 @@
 /// * `$CTOR`: The user-defined window function constructor.
 ///
 macro_rules! create_udwf {
+    ($STRUCT_NAME:ident, $FN_NAME:ident, $DOC:expr) => {
+        create_udwf!($STRUCT_NAME, $FN_NAME, $DOC, $STRUCT_NAME::default);
+    };
+
     ($STRUCT_NAME:ident, $FN_NAME:ident, $DOC:expr, $CTOR:path) => {
         paste::paste! {
             #[doc = concat!(" Singleton instance of [`", stringify!($STRUCT_NAME), "`], ensures the user-defined")]
@@ -44,5 +48,5 @@ macro_rules! create_udwf {
                     .clone()
             }
         }
-    }
+    };
 }
