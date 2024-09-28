@@ -328,7 +328,7 @@ where
 ///             Field::new("ordering", DataType::UInt32, true)
 ///        ])
 ///    }
-///    fn documentation(&self) -> Documentation {
+///    fn documentation(&self) -> &Documentation {
 ///        &self.documentation  
 ///    }
 /// }

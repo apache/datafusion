@@ -348,7 +348,7 @@ where
 ///    }
 ///    // The actual implementation would add one to the argument
 ///    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> { unimplemented!() }
-///    fn documentation(&self) -> Documentation {
+///    fn documentation(&self) -> &Documentation {
 ///         &self.documentation
 ///     }
 /// }
