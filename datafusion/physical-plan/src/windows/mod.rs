@@ -130,7 +130,7 @@ pub fn create_window_expr(
         }
         // TODO: Ordering not supported for Window UDFs yet
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
-            create_udwf_window_expr(fun, args, input_schema, name)?,
+            create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
             partition_by,
             order_by,
             window_frame,
@@ -329,6 +329,7 @@ fn create_udwf_window_expr(
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: String,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
     // need to get the types into an owned vec for some reason
     let input_types: Vec<_> = args
@@ -342,6 +343,7 @@ fn create_udwf_window_expr(
         input_types,
         name,
         is_reversed: false,
+        ignore_nulls,
     }))
 }
 
@@ -355,6 +357,7 @@ struct WindowUDFExpr {
     /// Types of input expressions
     input_types: Vec<DataType>,
     is_reversed: bool,
+    ignore_nulls: bool,
 }
 
 impl BuiltInWindowFunctionExpr for WindowUDFExpr {
@@ -389,6 +392,7 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
                 name: self.name.clone(),
                 input_types: self.input_types.clone(),
                 is_reversed: !self.is_reversed,
+                ignore_nulls: self.ignore_nulls,
             })),
         }
     }
