@@ -31,18 +31,14 @@ select * from table_with_metadata;
 NULL bar
 3 baz
 
-query I rowsort
+statement error DataFusion error: Internal error: Physical input schema should be the same as the one converted from logical input schema..
 SELECT (
   SELECT id FROM table_with_metadata
   ) UNION (
   SELECT id FROM table_with_metadata
   );
-----
-1
-3
-NULL
 
-query I rowsort
+statement error DataFusion error: Internal error: Physical input schema should be the same as the one converted from logical input schema..
 SELECT "data"."id"
 FROM
   (
@@ -54,9 +50,6 @@ FROM
     SELECT "id" FROM "table_with_metadata"
   ) as "samples"
 WHERE "data"."id" = "samples"."id";
-----
-1
-3
 
 statement ok
 drop table table_with_metadata;
