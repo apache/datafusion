@@ -23,12 +23,12 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::Result;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::{expressions, ExecutionPlan, Statistics};
+use datafusion_physical_plan::{expressions, ExecutionPlan};
 
 use crate::PhysicalOptimizerRule;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::udaf::AggregateFunctionExpr;
+use datafusion_physical_plan::udaf::{AggregateFunctionExpr, StatisticsArgs};
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default)]
@@ -55,14 +55,19 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let stats = partial_agg_exec.input().statistics()?;
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
-                if let Some((non_null_rows, name)) =
-                    take_optimizable_column_and_table_count(expr, &stats)
+                let field = expr.field();
+                let args = expr.expressions();
+                let statistics_args = StatisticsArgs {
+                    statistics: &stats,
+                    return_type: field.data_type(),
+                    is_distinct: expr.is_distinct(),
+                    exprs: args.as_slice(),
+                };
+                if let Some((optimizable_statistic, name)) =
+                    take_optimizable_value_from_statistics(&statistics_args, expr)
                 {
-                    projections.push((expressions::lit(non_null_rows), name.to_owned()));
-                } else if let Some((min_or_max, name)) =
-                    take_optimizable_value_from_statistics(expr, &stats)
-                {
-                    projections.push((expressions::lit(min_or_max), name.to_owned()));
+                    projections
+                        .push((expressions::lit(optimizable_statistic), name.to_owned()));
                 } else {
                     // TODO: we need all aggr_expr to be resolved (cf TODO fullres)
                     break;
@@ -133,29 +138,11 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
     None
 }
 
-/// If this agg_expr is a count that can be exactly derived from the statistics, return it.
-fn take_optimizable_column_and_table_count(
-    agg_expr: &AggregateFunctionExpr,
-    stats: &Statistics,
-) -> Option<(ScalarValue, String)> {
-    if !agg_expr.is_distinct() {
-        if let Some((val, name)) = take_optimizable_value_from_statistics(agg_expr, stats)
-        {
-            return Some((val, name));
-        }
-    }
-    None
-}
-
 /// If this agg_expr is a max that is exactly defined in the statistics, return it.
 fn take_optimizable_value_from_statistics(
+    statistics_args: &StatisticsArgs,
     agg_expr: &AggregateFunctionExpr,
-    stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
-    let value = agg_expr.fun().value_from_stats(
-        &stats,
-        agg_expr.field().data_type(),
-        agg_expr.expressions().as_slice(),
-    );
+    let value = agg_expr.fun().value_from_stats(statistics_args);
     value.map(|val| (val, agg_expr.name().to_string()))
 }

@@ -15,7 +15,7 @@
 // under the License.
 
 //! [`Max`] and [`MaxAccumulator`] accumulator for the `max` function
-//! [`Min`] and [`MinAccumulator`] accumulator for the `max` function
+//! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
 
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -52,12 +52,10 @@ use arrow_schema::IntervalUnit;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     downcast_value, exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
-    Statistics,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use datafusion_physical_expr::{expressions, PhysicalExpr};
+use datafusion_physical_expr::expressions;
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use arrow::datatypes::i256;
 use arrow::datatypes::{
@@ -67,10 +65,10 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::ScalarValue;
-use datafusion_expr::GroupsAccumulator;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Signature, Volatility,
 };
+use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use half::f16;
 use std::ops::Deref;
 
@@ -159,19 +157,18 @@ trait FromColumnStatistics {
 
     fn value_from_statistics(
         &self,
-        statistics: &Statistics,
-        data_type: &DataType,
-        arguments: &[Arc<dyn PhysicalExpr>],
+        statistics_args: &StatisticsArgs,
     ) -> Option<ScalarValue> {
-        if let Precision::Exact(num_rows) = &statistics.num_rows {
+        if let Precision::Exact(num_rows) = &statistics_args.statistics.num_rows {
             match *num_rows {
-                0 => return ScalarValue::try_from(data_type).ok(),
+                0 => return ScalarValue::try_from(statistics_args.return_type).ok(),
                 value if value > 0 => {
-                    let col_stats = &statistics.column_statistics;
-                    if arguments.len() == 1 {
+                    let col_stats = &statistics_args.statistics.column_statistics;
+                    if statistics_args.exprs.len() == 1 {
                         // TODO optimize with exprs other than Column
-                        if let Some(col_expr) =
-                            arguments[0].as_any().downcast_ref::<expressions::Column>()
+                        if let Some(col_expr) = statistics_args.exprs[0]
+                            .as_any()
+                            .downcast_ref::<expressions::Column>()
                         {
                             return self.value_from_column_statistics(
                                 &col_stats[col_expr.index()],
@@ -336,13 +333,8 @@ impl AggregateUDFImpl for Max {
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
         datafusion_expr::ReversedUDAF::Identical
     }
-    fn value_from_stats(
-        &self,
-        statistics: &Statistics,
-        data_type: &DataType,
-        arguments: &[Arc<dyn PhysicalExpr>],
-    ) -> Option<ScalarValue> {
-        self.value_from_statistics(statistics, data_type, arguments)
+    fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        self.value_from_statistics(statistics_args)
     }
 }
 
@@ -1128,13 +1120,8 @@ impl AggregateUDFImpl for Min {
         Some(false)
     }
 
-    fn value_from_stats(
-        &self,
-        statistics: &Statistics,
-        data_type: &DataType,
-        arguments: &[Arc<dyn PhysicalExpr>],
-    ) -> Option<ScalarValue> {
-        self.value_from_statistics(statistics, data_type, arguments)
+    fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        self.value_from_statistics(statistics_args)
     }
     fn order_sensitivity(&self) -> datafusion_expr::utils::AggregateOrderSensitivity {
         datafusion_expr::utils::AggregateOrderSensitivity::Insensitive

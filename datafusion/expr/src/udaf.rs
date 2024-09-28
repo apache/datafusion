@@ -94,6 +94,18 @@ impl fmt::Display for AggregateUDF {
     }
 }
 
+pub struct StatisticsArgs<'a> {
+    pub statistics: &'a Statistics,
+    pub return_type: &'a DataType,
+    /// Whether the aggregate function is distinct.
+    ///
+    /// ```sql /// SELECT COUNT(DISTINCT column1) FROM t;
+    /// ```
+    pub is_distinct: bool,
+    /// The physical expression of arguments the aggregate function takes.
+    pub exprs: &'a [Arc<dyn PhysicalExpr>],
+}
+
 impl AggregateUDF {
     /// Create a new AggregateUDF
     ///
@@ -265,12 +277,9 @@ impl AggregateUDF {
 
     pub fn value_from_stats(
         &self,
-        statistics: &Statistics,
-        data_type: &DataType,
-        arguments: &[Arc<dyn PhysicalExpr>],
+        statistics_args: &StatisticsArgs,
     ) -> Option<ScalarValue> {
-        self.inner
-            .value_from_stats(statistics, &data_type, arguments)
+        self.inner.value_from_stats(statistics_args)
     }
 
     /// See [`AggregateUDFImpl::default_value`] for more details.
@@ -586,12 +595,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         None
     }
     // Return the value of the current UDF from the statistics
-    fn value_from_stats(
-        &self,
-        _statistics: &Statistics,
-        _data_type: &DataType,
-        _arguments: &[Arc<dyn PhysicalExpr>],
-    ) -> Option<ScalarValue> {
+    fn value_from_stats(&self, _statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
         None
     }
 
