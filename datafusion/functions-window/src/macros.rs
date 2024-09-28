@@ -15,6 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+/// Creates a singleton instance of a user-defined window function.
+///
+/// # Parameters
+///
+/// * `$STRUCT_NAME`: The user-defined window function struct.
+/// * `$FN_NAME`: The prefix for the generated function name.
+/// * `$DOC`: The doc comment for the user-defined window function.
+/// * `$CTOR`: The user-defined window function constructor.
+///
 macro_rules! create_udwf {
     ($STRUCT_NAME:ident, $FN_NAME:ident, $DOC:expr, $CTOR:path) => {
         paste::paste! {
