@@ -1001,7 +1001,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_arrayref_at_indices() -> Result<()> {
+    fn test_take_arrays() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.])),
             Arc::new(Float64Array::from(vec![2.0, 3.0, 3.0, 4.0, 5.0])),
