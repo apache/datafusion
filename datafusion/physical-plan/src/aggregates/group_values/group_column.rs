@@ -102,7 +102,13 @@ impl<T: ArrowPrimitiveType> GroupColumn for PrimitiveGroupValueBuilder<T> {
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
-        self.nulls.append(array.is_null(row))
+        if array.is_null(row) {
+            self.nulls.append(true);
+            self.group_values.push(T::default_value());
+        } else {
+            self.nulls.append(false);
+            self.group_values.push(array.as_primitive::<T>().value(row));
+        }
     }
 
     fn len(&self) -> usize {
