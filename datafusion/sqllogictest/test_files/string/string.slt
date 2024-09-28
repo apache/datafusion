@@ -47,6 +47,52 @@ false false
 false true
 NULL NULL
 
+# TODO: move it back to `string_query.slt.part` after fixing the issue
+# see detail: https://github.com/apache/datafusion/issues/12637
+# Test pattern with wildcard characters
+query TTBBBB
+select ascii_1, unicode_1,
+       ascii_1 like 'An%' as ascii_like,
+       unicode_1 like '%ion数据%' as unicode_like,
+       ascii_1 ilike 'An%' as ascii_ilike,
+       unicode_1 ilike '%ion数据%' as unicode_ilik
+from test_basic_operator;
+----
+Andrew datafusion📊🔥 true false true false
+Xiangpeng datafusion数据融合 false true false true
+Raphael datafusionДатаФусион false false false false
+NULL NULL NULL NULL NULL NULL
+
+# TODO: move it back to `string_query.slt.part` after fixing the issue
+# see detail: https://github.com/apache/datafusion/issues/12664
+query BBBB
+SELECT
+  REGEXP_LIKE(ascii_1, 'an'),
+  REGEXP_LIKE(unicode_1, 'таФ'),
+  REGEXP_LIKE(ascii_1, NULL),
+  REGEXP_LIKE(unicode_1, NULL)
+FROM test_basic_operator;
+----
+false false NULL NULL
+true false NULL NULL
+false true NULL NULL
+NULL NULL NULL NULL
+
+# TODO: move it back to `string_query.slt.part` after fixing the issue
+# see detail: https://github.com/apache/datafusion/issues/12664
+query ????
+SELECT
+  REGEXP_MATCH(ascii_1, 'an'),
+  REGEXP_MATCH(unicode_1, 'таФ'),
+  REGEXP_MATCH(ascii_1, NULL),
+  REGEXP_MATCH(unicode_1, NULL)
+FROM test_basic_operator;
+----
+NULL NULL NULL NULL
+[an] NULL NULL NULL
+NULL [таФ] NULL NULL
+NULL NULL NULL NULL
+
 #
 # common test for string-like functions and operators
 #
