@@ -33,7 +33,7 @@ pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
 
 /// Trait for a [`Stream`] of [`RecordBatch`]es that can be passed between threads
 ///
-/// This trait is used to retrieve the results of DataFusion execution plans.
+/// This trait is used to retrieve the results of DataFusion execution plan nodes.
 ///
 /// The trait is a specialized Rust Async [`Stream`] that also knows the schema
 /// of the data it will return (even if the stream has no data). Every
