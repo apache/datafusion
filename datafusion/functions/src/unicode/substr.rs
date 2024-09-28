@@ -27,8 +27,7 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::Exact;
+use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
@@ -45,19 +44,8 @@ impl Default for SubstrFunc {
 
 impl SubstrFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Int64]),
-                    Exact(vec![LargeUtf8, Int64]),
-                    Exact(vec![Utf8, Int64, Int64]),
-                    Exact(vec![LargeUtf8, Int64, Int64]),
-                    Exact(vec![Utf8View, Int64]),
-                    Exact(vec![Utf8View, Int64, Int64]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![String::from("substring")],
         }
     }
@@ -90,6 +78,65 @@ impl ScalarUDFImpl for SubstrFunc {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let first_data_type = match &arg_types[0] {
+            DataType::Null => Ok(DataType::Utf8),
+            DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => Ok(arg_types[0].clone()),
+            DataType::Dictionary(key_type, value_type) => {
+                if key_type.is_integer() {
+                    match value_type.as_ref() {
+                        DataType::Null => Ok(DataType::Utf8),
+                        DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => Ok(*value_type.clone()),
+                        _ => plan_err!(
+                                "The first argument of the {} function can only be a string, but got {:?}.",
+                                self.name(),
+                                arg_types[0]
+                        ),
+                    }
+                } else {
+                    plan_err!(
+                        "The first argument of the {} function can only be a string, but got {:?}.",
+                        self.name(),
+                        arg_types[0]
+                    )
+                }
+            }
+            _ => plan_err!(
+                "The first argument of the {} function can only be a string, but got {:?}.",
+                self.name(),
+                arg_types[0]
+            )
+        }?;
+
+        if ![DataType::Int64, DataType::Int32, DataType::Null].contains(&arg_types[1]) {
+            return plan_err!(
+                "The second argument of the {} function can only be an integer, but got {:?}.",
+                self.name(),
+                arg_types[1]
+            );
+        }
+
+        if arg_types.len() == 3
+            && ![DataType::Int64, DataType::Int32, DataType::Null].contains(&arg_types[2])
+        {
+            return plan_err!(
+                "The third argument of the {} function can only be an integer, but got {:?}.",
+                self.name(),
+                arg_types[2]
+            );
+        }
+
+        if arg_types.len() == 2 {
+            Ok(vec![first_data_type.to_owned(), DataType::Int64])
+        } else {
+            Ok(vec![
+                first_data_type.to_owned(),
+                DataType::Int64,
+                DataType::Int64,
+            ])
+        }
     }
 }
 
@@ -394,7 +441,7 @@ where
                             )
                             } else {
                                 if start == i64::MIN {
-                                    return exec_err!("negative overflow when calculating skip value")
+                                    return exec_err!("negative overflow when calculating skip value");
                                 }
                                 let (start, end) = get_true_start_end(
                                     string,
