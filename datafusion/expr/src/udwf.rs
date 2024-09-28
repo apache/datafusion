@@ -174,7 +174,7 @@ impl WindowUDF {
     }
 
     /// Returns the reversed user-defined window function when the
-    /// order of the computation is reversed.
+    /// order of evaluation is reversed.
     ///
     /// See [`WindowUDFImpl::reverse_expr`] for more details.
     pub fn reverse_expr(&self) -> ReversedUDWF {
