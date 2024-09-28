@@ -41,7 +41,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{PrimitiveArray, RecordBatchOptions};
-use datafusion_common::utils::{get_arrayref_at_indices, transpose};
+use datafusion_common::utils::{take_arrays, transpose};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -300,7 +300,7 @@ impl BatchPartitioner {
 
                             // Produce batches based on indices
                             let columns =
-                                get_arrayref_at_indices(batch.columns(), &indices)?;
+                                take_arrays(batch.columns(), &indices)?;
 
                             let mut options = RecordBatchOptions::new();
                             options = options.with_row_count(Some(indices.len()));
