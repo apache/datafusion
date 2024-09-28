@@ -34,8 +34,8 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
-    WindowUDF,
+    BuiltInWindowFunction, PartitionEvaluator, ReversedUDWF, WindowFrame,
+    WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::equivalence::collapse_lex_req;
@@ -341,6 +341,7 @@ fn create_udwf_window_expr(
         args: args.to_vec(),
         input_types,
         name,
+        is_reversed: false,
     }))
 }
 
@@ -353,6 +354,7 @@ struct WindowUDFExpr {
     name: String,
     /// Types of input expressions
     input_types: Vec<DataType>,
+    is_reversed: bool,
 }
 
 impl BuiltInWindowFunctionExpr for WindowUDFExpr {
@@ -378,7 +380,17 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
-        None
+        match self.fun.reverse_expr() {
+            ReversedUDWF::Identical => Some(Arc::new(self.clone())),
+            ReversedUDWF::NotSupported => None,
+            ReversedUDWF::Reversed(fun) => Some(Arc::new(WindowUDFExpr {
+                fun,
+                args: self.args.clone(),
+                name: self.name.clone(),
+                input_types: self.input_types.clone(),
+                is_reversed: !self.is_reversed,
+            })),
+        }
     }
 
     fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
