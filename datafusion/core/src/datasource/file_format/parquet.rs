@@ -53,6 +53,7 @@ use datafusion_common::{
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
@@ -403,7 +404,7 @@ impl FileFormat for ParquetFormat {
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.overwrite {
+        if conf.insert_op != InsertOp::Append {
             return not_impl_err!("Overwrites are not implemented yet for Parquet");
         }
 
@@ -2269,7 +2270,7 @@ mod tests {
             table_paths: vec![ListingTableUrl::parse("file:///")?],
             output_schema: schema.clone(),
             table_partition_cols: vec![],
-            overwrite: true,
+            insert_op: InsertOp::Overwrite,
             keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
@@ -2364,7 +2365,7 @@ mod tests {
             table_paths: vec![ListingTableUrl::parse("file:///")?],
             output_schema: schema.clone(),
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
-            overwrite: true,
+            insert_op: InsertOp::Overwrite,
             keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
@@ -2447,7 +2448,7 @@ mod tests {
                 table_paths: vec![ListingTableUrl::parse("file:///")?],
                 output_schema: schema.clone(),
                 table_partition_cols: vec![],
-                overwrite: true,
+                insert_op: InsertOp::Overwrite,
                 keep_partition_by_columns: false,
             };
             let parquet_sink = Arc::new(ParquetSink::new(
