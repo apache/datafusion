@@ -99,7 +99,8 @@ pub struct StatisticsArgs<'a> {
     pub return_type: &'a DataType,
     /// Whether the aggregate function is distinct.
     ///
-    /// ```sql /// SELECT COUNT(DISTINCT column1) FROM t;
+    /// ```sql
+    /// SELECT COUNT(DISTINCT column1) FROM t;
     /// ```
     pub is_distinct: bool,
     /// The physical expression of arguments the aggregate function takes.
