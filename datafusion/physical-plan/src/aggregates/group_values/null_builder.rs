@@ -68,13 +68,12 @@ impl MaybeNullBufferBuilder {
                 nulls.append(false);
                 *self = Self::Nulls(nulls);
             }
-            Self::NoNulls { row_count }  => {
+            Self::NoNulls { row_count } => {
                 *row_count += 1;
             }
             Self::Nulls(builder) => builder.append(!is_null),
         }
     }
-
 
     /// return the number of heap allocated bytes used by this structure to store boolean values
     pub fn allocated_size(&self) -> usize {

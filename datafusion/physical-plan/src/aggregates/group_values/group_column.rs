@@ -47,6 +47,8 @@ use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAP
 pub trait GroupColumn: Send + Sync {
     /// Returns equal if the row stored in this builder at `lhs_row` is equal to
     /// the row in `array` at `rhs_row`
+    ///
+    /// Note that this comparison returns true if both elements are NULL
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
     /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize);
@@ -90,14 +92,11 @@ impl<T: ArrowPrimitiveType> GroupColumn for PrimitiveGroupValueBuilder<T> {
         // fast path when input has no nulls
         if !self.nullable {
             debug_assert!(!self.nulls.has_nulls());
-            return self.group_values[lhs_row]
-                == array.as_primitive::<T>().value(rhs_row);
-        }
-        // slow path if the input could have nulls
-        if self.nulls.is_null(lhs_row) || array.is_null(rhs_row) {
-            false // comparing null to anything is not true
-        } else {
             self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
+        } else {
+            // slow path if the input could have nulls
+            self.nulls.is_null(lhs_row) == array.is_null(rhs_row)
+                && self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
         }
     }
 
