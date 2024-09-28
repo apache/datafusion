@@ -17,7 +17,9 @@
 
 use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 
-/// Support building up an optional null mask
+/// Builder for an (optional) null mask
+///
+/// Optimized for avoid creating the bitmask when all values are non-null
 #[derive(Debug)]
 pub(crate) enum MaybeNullBufferBuilder {
     ///  seen `row_count` rows but no nulls yet
@@ -33,13 +35,6 @@ impl MaybeNullBufferBuilder {
     /// Create a new builder
     pub fn new() -> Self {
         Self::NoNulls { row_count: 0 }
-    }
-
-    /// Returns true if this builder is tracking any nulls
-    ///
-    /// This will return true if at least one null has been set via XXX
-    pub fn has_nulls(&self) -> bool {
-        matches!(self, Self::Nulls { .. })
     }
 
     /// Return true if the row at index `row` is null
@@ -79,6 +74,7 @@ impl MaybeNullBufferBuilder {
     pub fn allocated_size(&self) -> usize {
         match self {
             Self::NoNulls { .. } => 0,
+            // BooleanBufferBuilder builder::capacity returns capacity in bits (not bytes)
             Self::Nulls(builder) => builder.capacity() / 8,
         }
     }
