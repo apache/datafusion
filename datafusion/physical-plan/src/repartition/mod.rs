@@ -299,8 +299,7 @@ impl BatchPartitioner {
                             let _timer = partitioner_timer.timer();
 
                             // Produce batches based on indices
-                            let columns =
-                                take_arrays(batch.columns(), &indices)?;
+                            let columns = take_arrays(batch.columns(), &indices)?;
 
                             let mut options = RecordBatchOptions::new();
                             options = options.with_row_count(Some(indices.len()));
