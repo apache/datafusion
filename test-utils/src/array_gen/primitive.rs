@@ -14,22 +14,16 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-//
-// use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, RecordBatch, UInt32Array};
-use crate::stagger_batch;
-use arrow::array::{
-    ArrayRef, ArrowPrimitiveType, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
-    UInt32Array,
-};
-use arrow::datatypes::{
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-};
-use arrow::record_batch::RecordBatch;
-use rand::rngs::StdRng;
-use rand::{thread_rng, Rng, SeedableRng};
 
-/// Randomly generate strings
+use arrow::array::{ArrayRef, PrimitiveArray, UInt32Array};
+use arrow::datatypes::{
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
+};
+use rand::rngs::StdRng;
+use rand::Rng;
+
+/// Randomly generate primitive array
 pub struct PrimitiveArrayGenerator {
     /// the total number of strings in the output
     pub num_primitives: usize,
@@ -71,7 +65,7 @@ macro_rules! impl_gen_data {
     };
 }
 
-// TODO: support to generate more primitive arrays
+// TODO: support generating more primitive arrays
 impl PrimitiveArrayGenerator {
     impl_gen_data!(i8, Int8Type);
     impl_gen_data!(i16, Int16Type);
