@@ -28,7 +28,7 @@ pub struct PrimitiveArrayGenerator {
     /// the total number of strings in the output
     pub num_primitives: usize,
     /// The number of distinct strings in the columns
-    pub num_distinct_strings: usize,
+    pub num_distinct_primitives: usize,
     /// The percentage of nulls in the columns
     pub null_pct: f64,
     /// Random number generator
@@ -40,7 +40,7 @@ macro_rules! impl_gen_data {
         paste::paste! {
             pub fn [< gen_data_ $NATIVE_TYPE >](&mut self) -> ArrayRef {
                     // table of strings from which to draw
-                    let distinct_primitives: PrimitiveArray<$ARROW_TYPE> = (0..self.num_distinct_strings)
+                    let distinct_primitives: PrimitiveArray<$ARROW_TYPE> = (0..self.num_distinct_primitives)
                     .map(|_| Some(self.rng.gen::<$NATIVE_TYPE>()))
                     .collect();
 
@@ -49,8 +49,8 @@ macro_rules! impl_gen_data {
                     .map(|_| {
                         if self.rng.gen::<f64>() < self.null_pct {
                             None
-                        } else if self.num_distinct_strings > 1 {
-                            let range = 1..(self.num_distinct_strings as u32);
+                        } else if self.num_distinct_primitives > 1 {
+                            let range = 1..(self.num_distinct_primitives as u32);
                             Some(self.rng.gen_range(range))
                         } else {
                             Some(0)

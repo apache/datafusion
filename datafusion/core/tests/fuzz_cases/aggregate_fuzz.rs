@@ -23,6 +23,7 @@ use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::types::Int64Type;
+use arrow_schema::Schema;
 use datafusion::common::Result;
 use datafusion::datasource::MemTable;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
@@ -311,6 +312,7 @@ async fn group_by_string_test(
     let actual = extract_result_counts(results);
     assert_eq!(expected, actual);
 }
+
 async fn verify_ordered_aggregate(frame: &DataFrame, expected_sort: bool) {
     struct Visitor {
         expected_sort: bool,
