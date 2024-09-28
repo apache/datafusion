@@ -26,7 +26,7 @@ use arrow::{
 };
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProvider};
@@ -57,6 +57,7 @@ pub const INFORMATION_SCHEMA_TABLES: &[&str] =
 /// demand. This means that if more tables are added to the underlying
 /// providers, they will appear the next time the `information_schema`
 /// table is queried.
+#[derive(Debug)]
 pub struct InformationSchemaProvider {
     config: InformationSchemaConfig,
 }
@@ -70,18 +71,9 @@ impl InformationSchemaProvider {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct InformationSchemaConfig {
     catalog_list: Arc<dyn CatalogProviderList>,
-}
-
-impl Debug for InformationSchemaConfig {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InformationSchemaConfig")
-            // TODO it would be great to print the catalog list here
-            // but that would require CatalogProviderList to implement Debug
-            .finish_non_exhaustive()
-    }
 }
 
 impl InformationSchemaConfig {

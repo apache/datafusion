@@ -45,6 +45,7 @@ use substrait::proto::extensions::SimpleExtensionDeclaration;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
 
+#[derive(Debug)]
 struct MockSerializerRegistry;
 
 impl SerializerRegistry for MockSerializerRegistry {

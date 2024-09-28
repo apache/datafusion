@@ -30,7 +30,7 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 
 /// [DynamicListTableFactory] is a factory that can create a [ListingTable] from the given url.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DynamicListTableFactory {
     /// The session store that contains the current session.
     session_store: SessionStore,
