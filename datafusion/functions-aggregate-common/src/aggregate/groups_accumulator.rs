@@ -29,8 +29,7 @@ use arrow::{
     datatypes::UInt32Type,
 };
 use datafusion_common::{
-    arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
-    ScalarValue,
+    arrow_datafusion_err, utils::take_arrays, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
@@ -239,7 +238,7 @@ impl GroupsAccumulatorAdapter {
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the
         // accumulator once per group with values
-        let values = get_arrayref_at_indices(values, &batch_indices)?;
+        let values = take_arrays(values, &batch_indices)?;
         let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
 
         // invoke each accumulator with the appropriate rows, first
@@ -258,7 +257,7 @@ impl GroupsAccumulatorAdapter {
                 opt_filter.as_ref().map(|f| f.as_boolean()),
                 offsets,
             )?;
-            (f)(state.accumulator.as_mut(), &values_to_accumulate)?;
+            f(state.accumulator.as_mut(), &values_to_accumulate)?;
 
             // clear out the state so they are empty for next
             // iteration

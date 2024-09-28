@@ -1264,7 +1264,7 @@ impl SessionContext {
     /// [`ObjectStore`]: object_store::ObjectStore
     pub async fn register_listing_table(
         &self,
-        name: &str,
+        table_ref: impl Into<TableReference>,
         table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
@@ -1279,10 +1279,7 @@ impl SessionContext {
             .with_listing_options(options)
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?.with_definition(sql_definition);
-        self.register_table(
-            TableReference::Bare { table: name.into() },
-            Arc::new(table),
-        )?;
+        self.register_table(table_ref, Arc::new(table))?;
         Ok(())
     }
 
@@ -1550,7 +1547,7 @@ impl From<SessionContext> for SessionStateBuilder {
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
-pub trait QueryPlanner {
+pub trait QueryPlanner: Debug {
     /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
@@ -1563,7 +1560,7 @@ pub trait QueryPlanner {
 /// and interact with [SessionState] to registers new udf, udaf or udwf.
 
 #[async_trait]
-pub trait FunctionFactory: Sync + Send {
+pub trait FunctionFactory: Debug + Sync + Send {
     /// Handles creation of user defined function specified in [CreateFunction] statement
     async fn create(
         &self,
@@ -1586,6 +1583,7 @@ pub enum RegisterFunction {
 
 /// Default implementation of [SerializerRegistry] that throws unimplemented error
 /// for all requests.
+#[derive(Debug)]
 pub struct EmptySerializerRegistry;
 
 impl SerializerRegistry for EmptySerializerRegistry {
@@ -2132,6 +2130,7 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
     struct MyQueryPlanner {}
 
     #[async_trait]

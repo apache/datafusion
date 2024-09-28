@@ -48,6 +48,7 @@ use object_store::ObjectStore;
 /// - `s3://host.example.com:3000/data/tpch/customer/_delta_log/`
 ///
 /// [`ObjectStore`]: object_store::ObjectStore
+#[derive(Debug)]
 pub struct ListingSchemaProvider {
     authority: String,
     path: object_store::path::Path,

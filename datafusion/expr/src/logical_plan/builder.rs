@@ -216,7 +216,9 @@ impl LogicalPlanBuilder {
                     common_type = Some(data_type);
                 }
             }
-            field_types.push(common_type.unwrap_or(DataType::Utf8));
+            // assuming common_type was not set, and no error, therefore the type should be NULL
+            // since the code loop skips NULL
+            field_types.push(common_type.unwrap_or(DataType::Null));
         }
         // wrap cast if data type is not same as common type.
         for row in &mut values {
@@ -568,10 +570,18 @@ impl LogicalPlanBuilder {
         )
     }
 
-    /// Apply a sort
     pub fn sort(
         self,
         sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
+    ) -> Result<Self> {
+        self.sort_with_limit(sorts, None)
+    }
+
+    /// Apply a sort
+    pub fn sort_with_limit(
+        self,
+        sorts: impl IntoIterator<Item = impl Into<SortExpr>> + Clone,
+        fetch: Option<usize>,
     ) -> Result<Self> {
         let sorts = rewrite_sort_cols_by_aggs(sorts, &self.plan)?;
 
@@ -595,7 +605,7 @@ impl LogicalPlanBuilder {
             return Ok(Self::new(LogicalPlan::Sort(Sort {
                 expr: normalize_sorts(sorts, &self.plan)?,
                 input: self.plan,
-                fetch: None,
+                fetch,
             })));
         }
 
@@ -611,7 +621,7 @@ impl LogicalPlanBuilder {
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
             input: Arc::new(plan),
-            fetch: None,
+            fetch,
         });
 
         Projection::try_new(new_expr, Arc::new(sort_plan))
@@ -1200,7 +1210,7 @@ impl LogicalPlanBuilder {
 
     /// Unnest the given columns with the given [`UnnestOptions`]
     /// if one column is a list type, it can be recursively and simultaneously
-    /// unnested into the desired recursion levels  
+    /// unnested into the desired recursion levels
     /// e.g select unnest(list_col,depth=1), unnest(list_col,depth=2)
     pub fn unnest_columns_recursive_with_options(
         self,
