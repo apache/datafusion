@@ -1,41 +1,38 @@
+use dashmap::DashMap;
 use std::any::Any;
 use std::fmt::Formatter;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
 
-use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::joins::utils::{
-    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    get_final_indices_from_bit_map, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
-    OnceAsync, OnceFut,
+    build_join_schema, check_join_is_valid, estimate_join_statistics, ColumnIndex,
+    JoinFilter, OnceAsync, OnceFut,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::sorts::sort::SortExec;
 use crate::{
-    execution_mode_from_children, DisplayAs, DisplayFormatType, Distribution,
+    collect, execution_mode_from_children, DisplayAs, DisplayFormatType, Distribution,
     ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream,
 };
+use arrow::array::{make_comparator, DynComparator};
 
-use arrow::array::{BooleanBufferBuilder, UInt32Array, UInt64Array};
-use arrow::compute::concat_batches;
-use arrow::datatypes::{Schema, SchemaRef, UInt64Type};
+use arrow::compute::kernels::sort::SortOptions;
+use arrow::compute::kernels::take::take;
+use arrow::compute::{concat, lexsort_to_indices, SortColumn};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow::util::bit_util;
-use arrow_array::PrimitiveArray;
-use arrow_ord::partition;
-use datafusion_common::{exec_datafusion_err, plan_err, JoinSide, Result, Statistics};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use arrow_array::{ArrayRef, Int64Array};
+use datafusion_common::{plan_err, Result, Statistics};
 use datafusion_execution::TaskContext;
-use datafusion_expr::JoinType;
+use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
-use datafusion_physical_expr::{Partitioning, PhysicalExpr, PhysicalExprRef};
-use futures::{ready, Stream, StreamExt, TryStreamExt};
-use parking_lot::Mutex;
+use datafusion_physical_expr::{Partitioning, PhysicalExprRef, PhysicalSortExpr};
+use futures::{ready, Stream};
+use parking_lot::RwLock;
 
-use super::utils::check_inequality_conditions;
+use super::utils::{check_inequality_conditions, inequality_conditions_to_sort_exprs};
 
 /// IEJoinExec is optimized join without any equijoin conditions in `ON` clause but with two or more inequality conditions.
 /// For more detail algorithm, see https://vldb.org/pvldb/vol8/p2074-khayyat.pdf
@@ -81,6 +78,22 @@ pub struct IEJoinExec {
     left_data: OnceAsync<Arc<Vec<RecordBatch>>>,
     /// right table data after sort by condition 1
     right_data: OnceAsync<Arc<Vec<RecordBatch>>>,
+    /// left condition
+    left_conditions: Arc<[PhysicalSortExpr; 2]>,
+    /// right condition
+    right_conditions: Arc<[PhysicalSortExpr; 2]>,
+    /// operator of the inequality condition
+    operators: Arc<[Operator; 2]>,
+    /// sort options of the inequality condition
+    sort_options: Arc<[SortOptions; 2]>,
+    /// data blocks from left table, store evaluated result of left expr for each record batch
+    /// TODO: use OnceAsync to store the data blocks asynchronously
+    left_blocks: DashMap<usize, Arc<SortedBlock>>,
+    /// data blocks from right table, store evaluated result of right expr for each record batch
+    right_blocks: DashMap<usize, Arc<SortedBlock>>,
+    /// partition pairs
+    /// TODO: we can use a channel to store the pairs
+    pairs: RwLock<Option<(usize, usize)>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// execution metrics
@@ -103,6 +116,12 @@ impl IEJoinExec {
         check_join_is_valid(&left_schema, &right_schema, &[])?;
         let (schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
+        if inequality_conditions.len() != 2 {
+            return plan_err!(
+                "IEJoinExec only supports two inequality conditions, got {}",
+                inequality_conditions.len()
+            );
+        }
         check_inequality_conditions(&left_schema, &right_schema, &inequality_conditions)?;
         let schema = Arc::new(schema);
         if !matches!(join_type, JoinType::Inner) {
@@ -113,6 +132,19 @@ impl IEJoinExec {
         }
         let cache =
             Self::compute_properties(&left, &right, Arc::clone(&schema), *join_type);
+        let condition_parts =
+            inequality_conditions_to_sort_exprs(&inequality_conditions)?;
+        let left_conditions =
+            Arc::new([condition_parts[0].0.clone(), condition_parts[1].0.clone()]);
+        let right_conditions =
+            Arc::new([condition_parts[0].1.clone(), condition_parts[1].1.clone()]);
+        let operators =
+            Arc::new([condition_parts[0].2.clone(), condition_parts[1].2.clone()]);
+        let sort_options = Arc::new([
+            operator_to_sort_option(operators[0], false),
+            operator_to_sort_option(operators[1], false),
+        ]);
+
         Ok(IEJoinExec {
             left,
             right,
@@ -122,6 +154,13 @@ impl IEJoinExec {
             schema,
             left_data: Default::default(),
             right_data: Default::default(),
+            left_conditions,
+            right_conditions,
+            operators,
+            left_blocks: DashMap::new(),
+            right_blocks: DashMap::new(),
+            sort_options,
+            pairs: RwLock::new(Some((0, 0))),
             column_indices,
             metrics: Default::default(),
             cache,
@@ -188,6 +227,36 @@ impl DisplayAs for IEJoinExec {
     }
 }
 
+/// generate the next pair of block indices
+pub fn get_next_pair(n: usize, m: usize, pair: (usize, usize)) -> Option<(usize, usize)> {
+    let (i, j) = pair;
+    if j < m - 1 {
+        Some((i, j + 1))
+    } else if i < n - 1 {
+        Some((i + 1, 0))
+    } else {
+        None
+    }
+}
+
+/// convert operator to sort option for iejoin
+/// for left.a <= right.b, the sort option is ascending order
+/// for left.a >= right.b, the sort option is descending order
+/// negated is true if need to negate the sort direction
+pub fn operator_to_sort_option(op: Operator, negated: bool) -> SortOptions {
+    match op {
+        Operator::Lt | Operator::LtEq => SortOptions {
+            descending: negated,
+            nulls_first: false,
+        },
+        Operator::Gt | Operator::GtEq => SortOptions {
+            descending: !negated,
+            nulls_first: false,
+        },
+        _ => panic!("Unsupported operator"),
+    }
+}
+
 impl ExecutionPlan for IEJoinExec {
     fn name(&self) -> &'static str {
         "IEJoinExec"
@@ -206,7 +275,10 @@ impl ExecutionPlan for IEJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition, Distribution::SinglePartition]
+        vec![
+            Distribution::UnspecifiedDistribution,
+            Distribution::UnspecifiedDistribution,
+        ]
     }
 
     fn with_new_children(
@@ -242,5 +314,202 @@ impl ExecutionPlan for IEJoinExec {
             &self.join_type,
             &self.schema,
         )
+    }
+}
+
+#[derive(Debug)]
+/// SortedBlock contains arrays that are sorted by first column
+pub struct SortedBlock {
+    pub array: Vec<ArrayRef>,
+    pub sort_option: SortOptions,
+}
+
+impl SortedBlock {
+    pub fn new(array: Vec<ArrayRef>, sort_option: SortOptions) -> Self {
+        Self { array, sort_option }
+    }
+
+    /// sort the block by the first column
+    pub fn sort(&mut self) -> Result<()> {
+        let indices = lexsort_to_indices(
+            &[SortColumn {
+                values: self.array[0].clone(),
+                options: Some(self.sort_option),
+            }],
+            None,
+        )?;
+        self.array = self
+            .array
+            .iter()
+            .map(|array| take(array, &indices, None))
+            .collect::<Result<_, _>>()?;
+        Ok(())
+    }
+
+    /// make_comparator creates a comparator for the first column of the block
+    pub fn make_comparator(&self) -> Result<DynComparator> {
+        Ok(make_comparator(
+            &self.array[0],
+            &self.array[0],
+            self.sort_option,
+        )?)
+    }
+}
+
+/// sort the input plan by the first inequality condition, and collect all the data into sorted blocks
+async fn collect_by_condition(
+    input: Arc<dyn ExecutionPlan>,
+    sort_expr: PhysicalSortExpr,
+    context: Arc<TaskContext>,
+) -> Result<Vec<RecordBatch>> {
+    // let sort_options = sort_expr.options.clone();
+    let sort_plan = Arc::new(SortExec::new(vec![sort_expr], input));
+    let record_batches = collect(sort_plan, context).await?;
+    // let sorted_blocks = record_batches
+    //     .into_iter()
+    //     .map(|batch| SortedBlock::new(batch.columns().to_vec(), sort_options))
+    //     .collect();
+    Ok(record_batches)
+}
+
+struct IEJoinStream {
+    /// input schema
+    schema: Arc<Schema>,
+    /// join filter
+    filter: Option<JoinFilter>,
+    /// type of the join
+    join_type: JoinType,
+    /// left condition
+    left_conditions: Arc<[PhysicalSortExpr; 2]>,
+    /// right condition
+    right_conditions: Arc<[PhysicalSortExpr; 2]>,
+    /// operator of the inequality condition
+    operators: Arc<[Operator; 2]>,
+    /// sort options of the inequality condition
+    sort_options: Arc<[SortOptions; 2]>,
+    /// left table data
+    left_data: OnceFut<Arc<[RecordBatch]>>,
+    /// right table data
+    right_data: OnceFut<Arc<[RecordBatch]>>,
+    /// partition pair
+    pair: (usize, usize),
+    /// left block
+    left_block: OnceFut<SortedBlock>,
+    /// right block
+    right_block: OnceFut<SortedBlock>,
+}
+
+impl IEJoinStream {
+    fn poll_next_impl(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        let left_block = match ready!(self.left_block.get_shared(cx)) {
+            Ok(block) => block,
+            Err(e) => return Poll::Ready(Some(Err(e))),
+        };
+        let right_block = match ready!(self.right_block.get_shared(cx)) {
+            Ok(block) => block,
+            Err(e) => return Poll::Ready(Some(Err(e))),
+        };
+
+        todo!()
+    }
+
+    /// this function computes the permutation array of condition 2 on condition 1
+    /// for example, if condition 1 is left.a <= right.b, condition 2 is left.x <= right.y
+    /// for left table, we have:
+    /// | id | a | x |
+    /// | left1 | 1  | 7 |
+    /// | left2 | 3  | 4 |
+    /// for right table, we have:
+    /// | id | b | y |
+    /// | right1 | 2 | 5 |
+    /// | right2 | 4 | 6 |
+    /// Sort by condition 1, we get l1:
+    /// | value | 1 | 2 | 3 | 4 |
+    /// | id    | left1 | right1 | left2 | right2 |
+    /// Sort by condition 2, we get l2:
+    /// | value | 4 | 5 | 6 | 7 |
+    /// | id    | left2 | right1 | right2 | left1 |
+    /// Then the permutation array is [2, 1, 3, 0]
+    /// The first element of l2 is left2, which is the 3rd element(index 2) of l1. The second element of l2 is right1, which is the 2nd element(index 1) of l1. And so on.
+    fn compute_permutation(
+        left_block: &SortedBlock,
+        right_block: &SortedBlock,
+    ) -> Result<SortedBlock> {
+        // step1. sort the union block l1
+        let n = left_block.array[0].len() as i64;
+        let m = right_block.array[0].len() as i64;
+        let cond1 =
+            concat(&[&left_block.array[0].clone(), &right_block.array[0].clone()])?;
+        let cond2 =
+            concat(&[&left_block.array[1].clone(), &right_block.array[1].clone()])?;
+        // store index of left table and right table
+        // -i in (-n..-1) means it is index i in left table, j in (1..m) means it is index j in right table
+        let indexes = concat(&[
+            &Int64Array::from(
+                std::iter::successors(
+                    Some(-1),
+                    |&x| if x > -n { Some(x - 1) } else { None },
+                )
+                .collect::<Vec<_>>(),
+            ),
+            &Int64Array::from(
+                std::iter::successors(
+                    Some(1),
+                    |&x| if x < m { Some(x + 1) } else { None },
+                )
+                .collect::<Vec<_>>(),
+            ),
+        ])?;
+
+        todo!()
+    }
+}
+
+impl Stream for IEJoinStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        self.poll_next_impl(cx)
+    }
+}
+
+impl RecordBatchStream for IEJoinStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering;
+
+    use arrow::array::make_comparator;
+    use arrow_array::Int32Array;
+    use arrow_schema::SortOptions;
+
+    #[test]
+    fn test_compactor() {
+        let array1 = Int32Array::from(vec![Some(1), None]);
+        let array2 = Int32Array::from(vec![None, Some(2)]);
+        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
+
+        assert_eq!(cmp(0, 1), Ordering::Less); // Some(1) vs Some(2)
+        assert_eq!(cmp(1, 1), Ordering::Less); // None vs Some(2)
+        assert_eq!(cmp(1, 0), Ordering::Equal); // None vs None
+        assert_eq!(cmp(0, 0), Ordering::Greater); // Some(1) vs None
+    }
+
+    #[test]
+    fn test_successor() {
+        let iter =
+            std::iter::successors(Some(-1), |&x| if x > -4 { Some(x - 1) } else { None });
+        let vec = iter.collect::<Vec<_>>();
+        assert_eq!(vec, vec![-1, -2, -3, -4]);
     }
 }

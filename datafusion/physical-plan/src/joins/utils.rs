@@ -55,6 +55,7 @@ use datafusion_physical_expr::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
 
+use arrow::compute::kernels::sort::SortOptions;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use hashbrown::raw::RawTable;
@@ -398,7 +399,7 @@ pub fn check_inequality_conditions(
 ) -> Result<()> {
     for expr in inequality_conditions {
         if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
-            if !is_ineuqality_operator(&binary.op()) {
+            if !is_ineuqality_operator(&binary.op()) && *binary.op() != Operator::NotEq {
                 return plan_err!(
                     "Inequality conditions must be an inequality binary expression, but got {}",
                     binary.op()
@@ -434,6 +435,33 @@ pub fn check_inequality_conditions(
         }
     }
     Ok(())
+}
+
+pub fn inequality_conditions_to_sort_exprs(
+    inequality_conditions: &[Arc<dyn PhysicalExpr>],
+) -> Result<Vec<(PhysicalSortExpr, PhysicalSortExpr, Operator)>> {
+    inequality_conditions
+        .iter()
+        .map(|expr| {
+            let binary = expr.as_any().downcast_ref::<BinaryExpr>().unwrap();
+            let sort_option = match binary.op() {
+                Operator::Lt | Operator::LtEq => SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+                Operator::Gt | Operator::GtEq => SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+                _ => unreachable!(),
+            };
+            Ok((
+                PhysicalSortExpr::new(Arc::clone(&binary.left()), sort_option),
+                PhysicalSortExpr::new(Arc::clone(&binary.right()), sort_option),
+                binary.op().clone(),
+            ))
+        })
+        .collect()
 }
 
 /// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
