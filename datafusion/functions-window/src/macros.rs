@@ -16,17 +16,17 @@
 // under the License.
 
 macro_rules! create_udwf {
-    ($STRUCT_NAME:ident, $FN_NAME:ident, $CTOR:path) => {
+    ($STRUCT_NAME:ident, $FN_NAME:ident, $DOC:expr, $CTOR:path) => {
         paste::paste! {
-            /// Singleton instance of [$STRUCT_NAME], ensures the user-defined
-            /// window function is only created once.
-            ///
-            /// For example, `STATIC_RowNumber`
+            #[doc = concat!(" Singleton instance of [`", stringify!($STRUCT_NAME), "`], ensures the user-defined")]
+            #[doc = concat!(" window function is only created once.")]
             #[allow(non_upper_case_globals)]
             static [<STATIC_ $STRUCT_NAME>]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
                 std::sync::OnceLock::new();
 
-            /// Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for [$STRUCT_NAME]
+            #[doc = concat!(" Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for [`", stringify!($STRUCT_NAME), "`].")]
+            #[doc = ""]
+            #[doc = concat!(" ", $DOC)]
             pub fn [<$FN_NAME _udwf>]() -> std::sync::Arc<datafusion_expr::WindowUDF> {
                 [<STATIC_ $STRUCT_NAME>]
                     .get_or_init(|| {
