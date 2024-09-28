@@ -49,8 +49,8 @@ use arrow::{
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::{
-    evaluate_partition_ranges, get_arrayref_at_indices, get_at_indices,
-    get_record_batch_at_indices, get_row_at_idx,
+    evaluate_partition_ranges, get_at_indices, get_record_batch_at_indices,
+    get_row_at_idx, take_arrays,
 };
 use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -542,7 +542,7 @@ impl PartitionSearcher for LinearSearch {
         // We should emit columns according to row index ordering.
         let sorted_indices = sort_to_indices(&all_indices, None, None)?;
         // Construct new column according to row ordering. This fixes ordering
-        get_arrayref_at_indices(&new_columns, &sorted_indices).map(Some)
+        take_arrays(&new_columns, &sorted_indices).map(Some)
     }
 
     fn evaluate_partition_batches(
