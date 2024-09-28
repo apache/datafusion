@@ -356,7 +356,11 @@ struct WindowUDFExpr {
     name: String,
     /// Types of input expressions
     input_types: Vec<DataType>,
+    /// This is set to `true` only if the user-defined window function
+    /// expression supports evaluation in reverse order, and the
+    /// evaluation order is reversed.
     is_reversed: bool,
+    /// Set to `true` if `IGNORE NULLS` is defined, `false` otherwise.
     ignore_nulls: bool,
 }
 
