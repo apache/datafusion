@@ -34,6 +34,7 @@ use dirs::home_dir;
 use parking_lot::RwLock;
 
 /// Wraps another catalog, automatically register require object stores for the file locations
+#[derive(Debug)]
 pub struct DynamicObjectStoreCatalog {
     inner: Arc<dyn CatalogProviderList>,
     state: Weak<RwLock<SessionState>>,
@@ -74,6 +75,7 @@ impl CatalogProviderList for DynamicObjectStoreCatalog {
 }
 
 /// Wraps another catalog provider
+#[derive(Debug)]
 struct DynamicObjectStoreCatalogProvider {
     inner: Arc<dyn CatalogProvider>,
     state: Weak<RwLock<SessionState>>,
@@ -115,6 +117,7 @@ impl CatalogProvider for DynamicObjectStoreCatalogProvider {
 
 /// Wraps another schema provider. [DynamicObjectStoreSchemaProvider] is responsible for registering the required
 /// object stores for the file locations.
+#[derive(Debug)]
 struct DynamicObjectStoreSchemaProvider {
     inner: Arc<dyn SchemaProvider>,
     state: Weak<RwLock<SessionState>>,
