@@ -861,7 +861,10 @@ impl TryFrom<SchemaRef> for DFSchema {
 
 impl From<DFSchema> for SchemaRef {
     fn from(df_schema: DFSchema) -> Self {
-        SchemaRef::new(df_schema.into())
+        Arc::new(Schema::new_with_metadata(
+            df_schema.fields().to_owned(),
+            HashMap::new(),
+        ))
     }
 }
 
