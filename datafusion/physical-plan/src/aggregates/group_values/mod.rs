@@ -36,6 +36,7 @@ use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
 mod group_column;
+mod null_builder;
 
 /// An interning store for group keys
 pub trait GroupValues: Send {
