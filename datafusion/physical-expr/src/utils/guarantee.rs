@@ -342,7 +342,6 @@ impl<'a> GuaranteeBuilder<'a> {
             // add it to the list of guarantees
             self.guarantees.push(Some(guarantee));
             self.map.insert(key, self.guarantees.len() - 1);
-
         }
 
         self
