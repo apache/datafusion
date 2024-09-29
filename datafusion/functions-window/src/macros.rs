@@ -106,6 +106,7 @@ macro_rules! get_or_init_udwf {
 }
 
 macro_rules! create_udwf_expr {
+    // zero arguments
     ($STRUCT_NAME:ident, $FN_NAME:ident, $DOC:expr) => {
         paste::paste! {
             #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
@@ -114,6 +115,22 @@ macro_rules! create_udwf_expr {
             #[doc = concat!(" ", $DOC)]
             pub fn $FN_NAME() -> datafusion_expr::Expr {
                 [<$FN_NAME _udwf>]().call(vec![])
+            }
+       }
+    };
+
+    // 1 or more arguments
+    ($STRUCT_NAME:ident, $FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr) => {
+        paste::paste! {
+            #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
+            #[doc = concat!(" [`", stringify!($STRUCT_NAME), "`] user-defined window function.")]
+            #[doc = ""]
+            #[doc = concat!(" ", $DOC)]
+            pub fn $FN_NAME(
+                $($PARAM: datafusion_expr::Expr),+
+            ) -> datafusion_expr::Expr {
+                [<$FN_NAME _udwf>]()
+                    .call(vec![$($PARAM),+])
             }
        }
     };
