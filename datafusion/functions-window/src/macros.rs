@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Creates a singleton instance of a user-defined window function.
+/// Lazily initializes a user-defined window function exactly once
+/// when called concurrently. Repeated calls return a reference to the
+/// same instance.
 ///
 /// # Parameters
 ///
