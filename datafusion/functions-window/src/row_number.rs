@@ -27,8 +27,7 @@ use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::expr::WindowFunction;
-use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 use datafusion_functions_window_common::field;
 use field::WindowUDFFieldArgs;
 
@@ -38,11 +37,11 @@ get_or_init_udwf!(
     "Returns a unique row number for each row in window partition beginning at 1."
 );
 
-/// Create a [`WindowFunction`](Expr::WindowFunction) expression for
-/// `row_number` user-defined window function.
-pub fn row_number() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(row_number_udwf(), vec![]))
-}
+create_udwf_expr!(
+    RowNumber,
+    row_number,
+    "Returns a unique row number for each row in window partition beginning at 1."
+);
 
 /// row_number expression
 #[derive(Debug)]
