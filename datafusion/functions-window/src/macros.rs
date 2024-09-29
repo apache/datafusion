@@ -32,9 +32,6 @@
 ///
 /// # Example
 ///
-/// This shows the usage of the `make_udwf` macro which is used to
-/// create a user-defined window function.
-///
 /// ```
 /// use std::any::Any;
 /// use datafusion_common::arrow::datatypes::{DataType, Field};
@@ -76,8 +73,7 @@
 ///     }
 /// }
 ///
-/// /// This creates a singleton instance of `AddOne` user-defined
-/// /// window function named `add_one_udwf()`.
+/// /// This creates `add_one_udwf()` from `AddOne`.
 /// get_or_init_udwf!(AddOne, add_one, "Adds one to each row value in window partition.");
 /// ```
 
