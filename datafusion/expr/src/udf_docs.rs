@@ -34,6 +34,7 @@ pub struct Documentation {
     pub doc_section: DocSection,
     /// the description for the UDF
     pub description: &'static str,
+    /// a brief example of the syntax. For example "ascii(str)"
     pub syntax_example: &'static str,
     /// a sql example for the UDF, usually in the form of a sql prompt
     /// query and output. It is strongly recommended to provide an
