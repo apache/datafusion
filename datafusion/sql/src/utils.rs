@@ -17,7 +17,7 @@
 
 //! SQL Utility Functions
 
-use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
+use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use sqlparser::ast::Ident;
 
@@ -28,6 +28,10 @@ use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{Expr, LogicalPlan};
 use std::collections::HashMap;
+
+// use arrow_schema::DECIMAL_DEFAULT_SCALE;
+// Default scale for decimal type is 18 (as FixedDecimal type)
+const DECIMAL_DEFAULT_SCALE: i8 = 18;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
