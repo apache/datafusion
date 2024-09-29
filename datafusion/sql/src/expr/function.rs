@@ -432,6 +432,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 qualifier: None,
                 options: WildcardOptions::default(),
             }),
+            FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
+                let qualifier = self.object_name_to_table_reference(object_name)?;
+                // sanity check on qualifier with schema
+                let qualified_indices = schema.fields_indices_with_qualified(&qualifier);
+                if qualified_indices.is_empty() {
+                    return plan_err!("Invalid qualifier {qualifier}");
+                }
+                Ok(Expr::Wildcard {
+                    qualifier: Some(qualifier),
+                    options: WildcardOptions::default(),
+                })
+            }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }
     }
