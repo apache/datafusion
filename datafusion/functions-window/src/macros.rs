@@ -20,10 +20,66 @@
 /// # Parameters
 ///
 /// * `$STRUCT_NAME`: The user-defined window function struct.
-/// * `$FN_NAME`: The prefix for the generated function name.
-/// * `$DOC`: The doc comment for the user-defined window function.
-/// * `$CTOR`: The user-defined window function constructor.
+/// * `$FN_NAME`: The prefix for the generated function name. The
+///     generated function name is `$FN_NAME_udwf`.
+/// * `$DOC`: The doc comments.
+/// * (optional) `$CTOR`: An optional user-defined window function
+///     constructor. By default, this will resolve to
+///     `$STRUCT_NAME::default()`. Use this argument to customize
+///     the constructor.
 ///
+/// # Example
+///
+/// This shows the usage of the `make_udwf` macro which is used to
+/// create a user-defined window function.
+///
+/// ```
+/// use std::any::Any;
+/// use datafusion_common::arrow::datatypes::{DataType, Field};
+/// use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+///
+/// use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// use datafusion_functions_window::create_udwf;
+///
+/// #[derive(Debug)]
+/// struct AddOne {
+///     signature: Signature,
+/// }
+///
+/// impl Default for AddOne {
+///     fn default() -> Self {
+///         Self {
+///             signature: Signature::numeric(1, Volatility::Immutable),
+///         }
+///     }
+/// }
+///
+/// impl WindowUDFImpl for AddOne {
+///     fn as_any(&self) -> &dyn Any {
+///         self
+///     }
+///     fn name(&self) -> &str {
+///         "add_one"
+///     }
+///     fn signature(&self) -> &Signature {
+///         &self.signature
+///     }
+///     fn partition_evaluator(
+///         &self,
+///     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+///         unimplemented!("unnecessary for doc test")
+///     }
+///     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+///         Ok(Field::new(field_args.name(), DataType::Int64, false))
+///     }
+/// }
+///
+/// /// This creates a singleton instance of `AddOne` user-defined
+/// /// window function named `add_one_udwf()`.
+/// create_udwf!(AddOne, add_one, "Adds one to each row value in window partition.");
+/// ```
+
+#[macro_export]
 macro_rules! create_udwf {
     ($STRUCT_NAME:ident, $FN_NAME:ident, $DOC:expr) => {
         create_udwf!($STRUCT_NAME, $FN_NAME, $DOC, $STRUCT_NAME::default);

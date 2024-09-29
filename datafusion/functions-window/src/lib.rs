@@ -30,7 +30,7 @@ use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::WindowUDF;
 
 #[macro_use]
-mod macros;
+pub mod macros;
 pub mod row_number;
 
 /// Fluent-style API for creating `Expr`s
