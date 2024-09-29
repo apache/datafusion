@@ -387,10 +387,7 @@ impl Encoding {
         T: OffsetSizeTrait,
     {
         let input_value = as_generic_binary_array::<T>(value)?;
-        let array: ArrayRef = match self {
-            Self::Base64 => decode_to_array(base64_decode, input_value)?,
-            Self::Hex => decode_to_array(hex_decode, input_value)?,
-        };
+        let array = self.decode_byte_array(input_value)?;
         Ok(ColumnarValue::Array(array))
     }
 
@@ -399,11 +396,18 @@ impl Encoding {
         T: OffsetSizeTrait,
     {
         let input_value = as_generic_string_array::<T>(value)?;
-        let array: ArrayRef = match self {
-            Self::Base64 => decode_to_array(base64_decode, input_value)?,
-            Self::Hex => decode_to_array(hex_decode, input_value)?,
-        };
+        let array = self.decode_byte_array(input_value)?;
         Ok(ColumnarValue::Array(array))
+    }
+
+    fn decode_byte_array<T: ByteArrayType>(
+        &self,
+        input_value: &GenericByteArray<T>,
+    ) -> Result<ArrayRef> {
+        match self {
+            Self::Base64 => decode_to_array(base64_decode, input_value),
+            Self::Hex => decode_to_array(hex_decode, input_value),
+        }
     }
 }
 
