@@ -1956,7 +1956,7 @@ fn create_external_table_csv_no_schema() {
 }
 
 #[test]
-fn create_external_table_with_compression_typet() {
+fn create_external_table_with_compression_type() {
     // positive case
     let sqls = vec![
         "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv.gz' OPTIONS ('format.compression' 'gzip')",
