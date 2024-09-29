@@ -18,7 +18,7 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy)]
@@ -31,29 +31,14 @@ pub enum EmitTo {
     /// For example, if `n=10`, group_index `0, 1, ... 9` are emitted
     /// and group indexes `10, 11, 12, ...` become `0, 1, 2, ...`.
     First(usize),
-}
-
-impl EmitTo {
-    /// Removes the number of rows from `v` required to emit the right
-    /// number of rows, returning a `Vec` with elements taken, and the
-    /// remaining values in `v`.
+    /// Emit next block in the blocked managed groups
     ///
-    /// This avoids copying if Self::All
-    pub fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
-        match self {
-            Self::All => {
-                // Take the entire vector, leave new (empty) vector
-                std::mem::take(v)
-            }
-            Self::First(n) => {
-                // get end n+1,.. values into t
-                let mut t = v.split_off(*n);
-                // leave n+1,.. in v
-                std::mem::swap(v, &mut t);
-                t
-            }
-        }
-    }
+    /// The flag's meaning:
+    ///   - `true` represents new groups still will be added,
+    ///     and we need to shift the values down.
+    ///   - `false` represents no new groups will be added again,
+    ///     and we don't need to shift the values down.
+    NextBlock(bool),
 }
 
 /// `GroupsAccumulator` implements a single aggregate (e.g. AVG) and
@@ -165,6 +150,32 @@ pub trait GroupsAccumulator: Send {
     ///
     /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
+
+    /// Returns `true` if this accumulator supports blocked mode.
+    fn supports_blocked_mode(&self) -> bool {
+        false
+    }
+
+    /// Alter the block size in the accumulator
+    ///
+    /// If the target block size is `None`, it will use a single big
+    /// block(can think it a `Vec`) to manage the state.
+    ///
+    /// If the target block size` is `Some(blk_size)`, it will try to
+    /// set the block size to `blk_size`, and the try will only success
+    /// when the accumulator has supported blocked mode.
+    ///
+    /// NOTICE: After altering block size, all data in previous will be cleared.
+    ///
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        if block_size.is_some() {
+            return Err(DataFusionError::NotImplemented(
+                "this accumulator doesn't support blocked mode yet".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 
     /// Merges intermediate state (the output from [`Self::state`])
     /// into this accumulator's current state.

@@ -36,7 +36,8 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::{
-    aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
+    aggregate::groups_accumulator::{accumulate::accumulate, EmitToExt},
+    stats::StatsType,
 };
 
 make_udaf_expr_and_func!(

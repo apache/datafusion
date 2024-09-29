@@ -19,7 +19,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{downcast_primitive, ArrayRef};
 use arrow_schema::{DataType, SchemaRef};
 use bytes_view::GroupValuesBytesView;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 
 pub(crate) mod primitive;
 use datafusion_expr::EmitTo;
@@ -56,6 +56,32 @@ pub trait GroupValues: Send {
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, batch: &RecordBatch);
+
+    /// Returns `true` if this group values supports blocked mode.
+    fn supports_blocked_mode(&self) -> bool {
+        false
+    }
+
+    /// Alter the block size in the accumulator
+    ///
+    /// If the target block size is `None`, it will use a single big
+    /// block(can think it a `Vec`) to manage the state.
+    ///
+    /// If the target block size` is `Some(blk_size)`, it will try to
+    /// set the block size to `blk_size`, and the try will only success
+    /// when the accumulator has supported blocked mode.
+    ///
+    /// NOTICE: After altering block size, all data in previous will be cleared.
+    ///
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        if block_size.is_some() {
+            return Err(DataFusionError::NotImplemented(
+                "this group values doesn't support blocked mode yet".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {

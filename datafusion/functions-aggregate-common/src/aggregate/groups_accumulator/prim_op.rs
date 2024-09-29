@@ -25,7 +25,10 @@ use arrow::datatypes::DataType;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
-use super::accumulate::NullState;
+use crate::aggregate::groups_accumulator::accumulate::BlockedNullState;
+use crate::aggregate::groups_accumulator::{
+    ensure_enough_room_for_values, Blocks, EmitToExt, VecBlocks,
+};
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -43,7 +46,7 @@ where
     F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
     /// values per group, stored as the native type
-    values: Vec<T::Native>,
+    values_blocks: VecBlocks<T::Native>,
 
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
@@ -52,10 +55,12 @@ where
     starting_value: T::Native,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: BlockedNullState,
 
     /// Function that computes the primitive result
     prim_fn: F,
+
+    block_size: Option<usize>,
 }
 
 impl<T, F> PrimitiveGroupsAccumulator<T, F>
@@ -65,11 +70,12 @@ where
 {
     pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
-            values: vec![],
+            values_blocks: Blocks::new(),
             data_type: data_type.clone(),
-            null_state: NullState::new(),
+            null_state: BlockedNullState::new(None),
             starting_value: T::default_value(),
             prim_fn,
+            block_size: None,
         }
     }
 
@@ -92,20 +98,29 @@ where
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
+        if total_num_groups == 0 {
+            return Ok(());
+        }
+
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
-        // update values
-        self.values.resize(total_num_groups, self.starting_value);
-
         // NullState dispatches / handles tracking nulls and groups that saw no values
+        ensure_enough_room_for_values(
+            &mut self.values_blocks,
+            total_num_groups,
+            self.block_size,
+            self.starting_value,
+        );
+
         self.null_state.accumulate(
             group_indices,
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
-                let value = &mut self.values[group_index];
+            |index, new_value| {
+                let value =
+                    &mut self.values_blocks[index.block_id()][index.block_offset()];
                 (self.prim_fn)(value, new_value);
             },
         );
@@ -114,10 +129,11 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let values = emit_to.take_needed(&mut self.values);
+        let values = emit_to.take_needed_from_blocks(&mut self.values_blocks);
         let nulls = self.null_state.build(emit_to);
         let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
             .with_data_type(self.data_type.clone());
+
         Ok(Arc::new(values))
     }
 
@@ -195,6 +211,19 @@ where
     }
 
     fn size(&self) -> usize {
-        self.values.capacity() * std::mem::size_of::<T::Native>() + self.null_state.size()
+        self.values_blocks.capacity() * std::mem::size_of::<T::Native>()
+            + self.null_state.size()
+    }
+
+    fn supports_blocked_mode(&self) -> bool {
+        true
+    }
+
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        self.values_blocks.clear();
+        self.null_state = BlockedNullState::new(block_size);
+        self.block_size = block_size;
+
+        Ok(())
     }
 }

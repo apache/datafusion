@@ -24,6 +24,11 @@ use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowPrimitiveType;
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
+
+use crate::aggregate::groups_accumulator::{
+    BlockedGroupIndex, BlockedGroupIndexBuilder, Blocks, MAX_PREALLOC_BLOCK_SIZE,
+};
+
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
@@ -228,7 +233,126 @@ impl NullState {
                 }
                 first_n_null
             }
+            EmitTo::NextBlock(_) => {
+                unreachable!("can't support blocked emission in flat NullState")
+            }
         };
+        NullBuffer::new(nulls)
+    }
+}
+
+/// Similar as the [NullState] but designed for blocked version accumulator
+#[derive(Debug)]
+pub struct BlockedNullState {
+    /// Have we seen any non-filtered input values for `group_index`?
+    ///
+    /// If `seen_values[i]` is true, have seen at least one non null
+    /// value for group `i`
+    ///
+    /// If `seen_values[i]` is false, have not seen any values that
+    /// pass the filter yet for group `i`
+    seen_values_blocks: Blocks<BooleanBufferBuilder>,
+
+    block_size: Option<usize>,
+}
+
+impl Default for BlockedNullState {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+impl BlockedNullState {
+    pub fn new(block_size: Option<usize>) -> Self {
+        Self {
+            seen_values_blocks: Blocks::new(),
+            block_size,
+        }
+    }
+
+    /// return the size of all buffers allocated by this null state, not including self
+    pub fn size(&self) -> usize {
+        // capacity is in bits, so convert to bytes
+        self.seen_values_blocks
+            .iter()
+            .map(|blk| blk.capacity() / 8)
+            .sum::<usize>()
+    }
+
+    /// Similar as [NullState::accumulate]
+    pub fn accumulate<T, F>(
+        &mut self,
+        group_indices: &[usize],
+        values: &PrimitiveArray<T>,
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+        value_fn: F,
+    ) where
+        T: ArrowPrimitiveType + Send,
+        F: FnMut(&BlockedGroupIndex, T::Native) + Send,
+    {
+        debug_assert!(total_num_groups > 0);
+        debug_assert_eq!(values.values().len(), group_indices.len());
+
+        // ensure the seen_values is big enough (start everything at
+        // "not seen" valid)
+        ensure_enough_room_for_nulls(
+            &mut self.seen_values_blocks,
+            total_num_groups,
+            self.block_size,
+            false,
+        );
+        let seen_values_blocks = &mut self.seen_values_blocks;
+        let group_index_builder =
+            BlockedGroupIndexBuilder::new(self.block_size.is_some());
+
+        do_blocked_accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            &group_index_builder,
+            value_fn,
+            |group_index| {
+                seen_values_blocks[group_index.block_id()]
+                    .set_bit(group_index.block_offset(), true);
+            },
+        )
+    }
+
+    /// Similar as [NullState::build] but support the blocked version accumulator
+    pub fn build(&mut self, emit_to: EmitTo) -> NullBuffer {
+        if self.seen_values_blocks.num_blocks() == 0 {
+            return NullBuffer::new(BooleanBufferBuilder::new(0).finish());
+        }
+
+        let nulls = match emit_to {
+            EmitTo::All => {
+                debug_assert!(self.block_size.is_none());
+                self.seen_values_blocks.current_mut().unwrap().finish()
+            }
+            EmitTo::First(n) => {
+                debug_assert!(self.block_size.is_none());
+
+                // split off the first N values in seen_values
+                //
+                // TODO make this more efficient rather than two
+                // copies and bitwise manipulation
+                let blk = self.seen_values_blocks.current_mut().unwrap();
+                let nulls = blk.finish();
+                let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
+                // reset the existing seen buffer
+                for seen in nulls.iter().skip(n) {
+                    blk.append(seen);
+                }
+                first_n_null
+            }
+            EmitTo::NextBlock(_) => {
+                debug_assert!(self.block_size.is_some());
+                let mut cur_blk = self.seen_values_blocks.pop_first_block().unwrap();
+                cur_blk.finish()
+            }
+        };
+
         NullBuffer::new(nulls)
     }
 }
@@ -386,7 +510,7 @@ pub fn accumulate_indices<F>(
     opt_filter: Option<&BooleanArray>,
     mut index_fn: F,
 ) where
-    F: FnMut(usize) + Send,
+    F: FnMut(usize),
 {
     match (nulls, opt_filter) {
         (None, None) => {
@@ -462,6 +586,118 @@ pub fn accumulate_indices<F>(
     }
 }
 
+fn do_blocked_accumulate<T, F1, F2>(
+    group_indices: &[usize],
+    values: &PrimitiveArray<T>,
+    opt_filter: Option<&BooleanArray>,
+    group_index_builder: &BlockedGroupIndexBuilder,
+    mut value_fn: F1,
+    mut set_valid_fn: F2,
+) where
+    T: ArrowPrimitiveType + Send,
+    F1: FnMut(&BlockedGroupIndex, T::Native) + Send,
+    F2: FnMut(&BlockedGroupIndex) + Send,
+{
+    let data: &[T::Native] = values.values();
+    match (values.null_count() > 0, opt_filter) {
+        // no nulls, no filter,
+        (false, None) => {
+            let iter = group_indices.iter().zip(data.iter());
+            for (&group_index, &new_value) in iter {
+                let blocked_index = group_index_builder.build(group_index);
+                set_valid_fn(&blocked_index);
+                value_fn(&blocked_index, new_value);
+            }
+        }
+        // nulls, no filter
+        (true, None) => {
+            let nulls = values.nulls().unwrap();
+            // This is based on (ahem, COPY/PASTE) arrow::compute::aggregate::sum
+            // iterate over in chunks of 64 bits for more efficient null checking
+            let group_indices_chunks = group_indices.chunks_exact(64);
+            let data_chunks = data.chunks_exact(64);
+            let bit_chunks = nulls.inner().bit_chunks();
+
+            let group_indices_remainder = group_indices_chunks.remainder();
+            let data_remainder = data_chunks.remainder();
+
+            group_indices_chunks
+                .zip(data_chunks)
+                .zip(bit_chunks.iter())
+                .for_each(|((group_index_chunk, data_chunk), mask)| {
+                    // index_mask has value 1 << i in the loop
+                    let mut index_mask = 1;
+                    group_index_chunk.iter().zip(data_chunk.iter()).for_each(
+                        |(&group_index, &new_value)| {
+                            // valid bit was set, real value
+                            let is_valid = (mask & index_mask) != 0;
+                            if is_valid {
+                                let blocked_index =
+                                    group_index_builder.build(group_index);
+                                set_valid_fn(&blocked_index);
+                                value_fn(&blocked_index, new_value);
+                            }
+                            index_mask <<= 1;
+                        },
+                    )
+                });
+
+            // handle any remaining bits (after the initial 64)
+            let remainder_bits = bit_chunks.remainder_bits();
+            group_indices_remainder
+                .iter()
+                .zip(data_remainder.iter())
+                .enumerate()
+                .for_each(|(i, (&group_index, &new_value))| {
+                    let is_valid = remainder_bits & (1 << i) != 0;
+                    if is_valid {
+                        let blocked_index = group_index_builder.build(group_index);
+                        set_valid_fn(&blocked_index);
+                        value_fn(&blocked_index, new_value);
+                    }
+                });
+        }
+        // no nulls, but a filter
+        (false, Some(filter)) => {
+            assert_eq!(filter.len(), group_indices.len());
+            // The performance with a filter could be improved by
+            // iterating over the filter in chunks, rather than a single
+            // iterator. TODO file a ticket
+            group_indices
+                .iter()
+                .zip(data.iter())
+                .zip(filter.iter())
+                .for_each(|((&group_index, &new_value), filter_value)| {
+                    if let Some(true) = filter_value {
+                        let blocked_index = group_index_builder.build(group_index);
+                        set_valid_fn(&blocked_index);
+                        value_fn(&blocked_index, new_value);
+                    }
+                })
+        }
+        // both null values and filters
+        (true, Some(filter)) => {
+            assert_eq!(filter.len(), group_indices.len());
+            // The performance with a filter could be improved by
+            // iterating over the filter in chunks, rather than using
+            // iterators. TODO file a ticket
+            filter
+                .iter()
+                .zip(group_indices.iter())
+                .zip(values.iter())
+                .for_each(|((filter_value, &group_index), new_value)| {
+                    if let Some(true) = filter_value {
+                        if let Some(new_value) = new_value {
+                            let blocked_index = group_index_builder.build(group_index);
+                            set_valid_fn(&blocked_index);
+                            value_fn(&blocked_index, new_value);
+                        }
+                    }
+                })
+        }
+    }
+}
+
 /// Ensures that `builder` contains a `BooleanBufferBuilder with at
 /// least `total_num_groups`.
 ///
@@ -478,6 +714,77 @@ fn initialize_builder(
     builder
 }
 
+/// Similar as the [initialize_builder] but designed for the blocked version accumulator
+fn ensure_enough_room_for_nulls(
+    builder_blocks: &mut Blocks<BooleanBufferBuilder>,
+    total_num_groups: usize,
+    block_size: Option<usize>,
+    default_value: bool,
+) {
+    let calc_block_size = block_size.unwrap_or(usize::MAX);
+    // In blocked mode, we ensure the blks are enough first,
+    // and then ensure slots in blks are enough.
+    let (mut cur_blk_idx, exist_slots) = if builder_blocks.num_blocks() > 0 {
+        let cur_blk_idx = builder_blocks.num_blocks() - 1;
+        let exist_slots = (builder_blocks.num_blocks() - 1) * calc_block_size
+            + builder_blocks.current().unwrap().len();
+
+        (cur_blk_idx, exist_slots)
+    } else {
+        (0, 0)
+    };
+
+    // No new groups, don't need to expand, just return.
+    if exist_slots >= total_num_groups {
+        return;
+    }
+
+    // Ensure blks are enough
+    let exist_blks = builder_blocks.num_blocks();
+    let new_blks = (total_num_groups.saturating_add(calc_block_size - 1)
+        / calc_block_size)
+        - exist_blks;
+    if new_blks > 0 {
+        let prealloc_size = block_size.unwrap_or(0).min(MAX_PREALLOC_BLOCK_SIZE);
+        for _ in 0..new_blks {
+            builder_blocks.push_block(BooleanBufferBuilder::new(
+                calc_block_size.min(prealloc_size),
+            ));
+        }
+    }
+
+    // Ensure slots are enough.
+    let mut new_slots = total_num_groups - exist_slots;
+
+    // Expand current blk.
+    let cur_blk_rest_slots = calc_block_size - builder_blocks[cur_blk_idx].len();
+    if cur_blk_rest_slots >= new_slots {
+        builder_blocks[cur_blk_idx].append_n(new_slots, default_value);
+        return;
+    }
+
+    // Expand current blk to full, and expand next blks
+    builder_blocks[cur_blk_idx].append_n(cur_blk_rest_slots, default_value);
+    new_slots -= cur_blk_rest_slots;
+    cur_blk_idx += 1;
+
+    // Expand blks
+    let expand_blks = new_slots / calc_block_size;
+    for _ in 0..expand_blks {
+        builder_blocks[cur_blk_idx].append_n(calc_block_size, default_value);
+        cur_blk_idx += 1;
+    }
+
+    // Expand the last blk.
+    let last_expand_slots = new_slots % calc_block_size;
+    if last_expand_slots > 0 {
+        builder_blocks
+            .current_mut()
+            .unwrap()
+            .append_n(last_expand_slots, default_value);
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -486,8 +793,262 @@ mod test {
     use rand::{rngs::ThreadRng, Rng};
     use std::collections::HashSet;
 
+    /// Null state's behaviors needed in accumulate test
+    trait TestNullState {
+        fn accumulate<T>(
+            &mut self,
+            group_indices: &[usize],
+            values: &PrimitiveArray<T>,
+            opt_filter: Option<&BooleanArray>,
+            total_num_groups: usize,
+            accumulated_values: &mut Vec<(usize, T::Native)>,
+        ) where
+            T: ArrowPrimitiveType + Send;
+
+        fn build_bool_buffer(&self) -> BooleanBuffer;
+
+        fn build_null_buffer(&mut self) -> NullBuffer;
+    }
+
+    /// The original `NullState`
+    impl TestNullState for NullState {
+        fn accumulate<T>(
+            &mut self,
+            group_indices: &[usize],
+            values: &PrimitiveArray<T>,
+            opt_filter: Option<&BooleanArray>,
+            total_num_groups: usize,
+            accumulated_values: &mut Vec<(usize, T::Native)>,
+        ) where
+            T: ArrowPrimitiveType + Send,
+        {
+            self.accumulate(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                |group_index, value| {
+                    accumulated_values.push((group_index, value));
+                },
+            );
+        }
+
+        fn build_bool_buffer(&self) -> BooleanBuffer {
+            self.seen_values.finish_cloned()
+        }
+
+        fn build_null_buffer(&mut self) -> NullBuffer {
+            self.build(EmitTo::All)
+        }
+    }
+
+    /// The new `BlockedNullState` in flat mode
+    struct BlockedNullStateInFlatMode(BlockedNullState);
+
+    impl BlockedNullStateInFlatMode {
+        fn new() -> Self {
+            let null_state = BlockedNullState::new(None);
+
+            Self(null_state)
+        }
+    }
+
+    impl TestNullState for BlockedNullStateInFlatMode {
+        fn accumulate<T>(
+            &mut self,
+            group_indices: &[usize],
+            values: &PrimitiveArray<T>,
+            opt_filter: Option<&BooleanArray>,
+            total_num_groups: usize,
+            accumulated_values: &mut Vec<(usize, T::Native)>,
+        ) where
+            T: ArrowPrimitiveType + Send,
+        {
+            self.0.accumulate(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                |group_index, value| {
+                    accumulated_values.push((group_index.as_packed_index(), value));
+                },
+            );
+        }
+
+        fn build_bool_buffer(&self) -> BooleanBuffer {
+            self.0.seen_values_blocks.current().unwrap().finish_cloned()
+        }
+
+        fn build_null_buffer(&mut self) -> NullBuffer {
+            self.0.build(EmitTo::All)
+        }
+    }
+
+    /// The new `BlockedNullState` in blocked mode
+    struct BlockedNullStateInBlockedMode {
+        null_state: BlockedNullState,
+        block_size: usize,
+    }
+
+    impl BlockedNullStateInBlockedMode {
+        fn new() -> Self {
+            let null_state = BlockedNullState::new(Some(4));
+
+            Self {
+                null_state,
+                block_size: 4,
+            }
+        }
+    }
+
+    impl TestNullState for BlockedNullStateInBlockedMode {
+        fn accumulate<T>(
+            &mut self,
+            group_indices: &[usize],
+            values: &PrimitiveArray<T>,
+            opt_filter: Option<&BooleanArray>,
+            total_num_groups: usize,
+            accumulated_values: &mut Vec<(usize, T::Native)>,
+        ) where
+            T: ArrowPrimitiveType + Send,
+        {
+            // Convert group indices to blocked style
+            let blocked_indices = group_indices
+                .iter()
+                .map(|idx| {
+                    let block_id = *idx / self.block_size;
+                    let block_offset = *idx % self.block_size;
+                    BlockedGroupIndex::new_from_parts(
+                        block_id as u32,
+                        block_offset as u64,
+                    )
+                    .as_packed_index()
+                })
+                .collect::<Vec<_>>();
+
+            self.null_state.accumulate(
+                &blocked_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                |blocked_index, value| {
+                    let flat_index = blocked_index.block_id() * self.block_size
+                        + blocked_index.block_offset();
+                    accumulated_values.push((flat_index, value));
+                },
+            );
+        }
+
+        fn build_bool_buffer(&self) -> BooleanBuffer {
+            let mut ret_builder = BooleanBufferBuilder::new(0);
+            for blk in self.null_state.seen_values_blocks.iter() {
+                let buf = blk.finish_cloned();
+                for seen in buf.iter() {
+                    ret_builder.append(seen);
+                }
+            }
+            ret_builder.finish()
+        }
+
+        fn build_null_buffer(&mut self) -> NullBuffer {
+            let mut ret_builder = BooleanBufferBuilder::new(0);
+            loop {
+                let blk = self.null_state.build(EmitTo::NextBlock(false));
+                if blk.is_empty() {
+                    break;
+                }
+
+                for seen in blk.iter() {
+                    ret_builder.append(seen);
+                }
+            }
+
+            NullBuffer::new(ret_builder.finish())
+        }
+    }
+
+    /// Accumulate test mode
+    ///   - Original, test the original `NullState`
+    ///   - Flat, test the `BlockedNullState` in flat mode
+    ///   - Blocked, test the `BlockedNullState` in blocked mode
+    #[derive(Debug, Clone, Copy)]
+    enum AccumulateTest {
+        Original,
+        Flat,
+        Blocked,
+    }
+
+    impl AccumulateTest {
+        fn run(
+            &self,
+            group_indices: &[usize],
+            values: &UInt32Array,
+            opt_filter: Option<&BooleanArray>,
+            total_num_groups: usize,
+        ) {
+            match self {
+                AccumulateTest::Original => {
+                    Fixture::accumulate_test(
+                        group_indices,
+                        values,
+                        opt_filter,
+                        total_num_groups,
+                        NullState::new(),
+                    );
+                }
+                AccumulateTest::Flat => {
+                    Fixture::accumulate_test(
+                        group_indices,
+                        values,
+                        opt_filter,
+                        total_num_groups,
+                        BlockedNullStateInFlatMode::new(),
+                    );
+                }
+                AccumulateTest::Blocked => {
+                    Fixture::accumulate_test(
+                        group_indices,
+                        values,
+                        opt_filter,
+                        total_num_groups,
+                        BlockedNullStateInBlockedMode::new(),
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
-    fn accumulate() {
+    fn accumulate_test_original() {
+        do_accumulate_test(AccumulateTest::Original);
+    }
+
+    #[test]
+    fn accumulate_test_flat() {
+        do_accumulate_test(AccumulateTest::Flat);
+    }
+
+    #[test]
+    fn accumulate_test_blocked() {
+        do_accumulate_test(AccumulateTest::Blocked);
+    }
+
+    #[test]
+    fn accumulate_fuzz_test_original() {
+        do_accumulate_fuzz_test(AccumulateTest::Original);
+    }
+
+    #[test]
+    fn accumulate_fuzz_test_flat() {
+        do_accumulate_fuzz_test(AccumulateTest::Flat);
+    }
+
+    #[test]
+    fn accumulate_fuzz_test_blocked() {
+        do_accumulate_fuzz_test(AccumulateTest::Blocked);
+    }
+
+    fn do_accumulate_test(accumulate_test: AccumulateTest) {
         let group_indices = (0..100).collect();
         let values = (0..100).map(|i| (i + 1) * 10).collect();
         let values_with_nulls = (0..100)
@@ -515,15 +1076,15 @@ mod test {
             values,
             values_with_nulls,
             filter,
+            accumulate_test,
         }
         .run()
     }
 
-    #[test]
-    fn accumulate_fuzz() {
+    fn do_accumulate_fuzz_test(accumulate_test: AccumulateTest) {
         let mut rng = rand::thread_rng();
         for _ in 0..100 {
-            Fixture::new_random(&mut rng).run();
+            Fixture::new_random(&mut rng, accumulate_test).run();
         }
     }
 
@@ -541,10 +1102,13 @@ mod test {
 
         /// filter (defaults to None)
         filter: BooleanArray,
+
+        /// tested null state for value test
+        accumulate_test: AccumulateTest,
     }
 
     impl Fixture {
-        fn new_random(rng: &mut ThreadRng) -> Self {
+        fn new_random(rng: &mut ThreadRng, accumulate_test: AccumulateTest) -> Self {
             // Number of input values in a batch
             let num_values: usize = rng.gen_range(1..200);
             // number of distinct groups
@@ -592,6 +1156,7 @@ mod test {
                 values,
                 values_with_nulls,
                 filter,
+                accumulate_test,
             }
         }
 
@@ -616,10 +1181,15 @@ mod test {
             let filter = &self.filter;
 
             // no null, no filters
-            Self::accumulate_test(group_indices, &values_array, None, total_num_groups);
+            self.accumulate_test.run(
+                group_indices,
+                &values_array,
+                None,
+                total_num_groups,
+            );
 
             // nulls, no filters
-            Self::accumulate_test(
+            self.accumulate_test.run(
                 group_indices,
                 &values_with_nulls_array,
                 None,
@@ -627,7 +1197,7 @@ mod test {
             );
 
             // no nulls, filters
-            Self::accumulate_test(
+            self.accumulate_test.run(
                 group_indices,
                 &values_array,
                 Some(filter),
@@ -635,7 +1205,7 @@ mod test {
             );
 
             // nulls, filters
-            Self::accumulate_test(
+            self.accumulate_test.run(
                 group_indices,
                 &values_with_nulls_array,
                 Some(filter),
@@ -646,17 +1216,19 @@ mod test {
         /// Calls `NullState::accumulate` and `accumulate_indices` to
         /// ensure it generates the correct values.
         ///
-        fn accumulate_test(
+        fn accumulate_test<S: TestNullState>(
             group_indices: &[usize],
             values: &UInt32Array,
             opt_filter: Option<&BooleanArray>,
             total_num_groups: usize,
+            null_state_for_value_test: S,
         ) {
             Self::accumulate_values_test(
                 group_indices,
                 values,
                 opt_filter,
                 total_num_groups,
+                null_state_for_value_test,
             );
             Self::accumulate_indices_test(group_indices, values.nulls(), opt_filter);
 
@@ -665,6 +1237,8 @@ mod test {
             let avg: usize = values.iter().filter_map(|v| v.map(|v| v as usize)).sum();
             let boolean_values: BooleanArray =
                 values.iter().map(|v| v.map(|v| v as usize > avg)).collect();
+
+            // TODO: test the `BlockedNullState` after supporting `accumulate_boolean` in it
             Self::accumulate_boolean_test(
                 group_indices,
                 &boolean_values,
@@ -675,23 +1249,21 @@ mod test {
 
         /// This is effectively a different implementation of
         /// accumulate that we compare with the above implementation
-        fn accumulate_values_test(
+        fn accumulate_values_test<S: TestNullState>(
             group_indices: &[usize],
             values: &UInt32Array,
             opt_filter: Option<&BooleanArray>,
             total_num_groups: usize,
+            mut null_state: S,
         ) {
             let mut accumulated_values = vec![];
-            let mut null_state = NullState::new();
 
             null_state.accumulate(
                 group_indices,
                 values,
                 opt_filter,
                 total_num_groups,
-                |group_index, value| {
-                    accumulated_values.push((group_index, value));
-                },
+                &mut accumulated_values,
             );
 
             // Figure out the expected values
@@ -726,13 +1298,13 @@ mod test {
 
             assert_eq!(accumulated_values, expected_values,
                        "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
-            let seen_values = null_state.seen_values.finish_cloned();
+            let seen_values = null_state.build_bool_buffer();
             mock.validate_seen_values(&seen_values);
 
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
 
-            let null_buffer = null_state.build(EmitTo::All);
+            let null_buffer = null_state.build_null_buffer();
 
             assert_eq!(null_buffer, expected_null_buffer);
         }
@@ -893,5 +1465,47 @@ mod test {
                 .map(|group_index| self.expected_seen(group_index))
                 .collect()
         }
+    }
+
+    #[test]
+    fn test_ensure_room_for_nulls() {
+        let mut blocks: Blocks<BooleanBufferBuilder> = Blocks::new();
+        let block_size = 4;
+
+        // Block size < usize::MAX
+        // 0 total_num_groups, should be no blocks
+        ensure_enough_room_for_nulls(&mut blocks, 0, Some(block_size), false);
+        assert_eq!(blocks.num_blocks(), 0);
+        let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
+        assert_eq!(total_len, 0);
+
+        // 0 -> 3 total_num_groups, blocks should look like:
+        // [d, d, d, empty]
+        ensure_enough_room_for_nulls(&mut blocks, 3, Some(block_size), false);
+        assert_eq!(blocks.num_blocks(), 1);
+        let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
+        assert_eq!(total_len, 3);
+
+        // 3 -> 8 total_num_groups, blocks should look like:
+        // [d, d, d, d], [d, d, d, d]
+        ensure_enough_room_for_nulls(&mut blocks, 8, Some(block_size), false);
+        assert_eq!(blocks.num_blocks(), 2);
+        let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
+        assert_eq!(total_len, 8);
+
+        // 8 -> 13 total_num_groups, blocks should look like:
+        // [d, d, d, d], [d, d, d, d], [d, d, d, d], [d, empty, empty, empty]
+        ensure_enough_room_for_nulls(&mut blocks, 13, Some(block_size), false);
+        assert_eq!(blocks.num_blocks(), 4);
+        let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
+        assert_eq!(total_len, 13);
+
+        // Block size none, it means we will always use one single block
+        // [] -> [d, d, d,...,d]
+        blocks.clear();
+        ensure_enough_room_for_nulls(&mut blocks, 42, None, false);
+        assert_eq!(blocks.num_blocks(), 1);
+        let total_len = blocks.iter().map(|blk| blk.len()).sum::<usize>();
+        assert_eq!(total_len, 42);
     }
 }

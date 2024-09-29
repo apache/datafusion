@@ -17,6 +17,9 @@
 
 use ahash::RandomState;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+    ensure_enough_room_for_values, BlockedGroupIndexBuilder, Blocks, EmitToExt, VecBlocks,
+};
 use std::collections::HashSet;
 use std::ops::BitAnd;
 use std::{fmt::Debug, sync::Arc};
@@ -358,12 +361,17 @@ struct CountGroupsAccumulator {
     /// output type of count is `DataType::Int64`. Thus by using `i64`
     /// for the counts, the output [`Int64Array`] can be created
     /// without copy.
-    counts: Vec<i64>,
+    counts: VecBlocks<i64>,
+
+    block_size: Option<usize>,
 }
 
 impl CountGroupsAccumulator {
     pub fn new() -> Self {
-        Self { counts: vec![] }
+        Self {
+            counts: Blocks::new(),
+            block_size: None,
+        }
     }
 }
 
@@ -375,18 +383,33 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
+        if total_num_groups == 0 {
+            return Ok(());
+        }
+
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = &values[0];
 
         // Add one to each group's counter for each non null, non
         // filtered value
-        self.counts.resize(total_num_groups, 0);
+        ensure_enough_room_for_values(
+            &mut self.counts,
+            total_num_groups,
+            self.block_size,
+            0,
+        );
+
+        let group_index_builder =
+            BlockedGroupIndexBuilder::new(self.block_size.is_some());
         accumulate_indices(
             group_indices,
             values.logical_nulls().as_ref(),
             opt_filter,
             |group_index| {
-                self.counts[group_index] += 1;
+                let blocked_index = group_index_builder.build(group_index);
+                let count = &mut self.counts[blocked_index.block_id()]
+                    [blocked_index.block_offset()];
+                *count += 1;
             },
         );
 
@@ -400,6 +423,10 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
+        if total_num_groups == 0 {
+            return Ok(());
+        }
+
         assert_eq!(values.len(), 1, "one argument to merge_batch");
         // first batch is counts, second is partial sums
         let partial_counts = values[0].as_primitive::<Int64Type>();
@@ -409,7 +436,16 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         let partial_counts = partial_counts.values();
 
         // Adds the counts with the partial counts
-        self.counts.resize(total_num_groups, 0);
+        ensure_enough_room_for_values(
+            &mut self.counts,
+            total_num_groups,
+            self.block_size,
+            0,
+        );
+
+        let group_index_builder =
+            BlockedGroupIndexBuilder::new(self.block_size.is_some());
+
         match opt_filter {
             Some(filter) => filter
                 .iter()
@@ -417,12 +453,18 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                 .zip(partial_counts.iter())
                 .for_each(|((filter_value, &group_index), partial_count)| {
                     if let Some(true) = filter_value {
-                        self.counts[group_index] += partial_count;
+                        let blocked_index = group_index_builder.build(group_index);
+                        let count = &mut self.counts[blocked_index.block_id()]
+                            [blocked_index.block_offset()];
+                        *count += partial_count;
                     }
                 }),
             None => group_indices.iter().zip(partial_counts.iter()).for_each(
                 |(&group_index, partial_count)| {
-                    self.counts[group_index] += partial_count;
+                    let blocked_index = group_index_builder.build(group_index);
+                    let count = &mut self.counts[blocked_index.block_id()]
+                        [blocked_index.block_offset()];
+                    *count += partial_count;
                 },
             ),
         }
@@ -431,8 +473,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed(&mut self.counts);
-
+        let counts = emit_to.take_needed_from_blocks(&mut self.counts);
         // Count is always non null (null inputs just don't contribute to the overall values)
         let nulls = None;
         let array = PrimitiveArray::<Int64Type>::new(counts.into(), nulls);
@@ -442,8 +483,9 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
     // return arrays for counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let counts = emit_to.take_needed(&mut self.counts);
+        let counts = emit_to.take_needed_from_blocks(&mut self.counts);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
+
         Ok(vec![Arc::new(counts) as ArrayRef])
     }
 
@@ -514,6 +556,17 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
     fn size(&self) -> usize {
         self.counts.capacity() * std::mem::size_of::<usize>()
+    }
+
+    fn supports_blocked_mode(&self) -> bool {
+        true
+    }
+
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        self.counts.clear();
+        self.block_size = block_size;
+
+        Ok(())
     }
 }
 

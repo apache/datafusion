@@ -23,6 +23,14 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
+use std::{
+    cmp::min,
+    collections::VecDeque,
+    fmt::{self, Debug},
+    iter,
+    ops::{Index, IndexMut},
+};
+
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
@@ -33,6 +41,12 @@ use datafusion_common::{
 };
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+
+pub const MAX_PREALLOC_BLOCK_SIZE: usize = 8192;
+const FLAT_GROUP_INDEX_ID_MASK: u64 = 0;
+const FLAT_GROUP_INDEX_OFFSET_MASK: u64 = u64::MAX;
+const BLOCKED_GROUP_INDEX_ID_MASK: u64 = 0xffffffff00000000;
+const BLOCKED_GROUP_INDEX_OFFSET_MASK: u64 = 0x00000000ffffffff;
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -456,6 +470,315 @@ impl<T> VecAllocExt for Vec<T> {
     }
 }
 
+pub trait EmitToExt {
+    /// Removes the number of rows from `v` required to emit the right
+    /// number of rows, returning a `Vec` with elements taken, and the
+    /// remaining values in `v`.
+    ///
+    /// This avoids copying if Self::All
+    fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T>;
+
+    /// Removes the number of rows from `blocks` required to emit,
+    /// returning a `Vec` with elements taken.
+    ///
+    /// The detailed behavior in different emissions:
+    ///   - For Emit::CurrentBlock, the first block will be taken and return.
+    ///   - For Emit::All and Emit::First, it will be only supported in `GroupStatesMode::Flat`,
+    ///     similar as `take_needed`.
+    fn take_needed_from_blocks<T>(&self, blocks: &mut VecBlocks<T>) -> Vec<T>;
+}
+
+impl EmitToExt for EmitTo {
+    fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
+        match self {
+            Self::All => {
+                // Take the entire vector, leave new (empty) vector
+                std::mem::take(v)
+            }
+            Self::First(n) => {
+                let split_at = min(v.len(), *n);
+                // get end n+1,.. values into t
+                let mut t = v.split_off(split_at);
+                // leave n+1,.. in v
+                std::mem::swap(v, &mut t);
+                t
+            }
+            Self::NextBlock(_) => unreachable!(
+                "can not support blocked emission in take_needed, you should use take_needed_from_blocks"
+            ),
+        }
+    }
+
+    fn take_needed_from_blocks<T>(&self, blocks: &mut VecBlocks<T>) -> Vec<T> {
+        match self {
+            Self::All => {
+                debug_assert!(blocks.num_blocks() == 1);
+                blocks.pop_first_block().unwrap_or_default()
+            }
+            Self::First(n) => {
+                debug_assert!(blocks.num_blocks() == 1);
+                let block = blocks.current_mut().unwrap();
+                let split_at = min(block.len(), *n);
+
+                // get end n+1,.. values into t
+                let mut t = block.split_off(split_at);
+                // leave n+1,.. in v
+                std::mem::swap(block, &mut t);
+                t
+            }
+            Self::NextBlock(_) => blocks.pop_first_block().unwrap_or_default(),
+        }
+    }
+}
+
+/// Blocked style group index used in blocked mode group values and accumulators
+///
+/// In blocked mode(is_blocked=true):
+///   - High 32 bits represent `block_id`
+///   - Low 32 bits represent `block_offset`
+///
+/// In flat mode(is_blocked=false)
+///   - `block_id` is always 0
+///   - total 64 bits used to represent the `block offset`
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockedGroupIndex {
+    pub block_id: u32,
+    pub block_offset: u64,
+}
+
+impl BlockedGroupIndex {
+    #[inline]
+    pub fn new_from_parts(block_id: u32, block_offset: u64) -> Self {
+        Self {
+            block_id,
+            block_offset,
+        }
+    }
+
+    #[inline]
+    pub fn block_id(&self) -> usize {
+        self.block_id as usize
+    }
+
+    #[inline]
+    pub fn block_offset(&self) -> usize {
+        self.block_offset as usize
+    }
+
+    #[inline]
+    pub fn as_packed_index(&self) -> usize {
+        (((self.block_id as u64) << 32) | self.block_offset) as usize
+    }
+}
+
+pub struct BlockedGroupIndexBuilder {
+    block_id_mask: u64,
+    block_offset_mask: u64,
+}
+
+impl BlockedGroupIndexBuilder {
+    #[inline]
+    pub fn new(is_blocked: bool) -> Self {
+        if is_blocked {
+            Self {
+                block_id_mask: BLOCKED_GROUP_INDEX_ID_MASK,
+                block_offset_mask: BLOCKED_GROUP_INDEX_OFFSET_MASK,
+            }
+        } else {
+            Self {
+                block_id_mask: FLAT_GROUP_INDEX_ID_MASK,
+                block_offset_mask: FLAT_GROUP_INDEX_OFFSET_MASK,
+            }
+        }
+    }
+
+    #[inline]
+    pub fn build(&self, packed_index: usize) -> BlockedGroupIndex {
+        let block_id = (((packed_index as u64) & self.block_id_mask) >> 32) as u32;
+        let block_offset = (packed_index as u64) & self.block_offset_mask;
+
+        BlockedGroupIndex {
+            block_id,
+            block_offset,
+        }
+    }
+}
+
+/// The basic data structure for blocked aggregation intermediate results
+///
+/// The reason why not use `VecDeque` directly:
+///
+/// `current` and `current_mut` will be called frequently,
+/// and if we use `VecDeque` directly, they will be mapped
+/// to `back` and `back_mut` in it.
+///
+/// `back` and `back_mut` are implemented using indexed operation
+/// which need some computation about address that will be a bit
+/// more expansive than we keep the latest element in `current`,
+/// and just return reference of it directly.
+///
+/// This small optimization can bring slight performance improvement
+/// in the single block case(e.g. when blocked optimization is disabled).
+///
+pub struct Blocks<T> {
+    /// The current block, it should be pushed into `previous`
+    /// when next block is pushed
+    current: Option<T>,
+
+    /// Previous blocks pushed before `current`
+    previous: VecDeque<T>,
+}
+
+impl<T> Blocks<T> {
+    pub fn new() -> Self {
+        Self {
+            current: None,
+            previous: VecDeque::new(),
+        }
+    }
+
+    #[inline]
+    pub fn current(&self) -> Option<&T> {
+        self.current.as_ref()
+    }
+
+    #[inline]
+    pub fn current_mut(&mut self) -> Option<&mut T> {
+        self.current.as_mut()
+    }
+
+    pub fn push_block(&mut self, block: T) {
+        // If empty, use the block as initialized current
+        if self.current.is_none() {
+            self.current = Some(block);
+            return;
+        }
+
+        // Take and push the old current to `previous`,
+        // use input `block` as the new `current`
+        let old_cur = std::mem::replace(&mut self.current, Some(block)).unwrap();
+        self.previous.push_back(old_cur);
+    }
+
+    pub fn pop_first_block(&mut self) -> Option<T> {
+        // If `previous` not empty, pop the first of them
+        if !self.previous.is_empty() {
+            return self.previous.pop_front();
+        }
+
+        // Otherwise, we pop the current
+        std::mem::take(&mut self.current)
+    }
+
+    pub fn num_blocks(&self) -> usize {
+        if self.current.is_none() {
+            return 0;
+        }
+
+        self.previous.len() + 1
+    }
+
+    // TODO: maybe impl a specific Iterator rather than use the trait object,
+    // it can slightly improve performance by eliminating the dynamic dispatch.
+    pub fn iter(&self) -> Box<dyn Iterator<Item = &'_ T> + '_> {
+        // If current is None, it means no data, return empty iter
+        if self.current.is_none() {
+            return Box::new(iter::empty());
+        }
+
+        let cur_iter = iter::once(self.current.as_ref().unwrap());
+
+        if !self.previous.is_empty() {
+            let previous_iter = self.previous.iter();
+            Box::new(previous_iter.chain(cur_iter))
+        } else {
+            Box::new(cur_iter)
+        }
+    }
+
+    // TODO: maybe impl a specific Iterator rather than use the trait object,
+    // it can slightly improve performance by eliminating the dynamic dispatch.
+    pub fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &'_ mut T> + '_> {
+        // If current is None, it means no data, return empty iter
+        if self.current.is_none() {
+            return Box::new(iter::empty());
+        }
+
+        let cur_iter = iter::once(self.current.as_mut().unwrap());
+
+        if !self.previous.is_empty() {
+            let previous_iter = self.previous.iter_mut();
+            Box::new(previous_iter.chain(cur_iter))
+        } else {
+            Box::new(cur_iter)
+        }
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::new();
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for Blocks<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Blocks")
+            .field("current", &self.current)
+            .field("previous", &self.previous)
+            .finish()
+    }
+}
+
+impl<T> Index<usize> for Blocks<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &T {
+        if index < self.previous.len() {
+            &self.previous[index]
+        } else {
+            self.current.as_ref().unwrap()
+        }
+    }
+}
+
+impl<T> IndexMut<usize> for Blocks<T> {
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        if index < self.previous.len() {
+            &mut self.previous[index]
+        } else {
+            self.current.as_mut().unwrap()
+        }
+    }
+}
+
+impl<T> Default for Blocks<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub type VecBlocks<T> = Blocks<Vec<T>>;
+
+impl<T> VecBlocks<T> {
+    pub fn capacity(&self) -> usize {
+        let cur_cap = self.current.as_ref().map(|blk| blk.capacity()).unwrap_or(0);
+        let prev_cap = self.previous.iter().map(|p| p.capacity()).sum::<usize>();
+
+        cur_cap + prev_cap
+    }
+
+    pub fn len(&self) -> usize {
+        let cur_len = self.current.as_ref().map(|blk| blk.len()).unwrap_or(0);
+        let prev_len = self.previous.iter().map(|p| p.len()).sum::<usize>();
+
+        cur_len + prev_len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.current.is_none()
+    }
+}
+
 fn get_filter_at_indices(
     opt_filter: Option<&BooleanArray>,
     indices: &PrimitiveArray<UInt32Type>,
@@ -493,5 +816,262 @@ pub(crate) fn slice_and_maybe_filter(
             .collect()
     } else {
         Ok(sliced_arrays)
+    }
+}
+
+/// Expend blocked values to a big enough size for holding `total_num_groups` groups.
+///
+/// For example,
+///
+/// before expanding:
+///   values: [x, x, x], [x, x, x] (blocks=2, block_size=3)
+///   total_num_groups: 8
+///
+/// After expanding:
+///   values: [x, x, x], [x, x, x], [default, default, default]
+///
+pub fn ensure_enough_room_for_values<T: Clone>(
+    values: &mut VecBlocks<T>,
+    total_num_groups: usize,
+    block_size: Option<usize>,
+    default_value: T,
+) {
+    let calc_block_size = block_size.unwrap_or(usize::MAX);
+    // In blocked mode, we ensure the blks are enough first,
+    // and then ensure slots in blks are enough.
+    let (mut cur_blk_idx, exist_slots) = if values.num_blocks() > 0 {
+        let cur_blk_idx = values.num_blocks() - 1;
+        let exist_slots =
+            (values.num_blocks() - 1) * calc_block_size + values.current().unwrap().len();
+
+        (cur_blk_idx, exist_slots)
+    } else {
+        (0, 0)
+    };
+
+    // No new groups, don't need to expand, just return.
+    if exist_slots >= total_num_groups {
+        return;
+    }
+
+    // Ensure blks are enough.
+    let exist_blks = values.num_blocks();
+    let new_blks = total_num_groups.saturating_add(calc_block_size - 1) / calc_block_size
+        - exist_blks;
+
+    if new_blks > 0 {
+        let prealloc_size = block_size.unwrap_or(0).min(MAX_PREALLOC_BLOCK_SIZE);
+        for _ in 0..new_blks {
+            values.push_block(Vec::with_capacity(calc_block_size.min(prealloc_size)));
+        }
+    }
+
+    // Ensure slots are enough.
+    let mut new_slots = total_num_groups - exist_slots;
+
+    // Expand current blk.
+    let cur_blk_rest_slots = calc_block_size - values[cur_blk_idx].len();
+    if cur_blk_rest_slots >= new_slots {
+        // We just need to expand current blocks.
+        values[cur_blk_idx].extend(iter::repeat(default_value.clone()).take(new_slots));
+        return;
+    }
+
+    // Expand current blk to full, and expand next blks
+    values[cur_blk_idx]
+        .extend(iter::repeat(default_value.clone()).take(cur_blk_rest_slots));
+    new_slots -= cur_blk_rest_slots;
+    cur_blk_idx += 1;
+
+    // Expand whole blks
+    let expand_blks = new_slots / calc_block_size;
+    for _ in 0..expand_blks {
+        values[cur_blk_idx]
+            .extend(iter::repeat(default_value.clone()).take(calc_block_size));
+        cur_blk_idx += 1;
+    }
+
+    // Expand the last blk if needed
+    let last_expand_slots = new_slots % calc_block_size;
+    if last_expand_slots > 0 {
+        values
+            .current_mut()
+            .unwrap()
+            .extend(iter::repeat(default_value.clone()).take(last_expand_slots));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ensure_room_for_values() {
+        let mut blocks = VecBlocks::new();
+        let block_size = 4;
+
+        // 0 total_num_groups, should be no blocks
+        ensure_enough_room_for_values(&mut blocks, 0, Some(block_size), 0);
+        assert_eq!(blocks.num_blocks(), 0);
+        assert_eq!(blocks.len(), 0);
+
+        // 0 -> 3 total_num_groups, blocks should look like:
+        // [d, d, d, empty]
+        ensure_enough_room_for_values(&mut blocks, 3, Some(block_size), 0);
+        assert_eq!(blocks.num_blocks(), 1);
+        assert_eq!(blocks.len(), 3);
+
+        // 3 -> 8 total_num_groups, blocks should look like:
+        // [d, d, d, d], [d, d, d, d]
+        ensure_enough_room_for_values(&mut blocks, 8, Some(block_size), 0);
+        assert_eq!(blocks.num_blocks(), 2);
+        assert_eq!(blocks.len(), 8);
+
+        // 8 -> 13 total_num_groups, blocks should look like:
+        // [d, d, d, d], [d, d, d, d], [d, d, d, d], [d, empty, empty, empty]
+        ensure_enough_room_for_values(&mut blocks, 13, Some(block_size), 0);
+        assert_eq!(blocks.num_blocks(), 4);
+        assert_eq!(blocks.len(), 13);
+
+        // Block size none, it means we will always use one single block
+        // [] -> [d, d, d,...,d]
+        blocks.clear();
+        ensure_enough_room_for_values(&mut blocks, 42, None, 0);
+        assert_eq!(blocks.num_blocks(), 1);
+        assert_eq!(blocks.len(), 42);
+    }
+
+    #[test]
+    fn test_blocks_ops() {
+        let mut blocks = VecBlocks::<i32>::new();
+
+        // Test empty blocks
+        assert!(blocks.current().is_none());
+        assert!(blocks.current_mut().is_none());
+        assert!(blocks.pop_first_block().is_none());
+        assert_eq!(blocks.num_blocks(), 0);
+        {
+            let mut iter = blocks.iter();
+            assert!(iter.next().is_none());
+        }
+        {
+            let mut iter_mut = blocks.iter_mut();
+            assert!(iter_mut.next().is_none());
+        }
+
+        // Test push block
+        for cnt in 0..100 {
+            blocks.push_block(Vec::with_capacity(4));
+
+            assert!(blocks.current().is_some());
+            assert!(blocks.current_mut().is_some());
+            assert_eq!(blocks.num_blocks(), cnt + 1);
+
+            let block_num = blocks.iter().count();
+            assert_eq!(block_num, cnt + 1);
+            let block_num = blocks.iter_mut().count();
+            assert_eq!(block_num, cnt + 1);
+        }
+
+        // Test pop block
+        for cnt in 0..100 {
+            blocks.pop_first_block();
+
+            let rest_blk_num = 100 - cnt - 1;
+            assert_eq!(blocks.num_blocks(), rest_blk_num);
+            if rest_blk_num > 0 {
+                assert!(blocks.current().is_some());
+                assert!(blocks.current_mut().is_some());
+            } else {
+                assert!(blocks.current().is_none());
+                assert!(blocks.current_mut().is_none());
+            }
+
+            let block_num = blocks.iter().count();
+            assert_eq!(block_num, rest_blk_num);
+            let block_num = blocks.iter_mut().count();
+            assert_eq!(block_num, rest_blk_num);
+        }
+    }
+
+    #[test]
+    fn test_take_need() {
+        let values = vec![1, 2, 3, 4, 5, 6, 7, 8];
+
+        // Test emit all
+        let emit = EmitTo::All;
+        let mut source = values.clone();
+        let expected = values.clone();
+        let actual = emit.take_needed(&mut source);
+        assert_eq!(actual, expected);
+        assert!(source.is_empty());
+
+        // Test emit first n
+        // n < source len
+        let emit = EmitTo::First(4);
+        let mut origin = values.clone();
+        let expected = origin[0..4].to_vec();
+        let rest_expected = origin[4..].to_vec();
+        let actual = emit.take_needed(&mut origin);
+        assert_eq!(actual, expected);
+        assert_eq!(origin, rest_expected);
+
+        // n > source len
+        let emit = EmitTo::First(9);
+        let mut origin = values.clone();
+        let expected = values.clone();
+        let actual = emit.take_needed(&mut origin);
+        assert_eq!(actual, expected);
+        assert!(origin.is_empty());
+    }
+
+    #[test]
+    fn test_take_need_from_blocks() {
+        let block1 = vec![1, 2, 3, 4];
+        let block2 = vec![5, 6, 7, 8];
+
+        let mut values = VecBlocks::new();
+        values.push_block(block1.clone());
+        values.push_block(block2.clone());
+
+        // Test emit block
+        let emit = EmitTo::NextBlock(false);
+        let actual = emit.take_needed_from_blocks(&mut values);
+        assert_eq!(actual, block1);
+
+        let actual = emit.take_needed_from_blocks(&mut values);
+        assert_eq!(actual, block2);
+
+        let actual = emit.take_needed_from_blocks(&mut values);
+        assert!(actual.is_empty());
+    }
+
+    #[test]
+    fn test_blocked_group_index_build() {
+        let group_index1 = 1;
+        let group_index2 = (42_u64 << 32) | 2;
+        let group_index3 = ((u32::MAX as u64) << 32) | 3;
+
+        let index_builder = BlockedGroupIndexBuilder::new(false);
+        let flat1 = index_builder.build(group_index1 as usize);
+        let flat2 = index_builder.build(group_index2 as usize);
+        let flat3 = index_builder.build(group_index3 as usize);
+        let expected1 = BlockedGroupIndex::new_from_parts(0, group_index1);
+        let expected2 = BlockedGroupIndex::new_from_parts(0, group_index2);
+        let expected3 = BlockedGroupIndex::new_from_parts(0, group_index3);
+        assert_eq!(flat1, expected1);
+        assert_eq!(flat2, expected2);
+        assert_eq!(flat3, expected3);
+
+        let index_builder = BlockedGroupIndexBuilder::new(true);
+        let blocked1 = index_builder.build(group_index1 as usize);
+        let blocked2 = index_builder.build(group_index2 as usize);
+        let blocked3 = index_builder.build(group_index3 as usize);
+        let expected1 = BlockedGroupIndex::new_from_parts(0, 1);
+        let expected2 = BlockedGroupIndex::new_from_parts(42, 2);
+        let expected3 = BlockedGroupIndex::new_from_parts(u32::MAX, 3);
+        assert_eq!(blocked1, expected1);
+        assert_eq!(blocked2, expected2);
+        assert_eq!(blocked3, expected3);
     }
 }

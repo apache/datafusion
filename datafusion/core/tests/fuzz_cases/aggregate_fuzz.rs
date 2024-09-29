@@ -33,15 +33,20 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_common::ScalarValue;
+use datafusion_execution::disk_manager::DiskManagerConfig;
+use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion_execution::TaskContext;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::InputOrderMode;
+use rand::seq::SliceRandom;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
 use hashbrown::HashMap;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{thread_rng, Rng, SeedableRng};
 use tokio::task::JoinSet;
 
 /// Tests that streaming aggregate and batch (non streaming) aggregate produce
@@ -65,7 +70,7 @@ async fn streaming_aggregate_test() {
         for i in 0..n {
             let test_idx = i % test_cases.len();
             let group_by_columns = test_cases[test_idx].clone();
-            join_set.spawn(run_aggregate_test(
+            join_set.spawn(run_streaming_aggregate_test(
                 make_staggered_batches::<true>(1000, distinct, i as u64),
                 group_by_columns,
             ));
@@ -77,13 +82,59 @@ async fn streaming_aggregate_test() {
     }
 }
 
+/// Tests that streaming aggregate and batch (non streaming) aggregate produce
+/// same results
+#[tokio::test(flavor = "multi_thread")]
+async fn blocked_approach_aggregate_test() {
+    let test_cases = [
+        vec!["a"],
+        vec!["b", "a"],
+        vec!["c", "a"],
+        vec!["c", "b", "a"],
+        vec!["d", "a"],
+        vec!["d", "b", "a"],
+        vec!["d", "c", "a"],
+        vec!["d", "c", "b", "a"],
+    ];
+
+    let n_batch_size = 10;
+    let mut rng = thread_rng();
+    let mut all_batch_sizes = (1..=50_usize).collect::<Vec<_>>();
+    all_batch_sizes.shuffle(&mut rng);
+    let batch_sizes = &all_batch_sizes[0..n_batch_size];
+
+    let n = 300;
+    let distincts = vec![10, 20];
+    for distinct in distincts {
+        let mut join_set = JoinSet::new();
+        for batch_size in batch_sizes {
+            for i in 0..n {
+                let test_idx = i % test_cases.len();
+                let group_by_columns = test_cases[test_idx].clone();
+                join_set.spawn(run_blocked_approach_aggregate_test(
+                    make_staggered_batches::<true>(1000, distinct, i as u64),
+                    group_by_columns,
+                    *batch_size,
+                ));
+            }
+        }
+        while let Some(join_handle) = join_set.join_next().await {
+            // propagate errors
+            join_handle.unwrap();
+        }
+    }
+}
+
 /// Perform batch and streaming aggregation with same input
 /// and verify outputs of `AggregateExec` with pipeline breaking stream `GroupedHashAggregateStream`
 /// and non-pipeline breaking stream `BoundedAggregateStream` produces same result.
-async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str>) {
-    let schema = input1[0].schema();
-    let session_config = SessionConfig::new().with_batch_size(50);
-    let ctx = SessionContext::new_with_config(session_config);
+async fn run_streaming_aggregate_test(
+    test_data: Vec<RecordBatch>,
+    group_by_columns: Vec<&str>,
+) {
+    let schema = test_data[0].schema();
+
+    // Define test data source exec
     let mut sort_keys = vec![];
     for ordering_col in ["a", "b", "c"] {
         sort_keys.push(PhysicalSortExpr {
@@ -92,16 +143,137 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         })
     }
 
-    let concat_input_record = concat_batches(&schema, &input1).unwrap();
+    let concat_input_record = concat_batches(&schema, &test_data).unwrap();
     let usual_source = Arc::new(
         MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap(),
     );
 
     let running_source = Arc::new(
-        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
+        MemoryExec::try_new(&[test_data.clone()], schema.clone(), None)
             .unwrap()
             .with_sort_information(vec![sort_keys]),
     );
+
+    // Define test task ctx
+    let session_config = SessionConfig::new().with_batch_size(50);
+    let ctx = SessionContext::new_with_config(session_config);
+
+    // Run and check
+    let usual_aggr_ctx = AggrTestContext {
+        data_source_exec: usual_source,
+        task_ctx: ctx.task_ctx(),
+    };
+
+    let running_aggr_ctx = AggrTestContext {
+        data_source_exec: running_source,
+        task_ctx: ctx.task_ctx(),
+    };
+
+    run_aggregate_test_internal(
+        test_data,
+        usual_aggr_ctx,
+        running_aggr_ctx,
+        |collected_usual, collected_running| {
+            assert!(collected_running.len() > 2);
+            // Running should produce more chunk than the usual AggregateExec.
+            // Otherwise it means that we cannot generate result in running mode.
+            assert!(collected_running.len() > collected_usual.len());
+        },
+        group_by_columns,
+    )
+    .await;
+}
+
+/// Perform batch and blocked approach aggregations, and then verify their outputs.
+async fn run_blocked_approach_aggregate_test(
+    test_data: Vec<RecordBatch>,
+    group_by_columns: Vec<&str>,
+    batch_size: usize,
+) {
+    let schema = test_data[0].schema();
+
+    // Define test data source exec
+    let concat_input_record = concat_batches(&schema, &test_data).unwrap();
+    let usual_source = Arc::new(
+        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap(),
+    );
+
+    let running_source = Arc::new(
+        MemoryExec::try_new(&[test_data.clone()], schema.clone(), None).unwrap(),
+    );
+
+    // Define test task ctx
+    // Usual task ctx
+    let mut session_config = SessionConfig::default();
+    session_config = session_config.set(
+        "datafusion.execution.batch_size",
+        &ScalarValue::UInt64(Some(batch_size as u64)),
+    );
+    let usual_ctx = Arc::new(TaskContext::default().with_session_config(session_config));
+
+    // Running task ctx
+    let mut session_config = SessionConfig::default();
+    session_config = session_config.set(
+        "datafusion.execution.enable_aggregation_intermediate_states_blocked_approach",
+        &ScalarValue::Boolean(Some(true)),
+    );
+    session_config = session_config.set(
+        "datafusion.execution.batch_size",
+        &ScalarValue::UInt64(Some(batch_size as u64)),
+    );
+
+    let runtime = Arc::new(
+        RuntimeEnv::new(
+            RuntimeConfig::default().with_disk_manager(DiskManagerConfig::Disabled),
+        )
+        .unwrap(),
+    );
+    let running_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(session_config)
+            .with_runtime(runtime),
+    );
+
+    // Run and check
+    let usual_aggr_ctx = AggrTestContext {
+        data_source_exec: usual_source,
+        task_ctx: usual_ctx,
+    };
+
+    let running_aggr_ctx = AggrTestContext {
+        data_source_exec: running_source,
+        task_ctx: running_ctx,
+    };
+
+    run_aggregate_test_internal(
+        test_data,
+        usual_aggr_ctx,
+        running_aggr_ctx,
+        |_, _| {},
+        group_by_columns,
+    )
+    .await;
+}
+
+/// Options of the fuzz aggregation tests
+struct AggrTestContext {
+    data_source_exec: Arc<dyn ExecutionPlan>,
+    task_ctx: Arc<TaskContext>,
+}
+
+/// The internal test function for performing normal aggregation
+/// and other optimized aggregations (without any optimizations,
+/// e.g. streaming, blocked approach), and verify outputs of them.
+async fn run_aggregate_test_internal<C>(
+    test_data: Vec<RecordBatch>,
+    left_aggr_ctx: AggrTestContext,
+    right_aggr_ctx: AggrTestContext,
+    extra_checks: C,
+    group_by_columns: Vec<&str>,
+) where
+    C: Fn(&[RecordBatch], &[RecordBatch]),
+{
+    let schema = test_data[0].schema();
 
     let aggregate_expr =
         vec![
@@ -117,42 +289,44 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         .collect::<Vec<_>>();
     let group_by = PhysicalGroupBy::new_single(expr);
 
-    let aggregate_exec_running = Arc::new(
-        AggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by.clone(),
-            aggregate_expr.clone(),
-            vec![None],
-            running_source,
-            schema.clone(),
-        )
-        .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
-
     let aggregate_exec_usual = Arc::new(
         AggregateExec::try_new(
             AggregateMode::Partial,
             group_by.clone(),
             aggregate_expr.clone(),
             vec![None],
-            usual_source,
+            left_aggr_ctx.data_source_exec.clone(),
             schema.clone(),
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
 
-    let task_ctx = ctx.task_ctx();
-    let collected_usual = collect(aggregate_exec_usual.clone(), task_ctx.clone())
-        .await
-        .unwrap();
+    let aggregate_exec_running = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggregate_expr.clone(),
+            vec![None],
+            right_aggr_ctx.data_source_exec.clone(),
+            schema.clone(),
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
 
-    let collected_running = collect(aggregate_exec_running.clone(), task_ctx.clone())
-        .await
-        .unwrap();
-    assert!(collected_running.len() > 2);
-    // Running should produce more chunk than the usual AggregateExec.
-    // Otherwise it means that we cannot generate result in running mode.
-    assert!(collected_running.len() > collected_usual.len());
+    let collected_usual =
+        collect(aggregate_exec_usual.clone(), left_aggr_ctx.task_ctx.clone())
+            .await
+            .unwrap();
+
+    let collected_running = collect(
+        aggregate_exec_running.clone(),
+        right_aggr_ctx.task_ctx.clone(),
+    )
+    .await
+    .unwrap();
+
+    extra_checks(&collected_usual, &collected_running);
+
     // compare
     let usual_formatted = pretty_format_batches(&collected_usual).unwrap().to_string();
     let running_formatted = pretty_format_batches(&collected_running)
@@ -187,7 +361,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             displayable(aggregate_exec_running.as_ref()).indent(false),
             usual_formatted,
             running_formatted,
-            pretty_format_batches(&input1).unwrap(),
+            pretty_format_batches(&test_data).unwrap(),
         );
     }
 }
@@ -311,6 +485,7 @@ async fn group_by_string_test(
     let actual = extract_result_counts(results);
     assert_eq!(expected, actual);
 }
+
 async fn verify_ordered_aggregate(frame: &DataFrame, expected_sort: bool) {
     struct Visitor {
         expected_sort: bool,

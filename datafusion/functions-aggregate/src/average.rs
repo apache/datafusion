@@ -36,9 +36,12 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
 };
 
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::BlockedNullState;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
+};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
+    ensure_enough_room_for_values, Blocks, EmitToExt, VecBlocks,
 };
 
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
@@ -396,16 +399,18 @@ where
     return_data_type: DataType,
 
     /// Count per group (use u64 to make UInt64Array)
-    counts: Vec<u64>,
+    counts: VecBlocks<u64>,
 
     /// Sums per group, stored as the native type
-    sums: Vec<T::Native>,
+    sums: VecBlocks<T::Native>,
 
     /// Track nulls in the input / filters
-    null_state: NullState,
+    null_state: BlockedNullState,
 
     /// Function that computes the final average (value / count)
     avg_fn: F,
+
+    block_size: Option<usize>,
 }
 
 impl<T, F> AvgGroupsAccumulator<T, F>
@@ -422,10 +427,11 @@ where
         Self {
             return_data_type: return_data_type.clone(),
             sum_data_type: sum_data_type.clone(),
-            counts: vec![],
-            sums: vec![],
-            null_state: NullState::new(),
+            counts: Blocks::new(),
+            sums: Blocks::new(),
+            null_state: BlockedNullState::new(None),
             avg_fn,
+            block_size: None,
         }
     }
 }
@@ -442,22 +448,40 @@ where
         opt_filter: Option<&array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
+        if total_num_groups == 0 {
+            return Ok(());
+        }
+
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
         // increment counts, update sums
-        self.counts.resize(total_num_groups, 0);
-        self.sums.resize(total_num_groups, T::default_value());
+        ensure_enough_room_for_values(
+            &mut self.counts,
+            total_num_groups,
+            self.block_size,
+            0,
+        );
+        ensure_enough_room_for_values(
+            &mut self.sums,
+            total_num_groups,
+            self.block_size,
+            T::default_value(),
+        );
+
         self.null_state.accumulate(
             group_indices,
             values,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
-                let sum = &mut self.sums[group_index];
-                *sum = sum.add_wrapping(new_value);
+            |blocked_index, new_value| {
+                let sum = &mut self.sums[blocked_index.block_id()]
+                    [blocked_index.block_offset()];
+                let count = &mut self.counts[blocked_index.block_id()]
+                    [blocked_index.block_offset()];
 
-                self.counts[group_index] += 1;
+                *sum = sum.add_wrapping(new_value);
+                *count += 1;
             },
         );
 
@@ -465,8 +489,8 @@ where
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let counts = emit_to.take_needed(&mut self.counts);
-        let sums = emit_to.take_needed(&mut self.sums);
+        let counts = emit_to.take_needed_from_blocks(&mut self.counts);
+        let sums = emit_to.take_needed_from_blocks(&mut self.sums);
         let nulls = self.null_state.build(emit_to);
 
         assert_eq!(nulls.len(), sums.len());
@@ -505,10 +529,10 @@ where
         let nulls = self.null_state.build(emit_to);
         let nulls = Some(nulls);
 
-        let counts = emit_to.take_needed(&mut self.counts);
+        let counts = emit_to.take_needed_from_blocks(&mut self.counts);
         let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
 
-        let sums = emit_to.take_needed(&mut self.sums);
+        let sums = emit_to.take_needed_from_blocks(&mut self.sums);
         let sums = PrimitiveArray::<T>::new(sums.into(), nulls) // zero copy
             .with_data_type(self.sum_data_type.clone());
 
@@ -525,31 +549,50 @@ where
         opt_filter: Option<&array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
+        if total_num_groups == 0 {
+            return Ok(());
+        }
+
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
+
         // first batch is counts, second is partial sums
         let partial_counts = values[0].as_primitive::<UInt64Type>();
         let partial_sums = values[1].as_primitive::<T>();
-        // update counts with partial counts
-        self.counts.resize(total_num_groups, 0);
+
+        // update counts with partial counts + update sums
+        ensure_enough_room_for_values(
+            &mut self.counts,
+            total_num_groups,
+            self.block_size,
+            0,
+        );
+        ensure_enough_room_for_values(
+            &mut self.sums,
+            total_num_groups,
+            self.block_size,
+            T::default_value(),
+        );
+
         self.null_state.accumulate(
             group_indices,
             partial_counts,
             opt_filter,
             total_num_groups,
-            |group_index, partial_count| {
-                self.counts[group_index] += partial_count;
+            |blocked_index, partial_count| {
+                let count = &mut self.counts[blocked_index.block_id()]
+                    [blocked_index.block_offset()];
+                *count += partial_count;
             },
         );
 
-        // update sums
-        self.sums.resize(total_num_groups, T::default_value());
         self.null_state.accumulate(
             group_indices,
             partial_sums,
             opt_filter,
             total_num_groups,
-            |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
-                let sum = &mut self.sums[group_index];
+            |blocked_index, new_value: <T as ArrowPrimitiveType>::Native| {
+                let sum = &mut self.sums[blocked_index.block_id()]
+                    [blocked_index.block_offset()];
                 *sum = sum.add_wrapping(new_value);
             },
         );
@@ -584,5 +627,18 @@ where
     fn size(&self) -> usize {
         self.counts.capacity() * std::mem::size_of::<u64>()
             + self.sums.capacity() * std::mem::size_of::<T>()
+    }
+
+    fn supports_blocked_mode(&self) -> bool {
+        true
+    }
+
+    fn alter_block_size(&mut self, block_size: Option<usize>) -> Result<()> {
+        self.counts.clear();
+        self.sums.clear();
+        self.null_state = BlockedNullState::new(block_size);
+        self.block_size = block_size;
+
+        Ok(())
     }
 }

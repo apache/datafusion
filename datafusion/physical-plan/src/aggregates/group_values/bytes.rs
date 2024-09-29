@@ -17,6 +17,7 @@
 
 use crate::aggregates::group_values::GroupValues;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
+use datafusion_common::DataFusionError;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
 
@@ -114,6 +115,11 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
                 assert_eq!(0, group_indexes[0]);
 
                 emit_group_values
+            }
+            EmitTo::NextBlock(_) => {
+                return Err(DataFusionError::NotImplemented(
+                    "this group values doesn't support blocked mode yet".to_string(),
+                ))
             }
         };
 

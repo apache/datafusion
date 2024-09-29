@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
 use arrow::buffer::BooleanBuffer;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use super::accumulate::NullState;
@@ -116,6 +116,11 @@ where
                     self.values.append(v);
                 }
                 first_n
+            }
+            EmitTo::NextBlock(_) => {
+                return Err(DataFusionError::NotImplemented(
+                    "blocked group values management is not supported".to_string(),
+                ))
             }
         };
 
