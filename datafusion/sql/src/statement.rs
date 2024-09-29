@@ -1241,8 +1241,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
 
         let idents: Vec<Ident> = name.split('.').map(Ident::from).collect();
-        let name = object_name_to_table_reference(ObjectName(idents), false)
-            .unwrap_or(TableReference::bare(name));
+        let name = self.object_name_to_table_reference(name)?;
         let constraints =
             Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
