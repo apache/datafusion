@@ -37,6 +37,7 @@ use crate::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
+#[derive(Debug)]
 pub struct TopKAggregation {}
 
 impl TopKAggregation {

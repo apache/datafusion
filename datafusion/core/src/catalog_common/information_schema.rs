@@ -19,15 +19,15 @@
 //!
 //! [Information Schema]: https://en.wikipedia.org/wiki/Information_schema
 
-use async_trait::async_trait;
-use datafusion_common::DataFusionError;
-use std::{any::Any, sync::Arc};
-
 use arrow::{
     array::{StringBuilder, UInt64Builder},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use async_trait::async_trait;
+use datafusion_common::DataFusionError;
+use std::fmt::Debug;
+use std::{any::Any, sync::Arc};
 
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProvider};
 use crate::datasource::streaming::StreamingTable;
@@ -57,6 +57,7 @@ pub const INFORMATION_SCHEMA_TABLES: &[&str] =
 /// demand. This means that if more tables are added to the underlying
 /// providers, they will appear the next time the `information_schema`
 /// table is queried.
+#[derive(Debug)]
 pub struct InformationSchemaProvider {
     config: InformationSchemaConfig,
 }
@@ -70,7 +71,7 @@ impl InformationSchemaProvider {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct InformationSchemaConfig {
     catalog_list: Arc<dyn CatalogProviderList>,
 }
@@ -246,6 +247,7 @@ impl SchemaProvider for InformationSchemaProvider {
     }
 }
 
+#[derive(Debug)]
 struct InformationSchemaTables {
     schema: SchemaRef,
     config: InformationSchemaConfig,
@@ -337,6 +339,7 @@ impl InformationSchemaTablesBuilder {
     }
 }
 
+#[derive(Debug)]
 struct InformationSchemaViews {
     schema: SchemaRef,
     config: InformationSchemaConfig,
@@ -424,6 +427,7 @@ impl InformationSchemaViewBuilder {
     }
 }
 
+#[derive(Debug)]
 struct InformationSchemaColumns {
     schema: SchemaRef,
     config: InformationSchemaConfig,
@@ -640,6 +644,7 @@ impl InformationSchemaColumnsBuilder {
     }
 }
 
+#[derive(Debug)]
 struct InformationSchemata {
     schema: SchemaRef,
     config: InformationSchemaConfig,
@@ -741,6 +746,7 @@ impl PartitionStream for InformationSchemata {
     }
 }
 
+#[derive(Debug)]
 struct InformationSchemaDfSettings {
     schema: SchemaRef,
     config: InformationSchemaConfig,

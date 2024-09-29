@@ -282,3 +282,94 @@ drop table values;
 
 statement ok
 drop table struct_values;
+
+statement ok
+CREATE OR REPLACE VIEW complex_view AS 
+SELECT {
+    'user': {
+        'info': {
+            'personal': {
+                'name': 'John Doe',
+                'age': 30,
+                'email': 'john.doe@example.com'
+            },
+            'address': {
+                'street': '123 Main St',
+                'city': 'Anytown',
+                'country': 'Countryland',
+                'coordinates': [40.7128, -74.0060]
+            }
+        },
+        'preferences': {
+            'theme': 'dark',
+            'notifications': true,
+            'languages': ['en', 'es', 'fr']
+        },
+        'stats': {
+            'logins': 42,
+            'last_active': '2023-09-15',
+            'scores': [85, 92, 78, 95],
+            'achievements': {
+                'badges': ['early_bird', 'top_contributor'],
+                'levels': {
+                    'beginner': true,
+                    'intermediate': true,
+                    'advanced': false
+                }
+            }
+        }
+    },
+    'metadata': {
+        'version': '1.0',
+        'created_at': '2023-09-01T12:00:00Z'
+    },
+    'deep_nested': {
+        'level1': {
+            'level2': {
+                'level3': {
+                    'level4': {
+                        'level5': {
+                            'level6': {
+                                'level7': {
+                                    'level8': {
+                                        'level9': {
+                                            'level10': 'You reached the bottom!'
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+} AS complex_data;
+
+query T
+SELECT complex_data.user.info.personal.name FROM complex_view;
+----
+John Doe
+
+query I
+SELECT complex_data.user.info.personal.age FROM complex_view;
+----
+30
+
+query T
+SELECT complex_data.user.info.address.city FROM complex_view;
+----
+Anytown
+
+query T
+SELECT complex_data.user.preferences.languages[2] FROM complex_view;
+----
+es
+
+query T
+SELECT complex_data.deep_nested.level1.level2.level3.level4.level5.level6.level7.level8.level9.level10 FROM complex_view;
+----
+You reached the bottom!
+
+statement ok
+drop view complex_view;

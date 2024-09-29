@@ -4546,7 +4546,7 @@ set datafusion.sql_parser.dialect = 'Generic';
 statement ok
 create table dict_test as values (1, arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (2, arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
 
-query I?
+query IT
 select * from dict_test;
 ----
 1 foo
@@ -5862,64 +5862,3 @@ ORDER BY k;
 ----
 1 1.8125 6.8007813 Float16 Float16
 2 8.5 8.5 Float16 Float16
-
-# The result is 0.19432323191699075 actually
-query R
-SELECT kurtosis_pop(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col);
-----
-0.194323231917
-
-# The result is -1.153061224489787 actually
-query R
-SELECT kurtosis_pop(col) FROM VALUES (1), (2), (3), (2), (1) as tab(col);
-----
--1.15306122449
-
-query R
-SELECT kurtosis_pop(col) FROM VALUES (1.0), (10.0), (100.0), (10.0), (1.0) as tab(col);
-----
-0.194323231917
-
-query R
-SELECT kurtosis_pop(col) FROM VALUES ('1'), ('10'), ('100'), ('10'), ('1') as tab(col);
-----
-0.194323231917
-
-query R
-SELECT kurtosis_pop(col) FROM VALUES (1.0) as tab(col);
-----
-NULL
-
-query R
-SELECT kurtosis_pop(1)
-----
-NULL
-
-query R
-SELECT kurtosis_pop(1.0)
-----
-NULL
-
-query R
-SELECT kurtosis_pop(null)
-----
-NULL
-
-statement ok
-CREATE TABLE t1(c1 int);
-
-query R
-SELECT kurtosis_pop(c1) FROM t1;
-----
-NULL
-
-statement ok
-INSERT INTO t1 VALUES (1), (10), (100), (10), (1);
-
-query R
-SELECT kurtosis_pop(c1) FROM t1;
-----
-0.194323231917
-
-statement ok
-DROP TABLE t1;

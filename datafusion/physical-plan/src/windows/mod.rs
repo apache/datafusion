@@ -34,8 +34,8 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
-    WindowUDF,
+    BuiltInWindowFunction, PartitionEvaluator, ReversedUDWF, WindowFrame,
+    WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::equivalence::collapse_lex_req;
@@ -130,7 +130,7 @@ pub fn create_window_expr(
         }
         // TODO: Ordering not supported for Window UDFs yet
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
-            create_udwf_window_expr(fun, args, input_schema, name)?,
+            create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
             partition_by,
             order_by,
             window_frame,
@@ -329,6 +329,7 @@ fn create_udwf_window_expr(
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: String,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
     // need to get the types into an owned vec for some reason
     let input_types: Vec<_> = args
@@ -341,6 +342,8 @@ fn create_udwf_window_expr(
         args: args.to_vec(),
         input_types,
         name,
+        is_reversed: false,
+        ignore_nulls,
     }))
 }
 
@@ -353,6 +356,12 @@ struct WindowUDFExpr {
     name: String,
     /// Types of input expressions
     input_types: Vec<DataType>,
+    /// This is set to `true` only if the user-defined window function
+    /// expression supports evaluation in reverse order, and the
+    /// evaluation order is reversed.
+    is_reversed: bool,
+    /// Set to `true` if `IGNORE NULLS` is defined, `false` otherwise.
+    ignore_nulls: bool,
 }
 
 impl BuiltInWindowFunctionExpr for WindowUDFExpr {
@@ -378,7 +387,18 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
-        None
+        match self.fun.reverse_expr() {
+            ReversedUDWF::Identical => Some(Arc::new(self.clone())),
+            ReversedUDWF::NotSupported => None,
+            ReversedUDWF::Reversed(fun) => Some(Arc::new(WindowUDFExpr {
+                fun,
+                args: self.args.clone(),
+                name: self.name.clone(),
+                input_types: self.input_types.clone(),
+                is_reversed: !self.is_reversed,
+                ignore_nulls: self.ignore_nulls,
+            })),
+        }
     }
 
     fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {

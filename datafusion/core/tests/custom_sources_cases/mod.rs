@@ -71,7 +71,9 @@ macro_rules! TEST_CUSTOM_RECORD_BATCH {
 
 //--- Custom source dataframe tests ---//
 
+#[derive(Debug)]
 struct CustomTableProvider;
+
 #[derive(Debug, Clone)]
 struct CustomExecutionPlan {
     projection: Option<Vec<usize>>,
