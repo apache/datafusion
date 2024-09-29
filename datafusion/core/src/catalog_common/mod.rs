@@ -187,6 +187,9 @@ pub fn resolve_table_references(
             DFStatement::CreateExternalTable(table) => {
                 let idents: Vec<Ident> = table.name.split('.').map(Ident::from).collect();
                 visitor.relations.insert(ObjectName(idents));
+                visitor
+                    .relations
+                    .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
             }
             DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
                 CopyToSource::Relation(table_name) => {
