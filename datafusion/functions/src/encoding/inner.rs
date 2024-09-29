@@ -18,8 +18,10 @@
 //! Encoding expressions
 
 use arrow::{
-    array::{Array, ArrayRef, BinaryArray, OffsetSizeTrait, StringArray},
-    datatypes::DataType,
+    array::{
+        Array, ArrayRef, BinaryArray, GenericByteArray, OffsetSizeTrait, StringArray,
+    },
+    datatypes::{ByteArrayType, DataType},
 };
 use base64::{engine::general_purpose, Engine as _};
 use datafusion_common::{
@@ -267,14 +269,18 @@ macro_rules! encode_to_array {
     }};
 }
 
-macro_rules! decode_to_array {
-    ($METHOD: ident, $INPUT:expr) => {{
-        let binary_array: BinaryArray = $INPUT
-            .iter()
-            .map(|x| x.map(|x| $METHOD(x.as_ref())).transpose())
-            .collect::<Result<_>>()?;
-        Arc::new(binary_array)
-    }};
+fn decode_to_array<F, T: ByteArrayType>(
+    method: F,
+    input: &GenericByteArray<T>,
+) -> Result<ArrayRef>
+where
+    F: Fn(&[u8]) -> Result<Vec<u8>>,
+{
+    let binary_array: BinaryArray = input
+        .iter()
+        .map(|x| x.map(|x| method(x.as_ref())).transpose())
+        .collect::<Result<_>>()?;
+    Ok(Arc::new(binary_array))
 }
 
 impl Encoding {
@@ -382,8 +388,8 @@ impl Encoding {
     {
         let input_value = as_generic_binary_array::<T>(value)?;
         let array: ArrayRef = match self {
-            Self::Base64 => decode_to_array!(base64_decode, input_value),
-            Self::Hex => decode_to_array!(hex_decode, input_value),
+            Self::Base64 => decode_to_array(base64_decode, input_value)?,
+            Self::Hex => decode_to_array(hex_decode, input_value)?,
         };
         Ok(ColumnarValue::Array(array))
     }
@@ -394,8 +400,8 @@ impl Encoding {
     {
         let input_value = as_generic_string_array::<T>(value)?;
         let array: ArrayRef = match self {
-            Self::Base64 => decode_to_array!(base64_decode, input_value),
-            Self::Hex => decode_to_array!(hex_decode, input_value),
+            Self::Base64 => decode_to_array(base64_decode, input_value)?,
+            Self::Hex => decode_to_array(hex_decode, input_value)?,
         };
         Ok(ColumnarValue::Array(array))
     }
