@@ -14,20 +14,45 @@ use test_utils::{
     StringBatchGenerator,
 };
 
-// Data set generator
-// It will generate data set according to:
-//   - Seed
-//   - DataSetGeneratorConfig
+/// Config for Data sets generator
+///
+/// # Parameters
+///   - `columns`, you just need to define `column name`s and `column data type`s
+///     fot the test datasets, and then they will be randomly generated from generator
+///     when you can `generate` function
+///         
+///   - `rows_num_range`, the rows num of the datasets will be randomly generated
+///      among this range
+///
+///   - `sort_keys`, if `sort_keys` are defined, when you can `generate`, the generator
+///      will generate one `base dataset` firstly. Then the `base dataset` will be sorted
+///      based on each `sort_key` respectively. And finally `len(sort_keys) + 1` datasets
+///      will be returned
+///
+#[derive(Debug, Clone)]
+struct DataSetsGeneratorConfig {
+    // Descriptions of columns in datasets
+    columns: Vec<ColumnDescr>,
+
+    // Rows num range of the generated datasets
+    rows_num_range: (usize, usize),
+
+    // Sort keys used to generate the sorted data set
+    sort_keys: Vec<Vec<String>>,
+}
+
+/// Data sets generator
+///
 struct DataSetsGenerator {
-    config: DataSetGeneratorConfig,
+    config: DataSetsGeneratorConfig,
     batch_generator: RecordBatchGenerator,
 }
 
 impl DataSetsGenerator {
-    fn new(config: DataSetGeneratorConfig) -> Self {
+    fn new(config: DataSetsGeneratorConfig) -> Self {
         let batch_generator = RecordBatchGenerator::new(
-            config.min_rows_num,
-            config.max_rows_num,
+            config.rows_num_range.0,
+            config.rows_num_range.1,
             config.columns.clone(),
         );
 
@@ -51,21 +76,6 @@ impl DataSetsGenerator {
 struct DataSet {
     batches: Vec<RecordBatch>,
     sorted_key: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone)]
-struct DataSetGeneratorConfig {
-    // Each generated column in data set
-    columns: Vec<ColumnDescr>,
-
-    // Min rows num
-    min_rows_num: usize,
-
-    // Max rows num
-    max_rows_num: usize,
-
-    // Sort keys used to generate the sorted data set
-    sort_keys: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -290,7 +300,7 @@ mod test {
 
     #[test]
     fn simple_test() {
-        let config = DataSetGeneratorConfig {
+        let config = DataSetsGeneratorConfig {
             columns: vec![
                 ColumnDescr {
                     name: "a".to_string(),

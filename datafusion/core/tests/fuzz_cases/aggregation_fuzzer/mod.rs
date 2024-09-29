@@ -1,3 +1,3 @@
 mod data_generator;
 
-struct Test{}
+struct Test {}
