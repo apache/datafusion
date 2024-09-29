@@ -608,9 +608,9 @@ impl Stream for GroupedHashAggregateStream {
         loop {
             match &self.exec_state {
                 ExecutionState::ReadingInput => 'reading_input: {
-                    match (ready!(self.input.poll_next_unpin(cx)), self.mode) {
+                    match ready!(self.input.poll_next_unpin(cx)) {
                         // New batch to aggregate in partial aggregation operator
-                        (Some(Ok(batch)), AggregateMode::Partial) => {
+                        Some(Ok(batch)) if self.mode == AggregateMode::Partial => {
                             let timer = elapsed_compute.timer();
                             let input_rows = batch.num_rows();
 
@@ -649,7 +649,7 @@ impl Stream for GroupedHashAggregateStream {
 
                         // New batch to aggregate in terminal aggregation operator
                         // (Final/FinalPartitioned/Single/SinglePartitioned)
-                        (Some(Ok(batch)), _) => {
+                        Some(Ok(batch)) => {
                             let timer = elapsed_compute.timer();
 
                             // Make sure we have enough capacity for `batch`, otherwise spill
@@ -683,13 +683,13 @@ impl Stream for GroupedHashAggregateStream {
                         }
 
                         // Found error from input stream
-                        (Some(Err(e)), _) => {
+                        Some(Err(e)) => {
                             // inner had error, return to caller
                             return Poll::Ready(Some(Err(e)));
                         }
 
                         // Found end from input stream
-                        (None, _) => {
+                        None => {
                             // inner is done, emit all rows and switch to producing output
                             extract_ok!(self.set_input_done_and_produce_output());
                         }
