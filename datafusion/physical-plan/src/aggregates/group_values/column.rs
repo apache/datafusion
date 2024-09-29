@@ -37,6 +37,8 @@ use datafusion_physical_expr::binary_map::OutputType;
 use hashbrown::raw::RawTable;
 
 /// A [`GroupValues`] that stores multiple columns of group values.
+///
+///
 pub struct GroupValuesColumn {
     /// The output schema
     schema: SchemaRef,
@@ -55,8 +57,13 @@ pub struct GroupValuesColumn {
     map_size: usize,
 
     /// The actual group by values, stored column-wise. Compare from
-    /// the left to right, each column is stored as [`ArrayRowEq`].
-    /// This is shown faster than the row format
+    /// the left to right, each column is stored as [`GroupColumn`].
+    ///
+    /// Performance tests showed that this design is faster than using the
+    /// more general purpose [`GroupValuesRows`]. See the ticket for details:
+    /// <https://github.com/apache/datafusion/pull/12269>
+    ///
+    /// [`GroupValuesRows`]: crate::aggregates::group_values::row::GroupValuesRows
     group_values: Vec<Box<dyn GroupColumn>>,
 
     /// reused buffer to store hashes

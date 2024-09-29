@@ -61,7 +61,7 @@ pub trait GroupColumn: Send + Sync {
     fn take_n(&mut self, n: usize) -> ArrayRef;
 }
 
-/// An implementation of [`ArrayRowEq`] for primitive types.
+/// An implementation of [`GroupColumn`] for primitive types.
 pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType> {
     group_values: Vec<T::Native>,
     nulls: Vec<bool>,
@@ -157,7 +157,7 @@ impl<T: ArrowPrimitiveType> GroupColumn for PrimitiveGroupValueBuilder<T> {
     }
 }
 
-/// An implementation of [`ArrayRowEq`] for binary and utf8 types.
+/// An implementation of [`GroupColumn`] for binary and utf8 types.
 pub struct ByteGroupValueBuilder<O>
 where
     O: OffsetSizeTrait,

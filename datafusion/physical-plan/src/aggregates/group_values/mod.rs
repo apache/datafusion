@@ -41,9 +41,36 @@ mod group_column;
 
 /// Stores the group values during hash aggregation.
 ///
+/// # Background
+///
+/// In a query such as `SELECT a, b, count(*) FROM t GROUP BY a, b`, the group values
+/// identify each group, and correspond to all the distinct values of `(a,b)`.
+///
+/// ```sql
+/// -- Input has 4 rows with 3 distinct combinations of (a,b) ("groups")
+/// create table t(a int, b varchar)
+/// as values (1, 'a'), (2, 'b'), (1, 'a'), (3, 'c');
+///
+/// select a, b, count(*) from t group by a, b;
+/// ----
+/// 1 a 2
+/// 2 b 1
+/// 3 c 1
+/// ```
+///
+/// # Design
+///
+/// Managing group values is a performance critical operation in hash
+/// aggregation. The major operations are:
+///
+/// 1. Intern: Quickly finding existing and adding new group values
+/// 2. Emit: Returning the group values as an array
+///
 /// There are multiple specialized implementations of this trait optimized for
-/// different data types and number of columns, instantiated by
-/// [`new_group_values`].
+/// different data types and number of columns, optimized for these operations.
+/// See [`new_group_values`] for details.
+///
+/// # Group Ids
 ///
 /// Each distinct group in a hash aggregation is identified by a unique group id
 /// (usize) which is assigned by instances of this trait. Group ids are
