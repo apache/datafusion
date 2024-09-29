@@ -30,7 +30,6 @@ use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-use indexmap::IndexMap;
 use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
@@ -40,7 +39,6 @@ use DataType::{LargeUtf8, Utf8, Utf8View};
 #[derive(Debug)]
 pub struct RPadFunc {
     signature: Signature,
-    documentation: Documentation,
 }
 
 impl Default for RPadFunc {
@@ -48,6 +46,28 @@ impl Default for RPadFunc {
         Self::new()
     }
 }
+
+const DOCUMENTATION: Documentation = Documentation {
+    doc_section: DOC_SECTION_STRING,
+    description: "Pads the right side of a string with another string to a specified string length.",
+    syntax_example: "rpad(str, n[, padding_str])",
+    sql_example: None,
+    arguments: Some(&[
+        (
+            "str",
+            "String expression to operate on. Can be a constant, column, or function, and any combination of string operators."
+        ),
+        (
+            "n",
+            "String length to pad to."
+        ),
+        (
+            "padding_str",
+            "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._"
+        ),
+    ]),
+    related_udfs: Some(&["lpad"]),
+};
 
 impl RPadFunc {
     pub fn new() -> Self {
@@ -70,27 +90,6 @@ impl RPadFunc {
                 ],
                 Volatility::Immutable,
             ),
-            documentation: Documentation {
-                doc_section: DOC_SECTION_STRING,
-                description: "Pads the right side of a string with another string to a specified string length.",
-                syntax_example: "rpad(str, n[, padding_str])",
-                sql_example: None,
-                arguments: Some(IndexMap::from([
-                    (
-                        "str",
-                        "String expression to operate on. Can be a constant, column, or function, and any combination of string operators."
-                    ),
-                    (
-                        "n",
-                        "String length to pad to."
-                    ),
-                    (
-                        "padding_str",
-                        "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._"
-                    ),
-                ])),
-                related_udfs: Some(vec!["lpad"]),
-            },
         }
     }
 }
@@ -141,7 +140,7 @@ impl ScalarUDFImpl for RPadFunc {
     }
 
     fn documentation(&self) -> &Documentation {
-        &self.documentation
+        &DOCUMENTATION
     }
 }
 

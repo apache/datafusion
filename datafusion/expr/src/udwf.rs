@@ -217,30 +217,29 @@ where
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
 /// # use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-/// # use indexmap::IndexMap;
 ///
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
 ///   signature: Signature,
-///   documentation: Documentation,
 /// }
 ///
 /// impl SmoothIt {
 ///   fn new() -> Self {
 ///     Self {
 ///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
-///       documentation: Documentation {
-///             doc_section: DOC_SECTION_ANALYTICAL,
-///             description: "smooths the windows",
-///             syntax_example: "smooth_it(2)",
-///             sql_example: None,
-///             arguments: Some(IndexMap::from([("arg_1", "The int32 number to smooth by")])),
-///             related_udfs: None,
-///         }
 ///      }
 ///   }
 /// }
 ///
+/// const DOCUMENTATION: Documentation = Documentation {
+///     doc_section: DOC_SECTION_ANALYTICAL,
+///     description: "smooths the windows",
+///     syntax_example: "smooth_it(2)",
+///     sql_example: None,
+///     arguments: Some(&[("arg_1", "The int32 number to smooth by")]),
+///     related_udfs: None,
+/// };
+
 /// /// Implement the WindowUDFImpl trait for SmoothIt
 /// impl WindowUDFImpl for SmoothIt {
 ///    fn as_any(&self) -> &dyn Any { self }
@@ -256,7 +255,7 @@ where
 ///      }
 ///    }
 ///    fn documentation(&self) -> &Documentation {
-///      &self.documentation
+///      &DOCUMENTATION
 ///    }
 /// }
 ///

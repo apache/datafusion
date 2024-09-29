@@ -34,13 +34,11 @@ use std::{fmt, str::FromStr};
 
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_BINARY_STRING;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use indexmap::IndexMap;
 use std::any::Any;
 
 #[derive(Debug)]
 pub struct EncodeFunc {
     signature: Signature,
-    documentation: Documentation,
 }
 
 impl Default for EncodeFunc {
@@ -53,20 +51,21 @@ impl EncodeFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
-            documentation: Documentation {
-                doc_section: DOC_SECTION_BINARY_STRING,
-                description: "Encode binary data into a textual representation.",
-                syntax_example: "encode(expression, format)",
-                sql_example: None,
-                arguments: Some(IndexMap::from([
-                    ("expression", "Expression containing string or binary data"),
-                    ("format", "Supported formats are: `base64`, `hex`"),
-                ])),
-                related_udfs: Some(vec!["decode"]),
-            },
         }
     }
 }
+
+const ENCODE_DOCUMENTATION: Documentation = Documentation {
+    doc_section: DOC_SECTION_BINARY_STRING,
+    description: "Encode binary data into a textual representation.",
+    syntax_example: "encode(expression, format)",
+    sql_example: None,
+    arguments: Some(&[
+        ("expression", "Expression containing string or binary data"),
+        ("format", "Supported formats are: `base64`, `hex`"),
+    ]),
+    related_udfs: Some(&["decode"]),
+};
 
 impl ScalarUDFImpl for EncodeFunc {
     fn as_any(&self) -> &dyn Any {
@@ -116,14 +115,13 @@ impl ScalarUDFImpl for EncodeFunc {
     }
 
     fn documentation(&self) -> &Documentation {
-        &self.documentation
+        &ENCODE_DOCUMENTATION
     }
 }
 
 #[derive(Debug)]
 pub struct DecodeFunc {
     signature: Signature,
-    documentation: Documentation,
 }
 
 impl Default for DecodeFunc {
@@ -136,20 +134,21 @@ impl DecodeFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
-            documentation: Documentation {
-                doc_section: DOC_SECTION_BINARY_STRING,
-                description: "Decode binary data from textual representation in string.",
-                syntax_example: "decode(expression, format)",
-                sql_example: None,
-                arguments: Some(IndexMap::from([
-                    ("expression", "Expression containing encoded string data"),
-                    ("format", "Same arguments as [encode](#encode)"),
-                ])),
-                related_udfs: Some(vec!["encode"]),
-            },
         }
     }
 }
+
+const DECODE_DOCUMENTATION: Documentation = Documentation {
+    doc_section: DOC_SECTION_BINARY_STRING,
+    description: "Decode binary data from textual representation in string.",
+    syntax_example: "decode(expression, format)",
+    sql_example: None,
+    arguments: Some(&[
+        ("expression", "Expression containing encoded string data"),
+        ("format", "Same arguments as [encode](#encode)"),
+    ]),
+    related_udfs: Some(&["encode"]),
+};
 
 impl ScalarUDFImpl for DecodeFunc {
     fn as_any(&self) -> &dyn Any {
@@ -199,7 +198,7 @@ impl ScalarUDFImpl for DecodeFunc {
     }
 
     fn documentation(&self) -> &Documentation {
-        &self.documentation
+        &DECODE_DOCUMENTATION
     }
 }
 

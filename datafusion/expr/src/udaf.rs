@@ -285,30 +285,29 @@ where
 /// # use datafusion_expr::window_doc_sections::DOC_SECTION_AGGREGATE;
 /// # use arrow::datatypes::Schema;
 /// # use arrow::datatypes::Field;
-/// # use indexmap::IndexMap;
 ///
 /// #[derive(Debug, Clone)]
 /// struct GeoMeanUdf {
 ///   signature: Signature,
-///   documentation: Documentation,
 /// }
 ///
 /// impl GeoMeanUdf {
 ///   fn new() -> Self {
 ///     Self {
 ///       signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
-///       documentation: Documentation {
-///             doc_section: DOC_SECTION_AGGREGATE,
-///             description: "calculates a geometric mean",
-///             syntax_example: "geo_mean(2.0)",
-///             sql_example: None,    
-///             arguments: Some(IndexMap::from([("arg_1", "The Float64 number for the geometric mean")])),
-///             related_udfs: None,
-///         }    
 ///      }
 ///   }
 /// }
 ///
+/// const DOCUMENTATION: Documentation = Documentation {
+///     doc_section: DOC_SECTION_AGGREGATE,
+///     description: "calculates a geometric mean",
+///     syntax_example: "geo_mean(2.0)",
+///     sql_example: None,    
+///     arguments: Some(&[("arg_1", "The Float64 number for the geometric mean")]),
+///     related_udfs: None,
+/// };
+///    
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf
 /// impl AggregateUDFImpl for GeoMeanUdf {
 ///    fn as_any(&self) -> &dyn Any { self }
@@ -329,7 +328,7 @@ where
 ///        ])
 ///    }
 ///    fn documentation(&self) -> &Documentation {
-///        &self.documentation  
+///        &DOCUMENTATION  
 ///    }
 /// }
 ///

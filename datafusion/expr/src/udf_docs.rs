@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use indexmap::IndexMap;
-
 /// Documentation for use by [`crate::ScalarUDFImpl`],
 /// [`crate::AggregateUDFImpl`] and [`crate::WindowUDFImpl`] functions
 /// that will be used to generate public documentation.
@@ -41,15 +39,15 @@ pub struct Documentation {
     /// query and output. It is strongly recommended to provide an
     /// example for anything but the most basic UDF's
     pub sql_example: Option<&'static str>,
-    /// arguments for the UDF which will be displayed in insertion
-    /// order. Key is the argument name, value is a description for
-    /// the argument
-    pub arguments: Option<IndexMap<&'static str, &'static str>>,
+    /// arguments for the UDF which will be displayed in array order.
+    /// Left member of a pair is the argument name, right is a
+    /// description for the argument
+    pub arguments: Option<&'static [(&'static str, &'static str)]>,
     /// related functions if any. Values should match the related
     /// udf's name exactly. Related udf's must be of the same
     /// UDF type (scalar, aggregate or window) for proper linking to
     /// occur
-    pub related_udfs: Option<Vec<&'static str>>,
+    pub related_udfs: Option<&'static [&'static str]>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

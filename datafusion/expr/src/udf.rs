@@ -307,7 +307,6 @@ where
 /// ```
 /// # use std::any::Any;
 /// # use arrow::datatypes::DataType;
-/// # use indexmap::IndexMap;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Documentation, Signature, Volatility};
 /// # use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
@@ -316,25 +315,25 @@ where
 /// #[derive(Debug)]
 /// struct AddOne {
 ///   signature: Signature,
-///   documentation: Documentation,
 /// }
 ///
 /// impl AddOne {
 ///   fn new() -> Self {
 ///     Self {
 ///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
-///       documentation: Documentation {
-///             doc_section: DOC_SECTION_MATH,
-///             description: "Add one to an int32",
-///             syntax_example: "add_one(2)",
-///             sql_example: None,    
-///             arguments: Some(IndexMap::from([("arg_1", "The int32 number to add one to")])),
-///             related_udfs: None,
-///         }     
 ///      }
 ///   }
 /// }
-///
+///  
+/// const DOCUMENTATION: Documentation = Documentation {
+///     doc_section: DOC_SECTION_MATH,
+///     description: "Add one to an int32",
+///     syntax_example: "add_one(2)",
+///     sql_example: None,    
+///     arguments: Some(&[("arg_1", "The int32 number to add one to")]),
+///     related_udfs: None,
+/// };
+///     
 /// /// Implement the ScalarUDFImpl trait for AddOne
 /// impl ScalarUDFImpl for AddOne {
 ///    fn as_any(&self) -> &dyn Any { self }
@@ -349,7 +348,7 @@ where
 ///    // The actual implementation would add one to the argument
 ///    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> { unimplemented!() }
 ///    fn documentation(&self) -> &Documentation {
-///         &self.documentation
+///         &DOCUMENTATION
 ///     }
 /// }
 ///

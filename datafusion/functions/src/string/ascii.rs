@@ -23,14 +23,26 @@ use datafusion_common::{internal_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use indexmap::IndexMap;
 use std::any::Any;
 use std::sync::Arc;
+
+const DOCUMENTATION: Documentation = Documentation {
+    doc_section: DOC_SECTION_STRING,
+    description: "Returns the ASCII value of the first character in a string.",
+    syntax_example: "ascii(str)",
+    sql_example: None,
+    arguments: Some(&[
+        (
+            "str",
+            "String expression to operate on. Can be a constant, column, or function that evaluates to or can be coerced to a Utf8, LargeUtf8 or a Utf8View."
+        )
+    ]),
+    related_udfs: Some(&["chr"]),
+};
 
 #[derive(Debug)]
 pub struct AsciiFunc {
     signature: Signature,
-    documentation: Documentation,
 }
 
 impl Default for AsciiFunc {
@@ -48,19 +60,6 @@ impl AsciiFunc {
                 vec![Utf8, LargeUtf8, Utf8View],
                 Volatility::Immutable,
             ),
-            documentation: Documentation {
-                doc_section: DOC_SECTION_STRING,
-                description: "Returns the ASCII value of the first character in a string.",
-                syntax_example: "ascii(str)",
-                sql_example: None,
-                arguments: Some(IndexMap::from([
-                    (
-                        "str",
-                        "String expression to operate on. Can be a constant, column, or function that evaluates to or can be coerced to a Utf8, LargeUtf8 or a Utf8View."
-                    )
-                ])),
-                related_udfs: Some(vec!["chr"]),
-            },
         }
     }
 }
@@ -89,7 +88,7 @@ impl ScalarUDFImpl for AsciiFunc {
     }
 
     fn documentation(&self) -> &Documentation {
-        &self.documentation
+        &DOCUMENTATION
     }
 }
 

@@ -28,12 +28,10 @@ use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-use indexmap::IndexMap;
 
 #[derive(Debug)]
 pub struct ToDateFunc {
     signature: Signature,
-    documentation: Documentation,
 }
 
 impl Default for ToDateFunc {
@@ -46,49 +44,6 @@ impl ToDateFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            documentation: Documentation {
-                doc_section: DOC_SECTION_DATETIME,
-                description: r#"Converts a value to a date (`YYYY-MM-DD`).
-Supports strings, integer and double types as input.
-Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
-Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
-Returns the corresponding date.
-
-Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.
-"#,
-                syntax_example: "to_date('2017-05-31', '%Y-%m-%d')",
-                sql_example: Some(
-                    r#"```sql
-> select to_date('2023-01-31');
-+-----------------------------+
-| to_date(Utf8("2023-01-31")) |
-+-----------------------------+
-| 2023-01-31                  |
-+-----------------------------+
-> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');
-+---------------------------------------------------------------+
-| to_date(Utf8("2023/01/31"),Utf8("%Y-%m-%d"),Utf8("%Y/%m/%d")) |
-+---------------------------------------------------------------+
-| 2023-01-31                                                    |
-+---------------------------------------------------------------+
-```
-
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
-"#),
-                arguments: Some(IndexMap::from([
-                    (
-                        "expression",
-                        "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
-                    ),
-                    (
-                        "format_n",
-                        "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
-  they appear with the first successful one being returned. If none of the formats successfully parse the expression
-  an error will be returned.",
-                    )
-                ])),
-                related_udfs: None,
-            }
         }
     }
 
@@ -123,6 +78,50 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         }
     }
 }
+
+const DOCUMENTATION: Documentation = Documentation {
+    doc_section: DOC_SECTION_DATETIME,
+    description: r#"Converts a value to a date (`YYYY-MM-DD`).
+Supports strings, integer and double types as input.
+Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
+Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding date.
+
+Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.
+"#,
+    syntax_example: "to_date('2017-05-31', '%Y-%m-%d')",
+    sql_example: Some(
+        r#"```sql
+> select to_date('2023-01-31');
++-----------------------------+
+| to_date(Utf8("2023-01-31")) |
++-----------------------------+
+| 2023-01-31                  |
++-----------------------------+
+> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');
++---------------------------------------------------------------+
+| to_date(Utf8("2023/01/31"),Utf8("%Y-%m-%d"),Utf8("%Y/%m/%d")) |
++---------------------------------------------------------------+
+| 2023-01-31                                                    |
++---------------------------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
+"#),
+    arguments: Some(&[
+        (
+            "expression",
+            "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+        ),
+        (
+            "format_n",
+            "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.",
+        )
+    ]),
+    related_udfs: None,
+};
 
 impl ScalarUDFImpl for ToDateFunc {
     fn as_any(&self) -> &dyn Any {
@@ -166,7 +165,7 @@ impl ScalarUDFImpl for ToDateFunc {
     }
 
     fn documentation(&self) -> &Documentation {
-        &self.documentation
+        &DOCUMENTATION
     }
 }
 

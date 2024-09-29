@@ -92,7 +92,7 @@ fn main() {
             );
 
             // next, arguments
-            if let Some(args) = &documentation.arguments {
+            if let Some(args) = documentation.arguments {
                 let _ = writeln!(&mut docs, "#### Arguments\n");
                 for (arg_name, arg_desc) in args {
                     let _ = writeln!(&mut docs, "- **{arg_name}**: {arg_desc}");
@@ -122,7 +122,7 @@ fn main() {
             }
 
             // finally, any related udfs
-            if let Some(related_udfs) = &documentation.related_udfs {
+            if let Some(related_udfs) = documentation.related_udfs {
                 let _ = writeln!(&mut docs, "\n**Related functions**:");
 
                 for related in related_udfs {

@@ -60,7 +60,6 @@ pub fn row_number_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
 #[derive(Debug)]
 pub struct RowNumber {
     signature: Signature,
-    documentation: Documentation,
 }
 
 impl RowNumber {
@@ -68,15 +67,6 @@ impl RowNumber {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(0, Volatility::Immutable),
-            documentation: Documentation {
-                doc_section: DOC_SECTION_RANKING,
-                description:
-                    "Number of the current row within its partition, counting from 1.",
-                syntax_example: "row_number()",
-                sql_example: None,
-                arguments: None,
-                related_udfs: None,
-            },
         }
     }
 }
@@ -86,6 +76,15 @@ impl Default for RowNumber {
         Self::new()
     }
 }
+
+const DOCUMENTATION: Documentation = Documentation {
+    doc_section: DOC_SECTION_RANKING,
+    description: "Number of the current row within its partition, counting from 1.",
+    syntax_example: "row_number()",
+    sql_example: None,
+    arguments: None,
+    related_udfs: None,
+};
 
 impl WindowUDFImpl for RowNumber {
     fn as_any(&self) -> &dyn Any {
@@ -116,7 +115,7 @@ impl WindowUDFImpl for RowNumber {
     }
 
     fn documentation(&self) -> &Documentation {
-        &self.documentation
+        &DOCUMENTATION
     }
 }
 

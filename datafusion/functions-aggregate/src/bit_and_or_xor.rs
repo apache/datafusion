@@ -17,7 +17,6 @@
 
 //! Defines `BitAnd`, `BitOr`, `BitXor` and `BitXor DISTINCT` aggregate accumulators
 
-use indexmap::IndexMap;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -134,59 +133,65 @@ macro_rules! make_bitwise_udaf_expr_and_func {
     };
 }
 
+const BIT_AND_DOC: Documentation = Documentation {
+    doc_section: DOC_SECTION_GENERAL,
+    description: "Computes the bitwise AND of all non-null input values.",
+    syntax_example: "bit_and(expression)",
+    sql_example: None,
+    arguments: Some(&[
+        (
+            "expression",
+            "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
+        ),
+    ]),
+    related_udfs: None,
+};
+
+const BIT_OR_DOC: Documentation = Documentation {
+    doc_section: DOC_SECTION_GENERAL,
+    description: "Computes the bitwise OR of all non-null input values.",
+    syntax_example: "bit_or(expression)",
+    sql_example: None,
+    arguments: Some(&[
+        (
+            "expression",
+            "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
+        ),
+    ]),
+    related_udfs: None,
+};
+
+const BIT_XOR_DOC: Documentation =  Documentation {
+    doc_section: DOC_SECTION_GENERAL,
+    description: "Computes the bitwise exclusive OR of all non-null input values.",
+    syntax_example: "bit_xor(expression)",
+    sql_example: None,
+    arguments: Some(&[
+        (
+            "expression",
+            "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
+        ),
+    ]),
+    related_udfs: None,
+};
+
 make_bitwise_udaf_expr_and_func!(
     bit_and,
     bit_and_udaf,
     BitwiseOperationType::And,
-    Documentation {
-        doc_section: DOC_SECTION_GENERAL,
-        description: "Computes the bitwise AND of all non-null input values.",
-        syntax_example: "bit_and(expression)",
-        sql_example: None,
-        arguments: Some(IndexMap::from([
-            (
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
-            ),
-        ])),
-        related_udfs: None,
-    }
+    BIT_AND_DOC
 );
 make_bitwise_udaf_expr_and_func!(
     bit_or,
     bit_or_udaf,
     BitwiseOperationType::Or,
-    Documentation {
-        doc_section: DOC_SECTION_GENERAL,
-        description: "Computes the bitwise OR of all non-null input values.",
-        syntax_example: "bit_or(expression)",
-        sql_example: None,
-        arguments: Some(IndexMap::from([
-            (
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
-            ),
-        ])),
-        related_udfs: None,
-    }
+    BIT_OR_DOC
 );
 make_bitwise_udaf_expr_and_func!(
     bit_xor,
     bit_xor_udaf,
     BitwiseOperationType::Xor,
-    Documentation {
-        doc_section: DOC_SECTION_GENERAL,
-        description: "Computes the bitwise exclusive OR of all non-null input values.",
-        syntax_example: "bit_xor(expression)",
-        sql_example: None,
-        arguments: Some(IndexMap::from([
-            (
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
-            ),
-        ])),
-        related_udfs: None,
-    }
+    BIT_XOR_DOC
 );
 
 /// The different types of bitwise operations that can be performed.

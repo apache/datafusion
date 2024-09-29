@@ -36,12 +36,10 @@ use datafusion_expr::{
     lit, ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature::*,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use indexmap::IndexMap;
 
 #[derive(Debug)]
 pub struct LogFunc {
     signature: Signature,
-    documentation: Documentation,
 }
 
 impl Default for LogFunc {
@@ -49,6 +47,25 @@ impl Default for LogFunc {
         Self::new()
     }
 }
+
+const DOCUMENTATION: Documentation = Documentation {
+    doc_section: DOC_SECTION_MATH,
+    description: "Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.",
+    syntax_example: r#"log(base, numeric_expression)
+log(numeric_expression)"#,
+    sql_example: None,
+    arguments: Some(&[
+        (
+            "base",
+            "Base numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+        ),
+        (
+            "numeric_expression",
+            "Numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+        ),
+    ]),
+    related_udfs: None,
+};
 
 impl LogFunc {
     pub fn new() -> Self {
@@ -63,24 +80,6 @@ impl LogFunc {
                 ],
                 Volatility::Immutable,
             ),
-            documentation: Documentation {
-                doc_section: DOC_SECTION_MATH,
-                description: "Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.",
-                syntax_example: r#"log(base, numeric_expression)
-log(numeric_expression)"#,
-                sql_example: None,
-                arguments: Some(IndexMap::from([
-                    (
-                        "base",
-                        "Base numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
-                    ),
-                    (
-                        "numeric_expression",
-                        "Numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
-                    ),
-                ])),
-                related_udfs: None,
-            }
         }
     }
 }
@@ -188,7 +187,7 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     fn documentation(&self) -> &Documentation {
-        &self.documentation
+        &DOCUMENTATION
     }
 
     /// Simplify the `log` function by the relevant rules:
