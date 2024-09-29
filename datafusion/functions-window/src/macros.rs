@@ -41,7 +41,7 @@
 /// use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 ///
 /// use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-/// use datafusion_functions_window::make_udwf_singleton;
+/// use datafusion_functions_window::get_or_init_udwf;
 ///
 /// #[derive(Debug)]
 /// struct AddOne {
@@ -78,13 +78,13 @@
 ///
 /// /// This creates a singleton instance of `AddOne` user-defined
 /// /// window function named `add_one_udwf()`.
-/// make_udwf_singleton!(AddOne, add_one, "Adds one to each row value in window partition.");
+/// get_or_init_udwf!(AddOne, add_one, "Adds one to each row value in window partition.");
 /// ```
 
 #[macro_export]
-macro_rules! make_udwf_singleton {
+macro_rules! get_or_init_udwf {
     ($STRUCT_NAME:ident, $FN_NAME:ident, $DOC:expr) => {
-        make_udwf_singleton!($STRUCT_NAME, $FN_NAME, $DOC, $STRUCT_NAME::default);
+        get_or_init_udwf!($STRUCT_NAME, $FN_NAME, $DOC, $STRUCT_NAME::default);
     };
 
     ($STRUCT_NAME:ident, $FN_NAME:ident, $DOC:expr, $CTOR:path) => {

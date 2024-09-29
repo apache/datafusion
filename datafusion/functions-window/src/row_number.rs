@@ -32,7 +32,7 @@ use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDF
 use datafusion_functions_window_common::field;
 use field::WindowUDFFieldArgs;
 
-make_udwf_singleton!(
+get_or_init_udwf!(
     RowNumber,
     row_number,
     "Returns a unique row number for each row in window partition beginning at 1."
