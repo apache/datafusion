@@ -21,13 +21,13 @@
 ///
 /// # Parameters
 ///
-/// * `$STRUCT_NAME`: The struct which defines the [`Signature`](datafusion_expr::Signature)
+/// * `$UDWF`: The struct which defines the [`Signature`](datafusion_expr::Signature)
 ///     of the user-defined window function.
-/// * `$FN_NAME`: The basename to generate a unique function name like
-///     `$FN_NAME_udwf`.
+/// * `$OUT_FN_NAME`: The basename to generate a unique function name like
+///     `$OUT_FN_NAME_udwf`.
 /// * `$DOC`: Description of user-defined window function.
 /// * (optional) `$CTOR`: When none provided it automatically resolves
-///     to `$STRUCT_NAME::default()` (default constructor). To customize
+///     to `$UDWF::default()` (default constructor). To customize
 ///     pass a different constructor.
 ///
 /// # Example
@@ -79,23 +79,24 @@
 
 #[macro_export]
 macro_rules! get_or_init_udwf {
-    ($STRUCT_NAME:ident, $FN_NAME:ident, $DOC:expr) => {
-        get_or_init_udwf!($STRUCT_NAME, $FN_NAME, $DOC, $STRUCT_NAME::default);
+    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
+        get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC, $UDWF::default);
     };
 
-    ($STRUCT_NAME:ident, $FN_NAME:ident, $DOC:expr, $CTOR:path) => {
+    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr, $CTOR:path) => {
+
         paste::paste! {
-            #[doc = concat!(" Singleton instance of [`", stringify!($FN_NAME), "`], ensures the user-defined")]
+            #[doc = concat!(" Singleton instance of [`", stringify!($OUT_FN_NAME), "`], ensures the user-defined")]
             #[doc = concat!(" window function is only created once.")]
             #[allow(non_upper_case_globals)]
-            static [<STATIC_ $STRUCT_NAME>]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
+            static [<STATIC_ $UDWF>]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
                 std::sync::OnceLock::new();
 
-            #[doc = concat!(" Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for [`", stringify!($FN_NAME), "`].")]
+            #[doc = concat!(" Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for [`", stringify!($OUT_FN_NAME), "`].")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
-            pub fn [<$FN_NAME _udwf>]() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-                [<STATIC_ $STRUCT_NAME>]
+            pub fn [<$OUT_FN_NAME _udwf>]() -> std::sync::Arc<datafusion_expr::WindowUDF> {
+                [<STATIC_ $UDWF>]
                     .get_or_init(|| {
                         std::sync::Arc::new(datafusion_expr::WindowUDF::from($CTOR()))
                     })
@@ -107,29 +108,29 @@ macro_rules! get_or_init_udwf {
 
 macro_rules! create_udwf_expr {
     // zero arguments
-    ($STRUCT_NAME:ident, $FN_NAME:ident, $DOC:expr) => {
+    ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
         paste::paste! {
             #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
-            #[doc = concat!(" [`", stringify!($STRUCT_NAME), "`] user-defined window function.")]
+            #[doc = concat!(" [`", stringify!($UDWF), "`] user-defined window function.")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
-            pub fn $FN_NAME() -> datafusion_expr::Expr {
-                [<$FN_NAME _udwf>]().call(vec![])
+            pub fn $OUT_FN_NAME() -> datafusion_expr::Expr {
+                [<$OUT_FN_NAME _udwf>]().call(vec![])
             }
        }
     };
 
     // 1 or more arguments
-    ($STRUCT_NAME:ident, $FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr) => {
+    ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr) => {
         paste::paste! {
             #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
-            #[doc = concat!(" [`", stringify!($STRUCT_NAME), "`] user-defined window function.")]
+            #[doc = concat!(" [`", stringify!($UDWF), "`] user-defined window function.")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
-            pub fn $FN_NAME(
+            pub fn $OUT_FN_NAME(
                 $($PARAM: datafusion_expr::Expr),+
             ) -> datafusion_expr::Expr {
-                [<$FN_NAME _udwf>]()
+                [<$OUT_FN_NAME _udwf>]()
                     .call(vec![$($PARAM),+])
             }
        }
