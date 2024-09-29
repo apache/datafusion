@@ -21,14 +21,14 @@
 ///
 /// # Parameters
 ///
-/// * `$STRUCT_NAME`: The user-defined window function struct.
-/// * `$FN_NAME`: The prefix for the generated function name. The
-///     generated function name is `$FN_NAME_udwf`.
-/// * `$DOC`: The doc comments.
-/// * (optional) `$CTOR`: An optional user-defined window function
-///     constructor. By default, this will resolve to
-///     `$STRUCT_NAME::default()`. Use this argument to customize
-///     the constructor.
+/// * `$STRUCT_NAME`: The struct which defines the [`Signature`](datafusion_expr::Signature)
+///     of the user-defined window function.
+/// * `$FN_NAME`: The basename to generate a unique function name like
+///     `$FN_NAME_udwf`.
+/// * `$DOC`: Description of user-defined window function.
+/// * (optional) `$CTOR`: When none provided it automatically resolves
+///     to `$STRUCT_NAME::default()` (default constructor). To customize
+///     pass a different constructor.
 ///
 /// # Example
 ///
