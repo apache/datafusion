@@ -60,7 +60,17 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
 /// Count the number of distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
-    grouping_set_to_exprlist(group_expr).map(|exprs| exprs.len())
+    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
+        if group_expr.len() > 1 {
+            return plan_err!(
+                "Invalid group by expressions, GroupingSet must be the only expression"
+            );
+        }
+        // Groupings sets have an additional interal column for the grouping id
+        Ok(grouping_set.distinct_expr().len() + 1)
+    } else {
+        grouping_set_to_exprlist(group_expr).map(|exprs| exprs.len())
+    }
 }
 
 /// The [power set] (or powerset) of a set S is the set of all subsets of S, \

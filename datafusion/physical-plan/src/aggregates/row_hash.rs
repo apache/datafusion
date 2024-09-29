@@ -491,7 +491,7 @@ impl GroupedHashAggregateStream {
         let (ordering, _) = agg
             .properties()
             .equivalence_properties()
-            .find_longest_permutation(&agg_group_by.output_exprs(&agg.mode));
+            .find_longest_permutation(&agg_group_by.output_exprs());
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
             &agg.input_order_mode,
@@ -885,9 +885,6 @@ impl GroupedHashAggregateStream {
         }
 
         let mut output = self.group_values.emit(emit_to)?;
-        if !spilling {
-            output.truncate(self.group_by.num_output_exprs(&self.mode));
-        }
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
         }

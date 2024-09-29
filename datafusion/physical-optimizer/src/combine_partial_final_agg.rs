@@ -135,7 +135,7 @@ fn can_combine(final_agg: GroupExprsRef, partial_agg: GroupExprsRef) -> bool {
 
     // Compare output expressions of the partial, and input expressions of the final operator.
     physical_exprs_equal(
-        &input_group_by.output_exprs(&AggregateMode::Partial),
+        &input_group_by.output_exprs(),
         &final_group_by.input_exprs(),
     ) && input_group_by.groups() == final_group_by.groups()
         && input_group_by.null_expr().len() == final_group_by.null_expr().len()

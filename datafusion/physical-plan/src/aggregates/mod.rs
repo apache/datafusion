@@ -37,11 +37,10 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{UInt16Array, UInt32Array, UInt64Array, UInt8Array};
-use arrow_schema::DataType;
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::{
     equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::Column,
@@ -111,8 +110,6 @@ impl AggregateMode {
     }
 }
 
-const INTERNAL_GROUPING_ID: &str = "grouping_id";
-
 /// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
 /// In the case of a simple `GROUP BY a, b` clause, this will contain the expression [a, b]
 /// and a single group [false, false].
@@ -142,10 +139,6 @@ pub struct PhysicalGroupBy {
     /// expression in null_expr. If `groups[i][j]` is true, then the
     /// j-th expression in the i-th group is NULL, otherwise it is `expr[j]`.
     groups: Vec<Vec<bool>>,
-    // The number of internal expressions that are used to implement grouping
-    // sets. These output are removed from the final output and not in `expr`
-    // as they are generated based on the value in `groups`
-    num_internal_exprs: usize,
 }
 
 impl PhysicalGroupBy {
@@ -155,12 +148,10 @@ impl PhysicalGroupBy {
         null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
         groups: Vec<Vec<bool>>,
     ) -> Self {
-        let num_internal_exprs = if !null_expr.is_empty() { 1 } else { 0 };
         Self {
             expr,
             null_expr,
             groups,
-            num_internal_exprs,
         }
     }
 
@@ -172,7 +163,6 @@ impl PhysicalGroupBy {
             expr,
             null_expr: vec![],
             groups: vec![vec![false; num_exprs]],
-            num_internal_exprs: 0,
         }
     }
 
@@ -223,20 +213,17 @@ impl PhysicalGroupBy {
     }
 
     /// The number of expressions in the output schema.
-    fn num_output_exprs(&self, mode: &AggregateMode) -> usize {
+    fn num_output_exprs(&self) -> usize {
         let mut num_exprs = self.expr.len();
         if !self.is_single() {
-            num_exprs += self.num_internal_exprs;
-        }
-        if *mode != AggregateMode::Partial {
-            num_exprs -= self.num_internal_exprs;
+            num_exprs += 1
         }
         num_exprs
     }
 
     /// Return grouping expressions as they occur in the output schema.
-    pub fn output_exprs(&self, mode: &AggregateMode) -> Vec<Arc<dyn PhysicalExpr>> {
-        let num_output_exprs = self.num_output_exprs(mode);
+    pub fn output_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        let num_output_exprs = self.num_output_exprs();
         let mut output_exprs = Vec::with_capacity(num_output_exprs);
         output_exprs.extend(
             self.expr
@@ -245,9 +232,11 @@ impl PhysicalGroupBy {
                 .take(num_output_exprs)
                 .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _),
         );
-        if !self.is_single() && *mode == AggregateMode::Partial {
-            output_exprs
-                .push(Arc::new(Column::new(INTERNAL_GROUPING_ID, self.expr.len())) as _);
+        if !self.is_single() {
+            output_exprs.push(Arc::new(Column::new(
+                Aggregate::INTERNAL_GROUPING_ID,
+                self.expr.len(),
+            )) as _);
         }
         output_exprs
     }
@@ -257,23 +246,7 @@ impl PhysicalGroupBy {
         if self.is_single() {
             self.expr.len()
         } else {
-            self.expr.len() + self.num_internal_exprs
-        }
-    }
-
-    /// Returns the data type of the grouping id.
-    /// The grouping ID value is a bitmask where each set bit
-    /// indicates that the corresponding grouping expression is
-    /// null
-    fn grouping_id_type(&self) -> DataType {
-        if self.expr.len() <= 8 {
-            DataType::UInt8
-        } else if self.expr.len() <= 16 {
-            DataType::UInt16
-        } else if self.expr.len() <= 32 {
-            DataType::UInt32
-        } else {
-            DataType::UInt64
+            self.expr.len() + 1
         }
     }
 
@@ -283,17 +256,21 @@ impl PhysicalGroupBy {
         for ((expr, name), group_expr_nullable) in
             self.expr.iter().zip(self.exprs_nullable().into_iter())
         {
-            fields.push(Field::new(
-                name,
-                expr.data_type(input_schema)?,
-                group_expr_nullable || expr.nullable(input_schema)?,
-            ))
-            .with_metadata(get_field_metadata(expr, input_schema).unwrap_or_default());
+            fields.push(
+                Field::new(
+                    name,
+                    expr.data_type(input_schema)?,
+                    group_expr_nullable || expr.nullable(input_schema)?,
+                )
+                .with_metadata(
+                    get_field_metadata(expr, input_schema).unwrap_or_default(),
+                ),
+            );
         }
         if !self.is_single() {
             fields.push(Field::new(
-                INTERNAL_GROUPING_ID,
-                self.grouping_id_type(),
+                Aggregate::INTERNAL_GROUPING_ID,
+                Aggregate::grouping_id_type(self.expr.len()),
                 false,
             ));
         }
@@ -304,35 +281,29 @@ impl PhysicalGroupBy {
     ///
     /// This might be different from the `group_fields` that might contain internal expressions that
     /// should not be part of the output schema.
-    fn output_fields(
-        &self,
-        input_schema: &Schema,
-        mode: &AggregateMode,
-    ) -> Result<Vec<Field>> {
+    fn output_fields(&self, input_schema: &Schema) -> Result<Vec<Field>> {
         let mut fields = self.group_fields(input_schema)?;
-        fields.truncate(self.num_output_exprs(mode));
+        fields.truncate(self.num_output_exprs());
         Ok(fields)
     }
 
     /// Returns the `PhysicalGroupBy` for a final aggregation if `self` is used for a partial
     /// aggregation.
     pub fn as_final(&self) -> PhysicalGroupBy {
-        let expr: Vec<_> = self
-            .output_exprs(&AggregateMode::Partial)
-            .into_iter()
-            .zip(
-                self.expr
-                    .iter()
-                    .map(|t| t.1.clone())
-                    .chain(std::iter::once(INTERNAL_GROUPING_ID.to_owned())),
-            )
-            .collect();
+        let expr: Vec<_> =
+            self.output_exprs()
+                .into_iter()
+                .zip(
+                    self.expr.iter().map(|t| t.1.clone()).chain(std::iter::once(
+                        Aggregate::INTERNAL_GROUPING_ID.to_owned(),
+                    )),
+                )
+                .collect();
         let num_exprs = expr.len();
         Self {
             expr,
             null_expr: vec![],
             groups: vec![vec![false; num_exprs]],
-            num_internal_exprs: self.num_internal_exprs,
         }
     }
 }
@@ -569,7 +540,7 @@ impl AggregateExec {
 
     /// Grouping expressions as they occur in the output schema
     pub fn output_group_expr(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.group_by.output_exprs(&AggregateMode::Partial)
+        self.group_by.output_exprs()
     }
 
     /// Aggregate expressions
@@ -903,9 +874,8 @@ fn create_schema(
     aggr_expr: &[AggregateFunctionExpr],
     mode: AggregateMode,
 ) -> Result<Schema> {
-    let mut fields =
-        Vec::with_capacity(group_by.num_output_exprs(&mode) + aggr_expr.len());
-    fields.extend(group_by.output_fields(input_schema, &mode)?);
+    let mut fields = Vec::with_capacity(group_by.num_output_exprs() + aggr_expr.len());
+    fields.extend(group_by.output_fields(input_schema)?);
 
     match mode {
         AggregateMode::Partial => {
@@ -1511,49 +1481,49 @@ mod tests {
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
             // we trigger the early emit rule, which turns out the partial aggregate result.
             vec![
-                "+---+-----+-------------+-----------------+",
-                "| a | b   | grouping_id | COUNT(1)[count] |",
-                "+---+-----+-------------+-----------------+",
-                "|   | 1.0 | 2           | 1               |",
-                "|   | 1.0 | 2           | 1               |",
-                "|   | 2.0 | 2           | 1               |",
-                "|   | 2.0 | 2           | 1               |",
-                "|   | 3.0 | 2           | 1               |",
-                "|   | 3.0 | 2           | 1               |",
-                "|   | 4.0 | 2           | 1               |",
-                "|   | 4.0 | 2           | 1               |",
-                "| 2 |     | 1           | 1               |",
-                "| 2 |     | 1           | 1               |",
-                "| 2 | 1.0 | 0           | 1               |",
-                "| 2 | 1.0 | 0           | 1               |",
-                "| 3 |     | 1           | 1               |",
-                "| 3 |     | 1           | 2               |",
-                "| 3 | 2.0 | 0           | 2               |",
-                "| 3 | 3.0 | 0           | 1               |",
-                "| 4 |     | 1           | 1               |",
-                "| 4 |     | 1           | 2               |",
-                "| 4 | 3.0 | 0           | 1               |",
-                "| 4 | 4.0 | 0           | 2               |",
-                "+---+-----+-------------+-----------------+",
+                "+---+-----+---------------+-----------------+",
+                "| a | b   | __grouping_id | COUNT(1)[count] |",
+                "+---+-----+---------------+-----------------+",
+                "|   | 1.0 | 2             | 1               |",
+                "|   | 1.0 | 2             | 1               |",
+                "|   | 2.0 | 2             | 1               |",
+                "|   | 2.0 | 2             | 1               |",
+                "|   | 3.0 | 2             | 1               |",
+                "|   | 3.0 | 2             | 1               |",
+                "|   | 4.0 | 2             | 1               |",
+                "|   | 4.0 | 2             | 1               |",
+                "| 2 |     | 1             | 1               |",
+                "| 2 |     | 1             | 1               |",
+                "| 2 | 1.0 | 0             | 1               |",
+                "| 2 | 1.0 | 0             | 1               |",
+                "| 3 |     | 1             | 1               |",
+                "| 3 |     | 1             | 2               |",
+                "| 3 | 2.0 | 0             | 2               |",
+                "| 3 | 3.0 | 0             | 1               |",
+                "| 4 |     | 1             | 1               |",
+                "| 4 |     | 1             | 2               |",
+                "| 4 | 3.0 | 0             | 1               |",
+                "| 4 | 4.0 | 0             | 2               |",
+                "+---+-----+---------------+-----------------+",
             ]
         } else {
             vec![
-                "+---+-----+-------------+-----------------+",
-                "| a | b   | grouping_id | COUNT(1)[count] |",
-                "+---+-----+-------------+-----------------+",
-                "|   | 1.0 | 2           | 2               |",
-                "|   | 2.0 | 2           | 2               |",
-                "|   | 3.0 | 2           | 2               |",
-                "|   | 4.0 | 2           | 2               |",
-                "| 2 |     | 1           | 2               |",
-                "| 2 | 1.0 | 0           | 2               |",
-                "| 3 |     | 1           | 3               |",
-                "| 3 | 2.0 | 0           | 2               |",
-                "| 3 | 3.0 | 0           | 1               |",
-                "| 4 |     | 1           | 3               |",
-                "| 4 | 3.0 | 0           | 1               |",
-                "| 4 | 4.0 | 0           | 2               |",
-                "+---+-----+-------------+-----------------+",
+                "+---+-----+---------------+-----------------+",
+                "| a | b   | __grouping_id | COUNT(1)[count] |",
+                "+---+-----+---------------+-----------------+",
+                "|   | 1.0 | 2             | 2               |",
+                "|   | 2.0 | 2             | 2               |",
+                "|   | 3.0 | 2             | 2               |",
+                "|   | 4.0 | 2             | 2               |",
+                "| 2 |     | 1             | 2               |",
+                "| 2 | 1.0 | 0             | 2               |",
+                "| 3 |     | 1             | 3               |",
+                "| 3 | 2.0 | 0             | 2               |",
+                "| 3 | 3.0 | 0             | 1               |",
+                "| 4 |     | 1             | 3               |",
+                "| 4 | 3.0 | 0             | 1               |",
+                "| 4 | 4.0 | 0             | 2               |",
+                "+---+-----+---------------+-----------------+",
             ]
         };
         assert_batches_sorted_eq!(expected, &result);
@@ -1580,26 +1550,26 @@ mod tests {
         let result =
             common::collect(merged_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
-        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.num_columns(), 4);
         assert_eq!(batch.num_rows(), 12);
 
         let expected = vec![
-            "+---+-----+----------+",
-            "| a | b   | COUNT(1) |",
-            "+---+-----+----------+",
-            "|   | 1.0 | 2        |",
-            "|   | 2.0 | 2        |",
-            "|   | 3.0 | 2        |",
-            "|   | 4.0 | 2        |",
-            "| 2 |     | 2        |",
-            "| 2 | 1.0 | 2        |",
-            "| 3 |     | 3        |",
-            "| 3 | 2.0 | 2        |",
-            "| 3 | 3.0 | 1        |",
-            "| 4 |     | 3        |",
-            "| 4 | 3.0 | 1        |",
-            "| 4 | 4.0 | 2        |",
-            "+---+-----+----------+",
+            "+---+-----+---------------+----------+",
+            "| a | b   | __grouping_id | COUNT(1) |",
+            "+---+-----+---------------+----------+",
+            "|   | 1.0 | 2             | 2        |",
+            "|   | 2.0 | 2             | 2        |",
+            "|   | 3.0 | 2             | 2        |",
+            "|   | 4.0 | 2             | 2        |",
+            "| 2 |     | 1             | 2        |",
+            "| 2 | 1.0 | 0             | 2        |",
+            "| 3 |     | 1             | 3        |",
+            "| 3 | 2.0 | 0             | 2        |",
+            "| 3 | 3.0 | 0             | 1        |",
+            "| 4 |     | 1             | 3        |",
+            "| 4 | 3.0 | 0             | 1        |",
+            "| 4 | 4.0 | 0             | 2        |",
+            "+---+-----+---------------+----------+",
         ];
 
         assert_batches_sorted_eq!(&expected, &result);
@@ -2424,13 +2394,13 @@ mod tests {
             collect(aggregate_exec.execute(0, Arc::new(TaskContext::default()))?).await?;
 
         let expected = [
-            "+-----+-----+-------+-------+",
-            "| a   | b   | const | 1     |",
-            "+-----+-----+-------+-------+",
-            "|     | 0.0 |       | 32768 |",
-            "| 0.0 |     |       | 32768 |",
-            "|     |     | 1     | 32768 |",
-            "+-----+-----+-------+-------+",
+            "+-----+-----+-------+---------------+-------+",
+            "| a   | b   | const | __grouping_id | 1     |",
+            "+-----+-----+-------+---------------+-------+",
+            "|     |     | 1     | 6             | 32768 |",
+            "|     | 0.0 |       | 5             | 32768 |",
+            "| 0.0 |     |       | 3             | 32768 |",
+            "+-----+-----+-------+---------------+-------+",
         ];
         assert_batches_sorted_eq!(expected, &output);
 
@@ -2767,6 +2737,7 @@ mod tests {
         let expected_schema = Schema::new(vec![
             Field::new("a", DataType::Float32, false),
             Field::new("b", DataType::Float32, true),
+            Field::new("__grouping_id", DataType::UInt8, false),
             Field::new("COUNT(a)", DataType::Int64, false),
         ]);
         assert_eq!(aggr_schema, expected_schema);
