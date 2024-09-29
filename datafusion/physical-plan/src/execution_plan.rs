@@ -228,6 +228,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`TryStreamExt`]: futures::stream::TryStreamExt
     /// [`RecordBatchStreamAdapter`]: crate::stream::RecordBatchStreamAdapter
     ///
+    /// # Error handling
+    ///
+    /// Any error that occurs during execution is sent as an `Err` in the output
+    /// stream.
+    ///
+    /// `ExecutionPlan` implementations in DataFusion cancel additional work
+    /// immediately once an error occurs. The rationale is that if the overall
+    /// query will return an error,  any additional work such as continued
+    /// polling of inputs will be wasted as it will be thrown away.
+    ///
     /// # Cancellation / Aborting Execution
     ///
     /// The [`Stream`] that is returned must ensure that any allocated resources
