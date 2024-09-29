@@ -79,6 +79,7 @@ mod tests {
     use crate::arrow::datatypes::{DataType, Field, Schema};
     use crate::arrow::record_batch::RecordBatch;
     use crate::dataframe::DataFrameWriteOptions;
+    use crate::datasource::listing::ListingTableUrl;
     use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
 
@@ -100,6 +101,21 @@ mod tests {
         let results = df.collect().await?;
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
+        assert_eq!(total_rows, 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_with_listing_table_url() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let urls: Vec<ListingTableUrl> =
+            format!("{}/alltypes_plain*.parquet", parquet_test_data()).to_urls()?;
+        let df = ctx
+            .read_parquet(urls, ParquetReadOptions::default())
+            .await?;
+        let results = df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         assert_eq!(total_rows, 10);
         Ok(())
     }

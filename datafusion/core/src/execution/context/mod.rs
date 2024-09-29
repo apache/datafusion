@@ -65,6 +65,7 @@ use datafusion_expr::{
     planner::ExprPlanner,
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
+use itertools::Itertools;
 
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
@@ -116,12 +117,19 @@ impl DataFilePaths for &String {
 
 impl<P> DataFilePaths for Vec<P>
 where
-    P: AsRef<str>,
+    P: DataFilePaths,
 {
     fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
-        self.iter()
-            .map(ListingTableUrl::parse)
+        self.into_iter()
+            .map(|x| x.to_urls())
+            .flatten_ok()
             .collect::<Result<Vec<ListingTableUrl>>>()
+    }
+}
+
+impl DataFilePaths for Vec<ListingTableUrl> {
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
+        Ok(self)
     }
 }
 
