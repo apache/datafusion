@@ -175,6 +175,14 @@ impl WindowUDF {
         self.inner.coerce_types(arg_types)
     }
 
+    /// Returns the reversed user-defined window function when the
+    /// order of evaluation is reversed.
+    ///
+    /// See [`WindowUDFImpl::reverse_expr`] for more details.
+    pub fn reverse_expr(&self) -> ReversedUDWF {
+        self.inner.reverse_expr()
+    }
+
     /// Returns this UDF's documentation that will be used to generate public documentation
     pub fn documentation(&self) -> &Documentation {
         self.inner.documentation()
@@ -225,10 +233,10 @@ where
 ///             doc_section: DOC_SECTION_ANALYTICAL,
 ///             description: "smooths the windows",
 ///             syntax_example: "smooth_it(2)",
-///             sql_example: None,    
+///             sql_example: None,
 ///             arguments: Some(IndexMap::from([("arg_1", "The int32 number to smooth by")])),
 ///             related_udfs: None,
-///         }    
+///         }
 ///      }
 ///   }
 /// }
@@ -248,7 +256,7 @@ where
 ///      }
 ///    }
 ///    fn documentation(&self) -> &Documentation {
-///      &self.documentation     
+///      &self.documentation
 ///    }
 /// }
 ///
@@ -374,11 +382,29 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 
+    /// Allows customizing the behavior of the user-defined window
+    /// function when it is evaluated in reverse order.
+    fn reverse_expr(&self) -> ReversedUDWF {
+        ReversedUDWF::NotSupported
+    }
+
     /// Returns the documentation for this window UDF for use
     /// in generating publicly facing documentation.
     fn documentation(&self) -> &Documentation {
         &DOCUMENTATION_NONE
     }
+}
+
+pub enum ReversedUDWF {
+    /// The result of evaluating the user-defined window function
+    /// remains identical when reversed.
+    Identical,
+    /// A window function which does not support evaluating the result
+    /// in reverse order.
+    NotSupported,
+    /// Customize the user-defined window function for evaluating the
+    /// result in reverse order.
+    Reversed(Arc<WindowUDF>),
 }
 
 impl PartialEq for dyn WindowUDFImpl {
