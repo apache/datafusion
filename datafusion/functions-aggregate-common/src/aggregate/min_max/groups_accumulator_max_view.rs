@@ -1,27 +1,25 @@
-use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, AsArray, BinaryViewBuilder, BooleanArray};
-use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+use std::sync::Arc;
 
-pub struct StringGroupsAccumulatorMin {
+pub struct GroupsAccumulatorMaxStringView {
     states: Vec<String>,
 }
 
-impl Default for StringGroupsAccumulatorMin {
+impl Default for GroupsAccumulatorMaxStringView {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl StringGroupsAccumulatorMin {
+impl GroupsAccumulatorMaxStringView {
     pub fn new() -> Self {
-        Self {
-            states: Vec::new(),
-        }
+        Self { states: Vec::new() }
     }
 }
 
-impl GroupsAccumulator for StringGroupsAccumulatorMin {
+impl GroupsAccumulator for GroupsAccumulatorMaxStringView {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -29,41 +27,37 @@ impl GroupsAccumulator for StringGroupsAccumulatorMin {
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        // Ensure that self.states has capacity for total_num_groups
         if self.states.len() < total_num_groups {
             self.states.resize(total_num_groups, String::new());
         }
 
-        // Assume values has one element (the input column)
         let input_array = &values[0];
 
-        // Iterate over rows
         for (i, &group_index) in group_indices.iter().enumerate() {
-            // Check filter
             if let Some(filter) = opt_filter {
                 if !filter.value(i) {
                     continue;
                 }
             }
 
-            // Skip null values
             if input_array.is_null(i) {
                 continue;
             }
 
-            // Get the binary value at index i
             let value = input_array.as_binary_view().value(i);
 
-            // Convert binary data to a string (assuming UTF-8 encoding)
             let value_str = std::str::from_utf8(value).map_err(|e| {
-                DataFusionError::Execution(format!("Invalid UTF-8 sequence: {}", e))
+                DataFusionError::Execution(format!(
+                    "could not build utf8 from binary view {}",
+                    e
+                ))
             })?;
 
             if self.states[group_index].is_empty() {
                 self.states[group_index] = value_str.to_string();
             } else {
                 let curr_value_bytes = self.states[group_index].as_bytes();
-                if value < curr_value_bytes {
+                if value > curr_value_bytes {
                     self.states[group_index] = value_str.parse().unwrap();
                 }
             }
@@ -158,14 +152,17 @@ impl GroupsAccumulator for StringGroupsAccumulatorMin {
             let value = input_array.as_binary_view().value(i);
 
             let value_str = std::str::from_utf8(value).map_err(|e| {
-                DataFusionError::Execution(format!("Invalid UTF-8 sequence: {}", e))
+                DataFusionError::Execution(format!(
+                    "could not build utf8 from binary view {}",
+                    e
+                ))
             })?;
 
             if self.states[group_index].is_empty() {
                 self.states[group_index] = value_str.to_string();
             } else {
                 let curr_value_bytes = self.states[group_index].as_bytes();
-                if value < curr_value_bytes {
+                if value > curr_value_bytes {
                     self.states[group_index] = value_str.parse().unwrap();
                 }
             }
@@ -185,7 +182,6 @@ impl GroupsAccumulator for StringGroupsAccumulatorMin {
         }
 
         let filter = opt_filter.unwrap();
-
 
         let mut builder = BinaryViewBuilder::new();
 

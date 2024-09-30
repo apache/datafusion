@@ -48,12 +48,12 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
+use super::order::GroupOrdering;
+use super::AggregateExec;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
-use super::order::GroupOrdering;
-use super::AggregateExec;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
