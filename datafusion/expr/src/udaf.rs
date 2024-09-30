@@ -26,7 +26,8 @@ use std::vec;
 
 use arrow::datatypes::{DataType, Field};
 
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::AggregateFunction;
 use crate::function::{
@@ -92,6 +93,19 @@ impl fmt::Display for AggregateUDF {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", self.name())
     }
+}
+
+pub struct StatisticsArgs<'a> {
+    pub statistics: &'a Statistics,
+    pub return_type: &'a DataType,
+    /// Whether the aggregate function is distinct.
+    ///
+    /// ```sql
+    /// SELECT COUNT(DISTINCT column1) FROM t;
+    /// ```
+    pub is_distinct: bool,
+    /// The physical expression of arguments the aggregate function takes.
+    pub exprs: &'a [Arc<dyn PhysicalExpr>],
 }
 
 impl AggregateUDF {
@@ -242,6 +256,13 @@ impl AggregateUDF {
     ///
     pub fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
+    }
+
+    pub fn value_from_stats(
+        &self,
+        statistics_args: &StatisticsArgs,
+    ) -> Option<ScalarValue> {
+        self.inner.value_from_stats(statistics_args)
     }
 
     /// See [`AggregateUDFImpl::default_value`] for more details.
@@ -554,6 +575,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// Note: this is used to use special aggregate implementations in certain conditions
     fn is_descending(&self) -> Option<bool> {
+        None
+    }
+    // Return the value of the current UDF from the statistics
+    fn value_from_stats(&self, _statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
         None
     }
 
