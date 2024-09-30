@@ -195,6 +195,10 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// directly because it must remain object safe.
     fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool;
     fn dyn_ord(&self, other: &dyn UserDefinedLogicalNode) -> Option<Ordering>;
+
+    /// Indicates to the optimizer if its safe to push a limit down past
+    /// this extension node
+    fn allows_limit_to_inputs(&self) -> bool;
 }
 
 impl Hash for dyn UserDefinedLogicalNode {
@@ -295,6 +299,10 @@ pub trait UserDefinedLogicalNodeCore:
     ) -> Option<Vec<Vec<usize>>> {
         None
     }
+
+    /// Indicates to the optimizer if its safe to push a limit down past
+    /// this extension node
+    fn allows_limit_to_inputs(&self) -> bool;
 }
 
 /// Automatically derive UserDefinedLogicalNode to `UserDefinedLogicalNode`
@@ -360,6 +368,10 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
             .as_any()
             .downcast_ref::<Self>()
             .and_then(|other| self.partial_cmp(other))
+    }
+
+    fn allows_limit_to_inputs(&self) -> bool {
+        self.allows_limit_to_inputs()
     }
 }
 
