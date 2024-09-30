@@ -195,6 +195,7 @@ impl AggregateUDFImpl for Max {
                 | Time32(_)
                 | Time64(_)
                 | Timestamp(_, _)
+                | BinaryView
         )
     }
 
