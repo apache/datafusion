@@ -39,6 +39,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
 use datafusion_execution::TaskContext;
+use datafusion_expr::dml::InsertOp;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
@@ -262,7 +263,7 @@ impl TableProvider for MemTable {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: bool,
+        insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If we are inserting into the table, any sort order may be messed up so reset it here
         *self.sort_order.lock() = vec![];
@@ -289,8 +290,8 @@ impl TableProvider for MemTable {
                     .collect::<Vec<_>>()
             );
         }
-        if overwrite {
-            return not_impl_err!("Overwrite not implemented for MemoryTable yet");
+        if insert_op != InsertOp::Append {
+            return not_impl_err!("{insert_op} not implemented for MemoryTable yet");
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
         Ok(Arc::new(DataSinkExec::new(
@@ -638,7 +639,8 @@ mod tests {
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, InsertOp::Append)?
+                .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()

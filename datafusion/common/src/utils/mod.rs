@@ -291,6 +291,9 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
 }
 
 /// Construct a new [`Vec`] of [`ArrayRef`] from the rows of the `arrays` at the `indices`.
+///
+/// TODO: use implementation in arrow-rs when available:
+/// <https://github.com/apache/arrow-rs/pull/6475>
 pub fn take_arrays(arrays: &[ArrayRef], indices: &dyn Array) -> Result<Vec<ArrayRef>> {
     arrays
         .iter()
