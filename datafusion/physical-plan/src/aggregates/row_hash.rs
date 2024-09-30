@@ -574,7 +574,7 @@ impl GroupedHashAggregateStream {
 
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
 /// that is supported by the aggregate, or a
-/// [`GroupsAccumulatorMin`] if not.
+/// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
     agg_expr: &AggregateFunctionExpr,
 ) -> Result<Box<dyn GroupsAccumulator>> {

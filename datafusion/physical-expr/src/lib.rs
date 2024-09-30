@@ -45,7 +45,7 @@ pub mod execution_props {
 }
 
 pub use aggregate::groups_accumulator::{
-    GroupsAccumulatorAdapter, GroupsAccumulatorMinStringView, NullState,
+    GroupsAccumulatorAdapter, NullState,
 };
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
 pub use equivalence::{calculate_union, ConstExpr, EquivalenceProperties};
