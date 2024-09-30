@@ -190,9 +190,7 @@ fn get_signed_integer(value: ScalarValue) -> Result<i64> {
     }
 
     if !value.data_type().is_integer() {
-        return Err(DataFusionError::Execution(
-            "Expected an integer value".to_string(),
-        ));
+        return exec_err!("Expected an integer value")
     }
 
     value.cast_to(&DataType::Int64)?.try_into()
@@ -204,9 +202,7 @@ fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
     }
 
     if !value.data_type().is_integer() {
-        return Err(DataFusionError::Execution(
-            "Expected an integer value".to_string(),
-        ));
+        return exec_err!("Expected an integer value");
     }
 
     value.cast_to(&DataType::UInt64)?.try_into()
