@@ -573,7 +573,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 // extract list values, with non-lists converted to Value::Null
                 let array_item_count = rows
                     .iter()
-                    .map(|row| match row {
+                    .map(|row| match maybe_resolve_union(row) {
                         Value::Array(values) => values.len(),
                         _ => 1,
                     })
