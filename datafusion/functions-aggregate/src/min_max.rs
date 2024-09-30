@@ -256,9 +256,7 @@ impl AggregateUDFImpl for Max {
             Decimal256(_, _) => {
                 instantiate_max_accumulator!(data_type, i256, Decimal256Type)
             }
-            BinaryView => {
-                Ok(Box::new(GroupsAccumulatorMaxStringView::default()))
-            }
+            BinaryView => Ok(Box::new(GroupsAccumulatorMaxStringView::default())),
 
             // It would be nice to have a fast implementation for Strings as well
             // https://github.com/apache/datafusion/issues/6906
@@ -1039,9 +1037,7 @@ impl AggregateUDFImpl for Min {
             Decimal256(_, _) => {
                 instantiate_min_accumulator!(data_type, i256, Decimal256Type)
             }
-            BinaryView => {
-                Ok(Box::new(GroupsAccumulatorMinStringView::default()))
-            }
+            BinaryView => Ok(Box::new(GroupsAccumulatorMinStringView::default())),
 
             // It would be nice to have a fast implementation for Strings as well
             // https://github.com/apache/datafusion/issues/6906
