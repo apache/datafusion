@@ -25,8 +25,7 @@ use crate::parser::{
     LexOrdering, Statement as DFStatement,
 };
 use crate::planner::{
-    object_name_to_qualifier, object_name_to_table_reference, ContextProvider,
-    PlannerContext, SqlToRel,
+    object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
 };
 use crate::utils::normalize_ident;
 
@@ -1240,7 +1239,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let ordered_exprs =
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
 
-        let idents: Vec<Ident> = name.split('.').map(Ident::from).collect();
         let name = self.object_name_to_table_reference(name)?;
         let constraints =
             Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;

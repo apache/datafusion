@@ -181,7 +181,7 @@ pub(crate) type LexOrdering = Vec<OrderByExpr>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateExternalTable {
     /// Table name
-    pub name: String,
+    pub name: ObjectName,
     /// Optional schema
     pub columns: Vec<ColumnDef>,
     /// File type (Parquet, NDJSON, CSV, etc)
@@ -813,7 +813,7 @@ impl<'a> DFParser<'a> {
         }
 
         let create = CreateExternalTable {
-            name: table_name.to_string(),
+            name: table_name,
             columns,
             file_type: builder.file_type.unwrap(),
             location: builder.location.unwrap(),
