@@ -136,6 +136,12 @@ impl ListingTableUrl {
         Self::try_new(url, glob)
     }
 
+    /// Creates a new [`ListingTableUrl`] from a url, a valid prefix, and an optional glob
+    /// expression
+    fn new(url: Url, prefix: Path, glob: Option<Pattern>) -> Self {
+        Self { url, prefix, glob }
+    }
+
     /// Creates a new [`ListingTableUrl`] from a url and optional glob expression
     fn try_new(url: Url, glob: Option<Pattern>) -> Result<Self> {
         let prefix = Path::from_url_path(url.path())?;
