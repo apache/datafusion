@@ -992,6 +992,7 @@ impl LogicalPlan {
                 if_not_exists,
                 or_replace,
                 column_defaults,
+                temporary,
                 ..
             })) => {
                 self.assert_no_expressions(expr)?;
@@ -1004,6 +1005,7 @@ impl LogicalPlan {
                         if_not_exists: *if_not_exists,
                         or_replace: *or_replace,
                         column_defaults: column_defaults.clone(),
+                        temporary: *temporary,
                     },
                 )))
             }
@@ -1011,6 +1013,7 @@ impl LogicalPlan {
                 name,
                 or_replace,
                 definition,
+                temporary,
                 ..
             })) => {
                 self.assert_no_expressions(expr)?;
@@ -1019,6 +1022,7 @@ impl LogicalPlan {
                     input: Arc::new(input),
                     name: name.clone(),
                     or_replace: *or_replace,
+                    temporary: *temporary,
                     definition: definition.clone(),
                 })))
             }
