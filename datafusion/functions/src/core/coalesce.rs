@@ -60,6 +60,7 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        let arg_types = self.coerce_types(arg_types)?;
         Ok(arg_types[0].clone())
     }
 
@@ -153,5 +154,10 @@ mod test {
             .return_type(&[DataType::Date32, DataType::Date32])
             .unwrap();
         assert_eq!(return_type, DataType::Date32);
+
+        let return_type_args_coercion = coalesce
+            .return_type(&[DataType::Decimal128(10, 2), DataType::Int64])
+            .unwrap();
+        assert_eq!(return_type_args_coercion, DataType::Decimal128(22, 2));
     }
 }
