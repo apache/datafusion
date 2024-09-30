@@ -49,6 +49,8 @@
 /// /// This creates `add_one_udwf()` from `AddOne`.
 /// get_or_init_udwf!(AddOne, add_one, "Adds one to each row value in window partition.");
 /// #
+/// # assert_eq!(add_one_udwf().name(), "add_one");
+/// #
 /// #  #[derive(Debug)]
 /// #  struct AddOne {
 /// #      signature: Signature,
@@ -158,6 +160,12 @@ macro_rules! get_or_init_udwf {
 ///     row_number,
 ///     "Returns a unique row number for each row in window partition beginning at 1."
 /// );
+/// #
+/// # assert_eq!(
+/// #     row_number().name_for_alias().unwrap(),
+/// #     "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+/// # );
+/// #
 /// # #[derive(Debug)]
 /// # struct RowNumber {
 /// #     signature: Signature,
@@ -202,6 +210,8 @@ macro_rules! get_or_init_udwf {
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// #
 /// # use datafusion_common::arrow::datatypes::Field;
+/// # use datafusion_common::ScalarValue;
+/// # use datafusion_expr::{col, lit};
 /// #
 /// # get_or_init_udwf!(Lead, lead, "user-defined window function");
 /// #
@@ -221,50 +231,57 @@ macro_rules! get_or_init_udwf {
 ///     [expr, offset, default],
 ///     "user-defined window function"
 /// );
-///#
-///#  #[derive(Debug)]
-///#  struct Lead {
-///#      signature: Signature,
-///#  }
-///#
-///#  impl Default for Lead {
-///#      fn default() -> Self {
-///#          Self {
-///#              signature: Signature::one_of(
-///#                  vec![
-///#                      TypeSignature::Any(1),
-///#                      TypeSignature::Any(2),
-///#                      TypeSignature::Any(3),
-///#                  ],
-///#                  Volatility::Immutable,
-///#              ),
-///#          }
-///#      }
-///#  }
-///#
-///#  impl WindowUDFImpl for Lead {
-///#      fn as_any(&self) -> &dyn Any {
-///#          self
-///#      }
-///#      fn name(&self) -> &str {
-///#          "lead"
-///#      }
-///#      fn signature(&self) -> &Signature {
-///#          &self.signature
-///#      }
-///#      fn partition_evaluator(
-///#          &self,
-///#      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
-///#          unimplemented!()
-///#      }
-///#      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
-///#          Ok(Field::new(
-///#              field_args.name(),
-///#              field_args.get_input_type(0).unwrap(),
-///#              false,
-///#          ))
-///#      }
-///#  }
+/// #
+/// # assert_eq!(
+/// #     lead(col("a"), lit(1i64), lit(ScalarValue::Null))
+/// #         .name_for_alias()
+/// #         .unwrap(),
+/// #     "lead(a,Int64(1),NULL) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+/// # );
+/// #
+/// # #[derive(Debug)]
+/// # struct Lead {
+/// #     signature: Signature,
+/// # }
+/// #
+/// # impl Default for Lead {
+/// #     fn default() -> Self {
+/// #         Self {
+/// #             signature: Signature::one_of(
+/// #                 vec![
+/// #                     TypeSignature::Any(1),
+/// #                     TypeSignature::Any(2),
+/// #                     TypeSignature::Any(3),
+/// #                 ],
+/// #                 Volatility::Immutable,
+/// #             ),
+/// #         }
+/// #     }
+/// # }
+/// #
+/// # impl WindowUDFImpl for Lead {
+/// #     fn as_any(&self) -> &dyn Any {
+/// #         self
+/// #     }
+/// #     fn name(&self) -> &str {
+/// #         "lead"
+/// #     }
+/// #     fn signature(&self) -> &Signature {
+/// #         &self.signature
+/// #     }
+/// #     fn partition_evaluator(
+/// #         &self,
+/// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+/// #         unimplemented!()
+/// #     }
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #         Ok(Field::new(
+/// #             field_args.name(),
+/// #             field_args.get_input_type(0).unwrap(),
+/// #             false,
+/// #         ))
+/// #     }
+/// # }
 /// ```
 #[macro_export]
 macro_rules! create_udwf_expr {
