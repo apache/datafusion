@@ -59,7 +59,7 @@ use arrow::array::{
     UInt64Array,
 };
 use arrow::compute::concat_batches;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef, UInt32Type, UInt64Type};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
@@ -731,13 +731,14 @@ pub(crate) fn build_side_determined_results(
         && need_to_produce_result_in_final(build_hash_joiner.build_side, join_type)
     {
         // Calculate the indices for build and probe sides based on join type and build side:
-        let (build_indices, probe_indices) = calculate_indices_by_join_type(
-            build_hash_joiner.build_side,
-            prune_length,
-            &build_hash_joiner.visited_rows,
-            build_hash_joiner.deleted_offset,
-            join_type,
-        )?;
+        let (build_indices, probe_indices) =
+            calculate_indices_by_join_type::<UInt64Type, UInt32Type>(
+                build_hash_joiner.build_side,
+                prune_length,
+                &build_hash_joiner.visited_rows,
+                build_hash_joiner.deleted_offset,
+                join_type,
+            )?;
 
         // Create an empty probe record batch:
         let empty_probe_batch = RecordBatch::new_empty(probe_schema);

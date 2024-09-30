@@ -390,6 +390,10 @@ pub fn is_ineuqality_operator(op: &Operator) -> bool {
     )
 }
 
+pub fn is_loose_inequality_operator(op: &Operator) -> bool {
+    matches!(op, Operator::LtEq | Operator::GtEq)
+}
+
 /// Checks whether the inequality conditions are valid.
 /// The inequality conditions are valid if the expressions are not null and the expressions are not equal, and left expression is from left schema and right expression is from right schema. Maybe we can reorder the expressions to make it statisfy this condition later, like (right.b < left.a) -> (left.a > right.b).
 pub fn check_inequality_conditions(
@@ -1267,14 +1271,17 @@ pub(crate) fn get_final_indices_from_bit_map(
     (left_indices, right_indices)
 }
 
-pub(crate) fn apply_join_filter_to_indices(
+pub(crate) fn apply_join_filter_to_indices<
+    L: ArrowPrimitiveType,
+    R: ArrowPrimitiveType,
+>(
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
-    build_indices: UInt64Array,
-    probe_indices: UInt32Array,
+    build_indices: PrimitiveArray<L>,
+    probe_indices: PrimitiveArray<R>,
     filter: &JoinFilter,
     build_side: JoinSide,
-) -> Result<(UInt64Array, UInt32Array)> {
+) -> Result<(PrimitiveArray<L>, PrimitiveArray<R>)> {
     if build_indices.is_empty() && probe_indices.is_empty() {
         return Ok((build_indices, probe_indices));
     };
@@ -1304,12 +1311,12 @@ pub(crate) fn apply_join_filter_to_indices(
 
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
-pub(crate) fn build_batch_from_indices(
+pub(crate) fn build_batch_from_indices<L: ArrowPrimitiveType, R: ArrowPrimitiveType>(
     schema: &Schema,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
-    build_indices: &UInt64Array,
-    probe_indices: &UInt32Array,
+    build_indices: &PrimitiveArray<L>,
+    probe_indices: &PrimitiveArray<R>,
     column_indices: &[ColumnIndex],
     build_side: JoinSide,
 ) -> Result<RecordBatch> {

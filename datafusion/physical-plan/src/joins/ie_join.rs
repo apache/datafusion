@@ -1,11 +1,15 @@
 use dashmap::DashMap;
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt::Formatter;
+use std::ops::Range;
 use std::sync::Arc;
 use std::task::Poll;
 
 use crate::joins::utils::{
-    build_join_schema, check_join_is_valid, estimate_join_statistics, ColumnIndex,
+    apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
+    check_inequality_conditions, check_join_is_valid, estimate_join_statistics,
+    inequality_conditions_to_sort_exprs, is_loose_inequality_operator, ColumnIndex,
     JoinFilter, OnceAsync, OnceFut,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -15,15 +19,15 @@ use crate::{
     ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream,
 };
-use arrow::array::{make_comparator, DynComparator};
+use arrow::array::{make_comparator, AsArray, UInt64Builder};
 
 use arrow::compute::kernels::sort::SortOptions;
 use arrow::compute::kernels::take::take;
 use arrow::compute::{concat, lexsort_to_indices, SortColumn};
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{Int64Type, Schema, SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{ArrayRef, Int64Array};
-use datafusion_common::{plan_err, Result, Statistics};
+use arrow_array::{ArrayRef, Int64Array, UInt64Array};
+use datafusion_common::{plan_err, JoinSide, Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
@@ -32,8 +36,6 @@ use datafusion_physical_expr::{Partitioning, PhysicalExprRef, PhysicalSortExpr};
 use futures::{ready, Stream};
 use parking_lot::RwLock;
 
-use super::utils::{check_inequality_conditions, inequality_conditions_to_sort_exprs};
-
 /// IEJoinExec is optimized join without any equijoin conditions in `ON` clause but with two or more inequality conditions.
 /// For more detail algorithm, see https://vldb.org/pvldb/vol8/p2074-khayyat.pdf
 ///
@@ -41,25 +43,26 @@ use super::utils::{check_inequality_conditions, inequality_conditions_to_sort_ex
 ///
 /// SELECT t1.t id, t2.t id
 /// FROM west t1, west t2
-/// WHERE t1.time > t2.time AND t1.cost < t2.cost
+/// WHERE t1.time < t2.time AND t1.cost < t2.cost
 ///
 /// There is no equijoin condition in the `ON` clause, but there are two inequality conditions.
 /// Currently, left table is t1, right table is t2.
 ///
-/// The berif idea of this algorithm is converting it to inversion of permutation problem. For a permutation of a[0..n-1], for a pairs (i, j) such that i < j and a[i] > a[j], we call it an inversion of permutation.
-/// For example, for a[0..4] = [2, 3, 1, 4], there are 2 inversions: (0, 2), (1, 2)
+/// The berif idea of this algorithm is converting it to ordered pair/inversion pair of permutation problem. For a permutation of a[0..n-1], for a pairs (i, j) such that i < j and a[i] < a[j], we call it an ordered pair of permutation.
 ///
-/// To convert query q to inversion of permutation problem. We will do the following steps:
+/// For example, for a[0..4] = [2, 1, 3, 0], there are 2 ordered pairs: (2, 3), (1, 3)
+///
+/// To convert query q to ordered pair of permutation problem. We will do the following steps:
 /// 1. Sort t1 union t2 by time in ascending order, mark the sorted table as l1.
 /// 2. Sort t1 union t2 by cost in ascending order, mark the sorted table as l2.
 /// 3. For each element e_i in l2, find the index j in l1 such that l1[j] = e_i, mark the computed index as permutation array p.
-/// 4. Compute the inversion of permutation array p. For a pair (i, j) in l2, if i < j then e_i.cost < e_j.cost because l2 is sorted by cost in ascending order. And if p[i] > p[j], then e_i.time > e_j.time because l1 is sorted by time in ascending order.
-/// 5. The result of query q is the pairs (i, j) in l2 such that i < j and p[i] > p[j] and e_i is from right table and e_j is from left table.
+/// 4. Compute the inversion of permutation array p. For a pair (i, j) in l2, if i < j then e_i.cost < e_j.cost because l2 is sorted by cost in ascending order. And if p[i] < p[j], then e_i.time < e_j.time because l1 is sorted by time in ascending order.
+/// 5. The result of query q is the pairs (i, j) in l2 such that i < j and p[i] < p[j] and e_i is from right table and e_j is from left table.
 ///
-/// To get the final result, we need to get all the pairs (i, j) in l2 such that i < j and p[i] > p[j] and e_i is from right table and e_j is from left table. We can do this by the following steps:
-/// 1. Traverse l2 from left to right, at offset j, we can maintain BtreeSet or bitmap to record all the p[i] that i < j, then find all the pairs (i, j) in l2 such that p[i] > p[j].
+/// To get the final result, we need to get all the pairs (i, j) in l2 such that i < j and p[i] < p[j] and e_i is from right table and e_j is from left table. We can do this by the following steps:
+/// 1. Traverse l2 from left to right, at offset j, we can maintain BtreeSet or bitmap to record all the p[i] that i < j, then find all the pairs (i, j) in l2 such that p[i] < p[j].
 ///
-/// To parallel the above algorithm, we can sort t1 and t2 by time (condition 1) firstly, and repartition the data into N partitions, then join t1[i] and t2[j] respectively. And if the max time of t1[i] is smaller than the min time of t2[j], we can skip the join of t1[i] and t2[j] because there is no join result between them according to condition 1.
+/// To parallel the above algorithm, we can sort t1 and t2 by time (condition 1) firstly, and repartition the data into N partitions, then join t1[i] and t2[j] respectively. And if the minimum time of t1[i] is greater than the maximum time of t2[j], we can skip the join of t1[i] and t2[j] because there is no join result between them according to condition 1.
 #[derive(Debug)]
 pub struct IEJoinExec {
     /// left side
@@ -318,26 +321,31 @@ impl ExecutionPlan for IEJoinExec {
 }
 
 #[derive(Debug)]
-/// SortedBlock contains arrays that are sorted by first column
+/// SortedBlock contains arrays that are sorted by specified columns
 pub struct SortedBlock {
     pub array: Vec<ArrayRef>,
-    pub sort_option: SortOptions,
+    pub sort_options: Vec<(usize, SortOptions)>,
 }
 
 impl SortedBlock {
-    pub fn new(array: Vec<ArrayRef>, sort_option: SortOptions) -> Self {
-        Self { array, sort_option }
+    pub fn new(array: Vec<ArrayRef>, sort_options: Vec<(usize, SortOptions)>) -> Self {
+        Self {
+            array,
+            sort_options,
+        }
     }
 
-    /// sort the block by the first column
-    pub fn sort(&mut self) -> Result<()> {
-        let indices = lexsort_to_indices(
-            &[SortColumn {
-                values: self.array[0].clone(),
-                options: Some(self.sort_option),
-            }],
-            None,
-        )?;
+    /// sort the block by the specified columns
+    pub fn sort_by_columns(&mut self) -> Result<()> {
+        let sort_columns = self
+            .sort_options
+            .iter()
+            .map(|(i, opt)| SortColumn {
+                values: self.array[*i].clone(),
+                options: Some(*opt),
+            })
+            .collect::<Vec<_>>();
+        let indices = lexsort_to_indices(&sort_columns, None)?;
         self.array = self
             .array
             .iter()
@@ -346,13 +354,17 @@ impl SortedBlock {
         Ok(())
     }
 
-    /// make_comparator creates a comparator for the first column of the block
-    pub fn make_comparator(&self) -> Result<DynComparator> {
-        Ok(make_comparator(
-            &self.array[0],
-            &self.array[0],
-            self.sort_option,
-        )?)
+    pub fn arrays(&self) -> &[ArrayRef] {
+        &self.array
+    }
+
+    pub fn slice(&self, range: Range<usize>) -> Self {
+        let array = self
+            .array
+            .iter()
+            .map(|array| array.slice(range.start, range.end - range.start))
+            .collect();
+        SortedBlock::new(array, self.sort_options.clone())
     }
 }
 
@@ -378,11 +390,8 @@ struct IEJoinStream {
     /// join filter
     filter: Option<JoinFilter>,
     /// type of the join
-    join_type: JoinType,
-    /// left condition
-    left_conditions: Arc<[PhysicalSortExpr; 2]>,
-    /// right condition
-    right_conditions: Arc<[PhysicalSortExpr; 2]>,
+    /// Only support inner join currently
+    _join_type: JoinType,
     /// operator of the inequality condition
     operators: Arc<[Operator; 2]>,
     /// sort options of the inequality condition
@@ -391,12 +400,16 @@ struct IEJoinStream {
     left_data: OnceFut<Arc<[RecordBatch]>>,
     /// right table data
     right_data: OnceFut<Arc<[RecordBatch]>>,
+    /// column indices
+    column_indices: Vec<ColumnIndex>,
     /// partition pair
     pair: (usize, usize),
     /// left block
     left_block: OnceFut<SortedBlock>,
     /// right block
     right_block: OnceFut<SortedBlock>,
+    /// finished
+    finished: bool,
 }
 
 impl IEJoinStream {
@@ -404,6 +417,9 @@ impl IEJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
+        if self.finished {
+            return Poll::Ready(None);
+        }
         let left_block = match ready!(self.left_block.get_shared(cx)) {
             Ok(block) => block,
             Err(e) => return Poll::Ready(Some(Err(e))),
@@ -413,7 +429,86 @@ impl IEJoinStream {
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
 
-        todo!()
+        if !IEJoinStream::check_intersection(
+            &left_block,
+            &right_block,
+            &self.sort_options[0],
+        ) {
+            return Poll::Ready(None);
+        }
+
+        let (l1_indexes, permutation) = IEJoinStream::compute_permutation(
+            &left_block,
+            &right_block,
+            &self.sort_options,
+            &self.operators,
+        )?;
+
+        let (left_indices, right_indices) =
+            IEJoinStream::build_join_indices(&l1_indexes, &permutation)?;
+
+        let left_batch = match ready!(self.left_data.get_shared(cx)) {
+            Ok(batches) => batches[self.pair.0].clone(),
+            Err(e) => return Poll::Ready(Some(Err(e))),
+        };
+
+        let right_batch = match ready!(self.right_data.get_shared(cx)) {
+            Ok(batches) => batches[self.pair.1].clone(),
+            Err(e) => return Poll::Ready(Some(Err(e))),
+        };
+
+        let (left_indices, right_indices) = if let Some(filter) = &self.filter {
+            apply_join_filter_to_indices(
+                &left_batch,
+                &right_batch,
+                left_indices,
+                right_indices,
+                &filter,
+                JoinSide::Left,
+            )?
+        } else {
+            (left_indices, right_indices)
+        };
+
+        let batch = build_batch_from_indices(
+            &self.schema,
+            &left_batch,
+            &right_batch,
+            &left_indices,
+            &right_indices,
+            &self.column_indices,
+            JoinSide::Left,
+        );
+
+        self.finished = true;
+        Poll::Ready(Some(batch))
+    }
+
+    /// check if there is an intersection between two sorted blocks
+    fn check_intersection(
+        left_block: &SortedBlock,
+        right_block: &SortedBlock,
+        sort_options: &SortOptions,
+    ) -> bool {
+        // filter all null result
+        if left_block.arrays()[0].null_count() == left_block.arrays()[0].len()
+            || right_block.arrays()[0].null_count() == right_block.arrays()[0].len()
+        {
+            return false;
+        }
+        let comparator = make_comparator(
+            &left_block.arrays()[0],
+            &right_block.arrays()[0],
+            *sort_options,
+        )
+        .unwrap();
+        // get the valid count of right block
+        let m = right_block.arrays()[0].len() - right_block.arrays()[0].null_count();
+        // if the max valid element of right block is smaller than the min valid element of left block, there is no intersection
+        if comparator(0, m - 1) == std::cmp::Ordering::Greater {
+            return false;
+        }
+        true
     }
 
     /// this function computes the permutation array of condition 2 on condition 1
@@ -437,10 +532,13 @@ impl IEJoinStream {
     fn compute_permutation(
         left_block: &SortedBlock,
         right_block: &SortedBlock,
-    ) -> Result<SortedBlock> {
+        sort_options: &[SortOptions; 2],
+        operators: &[Operator; 2],
+    ) -> Result<(Int64Array, UInt64Array)> {
         // step1. sort the union block l1
         let n = left_block.array[0].len() as i64;
         let m = right_block.array[0].len() as i64;
+        // concat the left block and right block
         let cond1 =
             concat(&[&left_block.array[0].clone(), &right_block.array[0].clone()])?;
         let cond2 =
@@ -463,8 +561,121 @@ impl IEJoinStream {
                 .collect::<Vec<_>>(),
             ),
         ])?;
+        let mut l1 = SortedBlock::new(
+            vec![cond1, indexes, cond2],
+            vec![
+                (0, sort_options[0]),
+                (
+                    1,
+                    SortOptions {
+                        // if the operator is loose inequality,
+                        descending: !is_loose_inequality_operator(&operators[0]),
+                        nulls_first: false,
+                    },
+                ),
+            ],
+        );
+        // TODO: use more sort column to handle loose order
+        l1.sort_by_columns()?;
+        // ignore the null values of the first condition
+        // TODO: test all null result.
+        let valid = (l1.arrays()[0].len() - l1.arrays()[0].null_count()) as i64;
+        let l1 = l1.slice(0..valid as usize);
 
-        todo!()
+        // l1_indexes[i] = j means the ith element of l1 is the jth element of original recordbatch
+        let l1_indexes = l1.arrays()[1].clone().as_primitive::<Int64Type>().clone();
+
+        let permutation = UInt64Array::from(
+            std::iter::successors(Some(0 as u64), |&x| {
+                if x < (valid as u64) {
+                    Some(x + 1)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>(),
+        );
+
+        let mut l2 = SortedBlock::new(
+            vec![
+                l1.arrays()[2].clone(),
+                l1.arrays()[1].clone(),
+                Arc::new(permutation),
+            ],
+            vec![
+                (0, sort_options[1]),
+                (
+                    1,
+                    SortOptions {
+                        descending: !is_loose_inequality_operator(&operators[1]),
+                        nulls_first: false,
+                    },
+                ),
+            ],
+        );
+        l2.sort_by_columns()?;
+        let valid = (l2.arrays()[0].len() - l2.arrays()[0].null_count()) as usize;
+        let l2 = l2.slice(0..valid);
+
+        Ok((
+            l1_indexes,
+            l2.arrays()[2].clone().as_primitive::<UInt64Type>().clone(),
+        ))
+    }
+
+    fn build_join_indices(
+        l1_indexes: &Int64Array,
+        permutation: &UInt64Array,
+    ) -> Result<(UInt64Array, UInt64Array)> {
+        let mut left_builder = UInt64Builder::new();
+        let mut right_builder = UInt64Builder::new();
+        let mut range_map = BTreeMap::<u64, u64>::new();
+        for p in permutation.values().iter() {
+            let l1_index = unsafe { l1_indexes.value_unchecked(*p as usize) };
+            if l1_index < 0 {
+                // index from left table
+                IEJoinStream::insert_range_map(&mut range_map, *p as u64);
+                continue;
+            }
+            // index from right table, remap to 0..m
+            let right_index = (l1_index - 1) as u64;
+            for range in range_map.range(0..(*p as u64)) {
+                let (start, end) = range;
+                let (start, end) = (*start, std::cmp::min(*end, *p as u64));
+                for left_index in start..end {
+                    left_builder.append_value(
+                        -(unsafe { l1_indexes.value_unchecked(left_index as usize) } + 1)
+                            as u64,
+                    );
+                    right_builder.append_value(right_index);
+                }
+            }
+        }
+        Ok((left_builder.finish(), right_builder.finish()))
+    }
+
+    fn insert_range_map(range_map: &mut BTreeMap<u64, u64>, p: u64) {
+        let mut range = (p, p + 1);
+        // merge it with next consecutive range
+        // for example, if range_map is [(1, 2), (3, 4), (5, 6)], then insert(2) will make it [(1, 2), (2, 4), (5, 6)]
+        if let Some(end) = range_map.get(&(p + 1)) {
+            range = (p, *end);
+            range_map.remove(&(p + 1));
+        }
+        let mut need_insert = true;
+        let up_range = range_map.range_mut(0..p);
+        // if previous range is consecutive, merge them
+        // follow the example, [(1, 2), (2, 4), (5, 6)] will be merged into [(1, 4), (5, 6)]
+        if let Some(head) = up_range.last() {
+            if head.1 == &p {
+                *head.1 = range.1;
+                need_insert = false;
+            }
+        }
+        // if this range is not consecutive with previous one, insert it
+        if need_insert {
+            range_map.insert(range.0, range.1);
+        }
     }
 }
 
