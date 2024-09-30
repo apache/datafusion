@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::aggregates::group_values::group_column::{
-    ByteGroupValueBuilder, GroupColumn, PrimitiveGroupValueBuilder,
+    ByteGroupValueBuilder, GroupColumn, NonNullPrimitiveGroupValueBuilder,
+    PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
@@ -123,6 +124,26 @@ impl GroupValuesColumn {
     }
 }
 
+/// instantiates a [`PrimitiveGroupValueBuilder`] or
+/// [`NonNullPrimitiveGroupValueBuilder`]  and pushes it into $v
+///
+/// Arguments:
+/// `$v`: the vector to push the new builder into
+/// `$nullable`: whether the input can contains nulls
+/// `$t`: the primitive type of the builder
+///
+macro_rules! instantiate_primitive {
+    ($v:expr, $nullable:expr, $t:ty) => {
+        if $nullable {
+            let b = PrimitiveGroupValueBuilder::<$t>::new();
+            $v.push(Box::new(b) as _)
+        } else {
+            let b = NonNullPrimitiveGroupValueBuilder::<$t>::new();
+            $v.push(Box::new(b) as _)
+        }
+    };
+}
+
 impl GroupValues for GroupValuesColumn {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         let n_rows = cols[0].len();
@@ -133,54 +154,22 @@ impl GroupValues for GroupValuesColumn {
             for f in self.schema.fields().iter() {
                 let nullable = f.is_nullable();
                 match f.data_type() {
-                    &DataType::Int8 => {
-                        let b = PrimitiveGroupValueBuilder::<Int8Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::Int16 => {
-                        let b = PrimitiveGroupValueBuilder::<Int16Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::Int32 => {
-                        let b = PrimitiveGroupValueBuilder::<Int32Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::Int64 => {
-                        let b = PrimitiveGroupValueBuilder::<Int64Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::UInt8 => {
-                        let b = PrimitiveGroupValueBuilder::<UInt8Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::UInt16 => {
-                        let b = PrimitiveGroupValueBuilder::<UInt16Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::UInt32 => {
-                        let b = PrimitiveGroupValueBuilder::<UInt32Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::UInt64 => {
-                        let b = PrimitiveGroupValueBuilder::<UInt64Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
+                    &DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type),
+                    &DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type),
+                    &DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type),
+                    &DataType::Int64 => instantiate_primitive!(v, nullable, Int64Type),
+                    &DataType::UInt8 => instantiate_primitive!(v, nullable, UInt8Type),
+                    &DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type),
+                    &DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type),
+                    &DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type),
                     &DataType::Float32 => {
-                        let b = PrimitiveGroupValueBuilder::<Float32Type>::new(nullable);
-                        v.push(Box::new(b) as _)
+                        instantiate_primitive!(v, nullable, Float32Type)
                     }
                     &DataType::Float64 => {
-                        let b = PrimitiveGroupValueBuilder::<Float64Type>::new(nullable);
-                        v.push(Box::new(b) as _)
+                        instantiate_primitive!(v, nullable, Float64Type)
                     }
-                    &DataType::Date32 => {
-                        let b = PrimitiveGroupValueBuilder::<Date32Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::Date64 => {
-                        let b = PrimitiveGroupValueBuilder::<Date64Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
+                    &DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type),
+                    &DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type),
                     &DataType::Utf8 => {
                         let b = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
                         v.push(Box::new(b) as _)
