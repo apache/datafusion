@@ -76,7 +76,6 @@
 /// /// This creates `add_one_udwf()` from `AddOne`.
 /// get_or_init_udwf!(AddOne, add_one, "Adds one to each row value in window partition.");
 /// ```
-
 #[macro_export]
 macro_rules! get_or_init_udwf {
     ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
@@ -84,7 +83,6 @@ macro_rules! get_or_init_udwf {
     };
 
     ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr, $CTOR:path) => {
-
         paste::paste! {
             #[doc = concat!(" Singleton instance of [`", stringify!($OUT_FN_NAME), "`], ensures the user-defined")]
             #[doc = concat!(" window function is only created once.")]
