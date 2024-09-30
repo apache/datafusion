@@ -33,48 +33,49 @@
 /// # Example
 ///
 /// ```
-/// use std::any::Any;
-/// use datafusion_common::arrow::datatypes::{DataType, Field};
-/// use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
-///
-/// use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-/// use datafusion_functions_window::get_or_init_udwf;
-///
-/// #[derive(Debug)]
-/// struct AddOne {
-///     signature: Signature,
-/// }
-///
-/// impl Default for AddOne {
-///     fn default() -> Self {
-///         Self {
-///             signature: Signature::numeric(1, Volatility::Immutable),
-///         }
-///     }
-/// }
-///
-/// impl WindowUDFImpl for AddOne {
-///     fn as_any(&self) -> &dyn Any {
-///         self
-///     }
-///     fn name(&self) -> &str {
-///         "add_one"
-///     }
-///     fn signature(&self) -> &Signature {
-///         &self.signature
-///     }
-///     fn partition_evaluator(
-///         &self,
-///     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
-///         unimplemented!("unnecessary for doc test")
-///     }
-///     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
-///         Ok(Field::new(field_args.name(), DataType::Int64, false))
-///     }
-/// }
-///
+/// # use std::any::Any;
+/// # use datafusion_common::arrow::datatypes::{DataType, Field};
+/// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+/// #
+/// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// # use datafusion_functions_window::get_or_init_udwf;
+/// #
 /// /// This creates `add_one_udwf()` from `AddOne`.
 /// get_or_init_udwf!(AddOne, add_one, "Adds one to each row value in window partition.");
+/// #
+/// #  #[derive(Debug)]
+/// #  struct AddOne {
+/// #      signature: Signature,
+/// #  }
+/// #
+/// #  impl Default for AddOne {
+/// #      fn default() -> Self {
+/// #          Self {
+/// #              signature: Signature::numeric(1, Volatility::Immutable),
+/// #          }
+/// #      }
+/// #  }
+/// #
+/// #  impl WindowUDFImpl for AddOne {
+/// #      fn as_any(&self) -> &dyn Any {
+/// #          self
+/// #      }
+/// #      fn name(&self) -> &str {
+/// #          "add_one"
+/// #      }
+/// #      fn signature(&self) -> &Signature {
+/// #          &self.signature
+/// #      }
+/// #      fn partition_evaluator(
+/// #          &self,
+/// #      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+/// #          unimplemented!("unnecessary for doc test")
+/// #      }
+/// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #          Ok(Field::new(field_args.name(), DataType::Int64, false))
+/// #      }
+/// #  }
+/// #
 /// ```
 #[macro_export]
 macro_rules! get_or_init_udwf {
@@ -128,18 +129,13 @@ macro_rules! get_or_init_udwf {
 ///
 /// # Example
 ///
-/// 1. Function with zero parameters
+/// 1. With zero parameters
 /// ```
 /// # use std::any::Any;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 /// # use datafusion_functions_window::{create_udwf_expr, get_or_init_udwf};
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-/// # #[derive(Debug)]
-/// struct RowNumber {
-///     signature: Signature,
-/// }
-///
 /// # get_or_init_udwf!(
 /// #     RowNumber,
 /// #     row_number,
@@ -156,7 +152,10 @@ macro_rules! get_or_init_udwf {
 ///     row_number,
 ///     "Returns a unique row number for each row in window partition beginning at 1."
 /// );
-///
+/// # #[derive(Debug)]
+/// # struct RowNumber {
+/// #     signature: Signature,
+/// # }
 /// # impl Default for RowNumber {
 /// #     fn default() -> Self {
 /// #         Self {
@@ -164,7 +163,6 @@ macro_rules! get_or_init_udwf {
 /// #         }
 /// #     }
 /// # }
-///
 /// # impl WindowUDFImpl for RowNumber {
 /// #     fn as_any(&self) -> &dyn Any {
 /// #         self
@@ -184,9 +182,84 @@ macro_rules! get_or_init_udwf {
 /// #         Ok(Field::new(field_args.name(), DataType::UInt64, false))
 /// #     }
 /// # }
-///
 /// ```
-
+///
+/// 2. With at least 1 parameter
+/// ```
+/// # use std::any::Any;
+/// #
+/// # use datafusion_expr::{
+/// #     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDFImpl,
+/// # };
+/// #
+/// # use datafusion_functions_window::{create_udwf_expr, get_or_init_udwf};
+/// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// #
+/// # use datafusion_common::arrow::datatypes::Field;
+/// #
+/// # get_or_init_udwf!(Lead, lead, "user-defined window function");
+/// #
+/// // Creates `lead(expr, offset, default)` with 3 parameters
+/// //
+/// // The macros expands into this:
+/// // pub fn lead(
+/// //     expr: datafusion_expr::Expr,
+/// //     offset: datafusion_expr::Expr,
+/// //     default: datafusion_expr::Expr,
+/// // ) -> datafusion_expr::Expr {
+/// //     lead_udwf().call(vec![expr, offset, default])
+/// // }
+/// create_udwf_expr!(
+///     Lead,
+///     lead,
+///     [expr, offset, default],
+///     "user-defined window function"
+/// );
+///#
+///#  #[derive(Debug)]
+///#  struct Lead {
+///#      signature: Signature,
+///#  }
+///#
+///#  impl Default for Lead {
+///#      fn default() -> Self {
+///#          Self {
+///#              signature: Signature::one_of(
+///#                  vec![
+///#                      TypeSignature::Any(1),
+///#                      TypeSignature::Any(2),
+///#                      TypeSignature::Any(3),
+///#                  ],
+///#                  Volatility::Immutable,
+///#              ),
+///#          }
+///#      }
+///#  }
+///#
+///#  impl WindowUDFImpl for Lead {
+///#      fn as_any(&self) -> &dyn Any {
+///#          self
+///#      }
+///#      fn name(&self) -> &str {
+///#          "lead"
+///#      }
+///#      fn signature(&self) -> &Signature {
+///#          &self.signature
+///#      }
+///#      fn partition_evaluator(
+///#          &self,
+///#      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+///#          unimplemented!()
+///#      }
+///#      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+///#          Ok(Field::new(
+///#              field_args.name(),
+///#              field_args.get_input_type(0).unwrap(),
+///#              false,
+///#          ))
+///#      }
+///#  }
+/// ```
 #[macro_export]
 macro_rules! create_udwf_expr {
     // zero arguments
