@@ -146,6 +146,11 @@ fn roundtrip_statement() -> Result<()> {
             sum(id) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) from person"#,
             "SELECT id, sum(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) from person",
             "WITH t1 AS (SELECT j1_id AS id, j1_string name FROM j1), t2 AS (SELECT j2_id AS id, j2_string name FROM j2) SELECT * FROM t1 JOIN t2 USING (id, name)",
+            r#"SELECT id, first_name,
+            SUM(id) AS total_sum,
+            SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
+            MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total
+            FROM person GROUP BY id, first_name"#,
         ];
 
     // For each test sql string, we transform as follows:
@@ -161,6 +166,7 @@ fn roundtrip_statement() -> Result<()> {
         let state = MockSessionState::default()
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
+            .with_aggregate_function(max_udaf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);

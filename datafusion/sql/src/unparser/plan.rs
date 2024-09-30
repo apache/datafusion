@@ -36,7 +36,10 @@ use super::{
         rewrite_plan_for_sort_on_non_projected_fields,
         subquery_alias_inner_query_and_columns,
     },
-    utils::{find_agg_node_within_select, unproject_window_exprs, AggVariant},
+    utils::{
+        find_agg_node_within_select, find_window_nodes_within_select,
+        unproject_window_exprs,
+    },
     Unparser,
 };
 
@@ -170,13 +173,17 @@ impl Unparser<'_> {
         p: &Projection,
         select: &mut SelectBuilder,
     ) -> Result<()> {
-        match find_agg_node_within_select(plan, None, true) {
-            Some(AggVariant::Aggregate(agg)) => {
+        match (
+            find_agg_node_within_select(plan, true),
+            find_window_nodes_within_select(plan, None, true),
+        ) {
+            (Some(agg), window) => {
+                let window_option = window.as_deref();
                 let items = p
                     .expr
                     .iter()
                     .map(|proj_expr| {
-                        let unproj = unproject_agg_exprs(proj_expr, agg)?;
+                        let unproj = unproject_agg_exprs(proj_expr, agg, window_option)?;
                         self.select_item_to_sql(&unproj)
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -190,7 +197,7 @@ impl Unparser<'_> {
                     vec![],
                 ));
             }
-            Some(AggVariant::Window(window)) => {
+            (None, Some(window)) => {
                 let items = p
                     .expr
                     .iter()
@@ -202,7 +209,7 @@ impl Unparser<'_> {
 
                 select.projection(items);
             }
-            None => {
+            _ => {
                 let items = p
                     .expr
                     .iter()
@@ -285,10 +292,10 @@ impl Unparser<'_> {
                 self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
             }
             LogicalPlan::Filter(filter) => {
-                if let Some(AggVariant::Aggregate(agg)) =
-                    find_agg_node_within_select(plan, None, select.already_projected())
+                if let Some(agg) =
+                    find_agg_node_within_select(plan, select.already_projected())
                 {
-                    let unprojected = unproject_agg_exprs(&filter.predicate, agg)?;
+                    let unprojected = unproject_agg_exprs(&filter.predicate, agg, None)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
