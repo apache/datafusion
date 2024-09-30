@@ -32,7 +32,7 @@ use crate::datasource::{
     physical_plan::{FileScanConfig, FileSinkConfig},
 };
 use crate::execution::context::SessionState;
-use datafusion_catalog::TableProvider;
+use datafusion_catalog::{DynamicFileCatalog, TableProvider};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
@@ -53,6 +53,7 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_optimizer::OptimizerConfig;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -159,12 +160,40 @@ impl ListingTableConfig {
         let listing_options = ListingOptions::new(file_format)
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions());
+        // If the catalog is a `DynamicFileCatalog`, infer the partition columns from the table path
+        let listing_options = if Self::is_enable_url_table(state) {
+            let partitions = listing_options
+                .infer_partitions(state, self.table_paths.first().unwrap())
+                .await?
+                .into_iter()
+                .map(|col_name| {
+                    (
+                        col_name,
+                        DataType::Dictionary(
+                            Box::new(DataType::UInt16),
+                            Box::new(DataType::Utf8),
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>();
+            listing_options.with_table_partition_cols(partitions)
+        } else {
+            listing_options
+        };
 
         Ok(Self {
             table_paths: self.table_paths,
             file_schema: self.file_schema,
             options: Some(listing_options),
         })
+    }
+
+    fn is_enable_url_table(session: &SessionState) -> bool {
+        session
+            .catalog_list()
+            .as_any()
+            .downcast_ref::<DynamicFileCatalog>()
+            .is_some()
     }
 
     /// Infer the [`SchemaRef`] based on `table_path` suffix.  Requires `self.options` to be set prior to using.
@@ -504,7 +533,7 @@ impl ListingOptions {
     /// Infer the partitioning at the given path on the provided object store.
     /// For performance reasons, it doesn't read all the files on disk
     /// and therefore may fail to detect invalid partitioning.
-    async fn infer_partitions(
+    pub(crate) async fn infer_partitions(
         &self,
         state: &SessionState,
         table_path: &ListingTableUrl,
