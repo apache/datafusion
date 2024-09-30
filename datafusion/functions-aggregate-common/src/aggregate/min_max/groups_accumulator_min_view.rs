@@ -193,7 +193,7 @@ impl GroupsAccumulator for GroupsAccumulatorMinStringView {
         let input_array = &values[0];
 
         if opt_filter.is_none() {
-            return Ok(vec![Arc::<dyn arrow::array::Array>::clone(&input_array)]);
+            return Ok(vec![Arc::<dyn arrow::array::Array>::clone(input_array)]);
         }
 
         let filter = opt_filter.unwrap();
