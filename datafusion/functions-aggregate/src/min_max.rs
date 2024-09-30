@@ -53,6 +53,8 @@ use datafusion_common::{
     downcast_value, exec_err, internal_err, DataFusionError, Result,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use datafusion_functions_aggregate_common::aggregate::min_max::groups_accumulator_max_view::GroupsAccumulatorMaxStringView;
+use datafusion_functions_aggregate_common::aggregate::min_max::groups_accumulator_min_view::GroupsAccumulatorMinStringView;
 use std::fmt::Debug;
 
 use arrow::datatypes::i256;
@@ -193,6 +195,7 @@ impl AggregateUDFImpl for Max {
                 | Time32(_)
                 | Time64(_)
                 | Timestamp(_, _)
+                | BinaryView
         )
     }
 
@@ -253,6 +256,7 @@ impl AggregateUDFImpl for Max {
             Decimal256(_, _) => {
                 instantiate_max_accumulator!(data_type, i256, Decimal256Type)
             }
+            BinaryView => Ok(Box::new(GroupsAccumulatorMaxStringView::default())),
 
             // It would be nice to have a fast implementation for Strings as well
             // https://github.com/apache/datafusion/issues/6906
@@ -972,6 +976,7 @@ impl AggregateUDFImpl for Min {
                 | Time32(_)
                 | Time64(_)
                 | Timestamp(_, _)
+                | BinaryView
         )
     }
 
@@ -1032,6 +1037,7 @@ impl AggregateUDFImpl for Min {
             Decimal256(_, _) => {
                 instantiate_min_accumulator!(data_type, i256, Decimal256Type)
             }
+            BinaryView => Ok(Box::new(GroupsAccumulatorMinStringView::default())),
 
             // It would be nice to have a fast implementation for Strings as well
             // https://github.com/apache/datafusion/issues/6906

@@ -2,7 +2,6 @@
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
@@ -14,7 +13,5 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
-pub mod count_distinct;
-pub mod groups_accumulator;
-pub mod min_max;
+pub mod groups_accumulator_max_view;
+pub mod groups_accumulator_min_view;
