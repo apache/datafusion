@@ -83,7 +83,7 @@ impl GroupsAccumulator for GroupsAccumulatorMaxStringView {
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let num_groups = match emit_to {
             EmitTo::All => self.states.len(),
-            EmitTo::First(n) => std::cmp::min(n, self.states.len()),
+            EmitTo::First(n) => std::cmp::max(n, self.states.len()),
         };
 
         let mut builder = BinaryViewBuilder::new();
@@ -113,7 +113,7 @@ impl GroupsAccumulator for GroupsAccumulatorMaxStringView {
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let num_groups = match emit_to {
             EmitTo::All => self.states.len(),
-            EmitTo::First(n) => std::cmp::min(n, self.states.len()),
+            EmitTo::First(n) => std::cmp::max(n, self.states.len()),
         };
 
         let mut builder = BinaryViewBuilder::new();
