@@ -81,15 +81,11 @@ impl GroupsAccumulator for GroupsAccumulatorMaxStringView {
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let num_groups = match emit_to {
-            EmitTo::All => self.states.len(),
-            EmitTo::First(n) => std::cmp::max(n, self.states.len()),
-        };
+        let states = emit_to.take_needed(&mut self.states);
 
         let mut builder = BinaryViewBuilder::new();
 
-        for i in 0..num_groups {
-            let value = &self.states[i];
+        for value in states {
             if value.is_empty() {
                 builder.append_null();
             } else {
@@ -98,28 +94,15 @@ impl GroupsAccumulator for GroupsAccumulatorMaxStringView {
         }
 
         let array = Arc::new(builder.finish()) as ArrayRef;
-
-        match emit_to {
-            EmitTo::All => {
-                self.states.clear();
-            }
-            EmitTo::First(n) => {
-                self.states.drain(0..n);
-            }
-        }
         Ok(array)
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let num_groups = match emit_to {
-            EmitTo::All => self.states.len(),
-            EmitTo::First(n) => std::cmp::max(n, self.states.len()),
-        };
+        let states = emit_to.take_needed(&mut self.states);
 
         let mut builder = BinaryViewBuilder::new();
 
-        for i in 0..num_groups {
-            let value = &self.states[i];
+        for value in states {
             if value.is_empty() {
                 builder.append_null();
             } else {
@@ -128,15 +111,6 @@ impl GroupsAccumulator for GroupsAccumulatorMaxStringView {
         }
 
         let array = Arc::new(builder.finish()) as ArrayRef;
-
-        match emit_to {
-            EmitTo::All => {
-                self.states.clear();
-            }
-            EmitTo::First(n) => {
-                self.states.drain(0..n);
-            }
-        }
         Ok(vec![array])
     }
 
