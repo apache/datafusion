@@ -1644,6 +1644,83 @@ mod test {
     }
 
     #[test]
+    fn test_avro_nullable_struct() {
+        let schema = apache_avro::Schema::parse_str(
+            r#"
+            {
+                "type": "record",
+                "name": "r1",
+                "fields": [
+                    {
+                        "name": "col1",
+                        "type": [
+                            "null",
+                            {
+                                "type": "record",
+                                "name": "r2",
+                                "fields": [
+                                    {
+                                        "name": "col2",
+                                        "type": ["null", "string"]
+                                    }
+                                ]
+                            }
+                        ],
+                        "default": null
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+        let r1 = apache_avro::to_value(serde_json::json!({ "col1": null }))
+            .unwrap()
+            .resolve(&schema)
+            .unwrap();
+        let r2 = apache_avro::to_value(serde_json::json!({
+            "col1": {
+                "col2": "hello"
+            }
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+        let r3 = apache_avro::to_value(serde_json::json!({
+            "col1": {
+                "col2": null
+            }
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+
+        let mut w = apache_avro::Writer::new(&schema, vec![]);
+        w.append(r1).unwrap();
+        w.append(r2).unwrap();
+        w.append(r3).unwrap();
+        let bytes = w.into_inner().unwrap();
+
+        let mut reader = ReaderBuilder::new()
+            .read_schema()
+            .with_batch_size(3)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 1);
+
+        let expected = [
+            "+---------------+",
+            "| col1          |",
+            "+---------------+",
+            "|               |",
+            "| {col2: hello} |",
+            "| {col2: }      |",
+            "+---------------+",
+        ];
+        assert_batches_eq!(expected, &[batch]);
+    }
+
+    #[test]
     fn test_avro_iterator() {
         let reader = build_reader("alltypes_plain.avro", 5);
         let schema = reader.schema();
