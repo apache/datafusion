@@ -130,13 +130,12 @@ macro_rules! get_or_init_udwf {
 ///
 /// 1. Function with zero parameters
 /// ```
-/// use std::any::Any;
-/// use datafusion_common::arrow::datatypes::{DataType, Field};
-/// use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
-/// use datafusion_functions_window::{create_udwf_expr, get_or_init_udwf};
-/// use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-///
-/// #[derive(Debug)]
+/// # use std::any::Any;
+/// # use datafusion_common::arrow::datatypes::{DataType, Field};
+/// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+/// # use datafusion_functions_window::{create_udwf_expr, get_or_init_udwf};
+/// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// # #[derive(Debug)]
 /// struct RowNumber {
 ///     signature: Signature,
 /// }
@@ -147,6 +146,11 @@ macro_rules! get_or_init_udwf {
 /// #     "Returns a unique row number for each row in window partition beginning at 1."
 /// # );
 /// // Creates `row_number()` API which has no parameters
+/// //
+/// // The macro expands into this:
+/// // pub fn row_number() -> datafusion_expr::Expr {
+/// //     row_number_udwf().call(vec![])
+/// // }
 /// create_udwf_expr!(
 ///     RowNumber,
 ///     row_number,
