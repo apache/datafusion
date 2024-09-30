@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Macros for generating [`WindowUDF`] and a [`WindowFunction`]
+//! expression with a fluent API.
+//!
+//! [`WindowUDF`]: datafusion_expr::WindowUDF
+//! [`WindowFunction`]: datafusion_expr::Expr::WindowFunction
+
 /// Lazily initializes a user-defined window function exactly once
 /// when called concurrently. Repeated calls return a reference to the
 /// same instance.
