@@ -76,4 +76,8 @@ impl UserDefinedLogicalNodeCore for TestUserDefinedPlanNode {
             input: inputs.swap_remove(0),
         })
     }
+
+    fn allows_limit_to_inputs(&self) -> bool {
+        false // Disallow limit push-down by default
+    }
 }

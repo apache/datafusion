@@ -2557,6 +2557,10 @@ mod tests {
         ) -> Result<Self> {
             unimplemented!("NoOp");
         }
+
+        fn allows_limit_to_inputs(&self) -> bool {
+            false // Disallow limit push-down by default
+        }
     }
 
     #[derive(Debug)]

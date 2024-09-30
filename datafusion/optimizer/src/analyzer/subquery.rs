@@ -385,6 +385,10 @@ mod test {
                 empty_schema: Arc::clone(&self.empty_schema),
             })
         }
+
+        fn allows_limit_to_inputs(&self) -> bool {
+            false // Disallow limit push-down by default
+        }
     }
 
     #[test]
