@@ -40,7 +40,7 @@ use arrow::array::*;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -431,6 +431,7 @@ pub(crate) struct GroupedHashAggregateStream {
     random_state: RandomState,
     unique_hashes_count: HashSet<u64>,
     accumulated_batch_size: usize,
+    can_skip_partial_aggregation: bool,
     skip_partial_with_hash_count: bool,
 }
 
@@ -529,6 +530,7 @@ impl GroupedHashAggregateStream {
         // - all accumulators support input batch to intermediate
         //   aggregate state conversion
         // - there is only one GROUP BY expressions set
+        let mut can_skip_partial_aggregation = false;
         let skip_aggregation_probe = if agg.mode == AggregateMode::Partial
             && matches!(group_ordering, GroupOrdering::None)
             && accumulators
@@ -536,6 +538,8 @@ impl GroupedHashAggregateStream {
                 .all(|acc| acc.supports_convert_to_state())
             && agg_group_by.is_single()
         {
+            can_skip_partial_aggregation = true;
+
             let options = &context.session_config().options().execution;
             let probe_rows_threshold =
                 options.skip_partial_aggregation_probe_rows_threshold;
@@ -577,6 +581,7 @@ impl GroupedHashAggregateStream {
             unique_hashes_count: Default::default(),
             accumulated_batch_size: 0,
             skip_partial_with_hash_count: false,
+            can_skip_partial_aggregation,
         })
     }
 }
@@ -624,8 +629,10 @@ impl Stream for GroupedHashAggregateStream {
             match &self.exec_state {
                 ExecutionState::ReadingInput => 'reading_input: {
                     match ready!(self.input.poll_next_unpin(cx)) {
-                        // New batch to aggregate in partial aggregation operator
-                        Some(Ok(batch)) if self.mode == AggregateMode::Partial => {
+                        Some(Ok(batch))
+                            if self.mode == AggregateMode::Partial
+                                && self.can_skip_partial_aggregation =>
+                        {
                             let timer = elapsed_compute.timer();
                             let input_rows = batch.num_rows();
 
@@ -642,6 +649,49 @@ impl Stream for GroupedHashAggregateStream {
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
+                            extract_ok!(
+                                self.group_aggregate_batch(batch, group_by_values)
+                            );
+
+                            self.update_skip_aggregation_probe(input_rows);
+
+                            // If we can begin emitting rows, do so,
+                            // otherwise keep consuming input
+                            assert!(!self.input_done);
+
+                            // If the number of group values equals or exceeds the soft limit,
+                            // emit all groups and switch to producing output
+                            if self.hit_soft_group_limit() {
+                                timer.done();
+                                extract_ok!(self.set_input_done_and_produce_output());
+                                // make sure the exec_state just set is not overwritten below
+                                break 'reading_input;
+                            }
+
+                            if let Some(to_emit) = self.group_ordering.emit_to() {
+                                let batch = extract_ok!(self.emit(to_emit, false));
+                                self.exec_state = ExecutionState::ProducingOutput(batch);
+                                timer.done();
+                                // make sure the exec_state just set is not overwritten below
+                                break 'reading_input;
+                            }
+
+                            extract_ok!(self.emit_early_if_necessary());
+
+                            extract_ok!(self.switch_to_skip_aggregation());
+
+                            timer.done();
+                        }
+
+                        // New batch to aggregate in partial aggregation operator
+                        Some(Ok(batch)) if self.mode == AggregateMode::Partial => {
+                            let timer = elapsed_compute.timer();
+                            let input_rows = batch.num_rows();
+
+                            // Do the grouping
+                            let group_by_values =
+                                self.evalute_grouping_expressions(&batch)?;
+                            self.compute_group_by_hashes(&group_by_values)?;
                             extract_ok!(
                                 self.group_aggregate_batch(batch, group_by_values)
                             );
@@ -1177,13 +1227,14 @@ impl GroupedHashAggregateStream {
 
     /// Transforms input batch to intermediate aggregate state, without grouping it
     fn transform_to_states(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let group_values = evaluate_group_by(&self.group_by, &batch)?;
+        let mut group_values = evaluate_group_by(&self.group_by, &batch)?;
         let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
         let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
 
-        let mut output = group_values.first().cloned().ok_or_else(|| {
-            internal_datafusion_err!("group_values expected to have at least one element")
-        })?;
+        if group_values.is_empty() {
+            return internal_err!("group_values expected to have at least one element");
+        }
+        let mut output = group_values.swap_remove(0);
 
         let iter = self
             .accumulators

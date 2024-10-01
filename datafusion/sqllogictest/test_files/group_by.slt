@@ -5207,3 +5207,32 @@ NULL a 2
 
 statement ok
 drop table t;
+
+# Make sure the query run in multiple partitions
+statement ok
+set datafusion.execution.batch_size = 8;
+
+statement ok
+CREATE EXTERNAL TABLE agg_order (
+c1 INT NOT NULL,
+c2 VARCHAR NOT NULL,
+)
+STORED AS CSV
+LOCATION '../core/tests/data/aggregate_mixed_type.csv'
+OPTIONS ('format.has_header' 'true');
+
+query ITI rowsort
+select c1, c2, count(*) from agg_order group by c1, c2;
+----
+1 'a' 2
+2 'b' 2
+3 'c' 4
+4 'd' 3
+5 'e' 1
+6 'f' 1
+7 'g' 1
+8 'a' 1
+9 'b' 1
+
+statement ok
+drop table agg_order;
