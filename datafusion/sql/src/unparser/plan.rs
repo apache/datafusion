@@ -522,7 +522,7 @@ impl Unparser<'_> {
                 let input_exprs: Vec<SetExpr> = union
                     .inputs
                     .iter()
-                    .map(|input| self.select_to_sql_expr(input, &mut None))
+                    .map(|input| self.select_to_sql_expr(input, query))
                     .collect::<Result<Vec<_>>>()?;
 
                 let union_expr = SetExpr::SetOperation {
@@ -532,10 +532,12 @@ impl Unparser<'_> {
                     right: Box::new(input_exprs[1].clone()),
                 };
 
-                query
-                    .as_mut()
-                    .expect("to have a query builder")
-                    .body(Box::new(union_expr));
+                let Some(query) = query.as_mut() else {
+                    return internal_err!(
+                        "UNION ALL operator only valid in a statement context"
+                    );
+                };
+                query.body(Box::new(union_expr));
 
                 Ok(())
             }
