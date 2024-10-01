@@ -336,6 +336,62 @@ macro_rules! create_udwf_expr {
 ///
 /// [`Signature`]: datafusion_expr::Signature
 /// [`Expr`]: datafusion_expr::Expr
+///
+/// # Usage
+///
+/// 1. Build a UDWF using its default constructor and create an
+///     expression API which has zero parameters.
+///
+/// ```
+/// # use std::any::Any;
+/// # use datafusion_common::arrow::datatypes::{DataType, Field};
+/// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+/// #
+/// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// # use datafusion_functions_window::{define_udwf_and_expr, get_or_init_udwf, create_udwf_expr};
+/// #
+/// /// This creates:
+/// ///     1. `add_one_udwf()`: user-defined window function and,
+/// ///     2. `add_one()`: `WindowFunction` expression with zero parameters
+/// ///
+/// define_udwf_and_expr!(AddOne, add_one, "Adds one to each row value in window partition.");
+/// #
+/// # assert_eq!(add_one_udwf().name(), "add_one");
+/// #
+/// #  #[derive(Debug)]
+/// #  struct AddOne {
+/// #      signature: Signature,
+/// #  }
+/// #
+/// #  impl Default for AddOne {
+/// #      fn default() -> Self {
+/// #          Self {
+/// #              signature: Signature::numeric(1, Volatility::Immutable),
+/// #          }
+/// #      }
+/// #  }
+/// #
+/// #  impl WindowUDFImpl for AddOne {
+/// #      fn as_any(&self) -> &dyn Any {
+/// #          self
+/// #      }
+/// #      fn name(&self) -> &str {
+/// #          "add_one"
+/// #      }
+/// #      fn signature(&self) -> &Signature {
+/// #          &self.signature
+/// #      }
+/// #      fn partition_evaluator(
+/// #          &self,
+/// #      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+/// #          unimplemented!("unnecessary for doc test")
+/// #      }
+/// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #          Ok(Field::new(field_args.name(), DataType::Int64, false))
+/// #      }
+/// #  }
+/// #
+/// ```
 #[macro_export]
 macro_rules! define_udwf_and_expr {
     // default constructor, zero arguments
