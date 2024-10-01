@@ -44,8 +44,7 @@
 DataFusion is an extensible query engine written in [Rust] that
 uses [Apache Arrow] as its in-memory format.
 
-The core DataFusion libraries in this repository are not designed to be an out-of-the-box tool for end users. However,
-the following subprojects offer packaged versions of DataFusion.
+The DataFusion libraries in this repository are used to build data centric system software. Some subprojects offer packaged versions of DataFusion for end users.
 
 - [DataFusion Python](https://github.com/apache/datafusion-python/) offers a Python interface for SQL and DataFrame
   queries.
