@@ -587,7 +587,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Return the value of this aggregate function if it can be determined
     /// entirely from statistics and arguments.
     ///
-    /// Using a scalar valie rather than a runtime computation can significantly
+    /// Using a [`ScalarValue`] rather than a runtime computation can significantly
     /// improving query performance.
     ///
     /// For example, if the minimum value of column `x` is known to be `42` from
