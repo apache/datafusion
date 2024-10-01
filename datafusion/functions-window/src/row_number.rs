@@ -31,13 +31,7 @@ use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 use datafusion_functions_window_common::field;
 use field::WindowUDFFieldArgs;
 
-get_or_init_udwf!(
-    RowNumber,
-    row_number,
-    "Returns a unique row number for each row in window partition beginning at 1."
-);
-
-create_udwf_expr!(
+define_udwf_and_expr!(
     RowNumber,
     row_number,
     "Returns a unique row number for each row in window partition beginning at 1."
