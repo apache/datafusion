@@ -32,8 +32,8 @@ use crate::datasource::{
     physical_plan::{FileScanConfig, FileSinkConfig},
 };
 use crate::execution::context::SessionState;
-use datafusion_catalog::{DynamicFileCatalog, TableProvider};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_catalog::TableProvider;
+use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
@@ -159,40 +159,12 @@ impl ListingTableConfig {
         let listing_options = ListingOptions::new(file_format)
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions());
-        // If the catalog is a `DynamicFileCatalog`, infer the partition columns from the table path
-        let listing_options = if Self::is_enable_url_table(state) {
-            let partitions = listing_options
-                .infer_partitions(state, self.table_paths.first().unwrap())
-                .await?
-                .into_iter()
-                .map(|col_name| {
-                    (
-                        col_name,
-                        DataType::Dictionary(
-                            Box::new(DataType::UInt16),
-                            Box::new(DataType::Utf8),
-                        ),
-                    )
-                })
-                .collect::<Vec<_>>();
-            listing_options.with_table_partition_cols(partitions)
-        } else {
-            listing_options
-        };
 
         Ok(Self {
             table_paths: self.table_paths,
             file_schema: self.file_schema,
             options: Some(listing_options),
         })
-    }
-
-    fn is_enable_url_table(session: &SessionState) -> bool {
-        session
-            .catalog_list()
-            .as_any()
-            .downcast_ref::<DynamicFileCatalog>()
-            .is_some()
     }
 
     /// Infer the [`SchemaRef`] based on `table_path` suffix.  Requires `self.options` to be set prior to using.
@@ -218,6 +190,38 @@ impl ListingTableConfig {
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
     pub async fn infer(self, state: &SessionState) -> Result<Self> {
         self.infer_options(state).await?.infer_schema(state).await
+    }
+
+    /// Infer the partition columns from the path. Requires `self.options` to be set prior to using.
+    pub async fn infer_partitions_from_path(self, state: &SessionState) -> Result<Self> {
+        match self.options {
+            Some(options) => {
+                let Some(url) = self.table_paths.first() else {
+                    return config_err!("No table path found");
+                };
+                let partitions = options
+                    .infer_partitions(state, url)
+                    .await?
+                    .into_iter()
+                    .map(|col_name| {
+                        (
+                            col_name,
+                            DataType::Dictionary(
+                                Box::new(DataType::UInt16),
+                                Box::new(DataType::Utf8),
+                            ),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let options = options.with_table_partition_cols(partitions);
+                Ok(Self {
+                    table_paths: self.table_paths,
+                    file_schema: self.file_schema,
+                    options: Some(options),
+                })
+            }
+            None => config_err!("No `ListingOptions` set for inferring schema"),
+        }
     }
 }
 
