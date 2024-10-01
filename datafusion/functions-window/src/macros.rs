@@ -315,6 +315,27 @@ macro_rules! create_udwf_expr {
     };
 }
 
+/// Defines a user-defined window function.
+///
+/// Combines [`get_or_init_udwf!`] and [`create_udwf_expr!`] into a
+/// single macro for convenience.
+///
+/// # Arguments
+///
+/// * `$UDWF`: The struct which defines the [`Signature`] of the
+///     user-defined window function.
+/// * `$OUT_FN_NAME`: The basename to generate a unique function name like
+///     `$OUT_FN_NAME_udwf`.
+/// * (optional) `[$($PARAM:ident),+]`: An array of 1 or more parameters
+///     for the generated function. The type of parameters is [`Expr`].
+///     This is unnecessary for functions which take no arguments.
+/// * `$DOC`: Description of user-defined window function.
+/// * (optional) `$CTOR`: When none provided it automatically resolves
+///     to `$UDWF::default()` (default constructor). To customize
+///     pass a different constructor.
+///
+/// [`Signature`]: datafusion_expr::Signature
+/// [`Expr`]: datafusion_expr::Expr
 #[macro_export]
 macro_rules! define_udwf_and_expr {
     // default constructor, zero arguments
