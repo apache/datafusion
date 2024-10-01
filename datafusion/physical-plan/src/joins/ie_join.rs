@@ -564,18 +564,26 @@ impl IEJoinStream {
         let mut l1 = SortedBlock::new(
             vec![cond1, indexes, cond2],
             vec![
+                // order by condition 1
                 (0, sort_options[0]),
                 (
                     1,
                     SortOptions {
-                        // if the operator is loose inequality,
+                        // if the operator is loose inequality, let the right index (> 0) in backward of left index (< 0)
+                        // otherwise, let the right index (> 0) in forward of left index (< 0)
+                        // for example, t1.time <= t2.time
+                        // | value| 1      | 1      | 1     | 1     | 2     |
+                        // | index| -2(l2) | -1(l2) | 1(r1) | 2(r2) | 3(r3) |
+                        // if t1.time < t2.time
+                        // |value| 1      | 1      | 1     | 1     | 2     |
+                        // |index| 2(r2) | 1(r1) | -1(l2) | -2(l1) | 3(r3) |
+                        // according to this order, if i < j then value[i](from left table) and value[j](from right table) match the condition
                         descending: !is_loose_inequality_operator(&operators[0]),
                         nulls_first: false,
                     },
                 ),
             ],
         );
-        // TODO: use more sort column to handle loose order
         l1.sort_by_columns()?;
         // ignore the null values of the first condition
         // TODO: test all null result.
@@ -585,6 +593,7 @@ impl IEJoinStream {
         // l1_indexes[i] = j means the ith element of l1 is the jth element of original recordbatch
         let l1_indexes = l1.arrays()[1].clone().as_primitive::<Int64Type>().clone();
 
+        // mark the order of l1, the index i means this element is the ith element of l1(sorted by condition 1)
         let permutation = UInt64Array::from(
             std::iter::successors(Some(0 as u64), |&x| {
                 if x < (valid as u64) {
@@ -598,15 +607,20 @@ impl IEJoinStream {
 
         let mut l2 = SortedBlock::new(
             vec![
+                // condition 2
                 l1.arrays()[2].clone(),
+                // index of original recordbatch
                 l1.arrays()[1].clone(),
+                // index of l1
                 Arc::new(permutation),
             ],
             vec![
+                // order by condition 2
                 (0, sort_options[1]),
                 (
                     1,
                     SortOptions {
+                        // same as above
                         descending: !is_loose_inequality_operator(&operators[1]),
                         nulls_first: false,
                     },
@@ -629,11 +643,15 @@ impl IEJoinStream {
     ) -> Result<(UInt64Array, UInt64Array)> {
         let mut left_builder = UInt64Builder::new();
         let mut right_builder = UInt64Builder::new();
+        // maintain all p[i], for i in 0..j.
+        // our target is to find all pair(i, j) that i<j and p[i] < p[j] and i from left table and j from right table here
         let mut range_map = BTreeMap::<u64, u64>::new();
         for p in permutation.values().iter() {
+            // get the index of original recordbatch
             let l1_index = unsafe { l1_indexes.value_unchecked(*p as usize) };
             if l1_index < 0 {
                 // index from left table
+                // insert p in to range_map
                 IEJoinStream::insert_range_map(&mut range_map, *p as u64);
                 continue;
             }
@@ -642,11 +660,13 @@ impl IEJoinStream {
             for range in range_map.range(0..(*p as u64)) {
                 let (start, end) = range;
                 let (start, end) = (*start, std::cmp::min(*end, *p as u64));
-                for left_index in start..end {
+                for left_l1_index in start..end {
+                    // get all p[i] in range(start, end) and remap it to original recordbatch index in left table
                     left_builder.append_value(
-                        -(unsafe { l1_indexes.value_unchecked(left_index as usize) } + 1)
-                            as u64,
+                        (-unsafe { l1_indexes.value_unchecked(left_l1_index as usize) }
+                            - 1) as u64,
                     );
+                    // append right index
                     right_builder.append_value(right_index);
                 }
             }
