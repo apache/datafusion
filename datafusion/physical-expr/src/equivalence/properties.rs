@@ -118,7 +118,7 @@ use itertools::Itertools;
 ///   PhysicalSortExpr::new_default(col_c).desc(),
 /// ]);
 ///
-/// assert_eq!(eq_properties.to_string(), "order: [a@0 ASC,c@2 DESC], const: [b@1]")
+/// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC,c@2 DESC]], const: [b@1]")
 /// ```
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties {
