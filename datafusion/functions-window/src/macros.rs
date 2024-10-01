@@ -32,7 +32,7 @@
 ///     of the user-defined window function.
 /// * `$OUT_FN_NAME`: The basename to generate a unique function name like
 ///     `$OUT_FN_NAME_udwf`.
-/// * `$DOC`: Description of user-defined window function.
+/// * `$DOC`: Doc comments for UDWF.
 /// * (optional) `$CTOR`: When none provided it automatically resolves
 ///     to `$UDWF::default()` (default constructor). To customize
 ///     pass a different constructor.
@@ -115,12 +115,9 @@ macro_rules! get_or_init_udwf {
 }
 
 /// Create a [`WindowFunction`] expression that exposes a fluent API
-/// which you can use to build more complex expressions and contains
-/// additional [`ExprFunctionExt`] methods for configuring user-defined
-/// window functions.
+/// which you can use to build more complex expressions.
 ///
 /// [`WindowFunction`]: datafusion_expr::Expr::WindowFunction
-/// [`ExprFunctionExt`]: datafusion_expr::expr_fn::ExprFunctionExt
 ///
 /// # Parameters
 ///
@@ -128,17 +125,17 @@ macro_rules! get_or_init_udwf {
 ///     user-defined window function.
 /// * `$OUT_FN_NAME`: The basename to generate a unique function name like
 ///     `$OUT_FN_NAME_udwf`.
-/// * `$DOC`: Description of user-defined window function.
+/// * `$DOC`: Doc comments for UDWF.
 /// * (optional) `[$($PARAM:ident),+]`: An array of 1 or more parameters
 ///     for the generated function. The type of parameters is [`Expr`].
-///     This is unnecessary for functions which take no arguments.
+///     This is omitted for functions with zero parameters.
 ///
 /// [`Signature`]: datafusion_expr::Signature
 /// [`Expr`]: datafusion_expr::Expr
 ///
 /// # Example
 ///
-/// 1. With zero parameters
+/// 1. With Zero Parameters
 /// ```
 /// # use std::any::Any;
 /// # use datafusion_common::arrow::datatypes::{DataType, Field};
@@ -150,12 +147,15 @@ macro_rules! get_or_init_udwf {
 /// #     row_number,
 /// #     "Returns a unique row number for each row in window partition beginning at 1."
 /// # );
-/// // Creates `row_number()` API which has no parameters
-/// //
-/// // The macro expands into this:
-/// // pub fn row_number() -> datafusion_expr::Expr {
-/// //     row_number_udwf().call(vec![])
-/// // }
+/// /// Creates `row_number()` API which has zero parameters:
+/// ///
+/// ///     ```
+/// ///     /// Returns a unique row number for each row in window partition
+/// ///     /// beginning at 1.
+/// ///     pub fn row_number() -> datafusion_expr::Expr {
+/// ///        row_number_udwf().call(vec![])
+/// ///     }
+/// ///     ```
 /// create_udwf_expr!(
 ///     RowNumber,
 ///     row_number,
@@ -199,7 +199,7 @@ macro_rules! get_or_init_udwf {
 /// # }
 /// ```
 ///
-/// 2. With at least 1 parameter
+/// 2. With Multiple Parameters
 /// ```
 /// # use std::any::Any;
 /// #
@@ -216,21 +216,24 @@ macro_rules! get_or_init_udwf {
 /// #
 /// # get_or_init_udwf!(Lead, lead, "user-defined window function");
 /// #
-/// // Creates `lead(expr, offset, default)` with 3 parameters
-/// //
-/// // The macros expands into this:
-/// // pub fn lead(
-/// //     expr: datafusion_expr::Expr,
-/// //     offset: datafusion_expr::Expr,
-/// //     default: datafusion_expr::Expr,
-/// // ) -> datafusion_expr::Expr {
-/// //     lead_udwf().call(vec![expr, offset, default])
-/// // }
+/// /// Creates `lead(expr, offset, default)` with 3 parameters:
+/// ///
+/// ///     ```
+/// ///     /// Returns a value evaluated at the row that is offset rows
+/// ///     /// after the current row within the partition.
+/// ///     pub fn lead(
+/// ///         expr: datafusion_expr::Expr,
+/// ///         offset: datafusion_expr::Expr,
+/// ///         default: datafusion_expr::Expr,
+/// ///     ) -> datafusion_expr::Expr {
+/// ///         lead_udwf().call(vec![expr, offset, default])
+/// ///     }
+/// ///     ```
 /// create_udwf_expr!(
 ///     Lead,
 ///     lead,
 ///     [expr, offset, default],
-///     "user-defined window function"
+///     "Returns a value evaluated at the row that is offset rows after the current row within the partition."
 /// );
 /// #
 /// # assert_eq!(
@@ -330,7 +333,7 @@ macro_rules! create_udwf_expr {
 /// * (optional) `[$($PARAM:ident),+]`: An array of 1 or more parameters
 ///     for the generated function. The type of parameters is [`Expr`].
 ///     This is unnecessary for functions which take no arguments.
-/// * `$DOC`: Description of user-defined window function.
+/// * `$DOC`: Doc comments for UDWF.
 /// * (optional) `$CTOR`: When none provided it automatically resolves
 ///     to `$UDWF::default()` (default constructor). To customize
 ///     pass a different constructor.
