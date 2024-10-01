@@ -58,5 +58,43 @@ WHERE "data"."id" = "samples"."id";
 1
 3
 
+
+
+# Regression test: prevent field metadata loss per https://github.com/apache/datafusion/issues/12687
+query I
+select count(distinct name) from table_with_metadata;
+----
+2
+
+# Regression test: prevent field metadata loss per https://github.com/apache/datafusion/issues/12687
+query I
+select approx_median(distinct id) from table_with_metadata;
+----
+2
+
+# Regression test: prevent field metadata loss per https://github.com/apache/datafusion/issues/12687
+statement ok
+select array_agg(distinct id) from table_with_metadata;
+
+query I
+select distinct id from table_with_metadata order by id;
+----
+1
+3
+NULL
+
+query I
+select count(id) from table_with_metadata;
+----
+2
+
+query I
+select count(id) cnt from table_with_metadata group by name order by cnt;
+----
+0
+1
+1
+
+
 statement ok
 drop table table_with_metadata;
