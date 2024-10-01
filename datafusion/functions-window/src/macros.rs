@@ -339,7 +339,8 @@ macro_rules! create_udwf_expr {
 ///
 /// # Usage
 ///
-/// 1. Uses default constructor for UDWF + Zero parameters in expression API.
+/// ## Expression API With Zero parameters
+/// 1. Uses default constructor for UDWF.
 ///
 /// ```
 /// # use std::any::Any;
@@ -395,7 +396,8 @@ macro_rules! create_udwf_expr {
 /// #  }
 /// #
 /// ```
-/// 2. Uses a custom constructor for UDWF + Zero parameters in expression API.
+///
+/// 2. Uses a custom constructor for UDWF.
 ///
 /// ```
 /// # use std::any::Any;
@@ -451,6 +453,177 @@ macro_rules! create_udwf_expr {
 /// #     }
 /// # }
 /// ```
+///
+/// ## Expression API With Parameters
+/// 3. Uses default constructor for UDWF
+///
+/// ```
+/// # use std::any::Any;
+/// #
+/// # use datafusion_expr::{
+/// #     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDFImpl,
+/// # };
+/// #
+/// # use datafusion_functions_window::{create_udwf_expr, define_udwf_and_expr, get_or_init_udwf};
+/// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// #
+/// # use datafusion_common::arrow::datatypes::Field;
+/// # use datafusion_common::ScalarValue;
+/// # use datafusion_expr::{col, lit};
+/// #
+/// // Creates `lead(expr, offset, default)` with 3 parameters
+/// //
+/// // The macros expands into this:
+/// // pub fn lead(
+/// //     expr: datafusion_expr::Expr,
+/// //     offset: datafusion_expr::Expr,
+/// //     default: datafusion_expr::Expr,
+/// // ) -> datafusion_expr::Expr {
+/// //     lead_udwf().call(vec![expr, offset, default])
+/// // }
+/// define_udwf_and_expr!(
+///     Lead,
+///     lead,
+///     [expr, offset, default],
+///     "user-defined window function"
+/// );
+/// #
+/// # assert_eq!(
+/// #     lead(col("a"), lit(1i64), lit(ScalarValue::Null))
+/// #         .name_for_alias()
+/// #         .unwrap(),
+/// #     "lead(a,Int64(1),NULL) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+/// # );
+/// #
+/// # #[derive(Debug)]
+/// # struct Lead {
+/// #     signature: Signature,
+/// # }
+/// #
+/// # impl Default for Lead {
+/// #     fn default() -> Self {
+/// #         Self {
+/// #             signature: Signature::one_of(
+/// #                 vec![
+/// #                     TypeSignature::Any(1),
+/// #                     TypeSignature::Any(2),
+/// #                     TypeSignature::Any(3),
+/// #                 ],
+/// #                 Volatility::Immutable,
+/// #             ),
+/// #         }
+/// #     }
+/// # }
+/// #
+/// # impl WindowUDFImpl for Lead {
+/// #     fn as_any(&self) -> &dyn Any {
+/// #         self
+/// #     }
+/// #     fn name(&self) -> &str {
+/// #         "lead"
+/// #     }
+/// #     fn signature(&self) -> &Signature {
+/// #         &self.signature
+/// #     }
+/// #     fn partition_evaluator(
+/// #         &self,
+/// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+/// #         unimplemented!()
+/// #     }
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #         Ok(Field::new(
+/// #             field_args.name(),
+/// #             field_args.get_input_type(0).unwrap(),
+/// #             false,
+/// #         ))
+/// #     }
+/// # }
+/// ```
+/// 4. Uses custom constructor for UDWF
+///
+/// ```
+/// # use std::any::Any;
+/// #
+/// # use datafusion_expr::{
+/// #     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDFImpl,
+/// # };
+/// #
+/// # use datafusion_functions_window::{create_udwf_expr, define_udwf_and_expr, get_or_init_udwf};
+/// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// #
+/// # use datafusion_common::arrow::datatypes::Field;
+/// # use datafusion_common::ScalarValue;
+/// # use datafusion_expr::{col, lit};
+/// #
+/// // Creates `lead(expr, offset, default)` with 3 parameters
+/// //
+/// // The macros expands into this:
+/// // pub fn lead(
+/// //     expr: datafusion_expr::Expr,
+/// //     offset: datafusion_expr::Expr,
+/// //     default: datafusion_expr::Expr,
+/// // ) -> datafusion_expr::Expr {
+/// //     lead_udwf().call(vec![expr, offset, default])
+/// // }
+/// define_udwf_and_expr!(
+///     Lead,
+///     lead,
+///     [expr, offset, default],
+///     "user-defined window function",
+///     Lead::new
+/// );
+/// #
+/// # assert_eq!(
+/// #     lead(col("a"), lit(1i64), lit(ScalarValue::Null))
+/// #         .name_for_alias()
+/// #         .unwrap(),
+/// #     "lead(a,Int64(1),NULL) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+/// # );
+/// #
+/// # #[derive(Debug)]
+/// # struct Lead {
+/// #     signature: Signature,
+/// # }
+/// #
+/// # impl Lead {
+/// #     fn new() -> Self {
+/// #         Self {
+/// #             signature: Signature::one_of(
+/// #                 vec![
+/// #                     TypeSignature::Any(1),
+/// #                     TypeSignature::Any(2),
+/// #                     TypeSignature::Any(3),
+/// #                 ],
+/// #                 Volatility::Immutable,
+/// #             ),
+/// #         }
+/// #     }
+/// # }
+/// #
+/// # impl WindowUDFImpl for Lead {
+/// #     fn as_any(&self) -> &dyn Any {
+/// #         self
+/// #     }
+/// #     fn name(&self) -> &str {
+/// #         "lead"
+/// #     }
+/// #     fn signature(&self) -> &Signature {
+/// #         &self.signature
+/// #     }
+/// #     fn partition_evaluator(
+/// #         &self,
+/// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+/// #         unimplemented!()
+/// #     }
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #         Ok(Field::new(
+/// #             field_args.name(),
+/// #             field_args.get_input_type(0).unwrap(),
+/// #             false,
+/// #         ))
+/// #     }
+/// # }
+/// ```
 #[macro_export]
 macro_rules! define_udwf_and_expr {
     // default constructor, zero arguments
@@ -468,12 +641,12 @@ macro_rules! define_udwf_and_expr {
     // default constructor, 1 or more arguments
     ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr) => {
         get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC);
-        create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM:ident),+], $DOC);
+        create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM),+], $DOC);
     };
 
     // custom constructor, 1 or more arguments
     ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr, $CTOR:path) => {
         get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC, $CTOR);
-        create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM:ident),+], $DOC);
+        create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM),+], $DOC);
     };
 }
