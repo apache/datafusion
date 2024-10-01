@@ -320,8 +320,12 @@ where
     ///
     /// `update_payload_fn`: Invoked for each value that is already present,
     /// allowing the payload to be updated in-place.
-    pub fn insert_or_update<MP, UP>(&mut self, values: &ArrayRef, make_payload_fn: MP, update_payload_fn: UP)
-    where
+    pub fn insert_or_update<MP, UP>(
+        &mut self,
+        values: &ArrayRef,
+        make_payload_fn: MP,
+        update_payload_fn: UP,
+    ) where
         MP: FnMut(Option<&[u8]>) -> V,
         UP: FnMut(&mut V),
     {
@@ -329,11 +333,19 @@ where
         match self.output_type {
             OutputType::BinaryView => {
                 assert!(matches!(values.data_type(), DataType::BinaryView));
-                self.insert_or_update_inner::<MP, UP, BinaryViewType>(values, make_payload_fn, update_payload_fn)
+                self.insert_or_update_inner::<MP, UP, BinaryViewType>(
+                    values,
+                    make_payload_fn,
+                    update_payload_fn,
+                )
             }
             OutputType::Utf8View => {
                 assert!(matches!(values.data_type(), DataType::Utf8View));
-                self.insert_or_update_inner::<MP, UP, StringViewType>(values, make_payload_fn, update_payload_fn)
+                self.insert_or_update_inner::<MP, UP, StringViewType>(
+                    values,
+                    make_payload_fn,
+                    update_payload_fn,
+                )
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
         };
@@ -413,7 +425,8 @@ where
 
                 self.builder.append_value(value);
 
-                self.map.insert_accounted(new_header, |h| h.hash, &mut self.map_size);
+                self.map
+                    .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
             };
         }
     }
@@ -830,7 +843,13 @@ mod tests {
 
     #[test]
     fn test_insert_if_new_after_insert_or_update() {
-        let initial_values = GenericByteViewArray::from(vec![Some("A"), Some("B"), Some("B"), Some("C"), Some("C")]);
+        let initial_values = GenericByteViewArray::from(vec![
+            Some("A"),
+            Some("B"),
+            Some("B"),
+            Some("C"),
+            Some("C"),
+        ]);
 
         let mut map: ArrowBytesViewMap<u8> = ArrowBytesViewMap::new(OutputType::Utf8View);
         let arr: ArrayRef = Arc::new(initial_values);
@@ -843,14 +862,21 @@ mod tests {
             },
         );
 
-        let additional_values = GenericByteViewArray::from(vec![Some("A"), Some("D"), Some("E")]);
+        let additional_values =
+            GenericByteViewArray::from(vec![Some("A"), Some("D"), Some("E")]);
         let arr_additional: ArrayRef = Arc::new(additional_values);
 
         map.insert_if_new(&arr_additional, |_| 5u8, |_| {});
 
         let expected_payloads = [Some(1u8), Some(2u8), Some(2u8), Some(5u8), Some(5u8)];
 
-        let combined_arr = GenericByteViewArray::from(vec![Some("A"), Some("B"), Some("C"), Some("D"), Some("E")]);
+        let combined_arr = GenericByteViewArray::from(vec![
+            Some("A"),
+            Some("B"),
+            Some("C"),
+            Some("D"),
+            Some("E"),
+        ]);
 
         let arr_combined: ArrayRef = Arc::new(combined_arr);
         let payloads = map.get_payloads(&arr_combined);

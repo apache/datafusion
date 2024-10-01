@@ -489,20 +489,38 @@ where
     ///
     /// `update_payload_fn`: Invoked for each value that is already present,
     /// allowing the payload to be updated in-place.
-    pub fn insert_or_update<MP, UP>(&mut self, values: &ArrayRef, make_payload_fn: MP, update_payload_fn: UP)
-    where
+    pub fn insert_or_update<MP, UP>(
+        &mut self,
+        values: &ArrayRef,
+        make_payload_fn: MP,
+        update_payload_fn: UP,
+    ) where
         MP: FnMut(Option<&[u8]>) -> V,
         UP: FnMut(&mut V),
     {
         // Check the output type and dispatch to the appropriate internal function
         match self.output_type {
             OutputType::Binary => {
-                assert!(matches!(values.data_type(), DataType::Binary | DataType::LargeBinary));
-                self.insert_or_update_inner::<MP, UP, GenericBinaryType<O>>(values, make_payload_fn, update_payload_fn)
+                assert!(matches!(
+                    values.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.insert_or_update_inner::<MP, UP, GenericBinaryType<O>>(
+                    values,
+                    make_payload_fn,
+                    update_payload_fn,
+                )
             }
             OutputType::Utf8 => {
-                assert!(matches!(values.data_type(), DataType::Utf8 | DataType::LargeUtf8));
-                self.insert_or_update_inner::<MP, UP, GenericStringType<O>>(values, make_payload_fn, update_payload_fn)
+                assert!(matches!(
+                    values.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.insert_or_update_inner::<MP, UP, GenericStringType<O>>(
+                    values,
+                    make_payload_fn,
+                    update_payload_fn,
+                )
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         };
@@ -583,8 +601,11 @@ where
                         offset_or_inline: inline,
                         payload,
                     };
-                    self.map
-                        .insert_accounted(new_entry, |header| header.hash, &mut self.map_size);
+                    self.map.insert_accounted(
+                        new_entry,
+                        |header| header.hash,
+                        &mut self.map_size,
+                    );
                 }
             } else {
                 // Handle larger values
@@ -592,7 +613,8 @@ where
                     if header.len != value_len {
                         return false;
                     }
-                    let existing_value = unsafe { self.buffer.as_slice().get_unchecked(header.range()) };
+                    let existing_value =
+                        unsafe { self.buffer.as_slice().get_unchecked(header.range()) };
                     value == existing_value
                 });
 
@@ -610,8 +632,11 @@ where
                         offset_or_inline: offset,
                         payload,
                     };
-                    self.map
-                        .insert_accounted(new_entry, |header| header.hash, &mut self.map_size);
+                    self.map.insert_accounted(
+                        new_entry,
+                        |header| header.hash,
+                        &mut self.map_size,
+                    );
                 }
             };
         }
@@ -693,7 +718,8 @@ where
                     if header.len != value_len {
                         return false;
                     }
-                    let existing_value = unsafe { self.buffer.as_slice().get_unchecked(header.range()) };
+                    let existing_value =
+                        unsafe { self.buffer.as_slice().get_unchecked(header.range()) };
                     value == existing_value
                 });
 
@@ -727,11 +753,17 @@ where
     pub fn get_payloads(self, values: &ArrayRef) -> Vec<Option<V>> {
         match self.output_type {
             OutputType::Binary => {
-                assert!(matches!(values.data_type(), DataType::Binary | DataType::LargeBinary));
+                assert!(matches!(
+                    values.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
                 self.get_payloads_inner::<GenericBinaryType<O>>(values)
             }
             OutputType::Utf8 => {
-                assert!(matches!(values.data_type(), DataType::Utf8 | DataType::LargeUtf8));
+                assert!(matches!(
+                    values.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
                 self.get_payloads_inner::<GenericStringType<O>>(values)
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
@@ -1191,7 +1223,9 @@ mod tests {
                     },
                 );
 
-                if let Some(expected_count) = expected_counts.iter().find(|&&(s, _)| s == value) {
+                if let Some(expected_count) =
+                    expected_counts.iter().find(|&&(s, _)| s == value)
+                {
                     assert_eq!(result_payload.unwrap(), expected_count.1);
                 }
             }
@@ -1200,7 +1234,13 @@ mod tests {
 
     #[test]
     fn test_insert_if_new_after_insert_or_update() {
-        let initial_values = StringArray::from(vec![Some("A"), Some("B"), Some("B"), Some("C"), Some("C")]);
+        let initial_values = StringArray::from(vec![
+            Some("A"),
+            Some("B"),
+            Some("B"),
+            Some("C"),
+            Some("C"),
+        ]);
 
         let mut map: ArrowBytesMap<i32, u8> = ArrowBytesMap::new(OutputType::Utf8);
         let arr: ArrayRef = Arc::new(initial_values);
@@ -1218,7 +1258,13 @@ mod tests {
 
         map.insert_if_new(&arr_additional, |_| 5u8, |_| {});
 
-        let combined_arr = StringArray::from(vec![Some("A"), Some("B"), Some("C"), Some("D"), Some("E")]);
+        let combined_arr = StringArray::from(vec![
+            Some("A"),
+            Some("B"),
+            Some("C"),
+            Some("D"),
+            Some("E"),
+        ]);
 
         let arr_combined: ArrayRef = Arc::new(combined_arr);
         let payloads = map.get_payloads(&arr_combined);
