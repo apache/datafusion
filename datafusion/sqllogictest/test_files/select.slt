@@ -1686,6 +1686,20 @@ SELECT CASE 1 WHEN 2 THEN 4 / 0 END;
 ----
 NULL
 
+statement ok
+CREATE TABLE d AS VALUES
+('x', 1, [named_struct('a', 1, 'b', 2)]),
+('y', 2, [named_struct('a', 3, 'b', 4), named_struct('a', 5, 'b', 6)]);
+
+query ?TI?
+SELECT unnest(column3), * FROM d;
+----
+{a: 1, b: 2} x 1 [{a: 1, b: 2}]        
+{a: 3, b: 4} y 2 [{a: 3, b: 4}, {a: 5, b: 6}]        
+{a: 5, b: 6} y 2 [{a: 3, b: 4}, {a: 5, b: 6}]        
+
+# statement ok
+# SELECT unnest(column3), * except (column3, column1) FROM d;
 
 ######
 # Unprojected filter
