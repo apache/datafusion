@@ -46,34 +46,34 @@
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// # use datafusion_functions_window::get_or_init_udwf;
 /// #
-/// /// Defines the `add_one_udwf()` user-defined window function.
+/// /// Defines the `simple_udwf()` user-defined window function.
 /// get_or_init_udwf!(
-///     AddOne,
-///     add_one,
-///     "Adds one to each row value in window partition."
+///     SimpleUDWF,
+///     simple,
+///     "Simple user-defined window function doc comment."
 /// );
 /// #
-/// # assert_eq!(add_one_udwf().name(), "add_one");
+/// # assert_eq!(simple_udwf().name(), "simple_user_defined_window_function");
 /// #
 /// #  #[derive(Debug)]
-/// #  struct AddOne {
+/// #  struct SimpleUDWF {
 /// #      signature: Signature,
 /// #  }
 /// #
-/// #  impl Default for AddOne {
+/// #  impl Default for SimpleUDWF {
 /// #      fn default() -> Self {
 /// #          Self {
-/// #              signature: Signature::numeric(1, Volatility::Immutable),
+/// #             signature: Signature::any(0, Volatility::Immutable),
 /// #          }
 /// #      }
 /// #  }
 /// #
-/// #  impl WindowUDFImpl for AddOne {
+/// #  impl WindowUDFImpl for SimpleUDWF {
 /// #      fn as_any(&self) -> &dyn Any {
 /// #          self
 /// #      }
 /// #      fn name(&self) -> &str {
-/// #          "add_one"
+/// #          "simple_user_defined_window_function"
 /// #      }
 /// #      fn signature(&self) -> &Signature {
 /// #          &self.signature
@@ -81,7 +81,7 @@
 /// #      fn partition_evaluator(
 /// #          &self,
 /// #      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
-/// #          unimplemented!("unnecessary for doc test")
+/// #          unimplemented!()
 /// #      }
 /// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
 /// #          Ok(Field::new(field_args.name(), DataType::Int64, false))
@@ -356,41 +356,41 @@ macro_rules! create_udwf_expr {
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// # use datafusion_functions_window::{define_udwf_and_expr, get_or_init_udwf, create_udwf_expr};
 /// #
-/// /// 1. Defines the `add_one_udwf()` user-defined window function.
+/// /// 1. Defines the `simple_udwf()` user-defined window function.
 /// ///
 /// /// 2. Defines the expression API:
 /// ///     ```
-/// ///     pub fn add_one() -> datafusion_expr::Expr {
-/// ///         add_one_udwf().call(vec![])
+/// ///     pub fn simple() -> datafusion_expr::Expr {
+/// ///         simple_udwf().call(vec![])
 /// ///     }
 /// ///     ```
 /// define_udwf_and_expr!(
-///     AddOne,
-///     add_one,
+///     SimpleUDWF,
+///     simple,
 ///     "Adds one to each row value in window partition."
 /// );
 /// #
-/// # assert_eq!(add_one_udwf().name(), "add_one");
+/// # assert_eq!(simple_udwf().name(), "simple_user_defined_window_function");
 /// #
 /// #  #[derive(Debug)]
-/// #  struct AddOne {
+/// #  struct SimpleUDWF {
 /// #      signature: Signature,
 /// #  }
 /// #
-/// #  impl Default for AddOne {
+/// #  impl Default for SimpleUDWF {
 /// #      fn default() -> Self {
 /// #          Self {
-/// #              signature: Signature::numeric(1, Volatility::Immutable),
+/// #             signature: Signature::any(0, Volatility::Immutable),
 /// #          }
 /// #      }
 /// #  }
 /// #
-/// #  impl WindowUDFImpl for AddOne {
+/// #  impl WindowUDFImpl for SimpleUDWF {
 /// #      fn as_any(&self) -> &dyn Any {
 /// #          self
 /// #      }
 /// #      fn name(&self) -> &str {
-/// #          "add_one"
+/// #          "simple_user_defined_window_function"
 /// #      }
 /// #      fn signature(&self) -> &Signature {
 /// #          &self.signature
@@ -398,7 +398,7 @@ macro_rules! create_udwf_expr {
 /// #      fn partition_evaluator(
 /// #          &self,
 /// #      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
-/// #          unimplemented!("unnecessary for doc test")
+/// #          unimplemented!()
 /// #      }
 /// #      fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
 /// #          Ok(Field::new(field_args.name(), DataType::Int64, false))
