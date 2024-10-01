@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::aggregates::group_values::group_column::{
-    ByteGroupValueBuilder, GroupColumn, NonNullPrimitiveGroupValueBuilder,
-    PrimitiveGroupValueBuilder,
+    ByteGroupValueBuilder, GroupColumn, PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
@@ -135,10 +134,10 @@ impl GroupValuesColumn {
 macro_rules! instantiate_primitive {
     ($v:expr, $nullable:expr, $t:ty) => {
         if $nullable {
-            let b = PrimitiveGroupValueBuilder::<$t>::new();
+            let b = PrimitiveGroupValueBuilder::<$t, true>::new();
             $v.push(Box::new(b) as _)
         } else {
-            let b = NonNullPrimitiveGroupValueBuilder::<$t>::new();
+            let b = PrimitiveGroupValueBuilder::<$t, false>::new();
             $v.push(Box::new(b) as _)
         }
     };
