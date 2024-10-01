@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Macros for generating [`WindowUDF`] and a [`WindowFunction`]
-//! expression with a fluent API.
+//! Convenience macros for defining a user-defined window function
+//! and associated expression API (fluent style).
 //!
-//! [`WindowUDF`]: datafusion_expr::WindowUDF
-//! [`WindowFunction`]: datafusion_expr::Expr::WindowFunction
+//! See [`define_udwf_and_expr!`] for usage examples.
+//!
+//! [`define_udwf_and_expr!`]: crate::define_udwf_and_expr!
 
 /// Lazily initializes a user-defined window function exactly once
 /// when called concurrently. Repeated calls return a reference to the
