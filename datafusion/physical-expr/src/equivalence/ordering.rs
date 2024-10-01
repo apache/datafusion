@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::Display;
-use std::hash::Hash;
-use std::sync::Arc;
-
 use crate::equivalence::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 use arrow_schema::SortOptions;
+use std::fmt::Display;
+use std::hash::Hash;
+use std::sync::Arc;
+use std::vec::IntoIter;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
@@ -36,7 +36,7 @@ use arrow_schema::SortOptions;
 ///
 /// Here, both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the table
 /// ordering. In this case, we say that these orderings are equivalent.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
 pub struct OrderingEquivalenceClass {
     pub orderings: Vec<LexOrdering>,
 }
@@ -44,7 +44,7 @@ pub struct OrderingEquivalenceClass {
 impl OrderingEquivalenceClass {
     /// Creates new empty ordering equivalence class.
     pub fn empty() -> Self {
-        Self { orderings: vec![] }
+        Default::default()
     }
 
     /// Clears (empties) this ordering equivalence class.
@@ -197,6 +197,15 @@ impl OrderingEquivalenceClass {
     }
 }
 
+impl IntoIterator for OrderingEquivalenceClass {
+    type Item = LexOrdering;
+    type IntoIter = IntoIter<LexOrdering>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.orderings.into_iter()
+    }
+}
+
 /// This function constructs a duplicate-free `LexOrdering` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
 /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
@@ -229,10 +238,10 @@ impl Display for OrderingEquivalenceClass {
         write!(f, "[")?;
         let mut iter = self.orderings.iter();
         if let Some(ordering) = iter.next() {
-            write!(f, "{}", PhysicalSortExpr::format_list(ordering))?;
+            write!(f, "[{}]", PhysicalSortExpr::format_list(ordering))?;
         }
         for ordering in iter {
-            write!(f, "{}", PhysicalSortExpr::format_list(ordering))?;
+            write!(f, ", [{}]", PhysicalSortExpr::format_list(ordering))?;
         }
         write!(f, "]")?;
         Ok(())

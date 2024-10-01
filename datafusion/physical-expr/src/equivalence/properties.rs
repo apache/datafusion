@@ -2708,379 +2708,428 @@ mod tests {
         ))
     }
 
-    #[tokio::test]
-    async fn test_union_equivalence_properties_multi_children() -> Result<()> {
-        let schema = create_test_schema()?;
+    #[test]
+    fn test_union_equivalence_properties_multi_children_1() {
+        let schema = create_test_schema().unwrap();
         let schema2 = append_fields(&schema, "1");
         let schema3 = append_fields(&schema, "2");
-        let test_cases = vec![
-            // --------- TEST CASE 1 ----------
-            (
-                vec![
-                    // Children 1
-                    (
-                        // Orderings
-                        vec![vec!["a", "b", "c"]],
-                        Arc::clone(&schema),
-                    ),
-                    // Children 2
-                    (
-                        // Orderings
-                        vec![vec!["a1", "b1", "c1"]],
-                        Arc::clone(&schema2),
-                    ),
-                    // Children 3
-                    (
-                        // Orderings
-                        vec![vec!["a2", "b2"]],
-                        Arc::clone(&schema3),
-                    ),
-                ],
-                // Expected
-                vec![vec!["a", "b"]],
-            ),
-            // --------- TEST CASE 2 ----------
-            (
-                vec![
-                    // Children 1
-                    (
-                        // Orderings
-                        vec![vec!["a", "b", "c"]],
-                        Arc::clone(&schema),
-                    ),
-                    // Children 2
-                    (
-                        // Orderings
-                        vec![vec!["a1", "b1", "c1"]],
-                        Arc::clone(&schema2),
-                    ),
-                    // Children 3
-                    (
-                        // Orderings
-                        vec![vec!["a2", "b2", "c2"]],
-                        Arc::clone(&schema3),
-                    ),
-                ],
-                // Expected
-                vec![vec!["a", "b", "c"]],
-            ),
-            // --------- TEST CASE 3 ----------
-            (
-                vec![
-                    // Children 1
-                    (
-                        // Orderings
-                        vec![vec!["a", "b"]],
-                        Arc::clone(&schema),
-                    ),
-                    // Children 2
-                    (
-                        // Orderings
-                        vec![vec!["a1", "b1", "c1"]],
-                        Arc::clone(&schema2),
-                    ),
-                    // Children 3
-                    (
-                        // Orderings
-                        vec![vec!["a2", "b2", "c2"]],
-                        Arc::clone(&schema3),
-                    ),
-                ],
-                // Expected
-                vec![vec!["a", "b"]],
-            ),
-            // --------- TEST CASE 4 ----------
-            (
-                vec![
-                    // Children 1
-                    (
-                        // Orderings
-                        vec![vec!["a", "b"]],
-                        Arc::clone(&schema),
-                    ),
-                    // Children 2
-                    (
-                        // Orderings
-                        vec![vec!["a1", "b1"]],
-                        Arc::clone(&schema2),
-                    ),
-                    // Children 3
-                    (
-                        // Orderings
-                        vec![vec!["b2", "c2"]],
-                        Arc::clone(&schema3),
-                    ),
-                ],
-                // Expected
-                vec![],
-            ),
-            // --------- TEST CASE 5 ----------
-            (
-                vec![
-                    // Children 1
-                    (
-                        // Orderings
-                        vec![vec!["a", "b"], vec!["c"]],
-                        Arc::clone(&schema),
-                    ),
-                    // Children 2
-                    (
-                        // Orderings
-                        vec![vec!["a1", "b1"], vec!["c1"]],
-                        Arc::clone(&schema2),
-                    ),
-                ],
-                // Expected
-                vec![vec!["a", "b"], vec!["c"]],
-            ),
-        ];
-        for (children, expected) in test_cases {
-            let children_eqs = children
-                .iter()
-                .map(|(orderings, schema)| {
-                    let orderings = orderings
-                        .iter()
-                        .map(|ordering| {
-                            ordering
-                                .iter()
-                                .map(|name| PhysicalSortExpr {
-                                    expr: col(name, schema).unwrap(),
-                                    options: SortOptions::default(),
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .collect::<Vec<_>>();
-                    EquivalenceProperties::new_with_orderings(
-                        Arc::clone(schema),
-                        &orderings,
-                    )
-                })
-                .collect::<Vec<_>>();
-            let actual = calculate_union(children_eqs, Arc::clone(&schema))?;
+        UnionEquivalenceTest::new(&schema)
+            // Children 1
+            .with_child_sort(vec![vec!["a", "b", "c"]], &schema)
+            // Children 2
+            .with_child_sort(vec![vec!["a1", "b1", "c1"]], &schema2)
+            // Children 3
+            .with_child_sort(vec![vec!["a2", "b2"]], &schema3)
+            .with_expected_sort(vec![vec!["a", "b"]])
+            .run()
+    }
 
-            let expected_ordering = expected
-                .into_iter()
+    #[test]
+    fn test_union_equivalence_properties_multi_children_2() {
+        let schema = create_test_schema().unwrap();
+        let schema2 = append_fields(&schema, "1");
+        let schema3 = append_fields(&schema, "2");
+        UnionEquivalenceTest::new(&schema)
+            // Children 1
+            .with_child_sort(vec![vec!["a", "b", "c"]], &schema)
+            // Children 2
+            .with_child_sort(vec![vec!["a1", "b1", "c1"]], &schema2)
+            // Children 3
+            .with_child_sort(vec![vec!["a2", "b2", "c2"]], &schema3)
+            .with_expected_sort(vec![vec!["a", "b", "c"]])
+            .run()
+    }
+
+    #[test]
+    fn test_union_equivalence_properties_multi_children_3() {
+        let schema = create_test_schema().unwrap();
+        let schema2 = append_fields(&schema, "1");
+        let schema3 = append_fields(&schema, "2");
+        UnionEquivalenceTest::new(&schema)
+            // Children 1
+            .with_child_sort(vec![vec!["a", "b"]], &schema)
+            // Children 2
+            .with_child_sort(vec![vec!["a1", "b1", "c1"]], &schema2)
+            // Children 3
+            .with_child_sort(vec![vec!["a2", "b2", "c2"]], &schema3)
+            .with_expected_sort(vec![vec!["a", "b"]])
+            .run()
+    }
+
+    #[test]
+    fn test_union_equivalence_properties_multi_children_4() {
+        let schema = create_test_schema().unwrap();
+        let schema2 = append_fields(&schema, "1");
+        let schema3 = append_fields(&schema, "2");
+        UnionEquivalenceTest::new(&schema)
+            // Children 1
+            .with_child_sort(vec![vec!["a", "b"]], &schema)
+            // Children 2
+            .with_child_sort(vec![vec!["a1", "b1"]], &schema2)
+            // Children 3
+            .with_child_sort(vec![vec!["b2", "c2"]], &schema3)
+            .with_expected_sort(vec![])
+            .run()
+    }
+
+    #[test]
+    fn test_union_equivalence_properties_multi_children_5() {
+        let schema = create_test_schema().unwrap();
+        let schema2 = append_fields(&schema, "1");
+        UnionEquivalenceTest::new(&schema)
+            // Children 1
+            .with_child_sort(vec![vec!["a", "b"], vec!["c"]], &schema)
+            // Children 2
+            .with_child_sort(vec![vec!["a1", "b1"], vec!["c1"]], &schema2)
+            .with_expected_sort(vec![vec!["a", "b"], vec!["c"]])
+            .run()
+    }
+
+    #[test]
+    fn test_union_equivalence_properties_constants_1() {
+        let schema = create_test_schema().unwrap();
+        UnionEquivalenceTest::new(&schema)
+            .with_child_sort_and_const_exprs(
+                // First child: [a ASC], const [b, c]
+                vec![vec!["a"]],
+                vec!["b", "c"],
+                &schema,
+            )
+            .with_child_sort_and_const_exprs(
+                // Second child: [b ASC], const [a, c]
+                vec![vec!["b"]],
+                vec!["a", "c"],
+                &schema,
+            )
+            .with_expected_sort_and_const_exprs(
+                // Union expected orderings: [[a ASC], [b ASC]], const [c]
+                vec![vec!["a"], vec!["b"]],
+                vec!["c"],
+            )
+            .run()
+    }
+
+    #[test]
+    fn test_union_equivalence_properties_constants_2() {
+        let schema = create_test_schema().unwrap();
+        UnionEquivalenceTest::new(&schema)
+            // Meet ordering between [a ASC], [a ASC, b ASC] should be [a ASC]
+            .with_child_sort_and_const_exprs(
+                // First child: [a ASC], const []
+                vec![vec!["a"]],
+                vec![],
+                &schema,
+            )
+            .with_child_sort_and_const_exprs(
+                // Second child: [a ASC, b ASC], const []
+                vec![vec!["a", "b"]],
+                vec![],
+                &schema,
+            )
+            .with_expected_sort_and_const_exprs(
+                // Union orderings: [a ASC], const []
+                vec![vec!["a"]],
+                vec![],
+            )
+            .run()
+    }
+
+    #[test]
+    fn test_union_equivalence_properties_constants_3() {
+        let schema = create_test_schema().unwrap();
+        UnionEquivalenceTest::new(&schema)
+            // Meet ordering between [a ASC], [a DESC] should be []
+            .with_child_sort_and_const_exprs(
+                // First child: [a ASC], const []
+                vec![vec!["a"]],
+                vec![],
+                &schema,
+            )
+            .with_child_sort_and_const_exprs(
+                // Second child orderings: [a DESC], const []
+                vec![vec!["a DESC"]],
+                vec![],
+                &schema,
+            )
+            .with_expected_sort_and_const_exprs(
+                // Union doesn't have any ordering or constant
+                vec![],
+                vec![],
+            )
+            .run()
+    }
+
+    #[test]
+    fn test_union_equivalence_properties_constants_4() {
+        let schema = create_test_schema().unwrap();
+        let schema2 = append_fields(&schema, "1");
+        UnionEquivalenceTest::new(&schema)
+            .with_child_sort_and_const_exprs(
+                // First child orderings: [a ASC], const []
+                vec![vec!["a"]],
+                vec![],
+                &schema,
+            )
+            .with_child_sort_and_const_exprs(
+                // Second child orderings: [a1 ASC, b1 ASC], const []
+                vec![vec!["a1", "b1"]],
+                vec![],
+                &schema2,
+            )
+            .with_expected_sort_and_const_exprs(
+                // Union orderings:
+                // should be [a ASC]
+                //
+                // Where a, and a1 ath the same index for their corresponding
+                // schemas.
+                vec![vec!["a"]],
+                vec![],
+            )
+            .run()
+    }
+
+    #[test]
+    #[ignore]
+    // ignored due to https://github.com/apache/datafusion/issues/12446
+    fn test_union_equivalence_properties_constants() {
+        let schema = create_test_schema().unwrap();
+        UnionEquivalenceTest::new(&schema)
+            .with_child_sort_and_const_exprs(
+                // First child orderings: [a ASC, c ASC], const [b]
+                vec![vec!["a", "c"]],
+                vec!["b"],
+                &schema,
+            )
+            .with_child_sort_and_const_exprs(
+                // Second child orderings: [b ASC, c ASC], const [a]
+                vec![vec!["b", "c"]],
+                vec!["a"],
+                &schema,
+            )
+            .with_expected_sort_and_const_exprs(
+                // Union orderings: [
+                //   [a ASC, b ASC, c ASC],
+                //   [b ASC, a ASC, c ASC]
+                // ], const []
+                vec![vec!["a", "b", "c"], vec!["b", "a", "c"]],
+                vec![],
+            )
+            .run()
+    }
+
+    #[test]
+    #[ignore]
+    // ignored due to https://github.com/apache/datafusion/issues/12446
+    fn test_union_equivalence_properties_constants_desc() {
+        let schema = create_test_schema().unwrap();
+        UnionEquivalenceTest::new(&schema)
+            .with_child_sort_and_const_exprs(
+                // NB `b DESC` in the second child
+                // First child orderings: [a ASC, c ASC], const [b]
+                vec![vec!["a", "c"]],
+                vec!["b"],
+                &schema,
+            )
+            .with_child_sort_and_const_exprs(
+                // Second child orderings: [b ASC, c ASC], const [a]
+                vec![vec!["b DESC", "c"]],
+                vec!["a"],
+                &schema,
+            )
+            .with_expected_sort_and_const_exprs(
+                // Union orderings: [
+                //   [a ASC, b ASC, c ASC],
+                //   [b ASC, a ASC, c ASC]
+                // ], const []
+                vec![vec!["a", "b DESC", "c"], vec!["b DESC", "a", "c"]],
+                vec![],
+            )
+            .run()
+    }
+
+    #[test]
+    #[ignore]
+    // ignored due to https://github.com/apache/datafusion/issues/12446
+    fn test_union_equivalence_properties_constants_middle() {
+        let schema = create_test_schema().unwrap();
+        UnionEquivalenceTest::new(&schema)
+            .with_child_sort_and_const_exprs(
+                // First child: [a ASC, b ASC, d ASC], const [c]
+                vec![vec!["a", "b", "d"]],
+                vec!["c"],
+                &schema,
+            )
+            .with_child_sort_and_const_exprs(
+                // Second child: [a ASC, c ASC, d ASC], const [b]
+                vec![vec!["a", "c", "d"]],
+                vec!["b"],
+                &schema,
+            )
+            .with_expected_sort_and_const_exprs(
+                // Union orderings:
+                // [a, b, d] (c constant)
+                // [a, c, d] (b constant)
+                vec![vec!["a", "c", "b", "d"], vec!["a", "b", "c", "d"]],
+                vec![],
+            )
+            .run()
+    }
+
+    #[test]
+    #[ignore]
+    // ignored due to https://github.com/apache/datafusion/issues/12446
+    fn test_union_equivalence_properties_constants_middle_desc() {
+        let schema = create_test_schema().unwrap();
+        UnionEquivalenceTest::new(&schema)
+            .with_child_sort_and_const_exprs(
+                // NB `b DESC` in the first child
+                //
+                // First child: [a ASC, b DESC, d ASC], const [c]
+                vec![vec!["a", "b DESC", "d"]],
+                vec!["c"],
+                &schema,
+            )
+            .with_child_sort_and_const_exprs(
+                // Second child: [a ASC, c ASC, d ASC], const [b]
+                vec![vec!["a", "c", "d"]],
+                vec!["b"],
+                &schema,
+            )
+            .with_expected_sort_and_const_exprs(
+                // Union orderings:
+                // [a, b, d] (c constant)
+                // [a, c, d] (b constant)
+                vec![vec!["a", "c", "b DESC", "d"], vec!["a", "b DESC", "c", "d"]],
+                vec![],
+            )
+            .run()
+    }
+
+    // TODO tests with multiple constants
+
+    #[derive(Debug)]
+    struct UnionEquivalenceTest {
+        /// The schema of the output of the Union
+        output_schema: SchemaRef,
+        /// The equivalence properties of each child to the union
+        child_properties: Vec<EquivalenceProperties>,
+        /// The expected output properties of the union. Must be set before
+        /// running `build`
+        expected_properties: Option<EquivalenceProperties>,
+    }
+
+    impl UnionEquivalenceTest {
+        fn new(output_schema: &SchemaRef) -> Self {
+            Self {
+                output_schema: Arc::clone(output_schema),
+                child_properties: vec![],
+                expected_properties: None,
+            }
+        }
+
+        /// Add a union input with the specified orderings
+        ///
+        /// See [`Self::make_props`] for the format of the strings in `orderings`
+        fn with_child_sort(
+            mut self,
+            orderings: Vec<Vec<&'static str>>,
+            schema: &SchemaRef,
+        ) -> Self {
+            let properties = self.make_props(orderings, vec![], schema);
+            self.child_properties.push(properties);
+            self
+        }
+
+        /// Add a union input with the specified orderings and constant
+        /// equivalences
+        ///
+        /// See [`Self::make_props`] for the format of the strings in
+        /// `orderings` and `constants`
+        fn with_child_sort_and_const_exprs(
+            mut self,
+            orderings: Vec<Vec<&'static str>>,
+            constants: Vec<&'static str>,
+            schema: &SchemaRef,
+        ) -> Self {
+            let properties = self.make_props(orderings, constants, schema);
+            self.child_properties.push(properties);
+            self
+        }
+
+        /// Set the expected output sort order for the union of the children
+        ///
+        /// See [`Self::make_props`] for the format of the strings in `orderings`
+        fn with_expected_sort(mut self, orderings: Vec<Vec<&'static str>>) -> Self {
+            let properties = self.make_props(orderings, vec![], &self.output_schema);
+            self.expected_properties = Some(properties);
+            self
+        }
+
+        /// Set the expected output sort order and constant expressions for the
+        /// union of the children
+        ///
+        /// See [`Self::make_props`] for the format of the strings in
+        /// `orderings` and `constants`.
+        fn with_expected_sort_and_const_exprs(
+            mut self,
+            orderings: Vec<Vec<&'static str>>,
+            constants: Vec<&'static str>,
+        ) -> Self {
+            let properties = self.make_props(orderings, constants, &self.output_schema);
+            self.expected_properties = Some(properties);
+            self
+        }
+
+        /// compute the union's output equivalence properties from the child
+        /// properties, and compare them to the expected properties
+        fn run(self) {
+            let Self {
+                output_schema,
+                child_properties,
+                expected_properties,
+            } = self;
+            let expected_properties =
+                expected_properties.expect("expected_properties not set");
+            let actual_properties =
+                calculate_union(child_properties, Arc::clone(&output_schema))
+                    .expect("failed to calculate union equivalence properties");
+            assert_eq_properties_same(
+                &actual_properties,
+                &expected_properties,
+                format!(
+                    "expected: {expected_properties:?}\nactual:  {actual_properties:?}"
+                ),
+            );
+        }
+
+        /// Make equivalence properties for the specified columns named in orderings and constants
+        ///
+        /// orderings: strings formatted like `"a"` or `"a DESC"`. See [`parse_sort_expr`]
+        /// constants: strings formatted like `"a"`.
+        fn make_props(
+            &self,
+            orderings: Vec<Vec<&'static str>>,
+            constants: Vec<&'static str>,
+            schema: &SchemaRef,
+        ) -> EquivalenceProperties {
+            let orderings = orderings
+                .iter()
                 .map(|ordering| {
                     ordering
-                        .into_iter()
-                        .map(|name| PhysicalSortExpr {
-                            expr: col(name, &schema).unwrap(),
-                            options: SortOptions::default(),
-                        })
+                        .iter()
+                        .map(|name| parse_sort_expr(name, schema))
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
-            let expected = EquivalenceProperties::new_with_orderings(
-                Arc::clone(&schema),
-                &expected_ordering,
-            );
-            assert_eq_properties_same(
-                &actual,
-                &expected,
-                format!("expected: {:?}, actual: {:?}", expected, actual),
-            );
+
+            let constants = constants
+                .iter()
+                .map(|col_name| ConstExpr::new(col(col_name, schema).unwrap()))
+                .collect::<Vec<_>>();
+
+            EquivalenceProperties::new_with_orderings(Arc::clone(schema), &orderings)
+                .with_constants(constants)
         }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_union_equivalence_properties_binary() -> Result<()> {
-        let schema = create_test_schema()?;
-        let schema2 = append_fields(&schema, "1");
-        let col_a = &col("a", &schema)?;
-        let col_b = &col("b", &schema)?;
-        let col_c = &col("c", &schema)?;
-        let col_a1 = &col("a1", &schema2)?;
-        let col_b1 = &col("b1", &schema2)?;
-        let options = SortOptions::default();
-        let options_desc = !SortOptions::default();
-        let test_cases = [
-            //-----------TEST CASE 1----------//
-            (
-                (
-                    // First child orderings
-                    vec![
-                        // [a ASC]
-                        (vec![(col_a, options)]),
-                    ],
-                    // First child constants
-                    vec![col_b, col_c],
-                    Arc::clone(&schema),
-                ),
-                (
-                    // Second child orderings
-                    vec![
-                        // [b ASC]
-                        (vec![(col_b, options)]),
-                    ],
-                    // Second child constants
-                    vec![col_a, col_c],
-                    Arc::clone(&schema),
-                ),
-                (
-                    // Union expected orderings
-                    vec![
-                        // [a ASC]
-                        vec![(col_a, options)],
-                        // [b ASC]
-                        vec![(col_b, options)],
-                    ],
-                    // Union
-                    vec![col_c],
-                ),
-            ),
-            //-----------TEST CASE 2----------//
-            // Meet ordering between [a ASC], [a ASC, b ASC] should be [a ASC]
-            (
-                (
-                    // First child orderings
-                    vec![
-                        // [a ASC]
-                        vec![(col_a, options)],
-                    ],
-                    // No constant
-                    vec![],
-                    Arc::clone(&schema),
-                ),
-                (
-                    // Second child orderings
-                    vec![
-                        // [a ASC, b ASC]
-                        vec![(col_a, options), (col_b, options)],
-                    ],
-                    // No constant
-                    vec![],
-                    Arc::clone(&schema),
-                ),
-                (
-                    // Union orderings
-                    vec![
-                        // [a ASC]
-                        vec![(col_a, options)],
-                    ],
-                    // No constant
-                    vec![],
-                ),
-            ),
-            //-----------TEST CASE 3----------//
-            // Meet ordering between [a ASC], [a DESC] should be []
-            (
-                (
-                    // First child orderings
-                    vec![
-                        // [a ASC]
-                        vec![(col_a, options)],
-                    ],
-                    // No constant
-                    vec![],
-                    Arc::clone(&schema),
-                ),
-                (
-                    // Second child orderings
-                    vec![
-                        // [a DESC]
-                        vec![(col_a, options_desc)],
-                    ],
-                    // No constant
-                    vec![],
-                    Arc::clone(&schema),
-                ),
-                (
-                    // Union doesn't have any ordering
-                    vec![],
-                    // No constant
-                    vec![],
-                ),
-            ),
-            //-----------TEST CASE 4----------//
-            // Meet ordering between [a ASC], [a1 ASC, b1 ASC] should be [a ASC]
-            // Where a, and a1 ath the same index for their corresponding schemas.
-            (
-                (
-                    // First child orderings
-                    vec![
-                        // [a ASC]
-                        vec![(col_a, options)],
-                    ],
-                    // No constant
-                    vec![],
-                    Arc::clone(&schema),
-                ),
-                (
-                    // Second child orderings
-                    vec![
-                        // [a1 ASC, b1 ASC]
-                        vec![(col_a1, options), (col_b1, options)],
-                    ],
-                    // No constant
-                    vec![],
-                    Arc::clone(&schema2),
-                ),
-                (
-                    // Union orderings
-                    vec![
-                        // [a ASC]
-                        vec![(col_a, options)],
-                    ],
-                    // No constant
-                    vec![],
-                ),
-            ),
-        ];
-
-        for (
-            test_idx,
-            (
-                (first_child_orderings, first_child_constants, first_schema),
-                (second_child_orderings, second_child_constants, second_schema),
-                (union_orderings, union_constants),
-            ),
-        ) in test_cases.iter().enumerate()
-        {
-            let first_orderings = first_child_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
-            let first_constants = first_child_constants
-                .iter()
-                .map(|expr| ConstExpr::new(Arc::clone(expr)))
-                .collect::<Vec<_>>();
-            let mut lhs = EquivalenceProperties::new(Arc::clone(first_schema));
-            lhs = lhs.with_constants(first_constants);
-            lhs.add_new_orderings(first_orderings);
-
-            let second_orderings = second_child_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
-            let second_constants = second_child_constants
-                .iter()
-                .map(|expr| ConstExpr::new(Arc::clone(expr)))
-                .collect::<Vec<_>>();
-            let mut rhs = EquivalenceProperties::new(Arc::clone(second_schema));
-            rhs = rhs.with_constants(second_constants);
-            rhs.add_new_orderings(second_orderings);
-
-            let union_expected_orderings = union_orderings
-                .iter()
-                .map(|ordering| convert_to_sort_exprs(ordering))
-                .collect::<Vec<_>>();
-            let union_constants = union_constants
-                .iter()
-                .map(|expr| ConstExpr::new(Arc::clone(expr)))
-                .collect::<Vec<_>>();
-            let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
-            union_expected_eq = union_expected_eq.with_constants(union_constants);
-            union_expected_eq.add_new_orderings(union_expected_orderings);
-
-            let actual_union_eq = calculate_union_binary(lhs, rhs)?;
-            let err_msg = format!(
-                "Error in test id: {:?}, test case: {:?}",
-                test_idx, test_cases[test_idx]
-            );
-            assert_eq_properties_same(&actual_union_eq, &union_expected_eq, err_msg);
-        }
-        Ok(())
     }
 
     fn assert_eq_properties_same(
@@ -3091,21 +3140,63 @@ mod tests {
         // Check whether constants are same
         let lhs_constants = lhs.constants();
         let rhs_constants = rhs.constants();
-        assert_eq!(lhs_constants.len(), rhs_constants.len(), "{}", err_msg);
         for rhs_constant in rhs_constants {
             assert!(
                 const_exprs_contains(lhs_constants, rhs_constant.expr()),
-                "{}",
-                err_msg
+                "{err_msg}\nlhs: {lhs}\nrhs: {rhs}"
             );
         }
+        assert_eq!(
+            lhs_constants.len(),
+            rhs_constants.len(),
+            "{err_msg}\nlhs: {lhs}\nrhs: {rhs}"
+        );
 
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
         let rhs_orderings = &rhs.oeq_class.orderings;
-        assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
         for rhs_ordering in rhs_orderings {
-            assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
+            assert!(
+                lhs_orderings.contains(rhs_ordering),
+                "{err_msg}\nlhs: {lhs}\nrhs: {rhs}"
+            );
         }
+        assert_eq!(
+            lhs_orderings.len(),
+            rhs_orderings.len(),
+            "{err_msg}\nlhs: {lhs}\nrhs: {rhs}"
+        );
+    }
+
+    /// Converts a string to a physical sort expression
+    ///
+    /// # Example
+    /// * `"a"` -> (`"a"`, `SortOptions::default()`)
+    /// * `"a ASC"` -> (`"a"`, `SortOptions { descending: false, nulls_first: false }`)
+    fn parse_sort_expr(name: &str, schema: &SchemaRef) -> PhysicalSortExpr {
+        let mut parts = name.split_whitespace();
+        let name = parts.next().expect("empty sort expression");
+        let mut sort_expr = PhysicalSortExpr::new(
+            col(name, schema).expect("invalid column name"),
+            SortOptions::default(),
+        );
+
+        if let Some(options) = parts.next() {
+            sort_expr = match options {
+                "ASC" => sort_expr.asc(),
+                "DESC" => sort_expr.desc(),
+                _ => panic!(
+                    "unknown sort options. Expected 'ASC' or 'DESC', got {}",
+                    options
+                ),
+            }
+        }
+
+        assert!(
+            parts.next().is_none(),
+            "unexpected tokens in column name. Expected 'name' / 'name ASC' / 'name DESC' but got  '{name}'"
+        );
+
+        sort_expr
     }
 }
