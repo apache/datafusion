@@ -176,6 +176,7 @@ initial_logical_plan
 02)--TableScan: simple_explain_test
 logical_plan after inline_table_scan SAME TEXT AS ABOVE
 logical_plan after expand_wildcard_rule SAME TEXT AS ABOVE
+logical_plan after resolve_grouping_function SAME TEXT AS ABOVE
 logical_plan after type_coercion SAME TEXT AS ABOVE
 logical_plan after count_wildcard_rule SAME TEXT AS ABOVE
 analyzed_logical_plan SAME TEXT AS ABOVE
