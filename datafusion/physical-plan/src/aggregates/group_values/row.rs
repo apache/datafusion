@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::AggregateMode;
 use ahash::RandomState;
 use arrow::compute::cast;
 use arrow::record_batch::RecordBatch;
@@ -108,7 +109,13 @@ impl GroupValuesRows {
 }
 
 impl GroupValues for GroupValuesRows {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        mode: AggregateMode,
+        batch_hashes: &mut Vec<u64>,
+    ) -> Result<()> {
         // Convert the group keys into the row format
         let group_rows = &mut self.rows_buffer;
         group_rows.clear();

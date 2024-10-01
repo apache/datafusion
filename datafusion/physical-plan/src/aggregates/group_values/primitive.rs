@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::AggregateMode;
 use ahash::RandomState;
 use arrow::array::BooleanBufferBuilder;
 use arrow::buffer::NullBuffer;
@@ -111,7 +112,13 @@ impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
 {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        mode: AggregateMode,
+        batch_hashes: &mut Vec<u64>,
+    ) -> Result<()> {
         assert_eq!(cols.len(), 1);
         groups.clear();
 

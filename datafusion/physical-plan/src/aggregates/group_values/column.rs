@@ -19,6 +19,7 @@ use crate::aggregates::group_values::group_column::{
     ByteGroupValueBuilder, GroupColumn, PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::AggregateMode;
 use ahash::RandomState;
 use arrow::compute::cast;
 use arrow::datatypes::{
@@ -35,6 +36,7 @@ use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 
 use hashbrown::raw::RawTable;
+use hashbrown::HashMap;
 
 /// A [`GroupValues`] that stores multiple columns of group values.
 ///
@@ -71,6 +73,9 @@ pub struct GroupValuesColumn {
 
     /// Random state for creating hashes
     random_state: RandomState,
+    batch_cardinality: usize,
+    batch_cardinality_ratio: f32,
+    skip_partial: bool,
 }
 
 impl GroupValuesColumn {
@@ -84,6 +89,9 @@ impl GroupValuesColumn {
             group_values: vec![],
             hashes_buffer: Default::default(),
             random_state: Default::default(),
+            batch_cardinality: 0,
+            batch_cardinality_ratio: 0.0,
+            skip_partial: false,
         })
     }
 
@@ -123,8 +131,42 @@ impl GroupValuesColumn {
     }
 }
 
+// impl GroupValuesColumn {
+//     fn compute_hashes(&mut self, cols: &[ArrayRef]) -> Result<()> {
+//         let n_rows = cols[0].len();
+//         let batch_hashes = &mut self.hashes_buffer;
+//         batch_hashes.clear();
+//         batch_hashes.resize(n_rows, 0);
+//         create_hashes(cols, &self.random_state, batch_hashes)?;
+
+//         let mut table = HashMap::with_capacity(batch_hashes.len());
+//         for (row, target_hash) in batch_hashes.iter().enumerate() {
+//             if let Some(entry) = table.get_mut(target_hash) {
+//                 *entry = *entry + 1;
+//             } else {
+//                 table.insert(target_hash, 1);
+//             }
+//         }
+
+//         self.batch_cardinality = table.len();
+//         self.batch_cardinality_ratio = table.len() as f32 / n_rows as f32;
+
+//         Ok(())
+//     }
+// }
+
 impl GroupValues for GroupValuesColumn {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        mode: AggregateMode,
+        batch_hashes: &mut Vec<u64>,
+    ) -> Result<()> {
+        if mode == AggregateMode::Partial && self.skip_partial {
+            return Ok(());
+        }
+
         let n_rows = cols[0].len();
 
         if self.group_values.is_empty() {
@@ -207,12 +249,6 @@ impl GroupValues for GroupValuesColumn {
 
         // tracks to which group each of the input rows belongs
         groups.clear();
-
-        // 1.1 Calculate the group keys for the group values
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, batch_hashes)?;
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {

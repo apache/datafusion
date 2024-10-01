@@ -684,6 +684,7 @@ impl DefaultPhysicalPlanner {
                     multiunzip(agg_filter);
 
                 let is_multi_group = group_expr.len() > 1;
+                let is_multi_group = false;
                 if is_multi_group {
                     let can_repartition = !groups.is_empty()
                         && session_state.config().target_partitions() > 1

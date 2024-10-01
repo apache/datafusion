@@ -37,6 +37,8 @@ mod bytes_view;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
+use super::AggregateMode;
+
 mod group_column;
 
 /// Stores the group values during hash aggregation.
@@ -85,7 +87,13 @@ pub trait GroupValues: Send {
     /// If a row has the same value as a previous row, the same group id is
     /// assigned. If a row has a new value, the next available group id is
     /// assigned.
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        mode: AggregateMode,
+        batch_hashes: &mut Vec<u64>,
+    ) -> Result<()>;
 
     /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;
