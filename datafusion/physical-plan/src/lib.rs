@@ -27,7 +27,7 @@ pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
-pub use datafusion_expr::{Accumulator, ColumnarValue};
+pub use datafusion_expr::{Accumulator, ColumnarValue, Scalar};
 pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use datafusion_physical_expr::{

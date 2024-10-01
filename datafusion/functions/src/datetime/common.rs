@@ -195,10 +195,10 @@ where
             ))),
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
-        ColumnarValue::Scalar(scalar) => match scalar {
+        ColumnarValue::Scalar(scalar) => match scalar.value() {
             ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
                 let result = a.as_ref().map(|x| (op)(x)).transpose()?;
-                Ok(ColumnarValue::Scalar(S::scalar(result)))
+                Ok(ColumnarValue::from(S::scalar(result)))
             }
             other => exec_err!("Unsupported data type {other:?} for function {name}"),
         },
@@ -252,7 +252,7 @@ where
             }
         },
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
-        ColumnarValue::Scalar(scalar) => match scalar {
+        ColumnarValue::Scalar(scalar) => match scalar.value() {
             ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
                 let a = a.as_ref();
                 // ASK: Why do we trust `a` to be non-null at this point?
@@ -261,9 +261,11 @@ where
                 let mut ret = None;
 
                 for (pos, v) in args.iter().enumerate().skip(1) {
-                    let ColumnarValue::Scalar(
-                        ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x),
-                    ) = v
+                    let ColumnarValue::Scalar(v) = v else {
+                        return exec_err!("Expected scalar of data type {v:?} for function {name}, arg # {pos}");
+                    };
+
+                    let (ScalarValue::Utf8(x) | ScalarValue::LargeUtf8(x)) = v.value()
                     else {
                         return exec_err!("Unsupported data type {v:?} for function {name}, arg # {pos}");
                     };
@@ -271,7 +273,7 @@ where
                     if let Some(s) = x {
                         match op(a.as_str(), s.as_str()) {
                             Ok(r) => {
-                                ret = Some(Ok(ColumnarValue::Scalar(S::scalar(Some(
+                                ret = Some(Ok(ColumnarValue::from(S::scalar(Some(
                                     op2(r),
                                 )))));
                                 break;
@@ -328,7 +330,7 @@ where
             ColumnarValue::Array(a) => {
                 Ok(Either::Left(as_generic_string_array::<T>(a.as_ref())?))
             }
-            ColumnarValue::Scalar(s) => match s {
+            ColumnarValue::Scalar(s) => match s.value() {
                 ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => Ok(Either::Right(a)),
                 other => exec_err!(
                     "Unexpected scalar type encountered '{other}' for function '{name}'"

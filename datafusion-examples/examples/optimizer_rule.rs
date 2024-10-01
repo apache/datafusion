@@ -208,7 +208,7 @@ impl ScalarUDFImpl for MyEq {
     fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
         // this example simply returns "true" which is not what a real
         // implementation would do.
-        Ok(ColumnarValue::Scalar(ScalarValue::from(true)))
+        Ok(ColumnarValue::from(ScalarValue::from(true)))
     }
 }
 

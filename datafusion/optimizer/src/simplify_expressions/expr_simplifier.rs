@@ -670,7 +670,7 @@ impl<'a> ConstEvaluator<'a> {
             }
             ColumnarValue::Scalar(s) => {
                 // TODO: support the optimization for `Map` type after support impl hash for it
-                if matches!(&s, ScalarValue::Map(_)) {
+                if matches!(&s.value(), ScalarValue::Map(_)) {
                     ConstSimplifyResult::SimplifyRuntimeError(
                         DataFusionError::NotImplemented(
                             "Const evaluate for Map type is still not supported"
@@ -679,7 +679,7 @@ impl<'a> ConstEvaluator<'a> {
                         expr,
                     )
                 } else {
-                    ConstSimplifyResult::Simplified(s)
+                    ConstSimplifyResult::Simplified(s.into_value())
                 }
             }
         }

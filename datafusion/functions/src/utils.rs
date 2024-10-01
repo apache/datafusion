@@ -113,7 +113,7 @@ where
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
             let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(ColumnarValue::Scalar)
+            result.map(ColumnarValue::from)
         } else {
             result.map(ColumnarValue::Array)
         }
@@ -133,7 +133,7 @@ pub mod test {
             let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
             let func = $FUNC;
 
-            let type_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
+            let type_array = $ARGS.iter().map(|arg| arg.data_type().clone()).collect::<Vec<_>>();
             let return_type = func.return_type(&type_array);
 
             match expected {

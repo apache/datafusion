@@ -84,7 +84,7 @@ impl PhysicalExpr for NegativeExpr {
                 Ok(ColumnarValue::Array(result))
             }
             ColumnarValue::Scalar(scalar) => {
-                Ok(ColumnarValue::Scalar((scalar.arithmetic_negate())?))
+                Ok(ColumnarValue::from((scalar.value().arithmetic_negate())?))
             }
         }
     }

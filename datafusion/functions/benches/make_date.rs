@@ -72,7 +72,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("make_date_scalar_col_col_1000", |b| {
         let mut rng = rand::thread_rng();
-        let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
+        let year = ColumnarValue::from(ScalarValue::Int32(Some(2025)));
         let months = ColumnarValue::Array(Arc::new(months(&mut rng)) as ArrayRef);
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
@@ -87,8 +87,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("make_date_scalar_scalar_col_1000", |b| {
         let mut rng = rand::thread_rng();
-        let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
-        let month = ColumnarValue::Scalar(ScalarValue::Int32(Some(11)));
+        let year = ColumnarValue::from(ScalarValue::Int32(Some(2025)));
+        let month = ColumnarValue::from(ScalarValue::Int32(Some(11)));
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
         b.iter(|| {
@@ -101,9 +101,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("make_date_scalar_scalar_scalar", |b| {
-        let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
-        let month = ColumnarValue::Scalar(ScalarValue::Int32(Some(11)));
-        let day = ColumnarValue::Scalar(ScalarValue::Int32(Some(26)));
+        let year = ColumnarValue::from(ScalarValue::Int32(Some(2025)));
+        let month = ColumnarValue::from(ScalarValue::Int32(Some(11)));
+        let day = ColumnarValue::from(ScalarValue::Int32(Some(26)));
 
         b.iter(|| {
             black_box(

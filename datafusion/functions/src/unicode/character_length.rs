@@ -139,7 +139,7 @@ mod tests {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
+                &[ColumnarValue::from(ScalarValue::Utf8($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,
@@ -148,7 +148,7 @@ mod tests {
 
             test_function!(
                 CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
+                &[ColumnarValue::from(ScalarValue::LargeUtf8($INPUT))],
                 $EXPECTED,
                 i64,
                 Int64,
@@ -157,7 +157,7 @@ mod tests {
 
             test_function!(
                 CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
+                &[ColumnarValue::from(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,
@@ -181,7 +181,7 @@ mod tests {
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             CharacterLengthFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("josé"))))],
+            &[ColumnarValue::from(ScalarValue::Utf8(Some(String::from("josé"))))],
             internal_err!(
                 "function character_length requires compilation with feature flag: unicode_expressions."
             ),

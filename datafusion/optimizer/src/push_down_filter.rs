@@ -3057,7 +3057,7 @@ Projection: a, b
         }
 
         fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-            Ok(ColumnarValue::Scalar(ScalarValue::from(1)))
+            Ok(ColumnarValue::from(ScalarValue::from(1)))
         }
     }
 

@@ -79,50 +79,48 @@ impl ToLocalTimeFunc {
                 let tz: Tz = timezone.parse()?;
 
                 match time_value {
-                    ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                        Some(ts),
-                        Some(_),
-                    )) => {
-                        let adjusted_ts =
-                            adjust_to_local_time::<TimestampNanosecondType>(*ts, tz)?;
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                            Some(adjusted_ts),
-                            None,
-                        )))
-                    }
-                    ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                        Some(ts),
-                        Some(_),
-                    )) => {
-                        let adjusted_ts =
-                            adjust_to_local_time::<TimestampMicrosecondType>(*ts, tz)?;
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                            Some(adjusted_ts),
-                            None,
-                        )))
-                    }
-                    ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                        Some(ts),
-                        Some(_),
-                    )) => {
-                        let adjusted_ts =
-                            adjust_to_local_time::<TimestampMillisecondType>(*ts, tz)?;
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                            Some(adjusted_ts),
-                            None,
-                        )))
-                    }
-                    ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-                        Some(ts),
-                        Some(_),
-                    )) => {
-                        let adjusted_ts =
-                            adjust_to_local_time::<TimestampSecondType>(*ts, tz)?;
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-                            Some(adjusted_ts),
-                            None,
-                        )))
-                    }
+                    ColumnarValue::Scalar(scalar) => match scalar.value() {
+                        ScalarValue::TimestampNanosecond(Some(ts), Some(_)) => {
+                            let adjusted_ts =
+                                adjust_to_local_time::<TimestampNanosecondType>(*ts, tz)?;
+                            Ok(ColumnarValue::from(ScalarValue::TimestampNanosecond(
+                                Some(adjusted_ts),
+                                None,
+                            )))
+                        }
+                        ScalarValue::TimestampMicrosecond(Some(ts), Some(_)) => {
+                            let adjusted_ts = adjust_to_local_time::<
+                                TimestampMicrosecondType,
+                            >(*ts, tz)?;
+                            Ok(ColumnarValue::from(ScalarValue::TimestampMicrosecond(
+                                Some(adjusted_ts),
+                                None,
+                            )))
+                        }
+                        ScalarValue::TimestampMillisecond(Some(ts), Some(_)) => {
+                            let adjusted_ts = adjust_to_local_time::<
+                                TimestampMillisecondType,
+                            >(*ts, tz)?;
+                            Ok(ColumnarValue::from(ScalarValue::TimestampMillisecond(
+                                Some(adjusted_ts),
+                                None,
+                            )))
+                        }
+                        ScalarValue::TimestampSecond(Some(ts), Some(_)) => {
+                            let adjusted_ts =
+                                adjust_to_local_time::<TimestampSecondType>(*ts, tz)?;
+                            Ok(ColumnarValue::from(ScalarValue::TimestampSecond(
+                                Some(adjusted_ts),
+                                None,
+                            )))
+                        }
+                        _ => {
+                            exec_err!(
+                        "to_local_time function requires timestamp argument, got {:?}",
+                        time_value.data_type()
+                    )
+                        }
+                    },
                     ColumnarValue::Array(array) => {
                         fn transform_array<T: ArrowTimestampType>(
                             array: &ArrayRef,
@@ -166,12 +164,6 @@ impl ToLocalTimeFunc {
                                 exec_err!("to_local_time function requires timestamp argument in array, got {:?}", array.data_type())
                             }
                         }
-                    }
-                    _ => {
-                        exec_err!(
-                        "to_local_time function requires timestamp argument, got {:?}",
-                        time_value.data_type()
-                    )
                     }
                 }
             }
@@ -362,7 +354,7 @@ mod tests {
     use arrow::datatypes::{DataType, TimeUnit};
     use chrono::NaiveDateTime;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, Scalar, ScalarUDFImpl};
 
     use super::{adjust_to_local_time, ToLocalTimeFunc};
 
@@ -489,11 +481,11 @@ mod tests {
 
     fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
         let res = ToLocalTimeFunc::new()
-            .invoke(&[ColumnarValue::Scalar(input)])
+            .invoke(&[ColumnarValue::from(input)])
             .unwrap();
         match res {
             ColumnarValue::Scalar(res) => {
-                assert_eq!(res, expected);
+                assert_eq!(res, Scalar::from(expected));
             }
             _ => panic!("unexpected return type"),
         }

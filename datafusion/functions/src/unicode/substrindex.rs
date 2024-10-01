@@ -213,9 +213,9 @@ mod tests {
         test_function!(
             SubstrIndexFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
-                ColumnarValue::Scalar(ScalarValue::from(".")),
-                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+                ColumnarValue::from(ScalarValue::from("www.apache.org")),
+                ColumnarValue::from(ScalarValue::from(".")),
+                ColumnarValue::from(ScalarValue::from(1i64)),
             ],
             Ok(Some("www")),
             &str,
@@ -225,9 +225,9 @@ mod tests {
         test_function!(
             SubstrIndexFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
-                ColumnarValue::Scalar(ScalarValue::from(".")),
-                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+                ColumnarValue::from(ScalarValue::from("www.apache.org")),
+                ColumnarValue::from(ScalarValue::from(".")),
+                ColumnarValue::from(ScalarValue::from(2i64)),
             ],
             Ok(Some("www.apache")),
             &str,
@@ -237,9 +237,9 @@ mod tests {
         test_function!(
             SubstrIndexFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
-                ColumnarValue::Scalar(ScalarValue::from(".")),
-                ColumnarValue::Scalar(ScalarValue::from(-2i64)),
+                ColumnarValue::from(ScalarValue::from("www.apache.org")),
+                ColumnarValue::from(ScalarValue::from(".")),
+                ColumnarValue::from(ScalarValue::from(-2i64)),
             ],
             Ok(Some("apache.org")),
             &str,
@@ -249,9 +249,9 @@ mod tests {
         test_function!(
             SubstrIndexFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
-                ColumnarValue::Scalar(ScalarValue::from(".")),
-                ColumnarValue::Scalar(ScalarValue::from(-1i64)),
+                ColumnarValue::from(ScalarValue::from("www.apache.org")),
+                ColumnarValue::from(ScalarValue::from(".")),
+                ColumnarValue::from(ScalarValue::from(-1i64)),
             ],
             Ok(Some("org")),
             &str,
@@ -261,9 +261,9 @@ mod tests {
         test_function!(
             SubstrIndexFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
-                ColumnarValue::Scalar(ScalarValue::from(".")),
-                ColumnarValue::Scalar(ScalarValue::from(0i64)),
+                ColumnarValue::from(ScalarValue::from("www.apache.org")),
+                ColumnarValue::from(ScalarValue::from(".")),
+                ColumnarValue::from(ScalarValue::from(0i64)),
             ],
             Ok(Some("")),
             &str,
@@ -273,9 +273,9 @@ mod tests {
         test_function!(
             SubstrIndexFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("")),
-                ColumnarValue::Scalar(ScalarValue::from(".")),
-                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+                ColumnarValue::from(ScalarValue::from("")),
+                ColumnarValue::from(ScalarValue::from(".")),
+                ColumnarValue::from(ScalarValue::from(1i64)),
             ],
             Ok(Some("")),
             &str,
@@ -285,9 +285,9 @@ mod tests {
         test_function!(
             SubstrIndexFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
-                ColumnarValue::Scalar(ScalarValue::from("")),
-                ColumnarValue::Scalar(ScalarValue::from(1i64)),
+                ColumnarValue::from(ScalarValue::from("www.apache.org")),
+                ColumnarValue::from(ScalarValue::from("")),
+                ColumnarValue::from(ScalarValue::from(1i64)),
             ],
             Ok(Some("")),
             &str,

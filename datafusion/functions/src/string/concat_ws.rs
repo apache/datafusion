@@ -94,14 +94,17 @@ impl ScalarUDFImpl for ConcatWsFunc {
         // Scalar
         if array_len.is_none() {
             let sep = match &args[0] {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
-                | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s)))
-                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => s,
-                ColumnarValue::Scalar(ScalarValue::Utf8(None))
-                | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
-                }
+                ColumnarValue::Scalar(scalar) => match scalar.value() {
+                    ScalarValue::Utf8(Some(s))
+                    | ScalarValue::Utf8View(Some(s))
+                    | ScalarValue::LargeUtf8(Some(s)) => s,
+                    ScalarValue::Utf8(None)
+                    | ScalarValue::Utf8View(None)
+                    | ScalarValue::LargeUtf8(None) => {
+                        return Ok(ColumnarValue::from(ScalarValue::Utf8(None)));
+                    }
+                    _ => unreachable!(),
+                },
                 _ => unreachable!(),
             };
 
@@ -110,35 +113,41 @@ impl ScalarUDFImpl for ConcatWsFunc {
 
             for arg in iter.by_ref() {
                 match arg {
-                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
-                    | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s)))
-                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => {
-                        result.push_str(s);
-                        break;
-                    }
-                    ColumnarValue::Scalar(ScalarValue::Utf8(None))
-                    | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {}
+                    ColumnarValue::Scalar(scalar) => match scalar.value() {
+                        ScalarValue::Utf8(Some(s))
+                        | ScalarValue::Utf8View(Some(s))
+                        | ScalarValue::LargeUtf8(Some(s)) => {
+                            result.push_str(s);
+                            break;
+                        }
+                        ScalarValue::Utf8(None)
+                        | ScalarValue::Utf8View(None)
+                        | ScalarValue::LargeUtf8(None) => {}
+                        _ => unreachable!(),
+                    },
                     _ => unreachable!(),
                 }
             }
 
             for arg in iter.by_ref() {
                 match arg {
-                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
-                    | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s)))
-                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => {
-                        result.push_str(sep);
-                        result.push_str(s);
-                    }
-                    ColumnarValue::Scalar(ScalarValue::Utf8(None))
-                    | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {}
+                    ColumnarValue::Scalar(scalar) => match scalar.value() {
+                        ScalarValue::Utf8(Some(s))
+                        | ScalarValue::Utf8View(Some(s))
+                        | ScalarValue::LargeUtf8(Some(s)) => {
+                            result.push_str(sep);
+                            result.push_str(s);
+                        }
+                        ScalarValue::Utf8(None)
+                        | ScalarValue::Utf8View(None)
+                        | ScalarValue::LargeUtf8(None) => {}
+                        _ => unreachable!(),
+                    },
                     _ => unreachable!(),
                 }
             }
 
-            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))));
+            return Ok(ColumnarValue::from(ScalarValue::Utf8(Some(result))));
         }
 
         // Array
@@ -147,13 +156,18 @@ impl ScalarUDFImpl for ConcatWsFunc {
 
         // parse sep
         let sep = match &args[0] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => {
-                data_size += s.len() * len * (args.len() - 2); // estimate
-                ColumnarValueRef::Scalar(s.as_bytes())
-            }
-            ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {
-                return Ok(ColumnarValue::Array(Arc::new(StringArray::new_null(len))));
-            }
+            ColumnarValue::Scalar(scalar) => match scalar.value() {
+                ScalarValue::Utf8(Some(s)) => {
+                    data_size += s.len() * len * (args.len() - 2); // estimate
+                    ColumnarValueRef::Scalar(s.as_bytes())
+                }
+                ScalarValue::Utf8(None) => {
+                    return Ok(ColumnarValue::Array(Arc::new(StringArray::new_null(
+                        len,
+                    ))));
+                }
+                _ => unreachable!(),
+            },
             ColumnarValue::Array(array) => {
                 let string_array = as_string_array(array)?;
                 data_size += string_array.values().len() * (args.len() - 2); // estimate
@@ -163,20 +177,22 @@ impl ScalarUDFImpl for ConcatWsFunc {
                     ColumnarValueRef::NonNullableArray(string_array)
                 }
             }
-            _ => unreachable!(),
         };
 
         let mut columns = Vec::with_capacity(args.len() - 1);
         for arg in &args[1..] {
             match arg {
-                ColumnarValue::Scalar(ScalarValue::Utf8(maybe_value))
-                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(maybe_value))
-                | ColumnarValue::Scalar(ScalarValue::Utf8View(maybe_value)) => {
-                    if let Some(s) = maybe_value {
-                        data_size += s.len() * len;
-                        columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
+                ColumnarValue::Scalar(scalar) => match scalar.value() {
+                    ScalarValue::Utf8(maybe_value)
+                    | ScalarValue::Utf8View(maybe_value)
+                    | ScalarValue::LargeUtf8(maybe_value) => {
+                        if let Some(s) = maybe_value {
+                            data_size += s.len() * len;
+                            columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
+                        }
                     }
-                }
+                    _ => unreachable!(),
+                },
                 ColumnarValue::Array(array) => {
                     match array.data_type() {
                         DataType::Utf8 => {
@@ -217,7 +233,6 @@ impl ScalarUDFImpl for ConcatWsFunc {
                         }
                     };
                 }
-                _ => unreachable!(),
             }
         }
 
@@ -366,10 +381,10 @@ mod tests {
         test_function!(
             ConcatWsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("|")),
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
-                ColumnarValue::Scalar(ScalarValue::from("bb")),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::from(ScalarValue::from("|")),
+                ColumnarValue::from(ScalarValue::from("aa")),
+                ColumnarValue::from(ScalarValue::from("bb")),
+                ColumnarValue::from(ScalarValue::from("cc")),
             ],
             Ok(Some("aa|bb|cc")),
             &str,
@@ -379,8 +394,8 @@ mod tests {
         test_function!(
             ConcatWsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("|")),
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from("|")),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
             ],
             Ok(Some("")),
             &str,
@@ -390,10 +405,10 @@ mod tests {
         test_function!(
             ConcatWsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
-                ColumnarValue::Scalar(ScalarValue::from("bb")),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from("aa")),
+                ColumnarValue::from(ScalarValue::from("bb")),
+                ColumnarValue::from(ScalarValue::from("cc")),
             ],
             Ok(None),
             &str,
@@ -403,10 +418,10 @@ mod tests {
         test_function!(
             ConcatWsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("|")),
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::from(ScalarValue::from("|")),
+                ColumnarValue::from(ScalarValue::from("aa")),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from("cc")),
             ],
             Ok(Some("aa|cc")),
             &str,
@@ -420,7 +435,7 @@ mod tests {
     #[test]
     fn concat_ws() -> Result<()> {
         // sep is scalar
-        let c0 = ColumnarValue::Scalar(ScalarValue::Utf8(Some(",".to_string())));
+        let c0 = ColumnarValue::from(ScalarValue::Utf8(Some(",".to_string())));
         let c1 =
             ColumnarValue::Array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
         let c2 = ColumnarValue::Array(Arc::new(StringArray::from(vec![

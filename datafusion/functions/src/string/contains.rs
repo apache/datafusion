@@ -209,8 +209,8 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("alph")),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from("alph")),
             ],
             Ok(Some(true)),
             bool,
@@ -220,8 +220,8 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("dddddd")),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from("dddddd")),
             ],
             Ok(Some(false)),
             bool,
@@ -231,8 +231,8 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("pha")),
+                ColumnarValue::from(ScalarValue::from("alphabet")),
+                ColumnarValue::from(ScalarValue::from("pha")),
             ],
             Ok(Some(true)),
             bool,
@@ -243,10 +243,8 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "Apache"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("pac")))),
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("Apache")))),
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("pac")))),
             ],
             Ok(Some(true)),
             bool,
@@ -256,10 +254,8 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "Apache"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ap")))),
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("Apache")))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("ap")))),
             ],
             Ok(Some(false)),
             bool,
@@ -269,10 +265,8 @@ mod tests {
         test_function!(
             ContainsFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "Apache"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("Apache")))),
+                ColumnarValue::from(ScalarValue::LargeUtf8(Some(String::from(
                     "DataFusion"
                 )))),
             ],

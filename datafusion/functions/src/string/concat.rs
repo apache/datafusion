@@ -86,13 +86,13 @@ impl ScalarUDFImpl for ConcatFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let mut return_datatype = DataType::Utf8;
         args.iter().for_each(|col| {
-            if col.data_type() == DataType::Utf8View {
-                return_datatype = col.data_type();
+            if col.data_type() == &DataType::Utf8View {
+                return_datatype = col.data_type().clone();
             }
-            if col.data_type() == DataType::LargeUtf8
+            if col.data_type() == &DataType::LargeUtf8
                 && return_datatype != DataType::Utf8View
             {
-                return_datatype = col.data_type();
+                return_datatype = col.data_type().clone();
             }
         });
 
@@ -108,20 +108,22 @@ impl ScalarUDFImpl for ConcatFunc {
         if array_len.is_none() {
             let mut result = String::new();
             for arg in args {
-                if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = arg {
-                    result.push_str(v);
+                if let ColumnarValue::Scalar(scalar) = arg {
+                    if let ScalarValue::Utf8(Some(v)) = scalar.value() {
+                        result.push_str(v);
+                    }
                 }
             }
 
             return match return_datatype {
                 DataType::Utf8View => {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
+                    Ok(ColumnarValue::from(ScalarValue::Utf8View(Some(result))))
                 }
                 DataType::Utf8 => {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
+                    Ok(ColumnarValue::from(ScalarValue::Utf8(Some(result))))
                 }
                 DataType::LargeUtf8 => {
-                    Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
+                    Ok(ColumnarValue::from(ScalarValue::LargeUtf8(Some(result))))
                 }
                 other => {
                     plan_err!("Concat function does not support datatype of {other}")
@@ -136,14 +138,17 @@ impl ScalarUDFImpl for ConcatFunc {
 
         for arg in args {
             match arg {
-                ColumnarValue::Scalar(ScalarValue::Utf8(maybe_value))
-                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(maybe_value))
-                | ColumnarValue::Scalar(ScalarValue::Utf8View(maybe_value)) => {
-                    if let Some(s) = maybe_value {
-                        data_size += s.len() * len;
-                        columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
+                ColumnarValue::Scalar(scalar) => match scalar.value() {
+                    ScalarValue::Utf8(maybe_value)
+                    | ScalarValue::LargeUtf8(maybe_value)
+                    | ScalarValue::Utf8View(maybe_value) => {
+                        if let Some(s) = maybe_value {
+                            data_size += s.len() * len;
+                            columns.push(ColumnarValueRef::Scalar(s.as_bytes()));
+                        }
                     }
-                }
+                    _ => unreachable!(),
+                },
                 ColumnarValue::Array(array) => {
                     match array.data_type() {
                         DataType::Utf8 => {
@@ -184,7 +189,6 @@ impl ScalarUDFImpl for ConcatFunc {
                         }
                     };
                 }
-                _ => unreachable!(),
             }
         }
 
@@ -306,9 +310,9 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
-                ColumnarValue::Scalar(ScalarValue::from("bb")),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::from(ScalarValue::from("aa")),
+                ColumnarValue::from(ScalarValue::from("bb")),
+                ColumnarValue::from(ScalarValue::from("cc")),
             ],
             Ok(Some("aabbcc")),
             &str,
@@ -318,9 +322,9 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::from(ScalarValue::from("aa")),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::from("cc")),
             ],
             Ok(Some("aacc")),
             &str,
@@ -329,7 +333,7 @@ mod tests {
         );
         test_function!(
             ConcatFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(None))],
+            &[ColumnarValue::from(ScalarValue::Utf8(None))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -338,10 +342,10 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::from(ScalarValue::from("aa")),
+                ColumnarValue::from(ScalarValue::Utf8View(None)),
+                ColumnarValue::from(ScalarValue::LargeUtf8(None)),
+                ColumnarValue::from(ScalarValue::from("cc")),
             ],
             Ok(Some("aacc")),
             &str,
@@ -351,9 +355,9 @@ mod tests {
         test_function!(
             ConcatFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::from("aa")),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)),
-                ColumnarValue::Scalar(ScalarValue::from("cc")),
+                ColumnarValue::from(ScalarValue::from("aa")),
+                ColumnarValue::from(ScalarValue::LargeUtf8(None)),
+                ColumnarValue::from(ScalarValue::from("cc")),
             ],
             Ok(Some("aacc")),
             &str,
@@ -368,7 +372,7 @@ mod tests {
     fn concat() -> Result<()> {
         let c0 =
             ColumnarValue::Array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
-        let c1 = ColumnarValue::Scalar(ScalarValue::Utf8(Some(",".to_string())));
+        let c1 = ColumnarValue::from(ScalarValue::Utf8(Some(",".to_string())));
         let c2 = ColumnarValue::Array(Arc::new(StringArray::from(vec![
             Some("x"),
             None,

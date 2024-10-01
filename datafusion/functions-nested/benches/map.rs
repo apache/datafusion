@@ -91,8 +91,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             Arc::new(Int32Array::from(values(&mut rng))),
             None,
         );
-        let keys = ColumnarValue::Scalar(ScalarValue::List(Arc::new(key_list)));
-        let values = ColumnarValue::Scalar(ScalarValue::List(Arc::new(value_list)));
+        let keys = ColumnarValue::from(ScalarValue::List(Arc::new(key_list)));
+        let values = ColumnarValue::from(ScalarValue::List(Arc::new(value_list)));
 
         b.iter(|| {
             black_box(

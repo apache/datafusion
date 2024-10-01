@@ -80,8 +80,8 @@ impl PhysicalExpr for IsNullExpr {
             ColumnarValue::Array(array) => {
                 Ok(ColumnarValue::Array(Arc::new(compute_is_null(array)?)))
             }
-            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
-                ScalarValue::Boolean(Some(scalar.is_null())),
+            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::from(
+                ScalarValue::Boolean(Some(scalar.value().is_null())),
             )),
         }
     }

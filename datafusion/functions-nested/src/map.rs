@@ -111,7 +111,7 @@ fn check_unique_keys(array: &dyn Array) -> Result<()> {
 
 fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
     match columnar_value {
-        ColumnarValue::Scalar(value) => match value {
+        ColumnarValue::Scalar(value) => match value.value() {
             ScalarValue::List(array) => Ok(array.value(0)),
             ScalarValue::LargeList(array) => Ok(array.value(0)),
             ScalarValue::FixedSizeList(array) => Ok(array.value(0)),
@@ -125,7 +125,7 @@ fn make_map_batch_internal(
     keys: ArrayRef,
     values: ArrayRef,
     can_evaluate_to_const: bool,
-    data_type: DataType,
+    data_type: &DataType,
 ) -> Result<ColumnarValue> {
     if keys.len() != values.len() {
         return exec_err!("map requires key and value lists to have the same length");
@@ -172,7 +172,7 @@ fn make_map_batch_internal(
     let map_array = Arc::new(MapArray::from(map_data));
 
     Ok(if can_evaluate_to_const {
-        ColumnarValue::Scalar(ScalarValue::try_from_array(map_array.as_ref(), 0)?)
+        ColumnarValue::from(ScalarValue::try_from_array(map_array.as_ref(), 0)?)
     } else {
         ColumnarValue::Array(map_array)
     })

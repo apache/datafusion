@@ -106,8 +106,8 @@ impl ScalarUDFImpl for ArrayHas {
             ColumnarValue::Scalar(scalar_needle) => {
                 // Always return null if the second argument is null
                 // i.e. array_has(array, null) -> null
-                if scalar_needle.is_null() {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+                if scalar_needle.value().is_null() {
+                    return Ok(ColumnarValue::from(ScalarValue::Boolean(None)));
                 }
 
                 // since the needle is a scalar, convert it to an array of size 1
@@ -118,7 +118,7 @@ impl ScalarUDFImpl for ArrayHas {
                 if let ColumnarValue::Scalar(_) = &args[0] {
                     // If both inputs are scalar, keeps output as scalar
                     let scalar_value = ScalarValue::try_from_array(&array, 0)?;
-                    Ok(ColumnarValue::Scalar(scalar_value))
+                    Ok(ColumnarValue::from(scalar_value))
                 } else {
                     Ok(ColumnarValue::Array(array))
                 }

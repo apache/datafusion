@@ -168,14 +168,14 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
 
         if args[0].data_type().is_null() {
-            return Ok(ColumnarValue::Scalar(ScalarValue::Null));
+            return Ok(ColumnarValue::from(ScalarValue::Null));
         }
 
         let arrays = ColumnarValue::values_to_arrays(args)?;
         let array = Arc::clone(&arrays[0]);
 
         let name = match &args[1] {
-            ColumnarValue::Scalar(name) => name,
+            ColumnarValue::Scalar(name) => name.value(),
             _ => {
                 return exec_err!(
                     "get_field function requires the argument field_name to be a string"
@@ -227,7 +227,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                 "get indexed field is only possible on struct with utf8 indexes. \
                              Tried with {name:?} index"
             ),
-            (DataType::Null, _) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
+            (DataType::Null, _) => Ok(ColumnarValue::from(ScalarValue::Null)),
             (dt, name) => exec_err!(
                 "get indexed field is only possible on lists with int64 indexes or struct \
                                          with utf8 indexes. Tried {dt:?} with {name:?} index"

@@ -25,6 +25,8 @@ use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::sync::Arc;
 
+use crate::scalar::Scalar;
+
 /// The result of evaluating an expression.
 ///
 /// [`ColumnarValue::Scalar`] represents a single value repeated any number of
@@ -89,7 +91,7 @@ pub enum ColumnarValue {
     /// Array of values
     Array(ArrayRef),
     /// A single value
-    Scalar(ScalarValue),
+    Scalar(Scalar),
 }
 
 impl From<ArrayRef> for ColumnarValue {
@@ -100,14 +102,14 @@ impl From<ArrayRef> for ColumnarValue {
 
 impl From<ScalarValue> for ColumnarValue {
     fn from(value: ScalarValue) -> Self {
-        ColumnarValue::Scalar(value)
+        ColumnarValue::Scalar(value.into())
     }
 }
 
 impl ColumnarValue {
-    pub fn data_type(&self) -> DataType {
+    pub fn data_type(&self) -> &DataType {
         match self {
-            ColumnarValue::Array(array_value) => array_value.data_type().clone(),
+            ColumnarValue::Array(array_value) => array_value.data_type(),
             ColumnarValue::Scalar(scalar_value) => scalar_value.data_type(),
         }
     }
@@ -195,9 +197,12 @@ impl ColumnarValue {
                 kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
             )),
             ColumnarValue::Scalar(scalar) => {
+                // TODO(@notfilippo, logical vs physical): if `scalar.data_type` is *logically equivalent*
+                // to `cast_type` then skip the kernel cast and only change the `data_type` of the scalar.
+
                 let scalar_array =
                     if cast_type == &DataType::Timestamp(TimeUnit::Nanosecond, None) {
-                        if let ScalarValue::Float64(Some(float_ts)) = scalar {
+                        if let ScalarValue::Float64(Some(float_ts)) = scalar.value() {
                             ScalarValue::Int64(Some(
                                 (float_ts * 1_000_000_000_f64).trunc() as i64,
                             ))
@@ -213,7 +218,7 @@ impl ColumnarValue {
                     cast_type,
                     &cast_options,
                 )?;
-                let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
+                let cast_scalar = Scalar::try_from_array(&cast_array, 0)?;
                 Ok(ColumnarValue::Scalar(cast_scalar))
             }
         }
@@ -250,7 +255,7 @@ mod tests {
             TestCase {
                 input: vec![
                     ColumnarValue::Array(make_array(1, 3)),
-                    ColumnarValue::Scalar(ScalarValue::Int32(Some(100))),
+                    ColumnarValue::from(ScalarValue::Int32(Some(100))),
                 ],
                 expected: vec![
                     make_array(1, 3),
@@ -260,7 +265,7 @@ mod tests {
             // scalar and array
             TestCase {
                 input: vec![
-                    ColumnarValue::Scalar(ScalarValue::Int32(Some(100))),
+                    ColumnarValue::from(ScalarValue::Int32(Some(100))),
                     ColumnarValue::Array(make_array(1, 3)),
                 ],
                 expected: vec![
@@ -271,9 +276,9 @@ mod tests {
             // multiple scalars and array
             TestCase {
                 input: vec![
-                    ColumnarValue::Scalar(ScalarValue::Int32(Some(100))),
+                    ColumnarValue::from(ScalarValue::Int32(Some(100))),
                     ColumnarValue::Array(make_array(1, 3)),
-                    ColumnarValue::Scalar(ScalarValue::Int32(Some(200))),
+                    ColumnarValue::from(ScalarValue::Int32(Some(200))),
                 ],
                 expected: vec![
                     make_array(100, 3), // scalar is expanded
@@ -306,7 +311,7 @@ mod tests {
     fn values_to_arrays_mixed_length_and_scalar() {
         ColumnarValue::values_to_arrays(&[
             ColumnarValue::Array(make_array(1, 3)),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(100))),
+            ColumnarValue::from(ScalarValue::Int32(Some(100))),
             ColumnarValue::Array(make_array(2, 7)),
         ])
         .unwrap();

@@ -118,7 +118,7 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
             let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
-            result.map(ColumnarValue::Scalar)
+            result.map(ColumnarValue::from)
         } else {
             result.map(ColumnarValue::Array)
         }

@@ -110,7 +110,7 @@ impl ScalarUDFImpl for LogFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
-        let mut base = ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0)));
+        let mut base = ColumnarValue::from(ScalarValue::Float32(Some(10.0)));
 
         let mut x = &args[0];
         if args.len() == 2 {
@@ -120,11 +120,18 @@ impl ScalarUDFImpl for LogFunc {
         // note in f64::log params order is different than in sql. e.g in sql log(base, x) == f64::log(x, base)
         let arr: ArrayRef = match args[0].data_type() {
             DataType::Float64 => match base {
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                    Arc::new(make_function_scalar_inputs!(x, "x", Float64Array, {
-                        |value: f64| f64::log(value, base as f64)
-                    }))
-                }
+                ColumnarValue::Scalar(scalar) => match scalar.into_value() {
+                    ScalarValue::Float32(Some(base)) => {
+                        Arc::new(make_function_scalar_inputs!(x, "x", Float64Array, {
+                            |value: f64| f64::log(value, base as f64)
+                        }))
+                    }
+                    _ => {
+                        return exec_err!(
+                            "log function requires a Float32 scalar for base"
+                        )
+                    }
+                },
                 ColumnarValue::Array(base) => Arc::new(make_function_inputs2!(
                     x,
                     base,
@@ -133,17 +140,17 @@ impl ScalarUDFImpl for LogFunc {
                     Float64Array,
                     { f64::log }
                 )),
-                _ => {
-                    return exec_err!("log function requires a scalar or array for base")
-                }
             },
 
             DataType::Float32 => match base {
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                    Arc::new(make_function_scalar_inputs!(x, "x", Float32Array, {
-                        |value: f32| f32::log(value, base)
-                    }))
-                }
+                ColumnarValue::Scalar(scalar) => match scalar.into_value() {
+                    ScalarValue::Float32(Some(base)) => {
+                        Arc::new(make_function_scalar_inputs!(x, "x", Float32Array, {
+                            |value: f32| f32::log(value, base)
+                        }))
+                    }
+                    _ => return exec_err!("log function requires a Float32 scalar"),
+                },
                 ColumnarValue::Array(base) => Arc::new(make_function_inputs2!(
                     x,
                     base,
@@ -152,9 +159,6 @@ impl ScalarUDFImpl for LogFunc {
                     Float32Array,
                     { f32::log }
                 )),
-                _ => {
-                    return exec_err!("log function requires a scalar or array for base")
-                }
             },
             other => {
                 return exec_err!("Unsupported data type {other:?} for function log")

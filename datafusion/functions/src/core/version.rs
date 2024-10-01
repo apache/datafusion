@@ -76,7 +76,7 @@ impl ScalarUDFImpl for VersionFunc {
             std::env::consts::ARCH,
             std::env::consts::OS,
         );
-        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(version))))
+        Ok(ColumnarValue::from(ScalarValue::Utf8(Some(version))))
     }
 }
 
@@ -90,7 +90,11 @@ mod test {
         let version_udf = ScalarUDF::from(VersionFunc::new());
         let version = version_udf.invoke_no_args(0).unwrap();
 
-        if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(version))) = version {
+        let ColumnarValue::Scalar(version) = version else {
+            panic!("Expected scalar version")
+        };
+
+        if let ScalarValue::Utf8(Some(version)) = version.value() {
             assert!(version.starts_with("Apache DataFusion"));
         } else {
             panic!("Expected version string");

@@ -92,7 +92,7 @@ impl PhysicalExpr for TryCastExpr {
                 let array = scalar.to_array()?;
                 let cast_array = cast_with_options(&array, &self.cast_type, &options)?;
                 let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-                Ok(ColumnarValue::Scalar(cast_scalar))
+                Ok(ColumnarValue::from(cast_scalar))
             }
         }
     }

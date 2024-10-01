@@ -156,18 +156,22 @@ mod tests {
         for tc in &test_cases {
             let date_scalar = ScalarValue::Utf8(Some(tc.date_str.to_string()));
             let to_date_result =
-                ToDateFunc::new().invoke(&[ColumnarValue::Scalar(date_scalar)]);
+                ToDateFunc::new().invoke(&[ColumnarValue::from(date_scalar)]);
 
             match to_date_result {
-                Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
-                    let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
-                    assert_eq!(
-                        date_val, expected,
-                        "{}: to_date created wrong value",
-                        tc.name
-                    );
-                }
-                _ => panic!("Could not convert '{}' to Date", tc.date_str),
+                Ok(ColumnarValue::Scalar(scalar)) => match scalar.into_value() {
+                    ScalarValue::Date32(date_val) => {
+                        let expected =
+                            Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
+                        assert_eq!(
+                            date_val, expected,
+                            "{}: to_date created wrong value",
+                            tc.name
+                        );
+                    }
+                    _ => panic!("Could not convert '{}' to Date", tc.date_str),
+                },
+                _ => unreachable!(),
             }
         }
     }
@@ -226,19 +230,23 @@ mod tests {
             let format_scalar = ScalarValue::Utf8(Some(tc.format_str.to_string()));
 
             let to_date_result = ToDateFunc::new().invoke(&[
-                ColumnarValue::Scalar(formatted_date_scalar),
-                ColumnarValue::Scalar(format_scalar),
+                ColumnarValue::from(formatted_date_scalar),
+                ColumnarValue::from(format_scalar),
             ]);
 
             match to_date_result {
-                Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
-                    let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
-                    assert_eq!(date_val, expected, "{}: to_date created wrong value for date '{}' with format string '{}'", tc.name, tc.formatted_date, tc.format_str);
-                }
-                _ => panic!(
-                    "Could not convert '{}' with format string '{}'to Date",
-                    tc.date_str, tc.format_str
-                ),
+                Ok(ColumnarValue::Scalar(scalar)) => match scalar.into_value() {
+                    ScalarValue::Date32(date_val) => {
+                        let expected =
+                            Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
+                        assert_eq!(date_val, expected, "{}: to_date created wrong value for date '{}' with format string '{}'", tc.name, tc.formatted_date, tc.format_str);
+                    }
+                    _ => panic!(
+                        "Could not convert '{}' with format string '{}'to Date",
+                        tc.date_str, tc.format_str
+                    ),
+                },
+                _ => unreachable!(),
             }
         }
     }
@@ -250,20 +258,23 @@ mod tests {
         let format2_scalar = ScalarValue::Utf8(Some("%Y/%m/%d".into()));
 
         let to_date_result = ToDateFunc::new().invoke(&[
-            ColumnarValue::Scalar(formatted_date_scalar),
-            ColumnarValue::Scalar(format1_scalar),
-            ColumnarValue::Scalar(format2_scalar),
+            ColumnarValue::from(formatted_date_scalar),
+            ColumnarValue::from(format1_scalar),
+            ColumnarValue::from(format2_scalar),
         ]);
 
         match to_date_result {
-            Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
-                let expected = Date32Type::parse_formatted("2023-01-31", "%Y-%m-%d");
-                assert_eq!(
-                    date_val, expected,
-                    "to_date created wrong value for date with 2 format strings"
-                );
-            }
-            _ => panic!("Conversion failed",),
+            Ok(ColumnarValue::Scalar(scalar)) => match scalar.into_value() {
+                ScalarValue::Date32(date_val) => {
+                    let expected = Date32Type::parse_formatted("2023-01-31", "%Y-%m-%d");
+                    assert_eq!(
+                        date_val, expected,
+                        "to_date created wrong value for date with 2 format strings"
+                    );
+                }
+                _ => panic!("Conversion failed",),
+            },
+            _ => unreachable!(),
         }
     }
 
@@ -278,14 +289,18 @@ mod tests {
             let formatted_date_scalar = ScalarValue::Utf8(Some(date_str.into()));
 
             let to_date_result =
-                ToDateFunc::new().invoke(&[ColumnarValue::Scalar(formatted_date_scalar)]);
+                ToDateFunc::new().invoke(&[ColumnarValue::from(formatted_date_scalar)]);
 
             match to_date_result {
-                Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
-                    let expected = Date32Type::parse_formatted("2020-09-08", "%Y-%m-%d");
-                    assert_eq!(date_val, expected, "to_date created wrong value");
-                }
-                _ => panic!("Conversion of {} failed", date_str),
+                Ok(ColumnarValue::Scalar(scalar)) => match scalar.into_value() {
+                    ScalarValue::Date32(date_val) => {
+                        let expected =
+                            Date32Type::parse_formatted("2020-09-08", "%Y-%m-%d");
+                        assert_eq!(date_val, expected, "to_date created wrong value");
+                    }
+                    _ => panic!("Conversion of {} failed", date_str),
+                },
+                _ => unreachable!(),
             }
         }
     }
@@ -296,18 +311,21 @@ mod tests {
         let date_scalar = ScalarValue::Utf8(Some(date_str.into()));
 
         let to_date_result =
-            ToDateFunc::new().invoke(&[ColumnarValue::Scalar(date_scalar)]);
+            ToDateFunc::new().invoke(&[ColumnarValue::from(date_scalar)]);
 
         match to_date_result {
-            Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
-                let expected = Date32Type::parse_formatted("2024-12-31", "%Y-%m-%d");
-                assert_eq!(
-                    date_val, expected,
-                    "to_date created wrong value for {}",
-                    date_str
-                );
-            }
-            _ => panic!("Conversion of {} failed", date_str),
+            Ok(ColumnarValue::Scalar(scalar)) => match scalar.into_value() {
+                ScalarValue::Date32(date_val) => {
+                    let expected = Date32Type::parse_formatted("2024-12-31", "%Y-%m-%d");
+                    assert_eq!(
+                        date_val, expected,
+                        "to_date created wrong value for {}",
+                        date_str
+                    );
+                }
+                _ => panic!("Conversion of {} failed", date_str),
+            },
+            _ => unreachable!(),
         }
     }
 
@@ -317,13 +335,15 @@ mod tests {
         let date_scalar = ScalarValue::Utf8(Some(date_str.into()));
 
         let to_date_result =
-            ToDateFunc::new().invoke(&[ColumnarValue::Scalar(date_scalar)]);
+            ToDateFunc::new().invoke(&[ColumnarValue::from(date_scalar)]);
 
-        if let Ok(ColumnarValue::Scalar(ScalarValue::Date32(_))) = to_date_result {
-            panic!(
-                "Conversion of {} succeded, but should have failed, ",
-                date_str
-            );
+        if let Ok(ColumnarValue::Scalar(scalar)) = to_date_result {
+            if let ScalarValue::Date32(_) = scalar.value() {
+                panic!(
+                    "Conversion of {} succeded, but should have failed, ",
+                    date_str
+                )
+            }
         }
     }
 }

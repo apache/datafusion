@@ -117,18 +117,18 @@ mod tests {
         .into_iter()
         .flat_map(|(a, b, c)| {
             let utf_8_args = vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(a.map(|s| s.to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(b.map(|s| s.to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(a.map(|s| s.to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(b.map(|s| s.to_string()))),
             ];
 
             let large_utf_8_args = vec![
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(a.map(|s| s.to_string()))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(b.map(|s| s.to_string()))),
+                ColumnarValue::from(ScalarValue::LargeUtf8(a.map(|s| s.to_string()))),
+                ColumnarValue::from(ScalarValue::LargeUtf8(b.map(|s| s.to_string()))),
             ];
 
             let utf_8_view_args = vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8View(a.map(|s| s.to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(b.map(|s| s.to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8View(a.map(|s| s.to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8View(b.map(|s| s.to_string()))),
             ];
 
             vec![(utf_8_args, c), (large_utf_8_args, c), (utf_8_view_args, c)]

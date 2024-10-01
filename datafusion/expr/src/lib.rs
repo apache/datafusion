@@ -71,6 +71,7 @@ pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
+pub use datafusion_expr_common::scalar::Scalar;
 pub use datafusion_expr_common::signature::{
     ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
 };

@@ -72,7 +72,7 @@ impl PhysicalExpr for Literal {
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        Ok(ColumnarValue::Scalar(self.value.clone()))
+        Ok(ColumnarValue::from(self.value.clone()))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

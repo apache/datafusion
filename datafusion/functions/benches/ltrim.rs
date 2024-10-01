@@ -119,7 +119,7 @@ fn create_args(
     );
     vec![
         ColumnarValue::Array(string_array),
-        ColumnarValue::Scalar(pattern),
+        ColumnarValue::from(pattern),
     ]
 }
 
