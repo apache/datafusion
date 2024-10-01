@@ -644,25 +644,29 @@ macro_rules! create_udwf_expr {
 /// ```
 #[macro_export]
 macro_rules! define_udwf_and_expr {
-    // default constructor, zero arguments
+    // Defines UDWF with default constructor
+    // Defines expression API with zero parameters
     ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
         get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC);
         create_udwf_expr!($UDWF, $OUT_FN_NAME, $DOC);
     };
 
-    // custom constructor, zero arguments
+    // Defines UDWF by passing a custom constructor
+    // Defines expression API with zero parameters
     ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr, $CTOR:path) => {
         get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC, $CTOR);
         create_udwf_expr!($UDWF, $OUT_FN_NAME, $DOC);
     };
 
-    // default constructor, 1 or more arguments
+    // Defines UDWF with default constructor
+    // Defines expression API with multiple parameters
     ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr) => {
         get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC);
         create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM),+], $DOC);
     };
 
-    // custom constructor, 1 or more arguments
+    // Defines UDWF by passing a custom constructor
+    // Defines expression API with multiple parameters
     ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr, $CTOR:path) => {
         get_or_init_udwf!($UDWF, $OUT_FN_NAME, $DOC, $CTOR);
         create_udwf_expr!($UDWF, $OUT_FN_NAME, [$($PARAM),+], $DOC);
