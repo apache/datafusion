@@ -350,10 +350,14 @@ macro_rules! create_udwf_expr {
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// # use datafusion_functions_window::{define_udwf_and_expr, get_or_init_udwf, create_udwf_expr};
 /// #
-/// /// This creates:
-/// ///     1. `add_one_udwf()`: user-defined window function and,
-/// ///     2. `add_one()`: `WindowFunction` expression with zero parameters
+/// /// 1. Defines the `add_one_udwf()` user-defined window function.
 /// ///
+/// /// 2. Defines the expression API:
+/// ///     ```
+/// ///     pub fn add_one() -> datafusion_expr::Expr {
+/// ///         add_one_udwf().call(vec![])
+/// ///     }
+/// ///     ```
 /// define_udwf_and_expr!(
 ///     AddOne,
 ///     add_one,
@@ -406,10 +410,14 @@ macro_rules! create_udwf_expr {
 /// # use datafusion_functions_window::{create_udwf_expr, define_udwf_and_expr, get_or_init_udwf};
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// #
-/// /// This creates:
-/// ///     1. `row_number_udwf()`: user-defined window function and,
-/// ///     2. `row_number()`: `WindowFunction` expression with zero parameters
+/// /// 1. Defines the `row_number_udwf()` user-defined window function.
 /// ///
+/// /// 2. Defines the expression API:
+/// ///     ```
+/// ///     pub fn row_number() -> datafusion_expr::Expr {
+/// ///         row_number_udwf().call(vec![])
+/// ///     }
+/// ///     ```
 /// define_udwf_and_expr!(
 ///     RowNumber,
 ///     row_number,
@@ -454,7 +462,7 @@ macro_rules! create_udwf_expr {
 /// # }
 /// ```
 ///
-/// ## Expression API With Parameters
+/// ## Expression API With Multiple Parameters
 /// 3. Uses default constructor for UDWF
 ///
 /// ```
@@ -471,20 +479,22 @@ macro_rules! create_udwf_expr {
 /// # use datafusion_common::ScalarValue;
 /// # use datafusion_expr::{col, lit};
 /// #
-/// // Creates `lead(expr, offset, default)` with 3 parameters
-/// //
-/// // The macros expands into this:
-/// // pub fn lead(
-/// //     expr: datafusion_expr::Expr,
-/// //     offset: datafusion_expr::Expr,
-/// //     default: datafusion_expr::Expr,
-/// // ) -> datafusion_expr::Expr {
-/// //     lead_udwf().call(vec![expr, offset, default])
-/// // }
+/// /// 1. Defines the `lead_udwf()` user-defined window function.
+/// ///
+/// /// 2. Defines the expression API:
+/// ///     ```
+/// ///     pub fn lead(
+/// ///         expr: datafusion_expr::Expr,
+/// ///         offset: datafusion_expr::Expr,
+/// ///         default: datafusion_expr::Expr,
+/// ///     ) -> datafusion_expr::Expr {
+/// ///         lead_udwf().call(vec![expr, offset, default])
+/// ///     }
+/// ///     ```
 /// define_udwf_and_expr!(
 ///     Lead,
 ///     lead,
-///     [expr, offset, default],
+///     [expr, offset, default],        // <- 3 parameters
 ///     "user-defined window function"
 /// );
 /// #
@@ -555,22 +565,24 @@ macro_rules! create_udwf_expr {
 /// # use datafusion_common::ScalarValue;
 /// # use datafusion_expr::{col, lit};
 /// #
-/// // Creates `lead(expr, offset, default)` with 3 parameters
-/// //
-/// // The macros expands into this:
-/// // pub fn lead(
-/// //     expr: datafusion_expr::Expr,
-/// //     offset: datafusion_expr::Expr,
-/// //     default: datafusion_expr::Expr,
-/// // ) -> datafusion_expr::Expr {
-/// //     lead_udwf().call(vec![expr, offset, default])
-/// // }
+/// /// 1. Defines the `lead_udwf()` user-defined window function.
+/// ///
+/// /// 2. Defines the expression API:
+/// ///     ```
+/// ///     pub fn lead(
+/// ///         expr: datafusion_expr::Expr,
+/// ///         offset: datafusion_expr::Expr,
+/// ///         default: datafusion_expr::Expr,
+/// ///     ) -> datafusion_expr::Expr {
+/// ///         lead_udwf().call(vec![expr, offset, default])
+/// ///     }
+/// ///     ```
 /// define_udwf_and_expr!(
 ///     Lead,
 ///     lead,
-///     [expr, offset, default],
+///     [expr, offset, default],        // <- 3 parameters
 ///     "user-defined window function",
-///     Lead::new
+///     Lead::new                       // <- Custom constructor
 /// );
 /// #
 /// # assert_eq!(
