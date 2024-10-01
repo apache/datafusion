@@ -1684,6 +1684,9 @@ mod test {
             "col1": [
                 {
                     "id": 234
+                },
+                {
+                    "id": 345
                 }
             ]
         });
@@ -1697,26 +1700,32 @@ mod test {
             .unwrap();
 
         let mut w = apache_avro::Writer::new(&schema, vec![]);
-        w.append(r1).unwrap();
+        for _i in 0..5 {
+            w.append(r1.clone()).unwrap();
+        }
         w.append(r2).unwrap();
         let bytes = w.into_inner().unwrap();
 
         let mut reader = ReaderBuilder::new()
             .read_schema()
-            .with_batch_size(2)
+            .with_batch_size(20)
             .build(std::io::Cursor::new(bytes))
             .unwrap();
         let batch = reader.next().unwrap().unwrap();
-        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_rows(), 6);
         assert_eq!(batch.num_columns(), 1);
 
         let expected = [
-            "+-------------+",
-            "| col1        |",
-            "+-------------+",
-            "| [{id: 234}] |",
-            "|             |",
-            "+-------------+",
+            "+------------------------+",
+            "| col1                   |",
+            "+------------------------+",
+            "| [{id: 234}, {id: 345}] |",
+            "| [{id: 234}, {id: 345}] |",
+            "| [{id: 234}, {id: 345}] |",
+            "| [{id: 234}, {id: 345}] |",
+            "| [{id: 234}, {id: 345}] |",
+            "|                        |",
+            "+------------------------+",
         ];
         assert_batches_eq!(expected, &[batch]);
     }
