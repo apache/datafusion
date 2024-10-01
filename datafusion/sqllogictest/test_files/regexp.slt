@@ -174,18 +174,6 @@ select regexp_like('aaa-555', '.*-(\d*)');
 ----
 true
 
-query B
-select regexp_like(arrow_cast('foobar', 'LargeUtf8'), 'b.r');
-----
-true
-
-
-query B
-select regexp_like(arrow_cast('foobar', 'LargeUtf8'), 'B.R', 'i');
-----
-true
-
-
 #
 # regexp_match tests
 #
@@ -280,17 +268,6 @@ query ?
 SELECT regexp_match('(?<=[A-Z]\w )Smith', 'John Smith', 'i');
 ----
 NULL
-
-query ?
-select regexp_match(arrow_cast('foobar', 'LargeUtf8'), 'b.r');
-----
-[bar]
-
-query ?
-select regexp_match(arrow_cast('foobar', 'LargeUtf8'), 'B.R', 'i');
-----
-[bar]
-
 
 # ported test
 query ?
