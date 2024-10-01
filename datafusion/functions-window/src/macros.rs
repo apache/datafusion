@@ -33,9 +33,8 @@
 /// * `$OUT_FN_NAME`: The basename to generate a unique function name like
 ///     `$OUT_FN_NAME_udwf`.
 /// * `$DOC`: Doc comments for UDWF.
-/// * (optional) `$CTOR`: When none provided it automatically resolves
-///     to `$UDWF::default()` (default constructor). To customize
-///     pass a different constructor.
+/// * (optional) `$CTOR`: Pass a custom constructor. When omitted it
+///     automatically resolves to `$UDWF::default()`.
 ///
 /// # Example
 ///
@@ -47,8 +46,12 @@
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// # use datafusion_functions_window::get_or_init_udwf;
 /// #
-/// /// This creates `add_one_udwf()` from `AddOne`.
-/// get_or_init_udwf!(AddOne, add_one, "Adds one to each row value in window partition.");
+/// /// Defines the `add_one_udwf()` user-defined window function.
+/// get_or_init_udwf!(
+///     AddOne,
+///     add_one,
+///     "Adds one to each row value in window partition."
+/// );
 /// #
 /// # assert_eq!(add_one_udwf().name(), "add_one");
 /// #
@@ -128,7 +131,7 @@ macro_rules! get_or_init_udwf {
 /// * `$DOC`: Doc comments for UDWF.
 /// * (optional) `[$($PARAM:ident),+]`: An array of 1 or more parameters
 ///     for the generated function. The type of parameters is [`Expr`].
-///     This is omitted for functions with zero parameters.
+///     When omitted this creates a function with zero parameters.
 ///
 /// [`Signature`]: datafusion_expr::Signature
 /// [`Expr`]: datafusion_expr::Expr
@@ -332,11 +335,10 @@ macro_rules! create_udwf_expr {
 ///     `$OUT_FN_NAME_udwf`.
 /// * (optional) `[$($PARAM:ident),+]`: An array of 1 or more parameters
 ///     for the generated function. The type of parameters is [`Expr`].
-///     This is unnecessary for functions which take no arguments.
+///     When omitted this creates a function with zero parameters.
 /// * `$DOC`: Doc comments for UDWF.
-/// * (optional) `$CTOR`: When none provided it automatically resolves
-///     to `$UDWF::default()` (default constructor). To customize
-///     pass a different constructor.
+/// * (optional) `$CTOR`: Pass a custom constructor. When omitted it
+///     automatically resolves to `$UDWF::default()`.
 ///
 /// [`Signature`]: datafusion_expr::Signature
 /// [`Expr`]: datafusion_expr::Expr
