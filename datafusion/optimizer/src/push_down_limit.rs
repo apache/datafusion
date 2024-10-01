@@ -153,16 +153,15 @@ impl OptimizerRule for PushDownLimit {
                 subquery_alias.input = Arc::new(new_limit);
                 Ok(Transformed::yes(LogicalPlan::SubqueryAlias(subquery_alias)))
             }
-            LogicalPlan::Extension(extension_plan) => {
-                if !extension_plan.node.allows_limit_to_inputs() {
-                    // If push down is not allowed, keep the original limit
-                    return original_limit(
-                        skip,
-                        fetch,
-                        LogicalPlan::Extension(extension_plan),
-                    );
-                }
-
+            LogicalPlan::Extension(extension_plan)
+                if !extension_plan.node.allows_limit_to_inputs() =>
+            {
+                // If push down is not allowed, keep the original limit
+                original_limit(skip, fetch, LogicalPlan::Extension(extension_plan))
+            }
+            LogicalPlan::Extension(extension_plan)
+                if extension_plan.node.allows_limit_to_inputs() =>
+            {
                 let new_children = extension_plan
                     .node
                     .inputs()
