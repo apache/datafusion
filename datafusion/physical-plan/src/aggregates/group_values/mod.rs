@@ -37,8 +37,6 @@ mod bytes_view;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
-use super::AggregateMode;
-
 mod group_column;
 
 /// Stores the group values during hash aggregation.
@@ -91,8 +89,7 @@ pub trait GroupValues: Send {
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
-        mode: AggregateMode,
-        batch_hashes: &mut Vec<u64>,
+        batch_hashes: &[u64],
     ) -> Result<()>;
 
     /// Returns the number of bytes of memory used by this [`GroupValues`]

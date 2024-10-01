@@ -53,7 +53,7 @@ use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
-use hashbrown::HashMap;
+use hashbrown::HashSet;
 use log::debug;
 
 use super::order::GroupOrdering;
@@ -429,8 +429,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// reused buffer to store hashes
     hashes_buffer: Vec<Vec<u64>>,
     random_state: RandomState,
-    skip_partial_group: bool,
-    stored_batch: Option<RecordBatch>,
+    unique_hashes_count: HashSet<u64>,
+    accumulated_batch_size: usize,
+    skip_partial_with_hash_count: bool,
 }
 
 impl GroupedHashAggregateStream {
@@ -573,8 +574,9 @@ impl GroupedHashAggregateStream {
             skip_aggregation_probe,
             hashes_buffer: Default::default(),
             random_state: Default::default(),
-            skip_partial_group: false,
-            stored_batch: None,
+            unique_hashes_count: Default::default(),
+            accumulated_batch_size: 0,
+            skip_partial_with_hash_count: false,
         })
     }
 }
@@ -628,18 +630,21 @@ impl Stream for GroupedHashAggregateStream {
                             let input_rows = batch.num_rows();
 
                             // Do the grouping
-                            extract_ok!(self.group_aggregate_batch(batch));
-                            if self.skip_partial_group {
-                                let batch = self.stored_batch.take().unwrap();
+                            let group_by_values =
+                                self.evalute_grouping_expressions(&batch)?;
+                            self.compute_group_by_hashes_and_update_skip_aggregation_probe(
+                                &group_by_values,
+                            )?;
+
+                            if self.skip_partial_with_hash_count {
                                 let states = self.transform_to_states(batch)?;
-                                self.exec_state = ExecutionState::SkippingAggregation;
-                                return Poll::Ready(Some(Ok(
-                                    states.record_output(&self.baseline_metrics)
-                                )));
-                                // println!("batch len: {:?}", batch.num_rows());
-                                // self.exec_state = ExecutionState::ProducingOutput(batch);
-                                // break 'reading_input;
+                                self.exec_state = ExecutionState::ProducingOutput(states);
+                                // make sure the exec_state just set is not overwritten below
+                                break 'reading_input;
                             }
+                            extract_ok!(
+                                self.group_aggregate_batch(batch, group_by_values)
+                            );
 
                             self.update_skip_aggregation_probe(input_rows);
 
@@ -680,7 +685,12 @@ impl Stream for GroupedHashAggregateStream {
                             extract_ok!(self.spill_previous_if_necessary(&batch));
 
                             // Do the grouping
-                            extract_ok!(self.group_aggregate_batch(batch));
+                            let group_by_values =
+                                self.evalute_grouping_expressions(&batch)?;
+                            self.compute_group_by_hashes(&group_by_values)?;
+                            extract_ok!(
+                                self.group_aggregate_batch(batch, group_by_values)
+                            );
 
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
@@ -756,10 +766,9 @@ impl Stream for GroupedHashAggregateStream {
                             // if we should trigger partial skipping
                             else if self.mode == AggregateMode::Partial
                                 && self.should_skip_aggregation()
+                                || self.skip_partial_with_hash_count
                             {
                                 ExecutionState::SkippingAggregation
-                            // } else if self.skip_partial_group {
-                            //     ExecutionState::SkippingAggregation
                             } else {
                                 ExecutionState::ReadingInput
                             },
@@ -797,66 +806,72 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 }
 
 impl GroupedHashAggregateStream {
-    fn compute_hashes(
+    /// compute hashes with counting hashes for skipping partial aggregation
+    fn compute_group_by_hashes_and_update_skip_aggregation_probe(
         &mut self,
-        cols: &[ArrayRef],
-        index: usize,
-        mode: AggregateMode,
+        group_by_values: &[Vec<ArrayRef>],
     ) -> Result<()> {
-        let n_rows = cols[0].len();
-        let batch_hashes = &mut self.hashes_buffer[index];
-        batch_hashes.clear();
-        batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, batch_hashes)?;
+        self.hashes_buffer.resize(group_by_values.len(), Vec::new());
+        for (index, group_values) in group_by_values.iter().enumerate() {
+            let n_rows = group_values[0].len();
+            let batch_hashes = &mut self.hashes_buffer[index];
+            batch_hashes.clear();
+            batch_hashes.resize(n_rows, 0);
+            create_hashes(group_values, &self.random_state, batch_hashes)?;
 
-        let mut table = HashMap::with_capacity(batch_hashes.len());
-        for (row, target_hash) in batch_hashes.iter().enumerate() {
-            if let Some(entry) = table.get_mut(target_hash) {
-                *entry = *entry + 1;
-            } else {
-                table.insert(target_hash, 1);
+            for target_hash in batch_hashes.iter() {
+                self.unique_hashes_count.insert(*target_hash);
             }
-        }
+            self.accumulated_batch_size += batch_hashes.len();
 
-        let ratio = table.len() as f32 / n_rows as f32;
-        if mode == AggregateMode::Partial && ratio > 0.2 {
-            self.skip_partial_group = true;
+            // if the number of unique hashes are quite high, the partial aggregation won't help
+            // we can skip the partial aggregation and move on to repartition
+            let ratio = self.unique_hashes_count.len() as f32
+                / self.accumulated_batch_size as f32;
+            // TODO: Configure the threshold
+            self.skip_partial_with_hash_count = ratio > 0.1;
+            if self.skip_partial_with_hash_count {
+                return Ok(());
+            }
         }
 
         Ok(())
     }
 
-    /// Perform group-by aggregation for the given [`RecordBatch`].
-    fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<()> {
-        // Evaluate the grouping expressions
-        let group_by_values = if self.spill_state.is_stream_merging {
-            evaluate_group_by(&self.spill_state.merging_group_by, &batch)?
-        } else {
-            evaluate_group_by(&self.group_by, &batch)?
-        };
-
+    /// compute hashes without counting hashes
+    fn compute_group_by_hashes(
+        &mut self,
+        group_by_values: &[Vec<ArrayRef>],
+    ) -> Result<()> {
         self.hashes_buffer.resize(group_by_values.len(), Vec::new());
-
-        match self.mode {
-            AggregateMode::Partial => {
-                for (row, group_values) in group_by_values.iter().enumerate() {
-                    if !self.skip_partial_group {
-                        self.compute_hashes(group_values, row, self.mode)?;
-                    }
-                }
-
-                if self.skip_partial_group {
-                    self.stored_batch = Some(batch);
-                    return Ok(());
-                }
-            }
-            _ => {
-                for (row, group_values) in group_by_values.iter().enumerate() {
-                    self.compute_hashes(group_values, row, self.mode)?;
-                }
-            }
+        for (index, group_values) in group_by_values.iter().enumerate() {
+            let n_rows = group_values[0].len();
+            let batch_hashes = &mut self.hashes_buffer[index];
+            batch_hashes.clear();
+            batch_hashes.resize(n_rows, 0);
+            create_hashes(group_values, &self.random_state, batch_hashes)?;
         }
 
+        Ok(())
+    }
+
+    fn evalute_grouping_expressions(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<Vec<Vec<ArrayRef>>> {
+        if self.spill_state.is_stream_merging {
+            evaluate_group_by(&self.spill_state.merging_group_by, batch)
+        } else {
+            evaluate_group_by(&self.group_by, batch)
+        }
+    }
+
+    /// Perform group-by aggregation for the given [`RecordBatch`].
+    fn group_aggregate_batch(
+        &mut self,
+        batch: RecordBatch,
+        group_by_values: Vec<Vec<ArrayRef>>,
+    ) -> Result<()> {
         // Evaluate the aggregation expressions.
         let input_values = if self.spill_state.is_stream_merging {
             evaluate_many(&self.spill_state.merging_aggregate_arguments, &batch)?
@@ -875,12 +890,10 @@ impl GroupedHashAggregateStream {
         for (index, group_values) in group_by_values.iter().enumerate() {
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
-            let batch_hashes = &mut self.hashes_buffer[index];
             self.group_values.intern(
                 group_values,
                 &mut self.current_group_indices,
-                self.mode,
-                batch_hashes,
+                &self.hashes_buffer[index],
             )?;
 
             let group_indices = &self.current_group_indices;

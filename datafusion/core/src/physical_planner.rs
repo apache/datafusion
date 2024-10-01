@@ -683,80 +683,55 @@ impl DefaultPhysicalPlanner {
                 let (aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
                     multiunzip(agg_filter);
 
-                let is_multi_group = group_expr.len() > 1;
-                let is_multi_group = false;
-                if is_multi_group {
-                    let can_repartition = !groups.is_empty()
-                        && session_state.config().target_partitions() > 1
-                        && session_state.config().repartition_aggregations();
-                    let mode = if can_repartition {
-                        // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                        AggregateMode::SinglePartitioned
-                    } else {
-                        // construct a second aggregation, keeping the final column name equal to the
-                        // first aggregation and the expressions corresponding to the respective aggregate
-                        AggregateMode::Single
-                    };
-                    let aggr = AggregateExec::try_new(
-                        mode,
-                        groups.clone(),
-                        aggregates.clone(),
-                        filters.clone(),
-                        input_exec.clone(),
-                        physical_input_schema.clone(),
-                    )?;
-                    Arc::new(aggr)
+                let initial_aggr = Arc::new(AggregateExec::try_new(
+                    AggregateMode::Partial,
+                    groups.clone(),
+                    aggregates,
+                    filters.clone(),
+                    input_exec,
+                    physical_input_schema.clone(),
+                )?);
+
+                // update group column indices based on partial aggregate plan evaluation
+                let final_group: Vec<Arc<dyn PhysicalExpr>> =
+                    initial_aggr.output_group_expr();
+
+                let can_repartition = !groups.is_empty()
+                    && session_state.config().target_partitions() > 1
+                    && session_state.config().repartition_aggregations();
+
+                // Some aggregators may be modified during initialization for
+                // optimization purposes. For example, a FIRST_VALUE may turn
+                // into a LAST_VALUE with the reverse ordering requirement.
+                // To reflect such changes to subsequent stages, use the updated
+                // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
+                let updated_aggregates = initial_aggr.aggr_expr().to_vec();
+
+                let next_partition_mode = if can_repartition {
+                    // construct a second aggregation with 'AggregateMode::FinalPartitioned'
+                    AggregateMode::FinalPartitioned
                 } else {
-                    let initial_aggr = Arc::new(AggregateExec::try_new(
-                        AggregateMode::Partial,
-                        groups.clone(),
-                        aggregates,
-                        filters.clone(),
-                        input_exec,
-                        physical_input_schema.clone(),
-                    )?);
+                    // construct a second aggregation, keeping the final column name equal to the
+                    // first aggregation and the expressions corresponding to the respective aggregate
+                    AggregateMode::Final
+                };
 
-                    // update group column indices based on partial aggregate plan evaluation
-                    let final_group: Vec<Arc<dyn PhysicalExpr>> =
-                        initial_aggr.output_group_expr();
+                let final_grouping_set = PhysicalGroupBy::new_single(
+                    final_group
+                        .iter()
+                        .enumerate()
+                        .map(|(i, expr)| (expr.clone(), groups.expr()[i].1.clone()))
+                        .collect(),
+                );
 
-                    let can_repartition = !groups.is_empty()
-                        && session_state.config().target_partitions() > 1
-                        && session_state.config().repartition_aggregations();
-
-                    // Some aggregators may be modified during initialization for
-                    // optimization purposes. For example, a FIRST_VALUE may turn
-                    // into a LAST_VALUE with the reverse ordering requirement.
-                    // To reflect such changes to subsequent stages, use the updated
-                    // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
-                    let updated_aggregates = initial_aggr.aggr_expr().to_vec();
-
-                    let next_partition_mode = if can_repartition {
-                        // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                        AggregateMode::FinalPartitioned
-                    } else {
-                        // construct a second aggregation, keeping the final column name equal to the
-                        // first aggregation and the expressions corresponding to the respective aggregate
-                        AggregateMode::Final
-                    };
-
-                    let final_grouping_set = PhysicalGroupBy::new_single(
-                        final_group
-                            .iter()
-                            .enumerate()
-                            .map(|(i, expr)| (expr.clone(), groups.expr()[i].1.clone()))
-                            .collect(),
-                    );
-
-                    Arc::new(AggregateExec::try_new(
-                        next_partition_mode,
-                        final_grouping_set,
-                        updated_aggregates,
-                        filters,
-                        initial_aggr,
-                        physical_input_schema.clone(),
-                    )?)
-                }
+                Arc::new(AggregateExec::try_new(
+                    next_partition_mode,
+                    final_grouping_set,
+                    updated_aggregates,
+                    filters,
+                    initial_aggr,
+                    physical_input_schema.clone(),
+                )?)
             }
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
                 .create_project_physical_exec(

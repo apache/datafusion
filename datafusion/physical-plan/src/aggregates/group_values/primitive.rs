@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use crate::aggregates::AggregateMode;
 use ahash::RandomState;
 use arrow::array::BooleanBufferBuilder;
 use arrow::buffer::NullBuffer;
@@ -116,8 +115,7 @@ where
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
-        mode: AggregateMode,
-        batch_hashes: &mut Vec<u64>,
+        _batch_hashes: &[u64],
     ) -> Result<()> {
         assert_eq!(cols.len(), 1);
         groups.clear();

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::{group_values::GroupValues, AggregateMode};
+use crate::aggregates::group_values::GroupValues;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
@@ -45,8 +45,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
-        mode: AggregateMode,
-        batch_hashes: &mut Vec<u64>,
+        _batch_hashes: &[u64],
     ) -> datafusion_common::Result<()> {
         assert_eq!(cols.len(), 1);
 
@@ -110,13 +109,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
 
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
-                let mut batch_hashes = vec![];
-                self.intern(
-                    &[remaining_group_values],
-                    &mut group_indexes,
-                    AggregateMode::Partial,
-                    &mut batch_hashes,
-                )?;
+                self.intern(&[remaining_group_values], &mut group_indexes, &[])?;
 
                 // Verify that the group indexes were assigned in the correct order
                 assert_eq!(0, group_indexes[0]);
