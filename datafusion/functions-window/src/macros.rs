@@ -339,8 +339,7 @@ macro_rules! create_udwf_expr {
 ///
 /// # Usage
 ///
-/// 1. Build a UDWF using its default constructor and create an
-///     expression API which has zero parameters.
+/// 1. Uses default constructor for UDWF + Zero parameters in expression API.
 ///
 /// ```
 /// # use std::any::Any;
@@ -354,7 +353,11 @@ macro_rules! create_udwf_expr {
 /// ///     1. `add_one_udwf()`: user-defined window function and,
 /// ///     2. `add_one()`: `WindowFunction` expression with zero parameters
 /// ///
-/// define_udwf_and_expr!(AddOne, add_one, "Adds one to each row value in window partition.");
+/// define_udwf_and_expr!(
+///     AddOne,
+///     add_one,
+///     "Adds one to each row value in window partition."
+/// );
 /// #
 /// # assert_eq!(add_one_udwf().name(), "add_one");
 /// #
@@ -391,6 +394,62 @@ macro_rules! create_udwf_expr {
 /// #      }
 /// #  }
 /// #
+/// ```
+/// 2. Uses a custom constructor for UDWF + Zero parameters in expression API.
+///
+/// ```
+/// # use std::any::Any;
+/// # use datafusion_common::arrow::datatypes::{DataType, Field};
+/// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+/// # use datafusion_functions_window::{create_udwf_expr, define_udwf_and_expr, get_or_init_udwf};
+/// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// #
+/// /// This creates:
+/// ///     1. `row_number_udwf()`: user-defined window function and,
+/// ///     2. `row_number()`: `WindowFunction` expression with zero parameters
+/// ///
+/// define_udwf_and_expr!(
+///     RowNumber,
+///     row_number,
+///     "Returns a unique row number for each row in window partition beginning at 1.",
+///     RowNumber::new // <-- custom constructor
+/// );
+/// #
+/// # assert_eq!(
+/// #     row_number().name_for_alias().unwrap(),
+/// #     "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+/// # );
+/// #
+/// # #[derive(Debug)]
+/// # struct RowNumber {
+/// #     signature: Signature,
+/// # }
+/// # impl RowNumber {
+/// #     fn new() -> Self {
+/// #         Self {
+/// #             signature: Signature::any(0, Volatility::Immutable),
+/// #         }
+/// #     }
+/// # }
+/// # impl WindowUDFImpl for RowNumber {
+/// #     fn as_any(&self) -> &dyn Any {
+/// #         self
+/// #     }
+/// #     fn name(&self) -> &str {
+/// #         "row_number"
+/// #     }
+/// #     fn signature(&self) -> &Signature {
+/// #         &self.signature
+/// #     }
+/// #     fn partition_evaluator(
+/// #         &self,
+/// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+/// #         unimplemented!()
+/// #     }
+/// #     fn field(&self, field_args: WindowUDFFieldArgs) -> datafusion_common::Result<Field> {
+/// #         Ok(Field::new(field_args.name(), DataType::UInt64, false))
+/// #     }
+/// # }
 /// ```
 #[macro_export]
 macro_rules! define_udwf_and_expr {
