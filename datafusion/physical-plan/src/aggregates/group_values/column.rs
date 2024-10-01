@@ -123,8 +123,7 @@ impl GroupValuesColumn {
     }
 }
 
-/// instantiates a [`PrimitiveGroupValueBuilder`] or
-/// [`NonNullPrimitiveGroupValueBuilder`]  and pushes it into $v
+/// instantiates a [`PrimitiveGroupValueBuilder`] and pushes it into $v
 ///
 /// Arguments:
 /// `$v`: the vector to push the new builder into
