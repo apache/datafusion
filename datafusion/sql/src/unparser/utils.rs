@@ -129,7 +129,7 @@ pub(crate) fn unproject_agg_exprs(
                     Ok(Transformed::yes(unprojected_expr))
                 } else {
                     internal_err!(
-                        "Tried to unproject agg expr not found in provided Aggregate!"
+                        "Tried to unproject agg expr for column '{}' that was not found in the provided Aggregate!", &c.name
                     )
                 }
             } else {
