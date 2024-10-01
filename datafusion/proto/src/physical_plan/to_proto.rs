@@ -642,8 +642,8 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             table_paths,
             output_schema: Some(conf.output_schema.as_ref().try_into()?),
             table_partition_cols,
-            overwrite: conf.overwrite,
             keep_partition_by_columns: conf.keep_partition_by_columns,
+            insert_op: conf.insert_op as i32,
         })
     }
 }

@@ -32,3 +32,6 @@ mod user_defined_table_functions;
 
 /// Tests for Expression Planner
 mod expr_planner;
+
+/// Tests for insert operations
+mod insert_operation;

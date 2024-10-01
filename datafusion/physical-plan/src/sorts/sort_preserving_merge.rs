@@ -65,6 +65,11 @@ use log::{debug, trace};
 ///  Input Streams                                             Output stream
 ///    (sorted)                                                  (sorted)
 /// ```
+///
+/// # Error Handling
+///
+/// If any of the input partitions return an error, the error is propagated to
+/// the output and inputs are not polled again.
 #[derive(Debug)]
 pub struct SortPreservingMergeExec {
     /// Input plan
