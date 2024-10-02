@@ -96,5 +96,18 @@ select count(id) cnt from table_with_metadata group by name order by cnt;
 1
 
 
+
+# Regression test: missing schema metadata, when aggregate on cross join
+statement error DataFusion error: Internal error: Physical input schema should be the same as the one converted from logical input schema..
+SELECT count("data"."id")
+FROM
+  (
+   SELECT "id" FROM "table_with_metadata"
+  ) as "data",
+  (
+    SELECT "id" FROM "table_with_metadata"
+  ) as "samples";
+
+
 statement ok
 drop table table_with_metadata;
