@@ -54,9 +54,9 @@ impl RegexpMatchFunc {
                     // If that fails, it proceeds to `(LargeUtf8, Utf8)`.
                     // TODO: Native support Utf8View for regexp_match.
                     Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![LargeUtf8, LargeUtf8]),
                     Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -131,7 +131,7 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let flags = as_generic_string_array::<T>(&args[2])?;
 
             if flags.iter().any(|s| s == Some("g")) {
-                return plan_err!("regexp_match() does not support the \"global\" option")
+                return plan_err!("regexp_match() does not support the \"global\" option");
             }
 
             regexp::regexp_match(values, regex, Some(flags))
