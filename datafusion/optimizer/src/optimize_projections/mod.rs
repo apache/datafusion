@@ -896,7 +896,7 @@ mod tests {
             Some(vec![output_columns.to_vec()])
         }
 
-        fn allows_limit_to_inputs(&self) -> bool {
+        fn supports_limit_pushdown(&self) -> bool {
             false // Disallow limit push-down by default
         }
     }
@@ -996,7 +996,7 @@ mod tests {
             Some(vec![left_reqs, right_reqs])
         }
 
-        fn allows_limit_to_inputs(&self) -> bool {
+        fn supports_limit_pushdown(&self) -> bool {
             false // Disallow limit push-down by default
         }
     }

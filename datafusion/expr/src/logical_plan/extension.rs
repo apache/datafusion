@@ -196,9 +196,15 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool;
     fn dyn_ord(&self, other: &dyn UserDefinedLogicalNode) -> Option<Ordering>;
 
-    /// Indicates to the optimizer if its safe to push a limit down past
-    /// this extension node
-    fn allows_limit_to_inputs(&self) -> bool;
+    /// Returns `true` if a limit can be safely pushed down through this
+    /// `UserDefinedLogicalNode` node.
+    ///
+    /// If this method returns `true`, and the query plan contains a limit at
+    /// the output of this node, DataFusion will push the limit to the input
+    /// of this node.
+    fn supports_limit_pushdown(&self) -> bool {
+        false
+    }
 }
 
 impl Hash for dyn UserDefinedLogicalNode {
@@ -300,9 +306,15 @@ pub trait UserDefinedLogicalNodeCore:
         None
     }
 
-    /// Indicates to the optimizer if its safe to push a limit down past
-    /// this extension node
-    fn allows_limit_to_inputs(&self) -> bool;
+    /// Returns `true` if a limit can be safely pushed down through this
+    /// `UserDefinedLogicalNode` node.
+    ///
+    /// If this method returns `true`, and the query plan contains a limit at
+    /// the output of this node, DataFusion will push the limit to the input
+    /// of this node.
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
+    }
 }
 
 /// Automatically derive UserDefinedLogicalNode to `UserDefinedLogicalNode`
@@ -370,8 +382,8 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
             .and_then(|other| self.partial_cmp(other))
     }
 
-    fn allows_limit_to_inputs(&self) -> bool {
-        self.allows_limit_to_inputs()
+    fn supports_limit_pushdown(&self) -> bool {
+        self.supports_limit_pushdown()
     }
 }
 

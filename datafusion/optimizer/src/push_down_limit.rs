@@ -154,13 +154,7 @@ impl OptimizerRule for PushDownLimit {
                 Ok(Transformed::yes(LogicalPlan::SubqueryAlias(subquery_alias)))
             }
             LogicalPlan::Extension(extension_plan)
-                if !extension_plan.node.allows_limit_to_inputs() =>
-            {
-                // If push down is not allowed, keep the original limit
-                original_limit(skip, fetch, LogicalPlan::Extension(extension_plan))
-            }
-            LogicalPlan::Extension(extension_plan)
-                if extension_plan.node.allows_limit_to_inputs() =>
+                if extension_plan.node.supports_limit_pushdown() =>
             {
                 let new_children = extension_plan
                     .node
@@ -353,7 +347,7 @@ mod test {
             })
         }
 
-        fn allows_limit_to_inputs(&self) -> bool {
+        fn supports_limit_pushdown(&self) -> bool {
             true // Allow limit push-down
         }
     }
@@ -406,7 +400,7 @@ mod test {
             })
         }
 
-        fn allows_limit_to_inputs(&self) -> bool {
+        fn supports_limit_pushdown(&self) -> bool {
             false // Disallow limit push-down by default
         }
     }
