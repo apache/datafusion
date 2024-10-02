@@ -95,6 +95,7 @@ rpad(str, n[, padding_str])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of string operators.
+- **n**: String length to pad to.
 - **padding_str**: String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
 
 **Related functions**:
