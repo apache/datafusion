@@ -80,16 +80,19 @@ async fn streaming_aggregate_test() {
     }
 }
 
+fn new_ctx() -> SessionContext {
+    let session_config = SessionConfig::new()
+        .with_batch_size(BATCH_SIZE)
+        // Ensure most of the fuzzing test cases doesn't skip the partial aggregation
+        .with_skip_partial_aggregation_probe_ratio_threshold(1.0);
+    SessionContext::new_with_config(session_config)
+}
+
 /// Perform batch and streaming aggregation with same input
 /// and verify outputs of `AggregateExec` with pipeline breaking stream `GroupedHashAggregateStream`
 /// and non-pipeline breaking stream `BoundedAggregateStream` produces same result.
 async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str>) {
     let schema = input1[0].schema();
-    let session_config = SessionConfig::new()
-        .with_batch_size(BATCH_SIZE)
-        // Ensure most of the fuzzing test cases doesn't skip the partial aggregation
-        .with_skip_partial_aggregation_probe_ratio_threshold(1.0);
-    let ctx = SessionContext::new_with_config(session_config);
     let mut sort_keys = vec![];
     for ordering_col in ["a", "b", "c"] {
         sort_keys.push(PhysicalSortExpr {
@@ -147,7 +150,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
 
-    let task_ctx = ctx.task_ctx();
+    let task_ctx = new_ctx().task_ctx();
     let collected_usual = collect(aggregate_exec_usual.clone(), task_ctx.clone())
         .await
         .unwrap();
@@ -294,8 +297,7 @@ async fn group_by_string_test(
     let expected = compute_counts(&input, column_name);
 
     let schema = input[0].schema();
-    let session_config = SessionConfig::new().with_batch_size(50);
-    let ctx = SessionContext::new_with_config(session_config);
+    let ctx = new_ctx();
 
     let provider = MemTable::try_new(schema.clone(), vec![input]).unwrap();
     let provider = if sorted {
