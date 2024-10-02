@@ -1402,7 +1402,6 @@ dependencies = [
  "half",
  "log",
  "paste",
- "sqlparser",
 ]
 
 [[package]]
