@@ -28,13 +28,13 @@ use std::{
 
 use arrow::datatypes::{DataType, Field};
 
-use datafusion_common::{not_impl_err, Result};
-use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-
 use crate::expr::WindowFunction;
 use crate::{
     function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
 };
+use datafusion_common::{not_impl_err, Result};
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 
 /// Logical representation of a user-defined window function (UDWF)
 /// A UDWF is different from a UDF in that it is stateful across batches.
@@ -149,8 +149,11 @@ impl WindowUDF {
     }
 
     /// Return a `PartitionEvaluator` for evaluating this window function
-    pub fn partition_evaluator_factory(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        self.inner.partition_evaluator()
+    pub fn partition_evaluator_factory(
+        &self,
+        partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        self.inner.partition_evaluator(partition_evaluator_args)
     }
 
     /// Returns the field of the final result of evaluating this window function.
@@ -265,7 +268,10 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     fn signature(&self) -> &Signature;
 
     /// Invoke the function, returning the [`PartitionEvaluator`] instance
-    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
+    fn partition_evaluator(
+        &self,
+        partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>>;
 
     /// Returns any aliases (alternate names) for this function.
     ///
@@ -427,8 +433,11 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.signature()
     }
 
-    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        self.inner.partition_evaluator()
+    fn partition_evaluator(
+        &self,
+        partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        self.inner.partition_evaluator(partition_evaluator_args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -474,6 +483,7 @@ mod test {
     use datafusion_common::Result;
     use datafusion_expr_common::signature::{Signature, Volatility};
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+    use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use std::any::Any;
     use std::cmp::Ordering;
 
@@ -505,7 +515,10 @@ mod test {
         fn signature(&self) -> &Signature {
             &self.signature
         }
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn partition_evaluator(
+            &self,
+            partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
@@ -541,7 +554,10 @@ mod test {
         fn signature(&self) -> &Signature {
             &self.signature
         }
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn partition_evaluator(
+            &self,
+            partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {

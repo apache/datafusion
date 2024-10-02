@@ -24,6 +24,9 @@ use datafusion_expr::{
     PartitionEvaluator, ReversedUDWF, Signature, TypeSignature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
@@ -53,7 +56,7 @@ pub struct WindowShift {
 }
 
 impl WindowShift {
-    pub fn new() -> Self {
+    fn new(kind: WindowShiftKind) -> Self {
         Self {
             signature: Signature::one_of(
                 vec![
@@ -63,14 +66,16 @@ impl WindowShift {
                 ],
                 Volatility::Immutable,
             ),
-            kind: WindowShiftKind::Lag,
+            kind,
         }
     }
-}
 
-impl Default for WindowShift {
-    fn default() -> Self {
-        Self::new()
+    pub fn lag() -> Self {
+        Self::new(WindowShiftKind::Lag)
+    }
+
+    pub fn lead() -> Self {
+        Self::new(WindowShiftKind::Lead)
     }
 }
 
@@ -87,7 +92,10 @@ impl WindowUDFImpl for WindowShift {
         &self.signature
     }
 
-    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+    fn partition_evaluator(
+        &self,
+        partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
         todo!()
     }
 

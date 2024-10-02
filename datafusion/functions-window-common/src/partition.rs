@@ -15,8 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Common user-defined window functionality for [DataFusion]
-//!
-//! [DataFusion]: <https://crates.io/crates/datafusion>
-pub mod field;
-pub mod partition;
+use datafusion_common::arrow::datatypes::DataType;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use std::sync::Arc;
+
+pub struct PartitionEvaluatorArgs<'a> {
+    input_exprs: &'a [Arc<dyn PhysicalExpr>],
+    input_types: &'a [DataType],
+    is_reversed: bool,
+    ignore_nulls: bool,
+}
+
+impl<'a> PartitionEvaluatorArgs<'a> {
+    pub fn new(
+        input_exprs: &'a [Arc<dyn PhysicalExpr>],
+        input_types: &'a [DataType],
+        is_reversed: bool,
+        ignore_nulls: bool,
+    ) -> Self {
+        Self {
+            input_exprs,
+            input_types,
+            is_reversed,
+            ignore_nulls,
+        }
+    }
+
+    pub fn input_expr_at(&self, index: usize) -> Option<&Arc<dyn PhysicalExpr>> {
+        self.input_exprs.get(index)
+    }
+}

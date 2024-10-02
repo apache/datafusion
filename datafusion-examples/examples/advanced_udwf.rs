@@ -74,7 +74,10 @@ impl WindowUDFImpl for SmoothItUdf {
 
     /// Create a `PartitionEvaluator` to evaluate this function on a new
     /// partition.
-    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+    fn partition_evaluator(
+        &self,
+        partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(MyPartitionEvaluator::new()))
     }
 
