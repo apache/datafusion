@@ -1729,7 +1729,7 @@ mod test {
         ];
         assert_batches_eq!(expected, &[batch]);
     }
-    
+
     #[test]
     fn test_avro_iterator() {
         let reader = build_reader("alltypes_plain.avro", 5);
