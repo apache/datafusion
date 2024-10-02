@@ -367,7 +367,7 @@ macro_rules! create_udwf_expr {
 /// define_udwf_and_expr!(
 ///     SimpleUDWF,
 ///     simple,
-///     "Adds one to each row value in window partition."
+///     "a simple user-defined window function"
 /// );
 /// #
 /// # assert_eq!(simple_udwf().name(), "simple_user_defined_window_function");
