@@ -508,13 +508,13 @@ message ScalarUDFExprNode {
 enum BuiltInWindowFunction {
   UNSPECIFIED = 0; // https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum
   // ROW_NUMBER = 0;
-  RANK = 1;
-  DENSE_RANK = 2;
-  PERCENT_RANK = 3;
+  // RANK = 1;
+  // DENSE_RANK = 2;
+  // PERCENT_RANK = 3;
   CUME_DIST = 4;
   NTILE = 5;
-  LAG = 6;
-  LEAD = 7;
+  // LAG = 6;
+  // LEAD = 7;
   FIRST_VALUE = 8;
   LAST_VALUE = 9;
   NTH_VALUE = 10;

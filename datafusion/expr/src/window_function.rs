@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::ScalarValue;
-
 use crate::{expr::WindowFunction, BuiltInWindowFunction, Expr, Literal};
 
 /// Create an expression to represent the `rank` window function
@@ -50,7 +48,7 @@ pub fn ntile(arg: Expr) -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::Ntile, vec![arg]))
 }
 
-/// Create an expression to represent the `lag` window function
+/*/// Create an expression to represent the `lag` window function
 pub fn lag(
     arg: Expr,
     shift_offset: Option<i64>,
@@ -81,7 +79,7 @@ pub fn lead(
         vec![arg, shift_offset_lit, default_lit],
     ))
 }
-
+*/
 /// Create an expression to represent the `nth_value` window function
 pub fn nth_value(arg: Expr, n: i64) -> Expr {
     Expr::WindowFunction(WindowFunction::new(

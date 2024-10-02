@@ -17,123 +17,197 @@
 
 //! Defines physical expression for `lead` and `lag` that can evaluated
 //! at runtime during query execution
-use crate::window::BuiltInWindowFunctionExpr;
-use crate::PhysicalExpr;
-use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field};
-use arrow_array::Array;
+use datafusion_common::arrow::array::ArrayRef;
+use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::PartitionEvaluator;
+use datafusion_expr::{
+    PartitionEvaluator, ReversedUDWF, Signature, TypeSignature, Volatility, WindowUDFImpl,
+};
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
-use std::ops::{Neg, Range};
+use std::ops::Range;
 use std::sync::Arc;
+
+#[derive(Debug)]
+enum WindowShiftKind {
+    Lag,
+    Lead,
+}
+
+impl WindowShiftKind {
+    fn name(&self) -> &'static str {
+        match self {
+            WindowShiftKind::Lag => "lag",
+            WindowShiftKind::Lead => "lead",
+        }
+    }
+}
 
 /// window shift expression
 #[derive(Debug)]
 pub struct WindowShift {
-    name: String,
-    /// Output data type
-    data_type: DataType,
-    shift_offset: i64,
-    expr: Arc<dyn PhysicalExpr>,
-    default_value: ScalarValue,
-    ignore_nulls: bool,
+    signature: Signature,
+    kind: WindowShiftKind,
 }
 
 impl WindowShift {
-    /// Get shift_offset of window shift expression
-    pub fn get_shift_offset(&self) -> i64 {
-        self.shift_offset
-    }
-
-    /// Get the default_value for window shift expression.
-    pub fn get_default_value(&self) -> ScalarValue {
-        self.default_value.clone()
-    }
-}
-
-/// lead() window function
-pub fn lead(
-    name: String,
-    data_type: DataType,
-    expr: Arc<dyn PhysicalExpr>,
-    shift_offset: Option<i64>,
-    default_value: ScalarValue,
-    ignore_nulls: bool,
-) -> WindowShift {
-    WindowShift {
-        name,
-        data_type,
-        shift_offset: shift_offset.map(|v| v.neg()).unwrap_or(-1),
-        expr,
-        default_value,
-        ignore_nulls,
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Any(1),
+                    TypeSignature::Any(2),
+                    TypeSignature::Any(3),
+                ],
+                Volatility::Immutable,
+            ),
+            kind: WindowShiftKind::Lag,
+        }
     }
 }
 
-/// lag() window function
-pub fn lag(
-    name: String,
-    data_type: DataType,
-    expr: Arc<dyn PhysicalExpr>,
-    shift_offset: Option<i64>,
-    default_value: ScalarValue,
-    ignore_nulls: bool,
-) -> WindowShift {
-    WindowShift {
-        name,
-        data_type,
-        shift_offset: shift_offset.unwrap_or(1),
-        expr,
-        default_value,
-        ignore_nulls,
+impl Default for WindowShift {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-impl BuiltInWindowFunctionExpr for WindowShift {
-    /// Return a reference to Any that can be used for downcasting
+impl WindowUDFImpl for WindowShift {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn field(&self) -> Result<Field> {
-        let nullable = true;
-        Ok(Field::new(&self.name, self.data_type.clone(), nullable))
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![Arc::clone(&self.expr)]
-    }
-
     fn name(&self) -> &str {
-        &self.name
+        self.kind.name()
     }
 
-    fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        Ok(Box::new(WindowShiftEvaluator {
-            shift_offset: self.shift_offset,
-            default_value: self.default_value.clone(),
-            ignore_nulls: self.ignore_nulls,
-            non_null_offsets: VecDeque::new(),
-        }))
+    fn signature(&self) -> &Signature {
+        &self.signature
     }
 
-    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
-        Some(Arc::new(Self {
-            name: self.name.clone(),
-            data_type: self.data_type.clone(),
-            shift_offset: -self.shift_offset,
-            expr: Arc::clone(&self.expr),
-            default_value: self.default_value.clone(),
-            ignore_nulls: self.ignore_nulls,
-        }))
+    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        todo!()
+    }
+
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        Ok(Field::new(
+            field_args.name(),
+            field_args.get_input_type(0).unwrap(),
+            false,
+        ))
+    }
+
+    fn reverse_expr(&self) -> ReversedUDWF {
+        todo!()
     }
 }
 
+/// /// window shift expression
+/// #[derive(Debug)]
+/// pub struct WindowShift {
+///     name: String,
+///     /// Output data type
+///     data_type: DataType,
+///     shift_offset: i64,
+///     expr: Arc<dyn PhysicalExpr>,
+///     default_value: ScalarValue,
+///     ignore_nulls: bool,
+/// }
+///
+/// impl WindowShift {
+///     /// Get shift_offset of window shift expression
+///     pub fn get_shift_offset(&self) -> i64 {
+///         self.shift_offset
+///     }
+///
+///     /// Get the default_value for window shift expression.
+///     pub fn get_default_value(&self) -> ScalarValue {
+///         self.default_value.clone()
+///     }
+/// }
+///
+/// /// lead() window function
+/// pub fn lead(
+///     name: String,
+///     data_type: DataType,
+///     expr: Arc<dyn PhysicalExpr>,
+///     shift_offset: Option<i64>,
+///     default_value: ScalarValue,
+///     ignore_nulls: bool,
+/// ) -> WindowShift {
+///     WindowShift {
+///         name,
+///         data_type,
+///         shift_offset: shift_offset.map(|v| v.neg()).unwrap_or(-1),
+///         expr,
+///         default_value,
+///         ignore_nulls,
+///     }
+/// }
+///
+/// /// lag() window function
+/// pub fn lag(
+///     name: String,
+///     data_type: DataType,
+///     expr: Arc<dyn PhysicalExpr>,
+///     shift_offset: Option<i64>,
+///     default_value: ScalarValue,
+///     ignore_nulls: bool,
+/// ) -> WindowShift {
+///     WindowShift {
+///         name,
+///         data_type,
+///         shift_offset: shift_offset.unwrap_or(1),
+///         expr,
+///         default_value,
+///         ignore_nulls,
+///     }
+/// }
+///
+/// impl BuiltInWindowFunctionExpr for WindowShift {
+///     /// Return a reference to Any that can be used for downcasting
+///     fn as_any(&self) -> &dyn Any {
+///         self
+///     }
+///
+///     fn field(&self) -> Result<Field> {
+///         let nullable = true;
+///         Ok(Field::new(&self.name, self.data_type.clone(), nullable))
+///     }
+///
+///     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+///         vec![Arc::clone(&self.expr)]
+///     }
+///
+///     fn name(&self) -> &str {
+///         &self.name
+///     }
+///
+///     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+///         Ok(Box::new(WindowShiftEvaluator {
+///             shift_offset: self.shift_offset,
+///             default_value: self.default_value.clone(),
+///             ignore_nulls: self.ignore_nulls,
+///             non_null_offsets: VecDeque::new(),
+///         }))
+///     }
+///
+///     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+///         Some(Arc::new(Self {
+///             name: self.name.clone(),
+///             data_type: self.data_type.clone(),
+///             shift_offset: -self.shift_offset,
+///             expr: Arc::clone(&self.expr),
+///             default_value: self.default_value.clone(),
+///             ignore_nulls: self.ignore_nulls,
+///         }))
+///     }
+/// }
+
 #[derive(Debug)]
-pub(crate) struct WindowShiftEvaluator {
+struct WindowShiftEvaluator {
     shift_offset: i64,
     default_value: ScalarValue,
     ignore_nulls: bool,
@@ -205,7 +279,7 @@ fn shift_with_default_value(
     offset: i64,
     default_value: &ScalarValue,
 ) -> Result<ArrayRef> {
-    use arrow::compute::concat;
+    use datafusion_common::arrow::compute::concat;
 
     let value_len = array.len() as i64;
     if offset == 0 {
@@ -399,142 +473,142 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::expressions::Column;
-    use arrow::{array::*, datatypes::*};
-    use datafusion_common::cast::as_int32_array;
-
-    fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
-        let values = vec![arr];
-        let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
-        let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
-        let values = expr.evaluate_args(&batch)?;
-        let result = expr
-            .create_evaluator()?
-            .evaluate_all(&values, batch.num_rows())?;
-        let result = as_int32_array(&result)?;
-        assert_eq!(expected, *result);
-        Ok(())
-    }
-
-    #[test]
-    fn lead_lag_get_range() -> Result<()> {
-        // LAG(2)
-        let lag_fn = WindowShiftEvaluator {
-            shift_offset: 2,
-            default_value: ScalarValue::Null,
-            ignore_nulls: false,
-            non_null_offsets: Default::default(),
-        };
-        assert_eq!(lag_fn.get_range(6, 10)?, Range { start: 4, end: 7 });
-        assert_eq!(lag_fn.get_range(0, 10)?, Range { start: 0, end: 1 });
-
-        // LAG(2 ignore nulls)
-        let lag_fn = WindowShiftEvaluator {
-            shift_offset: 2,
-            default_value: ScalarValue::Null,
-            ignore_nulls: true,
-            // models data received [<Some>, <Some>, <Some>, NULL, <Some>, NULL, <current row>, ...]
-            non_null_offsets: vec![2, 2].into(), // [1, 1, 2, 2] actually, just last 2 is used
-        };
-        assert_eq!(lag_fn.get_range(6, 10)?, Range { start: 2, end: 7 });
-
-        // LEAD(2)
-        let lead_fn = WindowShiftEvaluator {
-            shift_offset: -2,
-            default_value: ScalarValue::Null,
-            ignore_nulls: false,
-            non_null_offsets: Default::default(),
-        };
-        assert_eq!(lead_fn.get_range(6, 10)?, Range { start: 6, end: 8 });
-        assert_eq!(lead_fn.get_range(9, 10)?, Range { start: 9, end: 10 });
-
-        // LEAD(2 ignore nulls)
-        let lead_fn = WindowShiftEvaluator {
-            shift_offset: -2,
-            default_value: ScalarValue::Null,
-            ignore_nulls: true,
-            // models data received [..., <current row>, NULL, <Some>, NULL, <Some>, ..]
-            non_null_offsets: vec![2, 2].into(),
-        };
-        assert_eq!(lead_fn.get_range(4, 10)?, Range { start: 4, end: 9 });
-
-        Ok(())
-    }
-
-    #[test]
-    fn lead_lag_window_shift() -> Result<()> {
-        test_i32_result(
-            lead(
-                "lead".to_owned(),
-                DataType::Int32,
-                Arc::new(Column::new("c3", 0)),
-                None,
-                ScalarValue::Null.cast_to(&DataType::Int32)?,
-                false,
-            ),
-            [
-                Some(-2),
-                Some(3),
-                Some(-4),
-                Some(5),
-                Some(-6),
-                Some(7),
-                Some(8),
-                None,
-            ]
-            .iter()
-            .collect::<Int32Array>(),
-        )?;
-
-        test_i32_result(
-            lag(
-                "lead".to_owned(),
-                DataType::Int32,
-                Arc::new(Column::new("c3", 0)),
-                None,
-                ScalarValue::Null.cast_to(&DataType::Int32)?,
-                false,
-            ),
-            [
-                None,
-                Some(1),
-                Some(-2),
-                Some(3),
-                Some(-4),
-                Some(5),
-                Some(-6),
-                Some(7),
-            ]
-            .iter()
-            .collect::<Int32Array>(),
-        )?;
-
-        test_i32_result(
-            lag(
-                "lead".to_owned(),
-                DataType::Int32,
-                Arc::new(Column::new("c3", 0)),
-                None,
-                ScalarValue::Int32(Some(100)),
-                false,
-            ),
-            [
-                Some(100),
-                Some(1),
-                Some(-2),
-                Some(3),
-                Some(-4),
-                Some(5),
-                Some(-6),
-                Some(7),
-            ]
-            .iter()
-            .collect::<Int32Array>(),
-        )?;
-        Ok(())
-    }
-}
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use crate::expressions::Column;
+//     use arrow::{array::*, datatypes::*};
+//     use datafusion_common::cast::as_int32_array;
+//
+//     fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {
+//         let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+//         let values = vec![arr];
+//         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
+//         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
+//         let values = expr.evaluate_args(&batch)?;
+//         let result = expr
+//             .create_evaluator()?
+//             .evaluate_all(&values, batch.num_rows())?;
+//         let result = as_int32_array(&result)?;
+//         assert_eq!(expected, *result);
+//         Ok(())
+//     }
+//
+//     #[test]
+//     fn lead_lag_get_range() -> Result<()> {
+//         // LAG(2)
+//         let lag_fn = WindowShiftEvaluator {
+//             shift_offset: 2,
+//             default_value: ScalarValue::Null,
+//             ignore_nulls: false,
+//             non_null_offsets: Default::default(),
+//         };
+//         assert_eq!(lag_fn.get_range(6, 10)?, Range { start: 4, end: 7 });
+//         assert_eq!(lag_fn.get_range(0, 10)?, Range { start: 0, end: 1 });
+//
+//         // LAG(2 ignore nulls)
+//         let lag_fn = WindowShiftEvaluator {
+//             shift_offset: 2,
+//             default_value: ScalarValue::Null,
+//             ignore_nulls: true,
+//             // models data received [<Some>, <Some>, <Some>, NULL, <Some>, NULL, <current row>, ...]
+//             non_null_offsets: vec![2, 2].into(), // [1, 1, 2, 2] actually, just last 2 is used
+//         };
+//         assert_eq!(lag_fn.get_range(6, 10)?, Range { start: 2, end: 7 });
+//
+//         // LEAD(2)
+//         let lead_fn = WindowShiftEvaluator {
+//             shift_offset: -2,
+//             default_value: ScalarValue::Null,
+//             ignore_nulls: false,
+//             non_null_offsets: Default::default(),
+//         };
+//         assert_eq!(lead_fn.get_range(6, 10)?, Range { start: 6, end: 8 });
+//         assert_eq!(lead_fn.get_range(9, 10)?, Range { start: 9, end: 10 });
+//
+//         // LEAD(2 ignore nulls)
+//         let lead_fn = WindowShiftEvaluator {
+//             shift_offset: -2,
+//             default_value: ScalarValue::Null,
+//             ignore_nulls: true,
+//             // models data received [..., <current row>, NULL, <Some>, NULL, <Some>, ..]
+//             non_null_offsets: vec![2, 2].into(),
+//         };
+//         assert_eq!(lead_fn.get_range(4, 10)?, Range { start: 4, end: 9 });
+//
+//         Ok(())
+//     }
+//
+//     #[test]
+//     fn lead_lag_window_shift() -> Result<()> {
+//         test_i32_result(
+//             lead(
+//                 "lead".to_owned(),
+//                 DataType::Int32,
+//                 Arc::new(Column::new("c3", 0)),
+//                 None,
+//                 ScalarValue::Null.cast_to(&DataType::Int32)?,
+//                 false,
+//             ),
+//             [
+//                 Some(-2),
+//                 Some(3),
+//                 Some(-4),
+//                 Some(5),
+//                 Some(-6),
+//                 Some(7),
+//                 Some(8),
+//                 None,
+//             ]
+//             .iter()
+//             .collect::<Int32Array>(),
+//         )?;
+//
+//         test_i32_result(
+//             lag(
+//                 "lead".to_owned(),
+//                 DataType::Int32,
+//                 Arc::new(Column::new("c3", 0)),
+//                 None,
+//                 ScalarValue::Null.cast_to(&DataType::Int32)?,
+//                 false,
+//             ),
+//             [
+//                 None,
+//                 Some(1),
+//                 Some(-2),
+//                 Some(3),
+//                 Some(-4),
+//                 Some(5),
+//                 Some(-6),
+//                 Some(7),
+//             ]
+//             .iter()
+//             .collect::<Int32Array>(),
+//         )?;
+//
+//         test_i32_result(
+//             lag(
+//                 "lead".to_owned(),
+//                 DataType::Int32,
+//                 Arc::new(Column::new("c3", 0)),
+//                 None,
+//                 ScalarValue::Int32(Some(100)),
+//                 false,
+//             ),
+//             [
+//                 Some(100),
+//                 Some(1),
+//                 Some(-2),
+//                 Some(3),
+//                 Some(-4),
+//                 Some(5),
+//                 Some(-6),
+//                 Some(7),
+//             ]
+//             .iter()
+//             .collect::<Int32Array>(),
+//         )?;
+//         Ok(())
+//     }
+// }

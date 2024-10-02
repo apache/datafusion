@@ -29,6 +29,7 @@ use log::debug;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::WindowUDF;
 
+pub mod lead_lag;
 pub mod row_number;
 
 /// Fluent-style API for creating `Expr`s

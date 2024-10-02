@@ -25,7 +25,7 @@ use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, InListExpr, IsNotNullExpr,
     IsNullExpr, Literal, NegativeExpr, NotExpr, NthValue, Ntile, Rank, RankType,
-    TryCastExpr, WindowShift,
+    TryCastExpr,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -126,26 +126,29 @@ pub fn serialize_physical_window_expr(
                 )))),
             );
             protobuf::BuiltInWindowFunction::Ntile
-        } else if let Some(window_shift_expr) =
-            built_in_fn_expr.downcast_ref::<WindowShift>()
-        {
-            args.insert(
-                1,
-                Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
-                    window_shift_expr.get_shift_offset(),
-                )))),
-            );
-            args.insert(
-                2,
-                Arc::new(Literal::new(window_shift_expr.get_default_value())),
-            );
+        }
+        /*        else if let Some(window_shift_expr) =
+                    built_in_fn_expr.downcast_ref::<WindowShift>()
+                {
+                    args.insert(
+                        1,
+                        Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
+                            window_shift_expr.get_shift_offset(),
+                        )))),
+                    );
+                    args.insert(
+                        2,
+                        Arc::new(Literal::new(window_shift_expr.get_default_value())),
+                    );
 
-            if window_shift_expr.get_shift_offset() >= 0 {
-                protobuf::BuiltInWindowFunction::Lag
-            } else {
-                protobuf::BuiltInWindowFunction::Lead
-            }
-        } else if let Some(nth_value_expr) = built_in_fn_expr.downcast_ref::<NthValue>() {
+                    if window_shift_expr.get_shift_offset() >= 0 {
+                        protobuf::BuiltInWindowFunction::Lag
+                    } else {
+                        protobuf::BuiltInWindowFunction::Lead
+                    }
+                }
+        */
+        else if let Some(nth_value_expr) = built_in_fn_expr.downcast_ref::<NthValue>() {
             match nth_value_expr.get_kind() {
                 NthValueKind::First => protobuf::BuiltInWindowFunction::FirstValue,
                 NthValueKind::Last => protobuf::BuiltInWindowFunction::LastValue,
