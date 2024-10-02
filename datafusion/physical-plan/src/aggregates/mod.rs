@@ -1330,8 +1330,18 @@ mod tests {
         )
     }
 
+    fn new_ctx() -> Arc<TaskContext> {
+        // Ensure skip the partial aggregation is not triggered
+        let session_config =
+            SessionConfig::new().with_skip_partial_aggregation_probe_ratio_threshold(1.0);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        Arc::new(task_ctx)
+    }
+
     fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
-        let session_config = SessionConfig::new().with_batch_size(batch_size);
+        let session_config = SessionConfig::new()
+            .with_batch_size(batch_size)
+            .with_skip_partial_aggregation_probe_ratio_threshold(1.0);
         let runtime = RuntimeEnvBuilder::default()
             .with_memory_pool(Arc::new(FairSpillPool::new(max_memory)))
             .build_arc()
@@ -1373,7 +1383,7 @@ mod tests {
             // adjust the max memory size to have the partial aggregate result for spill mode.
             new_spill_ctx(4, 500)
         } else {
-            Arc::new(TaskContext::default())
+            new_ctx()
         };
 
         let partial_aggregate = Arc::new(AggregateExec::try_new(
@@ -1521,7 +1531,7 @@ mod tests {
             // set to an appropriate value to trigger spill
             new_spill_ctx(2, 1600)
         } else {
-            Arc::new(TaskContext::default())
+            new_ctx()
         };
 
         let partial_aggregate = Arc::new(AggregateExec::try_new(
@@ -1821,7 +1831,12 @@ mod tests {
         let runtime = RuntimeEnvBuilder::default()
             .with_memory_limit(1, 1.0)
             .build_arc()?;
-        let task_ctx = TaskContext::default().with_runtime(runtime);
+        // Ensure skip the partial aggregation is not triggered
+        let session_config = SessionConfig::default()
+            .with_skip_partial_aggregation_probe_ratio_threshold(1.0);
+        let task_ctx = TaskContext::default()
+            .with_runtime(runtime)
+            .with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
 
         let groups_none = PhysicalGroupBy::default();
@@ -2503,16 +2518,8 @@ mod tests {
             schema,
         )?);
 
-        let mut session_config = SessionConfig::default();
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &ScalarValue::Int64(Some(2)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &ScalarValue::Float64(Some(0.1)),
-        );
-
+        let session_config = SessionConfig::default()
+            .with_skip_partial_aggregation_probe_ratio_threshold(0.1);
         let ctx = TaskContext::default().with_session_config(session_config);
         let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
 
@@ -2523,96 +2530,6 @@ mod tests {
             "| 1   | 1                 |",
             "| 2   | 1                 |",
             "| 3   | 1                 |",
-            "| 2   | 1                 |",
-            "| 3   | 1                 |",
-            "| 4   | 1                 |",
-            "+-----+-------------------+",
-        ];
-        assert_batches_eq!(expected, &output);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_skip_aggregation_after_threshold() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int32, true),
-            Field::new("val", DataType::Int32, true),
-        ]));
-
-        let group_by =
-            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
-
-        let aggr_expr =
-            vec![
-                AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias(String::from("COUNT(val)"))
-                    .build()?,
-            ];
-
-        let input_data = vec![
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![1, 2, 3])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![2, 3, 4])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![2, 3, 4])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-        ];
-
-        let input = Arc::new(MemoryExec::try_new(
-            &[input_data],
-            Arc::clone(&schema),
-            None,
-        )?);
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by,
-            aggr_expr,
-            vec![None],
-            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
-            schema,
-        )?);
-
-        let mut session_config = SessionConfig::default();
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &ScalarValue::Int64(Some(5)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &ScalarValue::Float64(Some(0.1)),
-        );
-
-        let ctx = TaskContext::default().with_session_config(session_config);
-        let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
-
-        let expected = [
-            "+-----+-------------------+",
-            "| key | COUNT(val)[count] |",
-            "+-----+-------------------+",
-            "| 1   | 1                 |",
-            "| 2   | 2                 |",
-            "| 3   | 2                 |",
-            "| 4   | 1                 |",
             "| 2   | 1                 |",
             "| 3   | 1                 |",
             "| 4   | 1                 |",
