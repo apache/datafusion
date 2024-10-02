@@ -30,7 +30,7 @@ use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug)]
 pub struct RegexpLikeFunc {
@@ -43,12 +43,15 @@ impl Default for RegexpLikeFunc {
     }
 }
 
-const DOCUMENTATION: Documentation = Documentation {
-    doc_section: DOC_SECTION_REGEX,
-    description: "Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.",
-    syntax_example: "regexp_like(str, regexp[, flags])",
-    sql_example: Some(
-        r#"```sql
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_regexp_like_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_REGEX)
+            .with_description("Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.")
+            .with_syntax_example("regexp_like(str, regexp[, flags])")
+            .with_sql_example(r#"```sql
 select regexp_like('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
 +--------------------------------------------------------+
 | regexp_like(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
@@ -63,26 +66,22 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 +--------------------------------------------------+
 ```
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
-"#),
-    arguments: Some(&[
-        (
-            "str",
-            "String expression to operate on. Can be a constant, column, or function, and any combination of string operators."
-        ),
-        (    "regexp",
-             "Regular expression to test against the string expression. Can be a constant, column, or function."
-        ),
-        ("flags",
-         r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+"#)
+            .with_argument("str",
+                           "String expression to operate on. Can be a constant, column, or function, and any combination of string operators.")
+            .with_argument("regexp",
+                           "Regular expression to test against the string expression. Can be a constant, column, or function.")
+            .with_argument("flags",
+                           r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
   - **i**: case-insensitive: letters match both upper and lower case
   - **m**: multi-line mode: ^ and $ match begin/end of line
   - **s**: allow . to match \n
   - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#
-        )
-    ]),
-    related_udfs: None,
-};
+  - **U**: swap the meaning of x* and x*?"#)
+            .build()
+            .unwrap()
+    })
+}
 
 impl RegexpLikeFunc {
     pub fn new() -> Self {
@@ -149,8 +148,8 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         }
     }
 
-    fn documentation(&self) -> &Documentation {
-        &DOCUMENTATION
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_regexp_like_doc())
     }
 }
 fn regexp_like_func(args: &[ArrayRef]) -> Result<ArrayRef> {

@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::array::{new_null_array, BooleanArray};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
@@ -27,6 +25,8 @@ use datafusion_expr::type_coercion::binary::type_union_resolution;
 use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use itertools::Itertools;
+use std::any::Any;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct CoalesceFunc {
@@ -47,19 +47,22 @@ impl CoalesceFunc {
     }
 }
 
-const DOCUMENTATION: Documentation = Documentation {
-    doc_section: DOC_SECTION_CONDITIONAL,
-    description: "Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.",
-    syntax_example: "coalesce(expression1[, ..., expression_n])",
-    sql_example: None,
-    arguments: Some(&[
-        (
-            "expression1, expression_n",
-            "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
-        ),
-    ]),
-    related_udfs: None,
-};
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_coalesce_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_CONDITIONAL)
+            .with_description("Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.")
+            .with_syntax_example("coalesce(expression1[, ..., expression_n])")
+            .with_argument(
+                "expression1, expression_n",
+                "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
+            )
+            .build()
+            .unwrap()
+    })
+}
 
 impl ScalarUDFImpl for CoalesceFunc {
     fn as_any(&self) -> &dyn Any {
@@ -156,8 +159,8 @@ impl ScalarUDFImpl for CoalesceFunc {
         Ok(vec![new_type; arg_types.len()])
     }
 
-    fn documentation(&self) -> &Documentation {
-        &DOCUMENTATION
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_coalesce_doc())
     }
 }
 

@@ -18,7 +18,7 @@
 //! Math function: `log()`.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::power::PowerFunc;
 
@@ -48,24 +48,23 @@ impl Default for LogFunc {
     }
 }
 
-const DOCUMENTATION: Documentation = Documentation {
-    doc_section: DOC_SECTION_MATH,
-    description: "Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.",
-    syntax_example: r#"log(base, numeric_expression)
-log(numeric_expression)"#,
-    sql_example: None,
-    arguments: Some(&[
-        (
-            "base",
-            "Base numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
-        ),
-        (
-            "numeric_expression",
-            "Numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
-        ),
-    ]),
-    related_udfs: None,
-};
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_log_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description("Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.")
+            .with_syntax_example(r#"log(base, numeric_expression)
+log(numeric_expression)"#)
+            .with_argument("base",
+                           "Base numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_argument("numeric_expression",
+                           "Numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .build()
+            .unwrap()
+    })
+}
 
 impl LogFunc {
     pub fn new() -> Self {
@@ -186,8 +185,8 @@ impl ScalarUDFImpl for LogFunc {
         Ok(ColumnarValue::Array(arr))
     }
 
-    fn documentation(&self) -> &Documentation {
-        &DOCUMENTATION
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_log_doc())
     }
 
     /// Simplify the `log` function by the relevant rules:

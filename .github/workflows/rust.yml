@@ -542,20 +542,10 @@ jobs:
           # If you encounter an error, run './dev/update_config_docs.sh' and commit
           ./dev/update_config_docs.sh
           git diff --exit-code
-      - name: Check if aggregate_functions.md has been modified
+      - name: Check if any of the xyz_functions.md has been modified
         run: |
-          # If you encounter an error, run './dev/update_aggregate_docs.sh' and commit
-          ./dev/update_aggregate_docs.sh
-          git diff --exit-code
-      - name: Check if scalar_functions.md has been modified
-        run: |
-          # If you encounter an error, run './dev/update_scalar_docs.sh' and commit
-          ./dev/update_scalar_docs.sh
-          git diff --exit-code
-      - name: Check if window_functions.md has been modified
-        run: |
-          # If you encounter an error, run './dev/update_window_docs.sh' and commit
-          ./dev/update_window_docs.sh
+          # If you encounter an error, run './dev/update_function_docs.sh' and commit
+          ./dev/update_function_docs.sh
           git diff --exit-code
 
   # Verify MSRV for the crates which are directly used by other projects:

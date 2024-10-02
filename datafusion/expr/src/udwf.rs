@@ -32,7 +32,6 @@ use datafusion_common::{not_impl_err, Result};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
 use crate::expr::WindowFunction;
-use crate::udf_docs::DOCUMENTATION_NONE;
 use crate::{
     function::WindowFunctionSimplification, Documentation, Expr, PartitionEvaluator,
     Signature,
@@ -183,8 +182,11 @@ impl WindowUDF {
         self.inner.reverse_expr()
     }
 
-    /// Returns this UDF's documentation that will be used to generate public documentation
-    pub fn documentation(&self) -> &Documentation {
+    /// Returns the documentation for this Window UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    pub fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
 }
@@ -211,6 +213,7 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
+/// # use std::sync::OnceLock;
 /// # use arrow::datatypes::{DataType, Field};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation};
@@ -231,15 +234,20 @@ where
 ///   }
 /// }
 ///
-/// const DOCUMENTATION: Documentation = Documentation {
-///     doc_section: DOC_SECTION_ANALYTICAL,
-///     description: "smooths the windows",
-///     syntax_example: "smooth_it(2)",
-///     sql_example: None,
-///     arguments: Some(&[("arg_1", "The int32 number to smooth by")]),
-///     related_udfs: None,
-/// };
-
+/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+///
+/// fn get_doc() -> &'static Documentation {
+///     DOCUMENTATION.get_or_init(|| {
+///         Documentation::builder()
+///             .with_doc_section(DOC_SECTION_ANALYTICAL)
+///             .with_description("smooths the windows")
+///             .with_syntax_example("smooth_it(2)")
+///             .with_argument("arg1", "The int32 number to smooth by")
+///             .build()
+///             .unwrap()
+///     })
+/// }
+///
 /// /// Implement the WindowUDFImpl trait for SmoothIt
 /// impl WindowUDFImpl for SmoothIt {
 ///    fn as_any(&self) -> &dyn Any { self }
@@ -254,8 +262,8 @@ where
 ///        plan_err!("smooth_it only accepts Int32 arguments")
 ///      }
 ///    }
-///    fn documentation(&self) -> &Documentation {
-///      &DOCUMENTATION
+///    fn documentation(&self) -> Option<&Documentation> {
+///      Some(get_doc())
 ///    }
 /// }
 ///
@@ -387,10 +395,12 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         ReversedUDWF::NotSupported
     }
 
-    /// Returns the documentation for this window UDF for use
-    /// in generating publicly facing documentation.
-    fn documentation(&self) -> &Documentation {
-        &DOCUMENTATION_NONE
+    /// Returns the documentation for this Window UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    fn documentation(&self) -> Option<&Documentation> {
+        None
     }
 }
 
@@ -493,7 +503,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.coerce_types(arg_types)
     }
 
-    fn documentation(&self) -> &Documentation {
+    fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
 }

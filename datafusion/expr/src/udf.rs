@@ -20,7 +20,6 @@
 use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::udf_docs::DOCUMENTATION_NONE;
 use crate::{
     ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
 };
@@ -278,8 +277,11 @@ impl ScalarUDF {
         self.inner.coerce_types(arg_types)
     }
 
-    /// Returns this UDF's documentation that will be used to generate public documentation
-    pub fn documentation(&self) -> &Documentation {
+    /// Returns the documentation for this Scalar UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    pub fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
 }
@@ -306,6 +308,7 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
+/// # use std::sync::OnceLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Documentation, Signature, Volatility};
@@ -325,15 +328,20 @@ where
 ///   }
 /// }
 ///  
-/// const DOCUMENTATION: Documentation = Documentation {
-///     doc_section: DOC_SECTION_MATH,
-///     description: "Add one to an int32",
-///     syntax_example: "add_one(2)",
-///     sql_example: None,    
-///     arguments: Some(&[("arg_1", "The int32 number to add one to")]),
-///     related_udfs: None,
-/// };
-///     
+/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+///
+/// fn get_doc() -> &'static Documentation {
+///     DOCUMENTATION.get_or_init(|| {
+///         Documentation::builder()
+///             .with_doc_section(DOC_SECTION_MATH)
+///             .with_description("Add one to an int32")
+///             .with_syntax_example("add_one(2)")
+///             .with_argument("arg1", "The int32 number to add one to")
+///             .build()
+///             .unwrap()
+///     })
+/// }
+///
 /// /// Implement the ScalarUDFImpl trait for AddOne
 /// impl ScalarUDFImpl for AddOne {
 ///    fn as_any(&self) -> &dyn Any { self }
@@ -347,8 +355,8 @@ where
 ///    }
 ///    // The actual implementation would add one to the argument
 ///    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> { unimplemented!() }
-///    fn documentation(&self) -> &Documentation {
-///         &DOCUMENTATION
+///    fn documentation(&self) -> Option<&Documentation> {
+///         Some(get_doc())
 ///     }
 /// }
 ///
@@ -619,10 +627,12 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         hasher.finish()
     }
 
-    /// Returns the documentation for this scalar UDF for use
-    /// in generating publicly facing documentation.
-    fn documentation(&self) -> &Documentation {
-        &DOCUMENTATION_NONE
+    /// Returns the documentation for this Scalar UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    fn documentation(&self) -> Option<&Documentation> {
+        None
     }
 }
 
@@ -738,7 +748,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         hasher.finish()
     }
 
-    fn documentation(&self) -> &Documentation {
+    fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
 }

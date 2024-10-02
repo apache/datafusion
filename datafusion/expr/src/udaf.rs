@@ -33,7 +33,6 @@ use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
 use crate::groups_accumulator::GroupsAccumulator;
-use crate::udf_docs::DOCUMENTATION_NONE;
 use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
 use crate::{Accumulator, Expr};
@@ -250,8 +249,11 @@ impl AggregateUDF {
         self.inner.default_value(data_type)
     }
 
-    /// Returns this UDF's documentation that will be used to generate public documentation
-    pub fn documentation(&self) -> &Documentation {
+    /// Returns the documentation for this Aggregate UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    pub fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
 }
@@ -278,6 +280,7 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
+/// # use std::sync::OnceLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr, Documentation};
@@ -299,14 +302,19 @@ where
 ///   }
 /// }
 ///
-/// const DOCUMENTATION: Documentation = Documentation {
-///     doc_section: DOC_SECTION_AGGREGATE,
-///     description: "calculates a geometric mean",
-///     syntax_example: "geo_mean(2.0)",
-///     sql_example: None,    
-///     arguments: Some(&[("arg_1", "The Float64 number for the geometric mean")]),
-///     related_udfs: None,
-/// };
+/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+///
+/// fn get_doc() -> &'static Documentation {
+///     DOCUMENTATION.get_or_init(|| {
+///         Documentation::builder()
+///             .with_doc_section(DOC_SECTION_AGGREGATE)
+///             .with_description("calculates a geometric mean")
+///             .with_syntax_example("geo_mean(2.0)")
+///             .with_argument("arg1", "The Float64 number for the geometric mean")
+///             .build()
+///             .unwrap()
+///     })
+/// }
 ///    
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf
 /// impl AggregateUDFImpl for GeoMeanUdf {
@@ -327,8 +335,8 @@ where
 ///             Field::new("ordering", DataType::UInt32, true)
 ///        ])
 ///    }
-///    fn documentation(&self) -> &Documentation {
-///        &DOCUMENTATION  
+///    fn documentation(&self) -> Option<&Documentation> {
+///        Some(get_doc())  
 ///    }
 /// }
 ///
@@ -585,10 +593,12 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ScalarValue::try_from(data_type)
     }
 
-    /// Returns the documentation for this Aggregate UDF for use
-    /// in generating publicly facing documentation.
-    fn documentation(&self) -> &Documentation {
-        &DOCUMENTATION_NONE
+    /// Returns the documentation for this Scalar UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    fn documentation(&self) -> Option<&Documentation> {
+        None
     }
 }
 
@@ -737,7 +747,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.is_descending()
     }
 
-    fn documentation(&self) -> &Documentation {
+    fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
 }

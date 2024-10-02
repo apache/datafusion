@@ -32,7 +32,7 @@ use datafusion_expr::{
 };
 use std::any::Any;
 use std::fmt::Write;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use unicode_segmentation::UnicodeSegmentation;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 
@@ -47,27 +47,26 @@ impl Default for RPadFunc {
     }
 }
 
-const DOCUMENTATION: Documentation = Documentation {
-    doc_section: DOC_SECTION_STRING,
-    description: "Pads the right side of a string with another string to a specified string length.",
-    syntax_example: "rpad(str, n[, padding_str])",
-    sql_example: None,
-    arguments: Some(&[
-        (
-            "str",
-            "String expression to operate on. Can be a constant, column, or function, and any combination of string operators."
-        ),
-        (
-            "n",
-            "String length to pad to."
-        ),
-        (
-            "padding_str",
-            "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._"
-        ),
-    ]),
-    related_udfs: Some(&["lpad"]),
-};
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_rpad_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Pads the right side of a string with another string to a specified string length.")
+            .with_syntax_example("rpad(str, n[, padding_str])")
+            .with_argument(
+                "str",
+                "String expression to operate on. Can be a constant, column, or function, and any combination of string operators.",
+            )
+            .with_argument("n", "String length to pad to.")
+            .with_argument("padding_str",
+                           "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._")
+            .with_related_udf("lpad")
+            .build()
+            .unwrap()
+    })
+}
 
 impl RPadFunc {
     pub fn new() -> Self {
@@ -139,8 +138,8 @@ impl ScalarUDFImpl for RPadFunc {
         }
     }
 
-    fn documentation(&self) -> &Documentation {
-        &DOCUMENTATION
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_rpad_doc())
     }
 }
 

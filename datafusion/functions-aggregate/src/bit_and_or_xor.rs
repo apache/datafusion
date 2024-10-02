@@ -42,6 +42,7 @@ use datafusion_expr::{
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use std::ops::{BitAndAssign, BitOrAssign, BitXorAssign};
+use std::sync::OnceLock;
 
 /// This macro helps create group accumulators based on bitwise operations typically used internally
 /// and might not be necessary for users to call directly.
@@ -133,65 +134,74 @@ macro_rules! make_bitwise_udaf_expr_and_func {
     };
 }
 
-const BIT_AND_DOC: Documentation = Documentation {
-    doc_section: DOC_SECTION_GENERAL,
-    description: "Computes the bitwise AND of all non-null input values.",
-    syntax_example: "bit_and(expression)",
-    sql_example: None,
-    arguments: Some(&[
-        (
-            "expression",
-            "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
-        ),
-    ]),
-    related_udfs: None,
-};
+static BIT_AND_DOC: OnceLock<Documentation> = OnceLock::new();
 
-const BIT_OR_DOC: Documentation = Documentation {
-    doc_section: DOC_SECTION_GENERAL,
-    description: "Computes the bitwise OR of all non-null input values.",
-    syntax_example: "bit_or(expression)",
-    sql_example: None,
-    arguments: Some(&[
-        (
-            "expression",
-            "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
-        ),
-    ]),
-    related_udfs: None,
-};
+fn get_bit_and_doc() -> &'static Documentation {
+    BIT_AND_DOC.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description("Computes the bitwise AND of all non-null input values.")
+            .with_syntax_example("bit_and(expression)")
+            .with_argument(
+                "expression",
+                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
+            )
+            .build()
+            .unwrap()
+    })
+}
 
-const BIT_XOR_DOC: Documentation =  Documentation {
-    doc_section: DOC_SECTION_GENERAL,
-    description: "Computes the bitwise exclusive OR of all non-null input values.",
-    syntax_example: "bit_xor(expression)",
-    sql_example: None,
-    arguments: Some(&[
-        (
-            "expression",
-            "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
-        ),
-    ]),
-    related_udfs: None,
-};
+static BIT_OR_DOC: OnceLock<Documentation> = OnceLock::new();
+
+fn get_bit_or_doc() -> &'static Documentation {
+    BIT_OR_DOC.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description("Computes the bitwise OR of all non-null input values.")
+            .with_syntax_example("bit_or(expression)")
+            .with_argument(
+                "expression",
+                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
+            )
+            .build()
+            .unwrap()
+    })
+}
+
+static BIT_XOR_DOC: OnceLock<Documentation> = OnceLock::new();
+
+fn get_bit_xor_doc() -> &'static Documentation {
+    BIT_XOR_DOC.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description("Computes the bitwise exclusive OR of all non-null input values.")
+            .with_syntax_example("bit_xor(expression)")
+            .with_argument(
+                "expression",
+                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
+            )
+            .build()
+            .unwrap()
+    })
+}
 
 make_bitwise_udaf_expr_and_func!(
     bit_and,
     bit_and_udaf,
     BitwiseOperationType::And,
-    BIT_AND_DOC
+    get_bit_and_doc()
 );
 make_bitwise_udaf_expr_and_func!(
     bit_or,
     bit_or_udaf,
     BitwiseOperationType::Or,
-    BIT_OR_DOC
+    get_bit_or_doc()
 );
 make_bitwise_udaf_expr_and_func!(
     bit_xor,
     bit_xor_udaf,
     BitwiseOperationType::Xor,
-    BIT_XOR_DOC
+    get_bit_xor_doc()
 );
 
 /// The different types of bitwise operations that can be performed.
@@ -215,14 +225,14 @@ struct BitwiseOperation {
     /// `operation` indicates the type of bitwise operation to be performed.
     operation: BitwiseOperationType,
     func_name: &'static str,
-    documentation: Documentation,
+    documentation: &'static Documentation,
 }
 
 impl BitwiseOperation {
     pub fn new(
         operator: BitwiseOperationType,
         func_name: &'static str,
-        documentation: Documentation,
+        documentation: &'static Documentation,
     ) -> Self {
         Self {
             operation: operator,
@@ -306,8 +316,8 @@ impl AggregateUDFImpl for BitwiseOperation {
         ReversedUDAF::Identical
     }
 
-    fn documentation(&self) -> &Documentation {
-        &self.documentation
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(self.documentation)
     }
 }
 

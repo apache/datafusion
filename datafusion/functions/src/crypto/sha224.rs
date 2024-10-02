@@ -24,6 +24,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use std::any::Any;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct SHA224Func {
@@ -49,19 +50,20 @@ impl SHA224Func {
     }
 }
 
-const DOCUMENTATION: Documentation = Documentation {
-    doc_section: DOC_SECTION_HASHING,
-    description: "Computes the SHA-224 hash of a binary string.",
-    syntax_example: "sha224(expression)",
-    sql_example: None,
-    arguments: Some(&[
-        (
-            "expression",
-            "String expression to operate on. Can be a constant, column, or function, and any combination of string operators."
-        ),
-    ]),
-    related_udfs: None,
-};
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_sha224_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_HASHING)
+            .with_description("Computes the SHA-224 hash of a binary string.")
+            .with_syntax_example("sha224(expression)")
+            .with_argument("expression",
+                           "String expression to operate on. Can be a constant, column, or function, and any combination of string operators.")
+            .build()
+            .unwrap()
+    })
+}
 
 impl ScalarUDFImpl for SHA224Func {
     fn as_any(&self) -> &dyn Any {
@@ -84,7 +86,7 @@ impl ScalarUDFImpl for SHA224Func {
         sha224(args)
     }
 
-    fn documentation(&self) -> &Documentation {
-        &DOCUMENTATION
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_sha224_doc())
     }
 }

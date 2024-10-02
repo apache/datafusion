@@ -15,13 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Documentation for use by [`crate::ScalarUDFImpl`],
-/// [`crate::AggregateUDFImpl`] and [`crate::WindowUDFImpl`] functions
+use datafusion_common::exec_err;
+use datafusion_common::Result;
+
+/// Documentation for use by [`ScalarUDFImpl`](crate::ScalarUDFImpl),
+/// [`AggregateUDFImpl`](crate::AggregateUDFImpl) and [`WindowUDFImpl`](crate::WindowUDFImpl) functions
 /// that will be used to generate public documentation.
 ///
-/// The name of the udf will be pulled from the [`crate::ScalarUDFImpl::name`],
-/// [`crate::AggregateUDFImpl::name`] or [`crate::WindowUDFImpl::name`] function
-/// as appropriate.
+/// The name of the udf will be pulled from the [`ScalarUDFImpl::name`](crate::ScalarUDFImpl::name),
+/// [`AggregateUDFImpl::name`](crate::AggregateUDFImpl::name) or [`WindowUDFImpl::name`](crate::WindowUDFImpl::name)
+/// function as appropriate.
 ///
 /// All strings in the documentation are required to be
 /// in [markdown format](https://www.markdownguide.org/basic-syntax/).
@@ -33,22 +36,29 @@ pub struct Documentation {
     /// the section in the documentation where the UDF will be documented
     pub doc_section: DocSection,
     /// the description for the UDF
-    pub description: &'static str,
+    pub description: String,
     /// a brief example of the syntax. For example "ascii(str)"
-    pub syntax_example: &'static str,
+    pub syntax_example: String,
     /// a sql example for the UDF, usually in the form of a sql prompt
     /// query and output. It is strongly recommended to provide an
     /// example for anything but the most basic UDF's
-    pub sql_example: Option<&'static str>,
+    pub sql_example: Option<String>,
     /// arguments for the UDF which will be displayed in array order.
     /// Left member of a pair is the argument name, right is a
     /// description for the argument
-    pub arguments: Option<&'static [(&'static str, &'static str)]>,
+    pub arguments: Option<Vec<(String, String)>>,
     /// related functions if any. Values should match the related
     /// udf's name exactly. Related udf's must be of the same
     /// UDF type (scalar, aggregate or window) for proper linking to
     /// occur
-    pub related_udfs: Option<&'static [&'static str]>,
+    pub related_udfs: Option<Vec<String>>,
+}
+
+impl Documentation {
+    /// Returns a new [`DocumentationBuilder`] with no options set.
+    pub fn builder() -> DocumentationBuilder {
+        DocumentationBuilder::new()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,19 +72,116 @@ pub struct DocSection {
     pub description: Option<&'static str>,
 }
 
-pub const DOCUMENTATION_NONE: Documentation = Documentation {
-    doc_section: DOC_SECTION_NONE,
-    description: "",
-    syntax_example: "",
-    sql_example: None,
-    arguments: None,
-    related_udfs: None,
-};
+/// A builder to be used for building [`Documentation`]'s.
+///
+/// Example:
+///
+/// ```rust
+/// # use datafusion_expr::Documentation;
+/// # use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+/// # use datafusion_common::Result;
+/// #
+/// # fn main() -> Result<()> {
+///       let documentation = Documentation::builder()
+///           .with_doc_section(DOC_SECTION_MATH)
+///           .with_description("Add one to an int32")
+///           .with_syntax_example("add_one(2)")
+///           .with_argument("arg_1", "The int32 number to add one to")
+///           .build()?;
+///       Ok(())  
+/// # }
+pub struct DocumentationBuilder {
+    pub doc_section: Option<DocSection>,
+    pub description: Option<String>,
+    pub syntax_example: Option<String>,
+    pub sql_example: Option<String>,
+    pub arguments: Option<Vec<(String, String)>>,
+    pub related_udfs: Option<Vec<String>>,
+}
 
-/// A doc section that indicated the UDF should not
-/// be publicly documented
-pub const DOC_SECTION_NONE: DocSection = DocSection {
-    include: false,
-    label: "",
-    description: None,
-};
+impl DocumentationBuilder {
+    pub fn new() -> Self {
+        Self {
+            doc_section: None,
+            description: None,
+            syntax_example: None,
+            sql_example: None,
+            arguments: None,
+            related_udfs: None,
+        }
+    }
+
+    pub fn with_doc_section(mut self, doc_section: DocSection) -> Self {
+        self.doc_section = Some(doc_section);
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_syntax_example(mut self, syntax_example: impl Into<String>) -> Self {
+        self.syntax_example = Some(syntax_example.into());
+        self
+    }
+
+    pub fn with_sql_example(mut self, sql_example: impl Into<String>) -> Self {
+        self.sql_example = Some(sql_example.into());
+        self
+    }
+
+    pub fn with_argument(
+        mut self,
+        arg_name: impl Into<String>,
+        arg_description: impl Into<String>,
+    ) -> Self {
+        let mut args = self.arguments.unwrap_or_default();
+        args.push((arg_name.into(), arg_description.into()));
+        self.arguments = Some(args);
+        self
+    }
+
+    pub fn with_related_udf(mut self, related_udf: impl Into<String>) -> Self {
+        let mut related = self.related_udfs.unwrap_or_default();
+        related.push(related_udf.into());
+        self.related_udfs = Some(related);
+        self
+    }
+
+    pub fn build(self) -> Result<Documentation> {
+        let Self {
+            doc_section,
+            description,
+            syntax_example,
+            sql_example,
+            arguments,
+            related_udfs,
+        } = self;
+
+        if doc_section.is_none() {
+            return exec_err!("Documentation must have a doc section");
+        }
+        if description.is_none() {
+            return exec_err!("Documentation must have a description");
+        }
+        if syntax_example.is_none() {
+            return exec_err!("Documentation must have a syntax_example");
+        }
+
+        Ok(Documentation {
+            doc_section: doc_section.unwrap(),
+            description: description.unwrap(),
+            syntax_example: syntax_example.unwrap(),
+            sql_example,
+            arguments,
+            related_udfs,
+        })
+    }
+}
+
+impl Default for DocumentationBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}

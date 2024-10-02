@@ -93,7 +93,7 @@ pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{aggregate_doc_sections, AggregateUDF, AggregateUDFImpl, ReversedUDAF};
 pub use udf::{scalar_doc_sections, ScalarUDF, ScalarUDFImpl};
-pub use udf_docs::{DocSection, Documentation, DOCUMENTATION_NONE, DOC_SECTION_NONE};
+pub use udf_docs::{DocSection, Documentation, DocumentationBuilder};
 pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 

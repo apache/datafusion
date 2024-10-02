@@ -17,10 +17,6 @@
 
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::ops::Range;
-
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::UInt64Array;
 use datafusion_common::arrow::compute::SortOptions;
@@ -34,6 +30,10 @@ use datafusion_expr::{
 };
 use datafusion_functions_window_common::field;
 use field::WindowUDFFieldArgs;
+use std::any::Any;
+use std::fmt::Debug;
+use std::ops::Range;
+use std::sync::OnceLock;
 
 /// Create a [`WindowFunction`](Expr::WindowFunction) expression for
 /// `row_number` user-defined window function.
@@ -77,14 +77,20 @@ impl Default for RowNumber {
     }
 }
 
-const DOCUMENTATION: Documentation = Documentation {
-    doc_section: DOC_SECTION_RANKING,
-    description: "Number of the current row within its partition, counting from 1.",
-    syntax_example: "row_number()",
-    sql_example: None,
-    arguments: None,
-    related_udfs: None,
-};
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_row_number_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_RANKING)
+            .with_description(
+                "Number of the current row within its partition, counting from 1.",
+            )
+            .with_syntax_example("row_number()")
+            .build()
+            .unwrap()
+    })
+}
 
 impl WindowUDFImpl for RowNumber {
     fn as_any(&self) -> &dyn Any {
@@ -114,8 +120,8 @@ impl WindowUDFImpl for RowNumber {
         })
     }
 
-    fn documentation(&self) -> &Documentation {
-        &DOCUMENTATION
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_row_number_doc())
     }
 }
 
