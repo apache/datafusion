@@ -19,13 +19,17 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::iter;
 use std::ops::Range;
+use std::sync::Arc;
 
+use crate::rank::RankState;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::UInt64Array;
 use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
+use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
@@ -40,27 +44,26 @@ pub fn dense_rank() -> Expr {
 
 /// Singleton instance of `dense_rank`, ensures the UDWF is only created once.
 #[allow(non_upper_case_globals)]
-static STATIC_DenseNumber: std::sync::OnceLock<
-    std::sync::Arc<datafusion_expr::WindowUDF>,
-> = std::sync::OnceLock::new();
+static STATIC_DenseRank: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
+    std::sync::OnceLock::new();
 
 /// Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for `dense_rank`
 /// user-defined window function.
 pub fn dense_rank_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-    STATIC_DenseNumber
+    STATIC_DenseRank
         .get_or_init(|| {
-            std::sync::Arc::new(datafusion_expr::WindowUDF::from(DenseNumber::default()))
+            std::sync::Arc::new(datafusion_expr::WindowUDF::from(DenseRank::default()))
         })
         .clone()
 }
 
 /// dense_rank expression
 #[derive(Debug)]
-pub struct DenseNumber {
+pub struct DenseRank {
     signature: Signature,
 }
 
-impl DenseNumber {
+impl DenseRank {
     /// Create a new `dense_rank` function
     pub fn new() -> Self {
         Self {
@@ -69,13 +72,13 @@ impl DenseNumber {
     }
 }
 
-impl Default for DenseNumber {
+impl Default for DenseRank {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl WindowUDFImpl for DenseNumber {
+impl WindowUDFImpl for DenseRank {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -89,7 +92,7 @@ impl WindowUDFImpl for DenseNumber {
     }
 
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        Ok(Box::<NumDensesEvaluator>::default())
+        Ok(Box::<DenseRankEvaluator>::default())
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
@@ -106,33 +109,63 @@ impl WindowUDFImpl for DenseNumber {
 
 /// State for the `dense_rank` built-in window function.
 #[derive(Debug, Default)]
-struct NumDensesEvaluator {
-    n_rows: usize,
+struct DenseRankEvaluator {
+    state: RankState,
 }
 
-impl PartitionEvaluator for NumDensesEvaluator {
+impl PartitionEvaluator for DenseRankEvaluator {
     fn is_causal(&self) -> bool {
         // The dense_rank function doesn't need "future" values to emit results:
         true
     }
 
-    fn evaluate_all(
-        &mut self,
-        _values: &[ArrayRef],
-        num_rows: usize,
-    ) -> Result<ArrayRef> {
-        Ok(std::sync::Arc::new(UInt64Array::from_iter_values(
-            1..(num_rows as u64) + 1,
-        )))
-    }
-
     fn evaluate(
         &mut self,
-        _values: &[ArrayRef],
-        _range: &Range<usize>,
+        values: &[ArrayRef],
+        range: &Range<usize>,
     ) -> Result<ScalarValue> {
-        self.n_rows += 1;
-        Ok(ScalarValue::UInt64(Some(self.n_rows as u64)))
+        let row_idx = range.start;
+        // There is no argument, values are order by column values (where rank is calculated)
+        let range_columns = values;
+        let last_rank_data = get_row_at_idx(range_columns, row_idx)?;
+        let new_rank_encountered =
+            if let Some(state_last_rank_data) = &self.state.last_rank_data {
+                // if rank data changes, new rank is encountered
+                state_last_rank_data != &last_rank_data
+            } else {
+                // First rank seen
+                true
+            };
+
+        if new_rank_encountered {
+            self.state.last_rank_data = Some(last_rank_data);
+            self.state.last_rank_boundary += self.state.current_group_count;
+            self.state.current_group_count = 1;
+            self.state.n_rank += 1;
+        } else {
+            // data is still in the same rank
+            self.state.current_group_count += 1;
+        }
+
+        Ok(ScalarValue::UInt64(Some(self.state.n_rank as u64)))
+    }
+
+    fn evaluate_all_with_rank(
+        &self,
+        _num_rows: usize,
+        ranks_in_partition: &[Range<usize>],
+    ) -> Result<ArrayRef> {
+        let result = Arc::new(UInt64Array::from_iter_values(
+            ranks_in_partition
+                .iter()
+                .zip(1u64..)
+                .flat_map(|(range, rank)| {
+                    let len = range.end - range.start;
+                    iter::repeat(rank).take(len)
+                }),
+        ));
+
+        Ok(result)
     }
 
     fn supports_bounded_execution(&self) -> bool {
@@ -142,42 +175,37 @@ impl PartitionEvaluator for NumDensesEvaluator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use datafusion_common::arrow::array::{Array, BooleanArray};
-    use datafusion_common::cast::as_uint64_array;
-
     use super::*;
+    use datafusion_common::cast::{as_float64_array, as_uint64_array};
 
-    #[test]
-    fn dense_rank_all_null() -> Result<()> {
-        let values: ArrayRef = Arc::new(BooleanArray::from(vec![
-            None, None, None, None, None, None, None, None,
-        ]));
-        let num_rows = values.len();
+    fn test_with_rank(expr: &DenseRank, expected: Vec<u64>) -> Result<()> {
+        test_i32_result(expr, vec![0..2, 2..3, 3..6, 6..7, 7..8], expected)
+    }
 
-        let actual = DenseNumber::default()
+    #[allow(clippy::single_range_in_vec_init)]
+    fn test_without_rank(expr: &DenseRank, expected: Vec<u64>) -> Result<()> {
+        test_i32_result(expr, vec![0..8], expected)
+    }
+
+    fn test_i32_result(
+        expr: &DenseRank,
+        ranks: Vec<Range<usize>>,
+        expected: Vec<u64>,
+    ) -> Result<()> {
+        let result = expr
             .partition_evaluator()?
-            .evaluate_all(&[values], num_rows)?;
-        let actual = as_uint64_array(&actual)?;
-
-        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *actual.values());
+            .evaluate_all_with_rank(8, &ranks)?;
+        let result = as_uint64_array(&result)?;
+        let result = result.values();
+        assert_eq!(expected, *result);
         Ok(())
     }
 
     #[test]
-    fn dense_rank_all_values() -> Result<()> {
-        let values: ArrayRef = Arc::new(BooleanArray::from(vec![
-            true, false, true, false, false, true, false, true,
-        ]));
-        let num_rows = values.len();
-
-        let actual = DenseNumber::default()
-            .partition_evaluator()?
-            .evaluate_all(&[values], num_rows)?;
-        let actual = as_uint64_array(&actual)?;
-
-        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *actual.values());
+    fn test_dense_rank() -> Result<()> {
+        let r = DenseRank::default();
+        test_without_rank(&r, vec![1; 8])?;
+        test_with_rank(&r, vec![1, 1, 2, 3, 3, 3, 4, 5])?;
         Ok(())
     }
 }

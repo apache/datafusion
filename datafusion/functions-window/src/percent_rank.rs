@@ -19,14 +19,16 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::iter;
 use std::ops::Range;
+use std::sync::Arc;
 
 use datafusion_common::arrow::array::ArrayRef;
-use datafusion_common::arrow::array::UInt64Array;
+use datafusion_common::arrow::array::Float64Array;
 use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 use datafusion_functions_window_common::field;
@@ -40,26 +42,27 @@ pub fn percent_rank() -> Expr {
 
 /// Singleton instance of `percent_rank`, ensures the UDWF is only created once.
 #[allow(non_upper_case_globals)]
-static STATIC_RowNumber: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
-    std::sync::OnceLock::new();
+static STATIC_PercentRank: std::sync::OnceLock<
+    std::sync::Arc<datafusion_expr::WindowUDF>,
+> = std::sync::OnceLock::new();
 
 /// Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for `percent_rank`
 /// user-defined window function.
 pub fn percent_rank_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-    STATIC_RowNumber
+    STATIC_PercentRank
         .get_or_init(|| {
-            std::sync::Arc::new(datafusion_expr::WindowUDF::from(RowNumber::default()))
+            std::sync::Arc::new(datafusion_expr::WindowUDF::from(PercentRank::default()))
         })
         .clone()
 }
 
 /// percent_rank expression
 #[derive(Debug)]
-pub struct RowNumber {
+pub struct PercentRank {
     signature: Signature,
 }
 
-impl RowNumber {
+impl PercentRank {
     /// Create a new `percent_rank` function
     pub fn new() -> Self {
         Self {
@@ -68,13 +71,13 @@ impl RowNumber {
     }
 }
 
-impl Default for RowNumber {
+impl Default for PercentRank {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl WindowUDFImpl for RowNumber {
+impl WindowUDFImpl for PercentRank {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -88,7 +91,7 @@ impl WindowUDFImpl for RowNumber {
     }
 
     fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        Ok(Box::<NumRowsEvaluator>::default())
+        Ok(Box::<PercentRankEvaluator>::default())
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
@@ -105,24 +108,12 @@ impl WindowUDFImpl for RowNumber {
 
 /// State for the `percent_rank` built-in window function.
 #[derive(Debug, Default)]
-struct NumRowsEvaluator {
-    n_rows: usize,
-}
+struct PercentRankEvaluator {}
 
-impl PartitionEvaluator for NumRowsEvaluator {
+impl PartitionEvaluator for PercentRankEvaluator {
     fn is_causal(&self) -> bool {
         // The percent_rank function doesn't need "future" values to emit results:
         true
-    }
-
-    fn evaluate_all(
-        &mut self,
-        _values: &[ArrayRef],
-        num_rows: usize,
-    ) -> Result<ArrayRef> {
-        Ok(std::sync::Arc::new(UInt64Array::from_iter_values(
-            1..(num_rows as u64) + 1,
-        )))
     }
 
     fn evaluate(
@@ -130,8 +121,31 @@ impl PartitionEvaluator for NumRowsEvaluator {
         _values: &[ArrayRef],
         _range: &Range<usize>,
     ) -> Result<ScalarValue> {
-        self.n_rows += 1;
-        Ok(ScalarValue::UInt64(Some(self.n_rows as u64)))
+        exec_err!("Can not execute PERCENT_RANK in a streaming fashion")
+    }
+
+    fn evaluate_all_with_rank(
+        &self,
+        num_rows: usize,
+        ranks_in_partition: &[Range<usize>],
+    ) -> Result<ArrayRef> {
+        let denominator = num_rows as f64;
+        let result =
+        // Returns the relative rank of the current row, that is (rank - 1) / (total partition rows - 1). The value thus ranges from 0 to 1 inclusive.
+        Arc::new(Float64Array::from_iter_values(
+            ranks_in_partition
+                .iter()
+                .scan(0_u64, |acc, range| {
+                    let len = range.end - range.start;
+                    let value = (*acc as f64) / (denominator - 1.0).max(1.0);
+                    let result = iter::repeat(value).take(len);
+                    *acc += len as u64;
+                    Some(result)
+                })
+                .flatten(),
+        ));
+
+        Ok(result)
     }
 
     fn supports_bounded_execution(&self) -> bool {
@@ -141,42 +155,59 @@ impl PartitionEvaluator for NumRowsEvaluator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use datafusion_common::arrow::array::{Array, BooleanArray};
-    use datafusion_common::cast::as_uint64_array;
-
     use super::*;
+    use datafusion_common::cast::{as_float64_array, as_uint64_array};
 
-    #[test]
-    fn percent_rank_all_null() -> Result<()> {
-        let values: ArrayRef = Arc::new(BooleanArray::from(vec![
-            None, None, None, None, None, None, None, None,
-        ]));
-        let num_rows = values.len();
-
-        let actual = RowNumber::default()
+    fn test_f64_result(
+        expr: &PercentRank,
+        num_rows: usize,
+        ranks: Vec<Range<usize>>,
+        expected: Vec<f64>,
+    ) -> Result<()> {
+        let result = expr
             .partition_evaluator()?
-            .evaluate_all(&[values], num_rows)?;
-        let actual = as_uint64_array(&actual)?;
+            .evaluate_all_with_rank(num_rows, &ranks)?;
+        let result = as_float64_array(&result)?;
+        let result = result.values();
+        assert_eq!(expected, *result);
+        Ok(())
+    }
 
-        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *actual.values());
+    fn test_i32_result(
+        expr: &PercentRank,
+        ranks: Vec<Range<usize>>,
+        expected: Vec<u64>,
+    ) -> Result<()> {
+        let result = expr
+            .partition_evaluator()?
+            .evaluate_all_with_rank(8, &ranks)?;
+        let result = as_uint64_array(&result)?;
+        let result = result.values();
+        assert_eq!(expected, *result);
         Ok(())
     }
 
     #[test]
-    fn percent_rank_all_values() -> Result<()> {
-        let values: ArrayRef = Arc::new(BooleanArray::from(vec![
-            true, false, true, false, false, true, false, true,
-        ]));
-        let num_rows = values.len();
+    #[allow(clippy::single_range_in_vec_init)]
+    fn test_percent_rank() -> Result<()> {
+        let r = PercentRank::default();
 
-        let actual = RowNumber::default()
-            .partition_evaluator()?
-            .evaluate_all(&[values], num_rows)?;
-        let actual = as_uint64_array(&actual)?;
+        // empty case
+        let expected = vec![0.0; 0];
+        test_f64_result(&r, 0, vec![0..0; 0], expected)?;
 
-        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *actual.values());
+        // singleton case
+        let expected = vec![0.0];
+        test_f64_result(&r, 1, vec![0..1], expected)?;
+
+        // uniform case
+        let expected = vec![0.0; 7];
+        test_f64_result(&r, 7, vec![0..7], expected)?;
+
+        // non-trivial case
+        let expected = vec![0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 0.5];
+        test_f64_result(&r, 7, vec![0..3, 3..7], expected)?;
+
         Ok(())
     }
 }

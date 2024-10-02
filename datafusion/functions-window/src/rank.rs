@@ -106,8 +106,6 @@ impl WindowUDFImpl for Rank {
     }
 }
 
-// only use the default implementation for the partition evaluator
-// todo!();
 /// State for the RANK(rank) built-in window function.
 #[derive(Debug, Clone, Default)]
 pub struct RankState {
@@ -119,13 +117,6 @@ pub struct RankState {
     pub current_group_count: usize,
     /// Rank number kept from the start
     pub n_rank: usize,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum RankType {
-    Basic,
-    Dense,
-    Percent,
 }
 
 /// State for the `rank` built-in window function.
@@ -202,8 +193,6 @@ mod tests {
     use super::*;
     use datafusion_common::cast::{as_float64_array, as_uint64_array};
 
-    use super::*;
-
     fn test_with_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {
         test_i32_result(expr, vec![0..2, 2..3, 3..6, 6..7, 7..8], expected)
     }
@@ -245,8 +234,8 @@ mod tests {
     #[test]
     fn test_rank() -> Result<()> {
         let r = Rank::default();
-        test_with_rank(&r, vec![1; 8])?;
-        // test_without_rank(&r, vec![1, 1, 3, 4, 4, 4, 7, 9])?;
+        test_without_rank(&r, vec![1; 8])?;
+        test_with_rank(&r, vec![1, 1, 3, 4, 4, 4, 7, 8])?;
         Ok(())
     }
 }
