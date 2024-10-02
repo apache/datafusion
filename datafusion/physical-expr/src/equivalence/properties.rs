@@ -3032,7 +3032,7 @@ mod tests {
         /// See [`Self::make_props`] for the format of the strings in `orderings`
         fn with_child_sort(
             mut self,
-            orderings: Vec<Vec<&'static str>>,
+            orderings: Vec<Vec<&str>>,
             schema: &SchemaRef,
         ) -> Self {
             let properties = self.make_props(orderings, vec![], schema);
@@ -3047,8 +3047,8 @@ mod tests {
         /// `orderings` and `constants`
         fn with_child_sort_and_const_exprs(
             mut self,
-            orderings: Vec<Vec<&'static str>>,
-            constants: Vec<&'static str>,
+            orderings: Vec<Vec<&str>>,
+            constants: Vec<&str>,
             schema: &SchemaRef,
         ) -> Self {
             let properties = self.make_props(orderings, constants, schema);
@@ -3059,7 +3059,7 @@ mod tests {
         /// Set the expected output sort order for the union of the children
         ///
         /// See [`Self::make_props`] for the format of the strings in `orderings`
-        fn with_expected_sort(mut self, orderings: Vec<Vec<&'static str>>) -> Self {
+        fn with_expected_sort(mut self, orderings: Vec<Vec<&str>>) -> Self {
             let properties = self.make_props(orderings, vec![], &self.output_schema);
             self.expected_properties = Some(properties);
             self
@@ -3072,8 +3072,8 @@ mod tests {
         /// `orderings` and `constants`.
         fn with_expected_sort_and_const_exprs(
             mut self,
-            orderings: Vec<Vec<&'static str>>,
-            constants: Vec<&'static str>,
+            orderings: Vec<Vec<&str>>,
+            constants: Vec<&str>,
         ) -> Self {
             let properties = self.make_props(orderings, constants, &self.output_schema);
             self.expected_properties = Some(properties);
@@ -3108,8 +3108,8 @@ mod tests {
         /// constants: strings formatted like `"a"`.
         fn make_props(
             &self,
-            orderings: Vec<Vec<&'static str>>,
-            constants: Vec<&'static str>,
+            orderings: Vec<Vec<&str>>,
+            constants: Vec<&str>,
             schema: &SchemaRef,
         ) -> EquivalenceProperties {
             let orderings = orderings
