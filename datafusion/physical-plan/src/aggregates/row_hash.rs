@@ -1121,8 +1121,8 @@ impl GroupedHashAggregateStream {
         let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
         let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
 
-        if group_values.is_empty() {
-            return internal_err!("group_values expected to have at least one element");
+        if group_values.len() != 1 {
+            return internal_err!("group_values expected to have single element");
         }
         let mut output = group_values.swap_remove(0);
 

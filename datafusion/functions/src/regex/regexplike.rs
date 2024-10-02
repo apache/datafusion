@@ -48,9 +48,9 @@ impl RegexpLikeFunc {
             signature: Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![LargeUtf8, LargeUtf8]),
                     Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
                 ],
                 Volatility::Immutable,
             ),
