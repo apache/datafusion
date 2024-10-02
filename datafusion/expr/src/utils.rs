@@ -1324,6 +1324,67 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
 
+/// Dynamic join filter used in
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DynamicJoinFilterPushdownInfo {
+    pub dynamic_filters: Option<DynamicTableFilters>,
+    pub filters: Vec<DynamicJoinFilterPushdownColumn>,
+    pub min_max_aggregates: Vec<Expr>,
+}
+
+impl DynamicJoinFilterPushdownInfo {
+    pub fn new_with_all(
+        dynamic_filters: DynamicTableFilters,
+        filters: Vec<DynamicJoinFilterPushdownColumn>,
+        min_max_aggregates: Vec<Expr>,
+    ) -> Self {
+        Self {
+            dynamic_filters: Some(dynamic_filters),
+            filters,
+            min_max_aggregates,
+        }
+    }
+
+    pub fn new_with_dynamic_filter(dynamic_filters: DynamicTableFilters) -> Self {
+        Self {
+            dynamic_filters: Some(dynamic_filters),
+            filters: Vec::new(),
+            min_max_aggregates: Vec::new(),
+        }
+    }
+    pub fn new() -> Self {
+        Self {
+            dynamic_filters: None,
+            filters: Vec::new(),
+            min_max_aggregates: Vec::new(),
+        }
+    }
+    pub fn push_filter(&mut self, filter: DynamicJoinFilterPushdownColumn) {
+        self.filters.push(filter);
+    }
+
+    pub fn push_aggregates(&mut self, aggs: Vec<Aggregate>) {
+        self.min_max_aggregates.extend(aggs);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DynamicTableFilters {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DynamicJoinFilterPushdownColumn {
+    pub condition_idx: usize,
+    pub column: Arc<Column>,
+}
+
+impl DynamicJoinFilterPushdownColumn {
+    pub fn new(condition_idx: usize, column: Arc<Column>) -> Self {
+        Self {
+            condition_idx,
+            column,
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

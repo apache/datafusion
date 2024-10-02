@@ -84,6 +84,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_plan::joins::utils::PhysicalDynamicFiltersInfo;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -858,6 +859,7 @@ impl DefaultPhysicalPlanner {
                 join_type,
                 null_equals_null,
                 schema: join_schema,
+                filter_pushdown_info,
                 ..
             }) => {
                 let null_equals_null = *null_equals_null;
@@ -1051,6 +1053,34 @@ impl DefaultPhysicalPlanner {
                     _ => None,
                 };
 
+                let physical_dynamic_filter_info = if let Some(filter_pushdown_info) =
+                    filter_pushdown_info
+                {
+                    let aggregates = filter_pushdown_info
+                        .min_max_aggregates
+                        .iter()
+                        .map(|aggr| {
+                            self.create_physical_expr(aggr, &join_schema, session_state)?
+                        })
+                        .collect::<Vec<_>>();
+
+                    let columns = filter_pushdown_info
+                        .filters
+                        .iter()
+                        .map(|filter| {
+                            self.create_physical_expr(
+                                filter.column,
+                                &join_schema,
+                                session_state,
+                            )?
+                        })
+                        .collect::<Vec<_>>();
+
+                    Some(PhysicalDynamicFiltersInfo::new(aggregates, columns))
+                } else {
+                    None
+                };
+
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
 
@@ -1091,27 +1121,33 @@ impl DefaultPhysicalPlanner {
                             PartitionMode::Partitioned
                         }
                     };
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        partition_mode,
-                        null_equals_null,
-                    )?)
+                    Arc::new(
+                        HashJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            join_filter,
+                            join_type,
+                            None,
+                            partition_mode,
+                            null_equals_null,
+                        )?
+                        .with_dynamic_filter_info(physical_dynamic_filter_info),
+                    )
                 } else {
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        PartitionMode::CollectLeft,
-                        null_equals_null,
-                    )?)
+                    Arc::new(
+                        HashJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            join_filter,
+                            join_type,
+                            None,
+                            PartitionMode::CollectLeft,
+                            null_equals_null,
+                        )?
+                        .with_dynamic_filter_info(physical_dynamic_filter_info),
+                    )
                 };
 
                 // If plan was mutated previously then need to create the ExecutionPlan

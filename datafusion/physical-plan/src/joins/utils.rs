@@ -56,6 +56,7 @@ use datafusion_physical_expr::{
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use hashbrown::raw::RawTable;
+use log::Record;
 use parking_lot::Mutex;
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
@@ -1632,6 +1633,49 @@ pub(crate) fn asymmetric_join_output_partitioning(
                 right.output_partitioning().partition_count(),
             )
         }
+    }
+}
+
+/// store physicalexpr about the dynamic filters
+pub struct PhysicalDynamicFiltersInfo {
+    pub probe_side_columns: Vec<Column>,
+    pub aggregates: Vec<dyn PhysicalExpr>,
+    // final predicates we should execute
+    final_expr: Option<dyn PhysicalExpr>,
+}
+
+impl PhysicalDynamicFiltersInfo {
+    pub fn new(
+        probe_side_columns: Vec<Column>,
+        aggregates: Vec<dyn PhysicalExpr>,
+    ) -> Self {
+        Self {
+            probe_side_columns,
+            aggregates,
+            final_expr: None,
+        }
+    }
+
+    pub fn with_final_expr(mut self, expr: dyn PhysicalExpr) -> Self {
+        self.final_expr = Some(expr);
+        self
+    }
+
+    pub fn get_final_expr(&self) -> &Option<dyn PhysicalExpr> {
+        &self.final_expr
+    }
+
+    pub fn calculate_final_expr(
+        &mut self,
+        records: &RecordBatch,
+    ) -> Result<(), DataFusionError> {
+        for (i, col) in self.probe_side_columns.into_iter().enumerate() {
+            let min_value = (self.aggregates[i] as dyn PhysicalExpr).evaluate(records)?;
+            let max_value =
+                (self.aggregates[i + 1] as dyn PhysicalExpr).evaluate(records)?;
+        }
+
+        Ok(())
     }
 }
 

@@ -36,7 +36,7 @@ use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
     enumerate_grouping_sets, exprlist_len, exprlist_to_fields, find_base_plan,
     find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    split_conjunction,
+    split_conjunction, DynamicJoinFilterPushdownInfo,
 };
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Expr,
@@ -669,6 +669,7 @@ impl LogicalPlan {
                 on,
                 schema: _,
                 null_equals_null,
+                filter_pushdown_info,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -690,6 +691,7 @@ impl LogicalPlan {
                     filter,
                     schema: DFSchemaRef::new(schema),
                     null_equals_null,
+                    filter_pushdown_info,
                 }))
             }
             LogicalPlan::CrossJoin(CrossJoin {
@@ -954,6 +956,7 @@ impl LogicalPlan {
                     filter: filter_expr,
                     schema: DFSchemaRef::new(schema),
                     null_equals_null: *null_equals_null,
+                    filter_pushdown_info: None,
                 }))
             }
             LogicalPlan::CrossJoin(_) => {
@@ -3173,6 +3176,9 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
+    /// store the filter which should passed to scan if dynamic filter
+    /// pushdown is enabled
+    pub filter_pushdown_info: Option<Arc<DynamicJoinFilterPushdownInfo>>,
 }
 
 impl Join {
@@ -3206,7 +3212,16 @@ impl Join {
             join_constraint: original_join.join_constraint,
             schema: Arc::new(join_schema),
             null_equals_null: original_join.null_equals_null,
+            filter_pushdown_info: None,
         })
+    }
+    /// assign filter pushdown struct
+    pub fn with_filter_pushdown_info(
+        mut self,
+        filter_pushdown: Arc<DynamicJoinFilterPushdownInfo>,
+    ) -> Self {
+        self.filter_pushdown_info = Some(filter_pushdown);
+        self
     }
 }
 
