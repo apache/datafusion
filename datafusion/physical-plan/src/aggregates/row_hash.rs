@@ -800,7 +800,6 @@ impl GroupedHashAggregateStream {
         for (index, group_values) in group_by_values.iter().enumerate() {
             let n_rows = group_values[0].len();
             let batch_hashes = &mut self.hashes_buffer[index];
-            batch_hashes.clear();
             batch_hashes.resize(n_rows, 0);
             create_hashes(group_values, &self.random_state, batch_hashes)?;
 
@@ -824,7 +823,6 @@ impl GroupedHashAggregateStream {
         for (index, group_values) in group_by_values.iter().enumerate() {
             let n_rows = group_values[0].len();
             let batch_hashes = &mut self.hashes_buffer[index];
-            batch_hashes.clear();
             batch_hashes.resize(n_rows, 0);
             create_hashes(group_values, &self.random_state, batch_hashes)?;
         }
