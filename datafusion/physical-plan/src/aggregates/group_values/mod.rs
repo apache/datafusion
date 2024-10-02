@@ -38,6 +38,7 @@ use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
 mod group_column;
+mod null_builder;
 
 /// Stores the group values during hash aggregation.
 ///

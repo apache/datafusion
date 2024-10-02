@@ -181,7 +181,7 @@ pub(crate) type LexOrdering = Vec<OrderByExpr>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateExternalTable {
     /// Table name
-    pub name: String,
+    pub name: ObjectName,
     /// Optional schema
     pub columns: Vec<ColumnDef>,
     /// File type (Parquet, NDJSON, CSV, etc)
@@ -813,7 +813,7 @@ impl<'a> DFParser<'a> {
         }
 
         let create = CreateExternalTable {
-            name: table_name.to_string(),
+            name: table_name,
             columns,
             file_type: builder.file_type.unwrap(),
             location: builder.location.unwrap(),
@@ -915,8 +915,9 @@ mod tests {
         // positive case
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
         let display = None;
+        let name = ObjectName(vec![Ident::from("t")]);
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
             file_type: "CSV".to_string(),
             location: "foo.csv".into(),
@@ -932,7 +933,7 @@ mod tests {
         // positive case: leading space
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'     ";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(None))],
             file_type: "CSV".to_string(),
             location: "foo.csv".into(),
@@ -949,7 +950,7 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'      ;";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(None))],
             file_type: "CSV".to_string(),
             location: "foo.csv".into(),
@@ -966,7 +967,7 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS (format.delimiter '|')";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
             file_type: "CSV".to_string(),
             location: "foo.csv".into(),
@@ -986,7 +987,7 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1, p2) LOCATION 'foo.csv'";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
             file_type: "CSV".to_string(),
             location: "foo.csv".into(),
@@ -1013,7 +1014,7 @@ mod tests {
          ];
         for (sql, compression) in sqls {
             let expected = Statement::CreateExternalTable(CreateExternalTable {
-                name: "t".into(),
+                name: name.clone(),
                 columns: vec![make_column_def("c1", DataType::Int(display))],
                 file_type: "CSV".to_string(),
                 location: "foo.csv".into(),
@@ -1033,7 +1034,7 @@ mod tests {
         // positive case: it is ok for parquet files not to have columns specified
         let sql = "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![],
             file_type: "PARQUET".to_string(),
             location: "foo.parquet".into(),
@@ -1049,7 +1050,7 @@ mod tests {
         // positive case: it is ok for parquet files to be other than upper case
         let sql = "CREATE EXTERNAL TABLE t STORED AS parqueT LOCATION 'foo.parquet'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![],
             file_type: "PARQUET".to_string(),
             location: "foo.parquet".into(),
@@ -1065,7 +1066,7 @@ mod tests {
         // positive case: it is ok for avro files not to have columns specified
         let sql = "CREATE EXTERNAL TABLE t STORED AS AVRO LOCATION 'foo.avro'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![],
             file_type: "AVRO".to_string(),
             location: "foo.avro".into(),
@@ -1082,7 +1083,7 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE IF NOT EXISTS t STORED AS PARQUET LOCATION 'foo.parquet'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![],
             file_type: "PARQUET".to_string(),
             location: "foo.parquet".into(),
@@ -1099,7 +1100,7 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(None)),
                 make_column_def("p1", DataType::Int(None)),
@@ -1132,7 +1133,7 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1') LOCATION 'blahblah'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![],
             file_type: "X".to_string(),
             location: "blahblah".into(),
@@ -1149,7 +1150,7 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2) LOCATION 'blahblah'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![],
             file_type: "X".to_string(),
             location: "blahblah".into(),
@@ -1188,7 +1189,7 @@ mod tests {
         ];
         for (sql, (asc, nulls_first)) in sqls.iter().zip(expected.into_iter()) {
             let expected = Statement::CreateExternalTable(CreateExternalTable {
-                name: "t".into(),
+                name: name.clone(),
                 columns: vec![make_column_def("c1", DataType::Int(None))],
                 file_type: "CSV".to_string(),
                 location: "foo.csv".into(),
@@ -1214,7 +1215,7 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 ASC, c2 DESC NULLS FIRST) LOCATION 'foo.csv'";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(display)),
                 make_column_def("c2", DataType::Int(display)),
@@ -1253,7 +1254,7 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 - c2 ASC) LOCATION 'foo.csv'";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(display)),
                 make_column_def("c2", DataType::Int(display)),
@@ -1297,7 +1298,7 @@ mod tests {
                      'TRUNCATE' 'NO',
                      'format.has_header' 'true')";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
+            name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(None)),
                 make_column_def("c2", DataType::Float(None)),
