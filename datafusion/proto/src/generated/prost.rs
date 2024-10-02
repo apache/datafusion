@@ -117,10 +117,11 @@ pub struct ListingTableScanNode {
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
-    #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12, 15")]
-    pub file_format_type: ::core::option::Option<
-        listing_table_scan_node::FileFormatType,
-    >,
+    #[prost(
+        oneof = "listing_table_scan_node::FileFormatType",
+        tags = "10, 11, 12, 15"
+    )]
+    pub file_format_type: ::core::option::Option<listing_table_scan_node::FileFormatType>,
 }
 /// Nested message and enum types in `ListingTableScanNode`.
 pub mod listing_table_scan_node {
@@ -254,10 +255,8 @@ pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "12")]
     pub constraints: ::core::option::Option<super::datafusion_common::Constraints>,
     #[prost(map = "string, message", tag = "13")]
-    pub column_defaults: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        LogicalExprNode,
-    >,
+    pub column_defaults:
+        ::std::collections::HashMap<::prost::alloc::string::String, LogicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrepareNode {
@@ -957,9 +956,7 @@ pub struct FullTableReference {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableReference {
     #[prost(oneof = "table_reference::TableReferenceEnum", tags = "1, 2, 3")]
-    pub table_reference_enum: ::core::option::Option<
-        table_reference::TableReferenceEnum,
-    >,
+    pub table_reference_enum: ::core::option::Option<table_reference::TableReferenceEnum>,
 }
 /// Nested message and enum types in `TableReference`.
 pub mod table_reference {
@@ -1077,9 +1074,8 @@ pub struct JsonSink {
     #[prost(message, optional, tag = "1")]
     pub config: ::core::option::Option<FileSinkConfig>,
     #[prost(message, optional, tag = "2")]
-    pub writer_options: ::core::option::Option<
-        super::datafusion_common::JsonWriterOptions,
-    >,
+    pub writer_options:
+        ::core::option::Option<super::datafusion_common::JsonWriterOptions>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JsonSinkExecNode {
@@ -1097,9 +1093,8 @@ pub struct CsvSink {
     #[prost(message, optional, tag = "1")]
     pub config: ::core::option::Option<FileSinkConfig>,
     #[prost(message, optional, tag = "2")]
-    pub writer_options: ::core::option::Option<
-        super::datafusion_common::CsvWriterOptions,
-    >,
+    pub writer_options:
+        ::core::option::Option<super::datafusion_common::CsvWriterOptions>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvSinkExecNode {
@@ -1117,9 +1112,8 @@ pub struct ParquetSink {
     #[prost(message, optional, tag = "1")]
     pub config: ::core::option::Option<FileSinkConfig>,
     #[prost(message, optional, tag = "2")]
-    pub parquet_options: ::core::option::Option<
-        super::datafusion_common::TableParquetOptions,
-    >,
+    pub parquet_options:
+        ::core::option::Option<super::datafusion_common::TableParquetOptions>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetSinkExecNode {
@@ -1239,9 +1233,8 @@ pub struct PhysicalAggregateExprNode {
     #[prost(bytes = "vec", optional, tag = "7")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "4")]
-    pub aggregate_function: ::core::option::Option<
-        physical_aggregate_expr_node::AggregateFunction,
-    >,
+    pub aggregate_function:
+        ::core::option::Option<physical_aggregate_expr_node::AggregateFunction>,
 }
 /// Nested message and enum types in `PhysicalAggregateExprNode`.
 pub mod physical_aggregate_expr_node {
@@ -1266,9 +1259,8 @@ pub struct PhysicalWindowExprNode {
     #[prost(bytes = "vec", optional, tag = "9")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "2, 3")]
-    pub window_function: ::core::option::Option<
-        physical_window_expr_node::WindowFunction,
-    >,
+    pub window_function:
+        ::core::option::Option<physical_window_expr_node::WindowFunction>,
 }
 /// Nested message and enum types in `PhysicalWindowExprNode`.
 pub mod physical_window_expr_node {
@@ -1787,9 +1779,7 @@ pub struct PartitionedFile {
     #[prost(uint64, tag = "3")]
     pub last_modified_ns: u64,
     #[prost(message, repeated, tag = "4")]
-    pub partition_values: ::prost::alloc::vec::Vec<
-        super::datafusion_common::ScalarValue,
-    >,
+    pub partition_values: ::prost::alloc::vec::Vec<super::datafusion_common::ScalarValue>,
     #[prost(message, optional, tag = "5")]
     pub range: ::core::option::Option<FileRange>,
     #[prost(message, optional, tag = "6")]
@@ -1813,15 +1803,17 @@ pub struct PartitionStats {
     #[prost(message, repeated, tag = "4")]
     pub column_stats: ::prost::alloc::vec::Vec<super::datafusion_common::ColumnStats>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum BuiltInWindowFunction {
     /// <https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum>
     Unspecified = 0,
     /// ROW_NUMBER = 0;
-    Rank = 1,
-    DenseRank = 2,
-    PercentRank = 3,
+    // Rank = 1,
+    // DenseRank = 2,
+    // PercentRank = 3,
     CumeDist = 4,
     Ntile = 5,
     Lag = 6,
@@ -1838,9 +1830,6 @@ impl BuiltInWindowFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "UNSPECIFIED",
-            Self::Rank => "RANK",
-            Self::DenseRank => "DENSE_RANK",
-            Self::PercentRank => "PERCENT_RANK",
             Self::CumeDist => "CUME_DIST",
             Self::Ntile => "NTILE",
             Self::Lag => "LAG",
@@ -1854,9 +1843,6 @@ impl BuiltInWindowFunction {
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "UNSPECIFIED" => Some(Self::Unspecified),
-            "RANK" => Some(Self::Rank),
-            "DENSE_RANK" => Some(Self::DenseRank),
-            "PERCENT_RANK" => Some(Self::PercentRank),
             "CUME_DIST" => Some(Self::CumeDist),
             "NTILE" => Some(Self::Ntile),
             "LAG" => Some(Self::Lag),
@@ -1868,7 +1854,9 @@ impl BuiltInWindowFunction {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum WindowFrameUnits {
     Rows = 0,
@@ -1897,7 +1885,9 @@ impl WindowFrameUnits {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum WindowFrameBoundType {
     CurrentRow = 0,
@@ -1926,7 +1916,9 @@ impl WindowFrameBoundType {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum DateUnit {
     Day = 0,
@@ -1952,7 +1944,9 @@ impl DateUnit {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum InsertOp {
     Append = 0,
@@ -1981,7 +1975,9 @@ impl InsertOp {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum PartitionMode {
     CollectLeft = 0,
@@ -2010,7 +2006,9 @@ impl PartitionMode {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum StreamPartitionMode {
     SinglePartition = 0,
@@ -2036,7 +2034,9 @@ impl StreamPartitionMode {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+)]
 #[repr(i32)]
 pub enum AggregateMode {
     Partial = 0,

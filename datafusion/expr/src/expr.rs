@@ -2628,9 +2628,6 @@ mod test {
     #[test]
     fn test_window_function_case_insensitive() -> Result<()> {
         let names = vec![
-            "rank",
-            "dense_rank",
-            "percent_rank",
             "cume_dist",
             "ntile",
             "lag",
