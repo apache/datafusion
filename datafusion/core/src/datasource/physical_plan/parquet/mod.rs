@@ -586,7 +586,7 @@ impl ParquetExec {
         )
     }
 
-    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+    pub fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
         self.base_config.file_groups = file_groups;
         // Changing file groups may invalidate output partitioning. Update it also
         let output_partitioning = Self::output_partitioning_helper(&self.base_config);
