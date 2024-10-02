@@ -111,21 +111,23 @@ struct DataSetsGenerator {
 }
 
 impl DataSetsGenerator {
-    fn generate(&self) -> Vec<DataSet> {
-        let mut datasets = Vec::with_capacity(self.config.sort_keys_set.len() + 1);
+    fn generate(&self) -> Vec<Dataset> {
+        let mut datasets = Vec::with_capacity(self.sort_keys_set.len() + 1);
 
         // Generate the base batch
         let base_batch = self.batch_generator.generate();
+        let total_rows_num = base_batch.num_rows();
         let batches = stagger_batch(base_batch.clone());
-        let dataset = DataSet {
+        let dataset = Dataset {
             batches,
-            sorted_key: None,
+            total_rows_num,
+            sort_keys: Vec::new(),
         };
         datasets.push(dataset);
 
         // Generate the related sorted batches
         let schema = base_batch.schema_ref();
-        for sort_keys in self.config.sort_keys_set.clone() {
+        for sort_keys in self.sort_keys_set.clone() {
             let sort_exprs = sort_keys
                 .iter()
                 .map(|key| {
@@ -140,9 +142,10 @@ impl DataSetsGenerator {
                 .expect("sort batch should not fail");
 
             let batches = stagger_batch(sorted_batch);
-            let dataset = DataSet {
+            let dataset = Dataset {
                 batches,
-                sorted_key: None,
+                total_rows_num,
+                sort_keys: Vec::new(),
             };
             datasets.push(dataset);
         }
@@ -153,9 +156,10 @@ impl DataSetsGenerator {
 
 /// Single test data set
 #[derive(Debug)]
-struct DataSet {
-    batches: Vec<RecordBatch>,
-    sorted_key: Option<Vec<String>>,
+pub struct Dataset {
+    pub batches: Vec<RecordBatch>,
+    pub total_rows_num: usize,
+    pub sort_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod context_generator;
 mod data_generator;
 
 struct Test {}
