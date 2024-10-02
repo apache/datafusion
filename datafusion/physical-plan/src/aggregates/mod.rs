@@ -26,6 +26,7 @@ use crate::aggregates::{
     topk_stream::GroupedTopKAggregateStream,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::projection::get_field_metadata;
 use crate::windows::get_ordered_partition_by_indices;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
@@ -795,14 +796,17 @@ fn create_schema(
 ) -> Result<Schema> {
     let mut fields = Vec::with_capacity(group_expr.len() + aggr_expr.len());
     for (index, (expr, name)) in group_expr.iter().enumerate() {
-        fields.push(Field::new(
-            name,
-            expr.data_type(input_schema)?,
-            // In cases where we have multiple grouping sets, we will use NULL expressions in
-            // order to align the grouping sets. So the field must be nullable even if the underlying
-            // schema field is not.
-            group_expr_nullable[index] || expr.nullable(input_schema)?,
-        ))
+        fields.push(
+            Field::new(
+                name,
+                expr.data_type(input_schema)?,
+                // In cases where we have multiple grouping sets, we will use NULL expressions in
+                // order to align the grouping sets. So the field must be nullable even if the underlying
+                // schema field is not.
+                group_expr_nullable[index] || expr.nullable(input_schema)?,
+            )
+            .with_metadata(get_field_metadata(expr, input_schema).unwrap_or_default()),
+        )
     }
 
     match mode {
@@ -823,7 +827,10 @@ fn create_schema(
         }
     }
 
-    Ok(Schema::new(fields))
+    Ok(Schema::new_with_metadata(
+        fields,
+        input_schema.metadata().clone(),
+    ))
 }
 
 fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {

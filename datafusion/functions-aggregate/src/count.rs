@@ -16,7 +16,9 @@
 // under the License.
 
 use ahash::RandomState;
+use datafusion_common::stats::Precision;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
+use datafusion_physical_expr::expressions;
 use std::collections::HashSet;
 use std::ops::BitAnd;
 use std::{fmt::Debug, sync::Arc};
@@ -46,7 +48,7 @@ use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     EmitTo, GroupsAccumulator, Signature, Volatility,
 };
-use datafusion_expr::{Expr, ReversedUDAF, TypeSignature};
+use datafusion_expr::{Expr, ReversedUDAF, StatisticsArgs, TypeSignature};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::{
     BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
     PrimitiveDistinctCountAccumulator,
@@ -54,6 +56,7 @@ use datafusion_functions_aggregate_common::aggregate::count_distinct::{
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
 use datafusion_physical_expr_common::binary_map::OutputType;
 
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 make_udaf_expr_and_func!(
     Count,
     count,
@@ -290,6 +293,36 @@ impl AggregateUDFImpl for Count {
 
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(0)))
+    }
+
+    fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        if statistics_args.is_distinct {
+            return None;
+        }
+        if let Precision::Exact(num_rows) = statistics_args.statistics.num_rows {
+            if statistics_args.exprs.len() == 1 {
+                // TODO optimize with exprs other than Column
+                if let Some(col_expr) = statistics_args.exprs[0]
+                    .as_any()
+                    .downcast_ref::<expressions::Column>()
+                {
+                    let current_val = &statistics_args.statistics.column_statistics
+                        [col_expr.index()]
+                    .null_count;
+                    if let &Precision::Exact(val) = current_val {
+                        return Some(ScalarValue::Int64(Some((num_rows - val) as i64)));
+                    }
+                } else if let Some(lit_expr) = statistics_args.exprs[0]
+                    .as_any()
+                    .downcast_ref::<expressions::Literal>()
+                {
+                    if lit_expr.value() == &COUNT_STAR_EXPANSION {
+                        return Some(ScalarValue::Int64(Some(num_rows as i64)));
+                    }
+                }
+            }
+        }
+        None
     }
 }
 
