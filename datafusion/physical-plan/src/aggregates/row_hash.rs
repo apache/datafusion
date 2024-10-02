@@ -110,6 +110,7 @@ struct SpillState {
 /// Tracks if the aggregate should skip partial aggregations
 ///
 /// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
+#[derive(Debug)]
 struct SkipAggregationProbe {
     // ========================================================================
     // PROPERTIES:

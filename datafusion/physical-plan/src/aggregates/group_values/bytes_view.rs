@@ -110,7 +110,6 @@ impl GroupValues for GroupValuesBytesView {
 
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
-                // Change mode
                 self.intern(&[remaining_group_values], &mut group_indexes, &[])?;
 
                 // Verify that the group indexes were assigned in the correct order

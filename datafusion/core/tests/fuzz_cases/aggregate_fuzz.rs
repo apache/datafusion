@@ -44,6 +44,8 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::task::JoinSet;
 
+const BATCH_SIZE: usize = 50;
+
 /// Tests that streaming aggregate and batch (non streaming) aggregate produce
 /// same results
 #[tokio::test(flavor = "multi_thread")]
@@ -60,13 +62,14 @@ async fn streaming_aggregate_test() {
     ];
     let n = 300;
     let distincts = vec![10, 20];
+    let len = 1000;
     for distinct in distincts {
         let mut join_set = JoinSet::new();
         for i in 0..n {
             let test_idx = i % test_cases.len();
             let group_by_columns = test_cases[test_idx].clone();
             join_set.spawn(run_aggregate_test(
-                make_staggered_batches::<true>(1000, distinct, i as u64),
+                make_staggered_batches::<true>(len, distinct, i as u64),
                 group_by_columns,
             ));
         }
@@ -82,7 +85,10 @@ async fn streaming_aggregate_test() {
 /// and non-pipeline breaking stream `BoundedAggregateStream` produces same result.
 async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str>) {
     let schema = input1[0].schema();
-    let session_config = SessionConfig::new().with_batch_size(50);
+    let session_config = SessionConfig::new()
+        .with_batch_size(BATCH_SIZE)
+        // Ensure most of the fuzzing test cases doesn't skip the partial aggregation
+        .with_skip_partial_aggregation_probe_ratio_threshold(1.0);
     let ctx = SessionContext::new_with_config(session_config);
     let mut sort_keys = vec![];
     for ordering_col in ["a", "b", "c"] {
@@ -149,6 +155,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     let collected_running = collect(aggregate_exec_running.clone(), task_ctx.clone())
         .await
         .unwrap();
+
     assert!(collected_running.len() > 2);
     // Running should produce more chunk than the usual AggregateExec.
     // Otherwise it means that we cannot generate result in running mode.
@@ -232,7 +239,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut batches = vec![];
     if STREAM {
         while remainder.num_rows() > 0 {
-            let batch_size = rng.gen_range(0..50);
+            let batch_size = rng.gen_range(0..BATCH_SIZE);
             if remainder.num_rows() < batch_size {
                 break;
             }

@@ -5236,3 +5236,4 @@ select c1, c2, count(*) from agg_order group by c1, c2;
 
 statement ok
 drop table agg_order;
+

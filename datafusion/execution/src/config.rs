@@ -388,6 +388,17 @@ impl SessionConfig {
         self
     }
 
+    /// Set the threshold for skip partial aggregation ratio
+    pub fn with_skip_partial_aggregation_probe_ratio_threshold(
+        mut self,
+        threshold: f64,
+    ) -> Self {
+        self.options
+            .execution
+            .skip_partial_aggregation_probe_ratio_threshold = threshold;
+        self
+    }
+
     /// Returns true if record batches will be examined between each operator
     /// and small batches will be coalesced into larger batches.
     pub fn coalesce_batches(&self) -> bool {
