@@ -24,7 +24,7 @@ use crate::common::spawn_buffered;
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::sorts::streaming_merge;
+use crate::sorts::streaming_merge::{streaming_merge, StreamingMergeConfig};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -273,15 +273,15 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
                 debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 
-                let result = streaming_merge(
-                    receivers,
+                let result = streaming_merge(StreamingMergeConfig {
+                    streams: receivers,
                     schema,
-                    &self.expr,
-                    BaselineMetrics::new(&self.metrics, partition),
-                    context.session_config().batch_size(),
-                    self.fetch,
+                    expressions: &self.expr,
+                    metrics: BaselineMetrics::new(&self.metrics, partition),
+                    batch_size: context.session_config().batch_size(),
+                    fetch: self.fetch,
                     reservation,
-                )?;
+                })?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
 
@@ -960,15 +960,15 @@ mod tests {
             MemoryConsumer::new("test").register(&task_ctx.runtime_env().memory_pool);
 
         let fetch = None;
-        let merge_stream = streaming_merge(
+        let merge_stream = streaming_merge(StreamingMergeConfig {
             streams,
-            batches.schema(),
-            sort.as_slice(),
-            BaselineMetrics::new(&metrics, 0),
-            task_ctx.session_config().batch_size(),
+            schema: batches.schema(),
+            expressions: sort.as_slice(),
+            metrics: BaselineMetrics::new(&metrics, 0),
+            batch_size: task_ctx.session_config().batch_size(),
             fetch,
             reservation,
-        )
+        })
         .unwrap();
 
         let mut merged = common::collect(merge_stream).await.unwrap();

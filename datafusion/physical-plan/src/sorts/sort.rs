@@ -30,7 +30,7 @@ use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use crate::sorts::streaming_merge::streaming_merge;
+use crate::sorts::streaming_merge::{streaming_merge, StreamingMergeConfig};
 use crate::spill::{read_spill_as_stream, spill_record_batches};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
@@ -342,15 +342,15 @@ impl ExternalSorter {
                 streams.push(stream);
             }
 
-            streaming_merge(
+            streaming_merge(StreamingMergeConfig {
                 streams,
-                Arc::clone(&self.schema),
-                &self.expr,
-                self.metrics.baseline.clone(),
-                self.batch_size,
-                self.fetch,
-                self.reservation.new_empty(),
-            )
+                schema: Arc::clone(&self.schema),
+                expressions: &self.expr,
+                metrics: self.metrics.baseline.clone(),
+                batch_size: self.batch_size,
+                fetch: self.fetch,
+                reservation: self.reservation.new_empty(),
+            })
         } else {
             self.in_mem_sort_stream(self.metrics.baseline.clone())
         }
@@ -534,15 +534,15 @@ impl ExternalSorter {
             })
             .collect::<Result<_>>()?;
 
-        streaming_merge(
+        streaming_merge(StreamingMergeConfig {
             streams,
-            Arc::clone(&self.schema),
-            &self.expr,
+            schema: Arc::clone(&self.schema),
+            expressions: &self.expr,
             metrics,
-            self.batch_size,
-            self.fetch,
-            self.merge_reservation.new_empty(),
-        )
+            batch_size: self.batch_size,
+            fetch: self.fetch,
+            reservation: self.merge_reservation.new_empty(),
+        })
     }
 
     /// Sorts a single `RecordBatch` into a single stream.

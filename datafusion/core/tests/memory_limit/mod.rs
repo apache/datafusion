@@ -301,7 +301,8 @@ async fn sort_spill_reservation() {
 
     test.clone()
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: ExternalSorterMerge",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:",
+            "ExternalSorterMerge"
         ])
         .with_config(config)
         .run()

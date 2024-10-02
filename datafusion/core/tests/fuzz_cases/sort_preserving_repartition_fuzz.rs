@@ -29,7 +29,7 @@ mod sp_repartition_fuzz_tests {
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet},
         repartition::RepartitionExec,
         sorts::sort_preserving_merge::SortPreservingMergeExec,
-        sorts::streaming_merge::streaming_merge,
+        sorts::streaming_merge::{streaming_merge, StreamingMergeConfig},
         stream::RecordBatchStreamAdapter,
         ExecutionPlan, Partitioning,
     };
@@ -246,15 +246,15 @@ mod sp_repartition_fuzz_tests {
                 MemoryConsumer::new("test".to_string()).register(context.memory_pool());
 
             // Internally SortPreservingMergeExec uses this function for merging.
-            let res = streaming_merge(
+            let res = streaming_merge(StreamingMergeConfig {
                 streams,
                 schema,
-                &exprs,
-                BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
-                1,
-                None,
-                mem_reservation,
-            )?;
+                expressions: &exprs,
+                metrics: BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+                batch_size: 1,
+                fetch: None,
+                reservation: mem_reservation,
+            })?;
             let res = collect(res).await?;
             // Contains the merged result.
             let res = concat_batches(&res[0].schema(), &res)?;

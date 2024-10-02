@@ -34,7 +34,7 @@ use crate::metrics::BaselineMetrics;
 use crate::repartition::distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
 };
-use crate::sorts::streaming_merge;
+use crate::sorts::streaming_merge::{streaming_merge, StreamingMergeConfig};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
@@ -637,15 +637,15 @@ impl ExecutionPlan for RepartitionExec {
                 let merge_reservation =
                     MemoryConsumer::new(format!("{}[Merge {partition}]", name))
                         .register(context.memory_pool());
-                streaming_merge(
-                    input_streams,
-                    schema_captured,
-                    &sort_exprs,
-                    BaselineMetrics::new(&metrics, partition),
-                    context.session_config().batch_size(),
+                streaming_merge(StreamingMergeConfig {
+                    streams: input_streams,
+                    schema: schema_captured,
+                    expressions: &sort_exprs,
+                    metrics: BaselineMetrics::new(&metrics, partition),
+                    batch_size: context.session_config().batch_size(),
                     fetch,
-                    merge_reservation,
-                )
+                    reservation: merge_reservation,
+                })
             } else {
                 Ok(Box::pin(RepartitionStream {
                     num_input_partitions,

@@ -36,62 +36,67 @@ macro_rules! primitive_merge_helper {
 }
 
 macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident) => {{
-        let streams = FieldCursorStream::<$t>::new($sort, $streams);
+    ($t:ty, $sort:ident, $config:ident) => {{
+        let streams = FieldCursorStream::<$t>::new($sort, $config.streams);
         return Ok(Box::pin(SortPreservingMergeStream::new(
             Box::new(streams),
-            $schema,
-            $tracking_metrics,
-            $batch_size,
-            $fetch,
-            $reservation,
+            $config.schema,
+            $config.metrics,
+            $config.batch_size,
+            $config.fetch,
+            $config.reservation,
         )));
     }};
+}
+
+/// Configuration parameters to initialize a `SortPreservingMergeStream`
+pub struct StreamingMergeConfig<'a> {
+    pub streams: Vec<SendableRecordBatchStream>,
+    pub schema: SchemaRef,
+    pub expressions: &'a [PhysicalSortExpr],
+    pub metrics: BaselineMetrics,
+    pub batch_size: usize,
+    pub fetch: Option<usize>,
+    pub reservation: MemoryReservation,
 }
 
 /// Perform a streaming merge of [`SendableRecordBatchStream`] based on provided sort expressions
 /// while preserving order.
 pub fn streaming_merge(
-    streams: Vec<SendableRecordBatchStream>,
-    schema: SchemaRef,
-    expressions: &[PhysicalSortExpr],
-    metrics: BaselineMetrics,
-    batch_size: usize,
-    fetch: Option<usize>,
-    reservation: MemoryReservation,
+    config: StreamingMergeConfig,
 ) -> Result<SendableRecordBatchStream> {
     // If there are no sort expressions, preserving the order
     // doesn't mean anything (and result in infinite loops)
-    if expressions.is_empty() {
+    if config.expressions.is_empty() {
         return internal_err!("Sort expressions cannot be empty for streaming merge");
     }
     // Special case single column comparisons with optimized cursor implementations
-    if expressions.len() == 1 {
-        let sort = expressions[0].clone();
-        let data_type = sort.expr.data_type(schema.as_ref())?;
+    if config.expressions.len() == 1 {
+        let sort = config.expressions[0].clone();
+        let data_type = sort.expr.data_type(config.schema.as_ref())?;
         downcast_primitive! {
-            data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation),
-            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
+            data_type => (primitive_merge_helper, sort, config),
+            DataType::Utf8 => merge_helper!(StringArray, sort, config)
+            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, config)
+            DataType::Binary => merge_helper!(BinaryArray, sort, config)
+            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, config)
             _ => {}
         }
     }
 
     let streams = RowCursorStream::try_new(
-        schema.as_ref(),
-        expressions,
-        streams,
-        reservation.new_empty(),
+        config.schema.as_ref(),
+        config.expressions,
+        config.streams,
+        config.reservation.new_empty(),
     )?;
 
     Ok(Box::pin(SortPreservingMergeStream::new(
         Box::new(streams),
-        schema,
-        metrics,
-        batch_size,
-        fetch,
-        reservation,
+        config.schema,
+        config.metrics,
+        config.batch_size,
+        config.fetch,
+        config.reservation,
     )))
 }
