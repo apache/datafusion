@@ -27,12 +27,12 @@ use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
     PhysicalGroupBy,
 };
-use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
+use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge;
 use crate::spill::{read_spill_as_stream, spill_record_batch_by_size};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
+use crate::{aggregates, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use ahash::RandomState;
@@ -116,9 +116,6 @@ struct SkipAggregationProbe {
     // These fields are initialized at the start and remain constant throughout
     // the execution.
     // ========================================================================
-    /// Aggregation ratio check performed when the number of input rows exceeds
-    /// this threshold (from `SessionConfig`)
-    probe_rows_threshold: usize,
     /// Maximum ratio of `num_groups` to `input_rows` for continuing aggregation
     /// (from `SessionConfig`). If the ratio exceeds this value, aggregation
     /// is skipped and input rows are directly converted to output
@@ -131,68 +128,32 @@ struct SkipAggregationProbe {
     // ========================================================================
     /// Number of processed input rows (updated during probing)
     input_rows: usize,
-    /// Number of total group values for `input_rows` (updated during probing)
-    num_groups: usize,
 
-    /// Flag indicating further data aggregation may be skipped (decision made
-    /// when probing complete)
-    should_skip: bool,
-    /// Flag indicating further updates of `SkipAggregationProbe` state won't
-    /// make any effect (set either while probing or on probing completion)
-    is_locked: bool,
-
-    /// Number of rows where state was output without aggregation.
-    ///
-    /// * If 0, all input rows were aggregated (should_skip was always false)
-    ///
-    /// * if greater than zero, the number of rows which were output directly
-    ///   without aggregation
-    skipped_aggregation_rows: metrics::Count,
+    /// Number of unique hash, which represents the cardinality of the group values
+    unique_hashes_count: HashSet<u64>,
 }
 
 impl SkipAggregationProbe {
-    fn new(
-        probe_rows_threshold: usize,
-        probe_ratio_threshold: f64,
-        skipped_aggregation_rows: metrics::Count,
-    ) -> Self {
+    fn new(probe_ratio_threshold: f64) -> Self {
         Self {
             input_rows: 0,
-            num_groups: 0,
-            probe_rows_threshold,
             probe_ratio_threshold,
-            should_skip: false,
-            is_locked: false,
-            skipped_aggregation_rows,
+            unique_hashes_count: Default::default(),
         }
     }
 
     /// Updates `SkipAggregationProbe` state:
-    /// - increments the number of input rows
-    /// - replaces the number of groups with the new value
-    /// - on `probe_rows_threshold` exceeded calculates
-    ///   aggregation ratio and sets `should_skip` flag
-    /// - if `should_skip` is set, locks further state updates
-    fn update_state(&mut self, input_rows: usize, num_groups: usize) {
-        if self.is_locked {
-            return;
+    /// Insert hashes to the HashSet, if the number of
+    /// unique hashes to the total rows exceed the
+    /// threshold, return true to indicates `should skip aggregation`
+    fn update_state(&mut self, batch_hashes: &[u64]) -> bool {
+        for target_hash in batch_hashes.iter() {
+            self.unique_hashes_count.insert(*target_hash);
         }
-        self.input_rows += input_rows;
-        self.num_groups = num_groups;
-        if self.input_rows >= self.probe_rows_threshold {
-            self.should_skip = self.num_groups as f64 / self.input_rows as f64
-                >= self.probe_ratio_threshold;
-            self.is_locked = true;
-        }
-    }
+        self.input_rows += batch_hashes.len();
 
-    fn should_skip(&self) -> bool {
-        self.should_skip
-    }
-
-    /// Record the number of rows that were output directly without aggregation
-    fn record_skipped(&mut self, batch: &RecordBatch) {
-        self.skipped_aggregation_rows.add(batch.num_rows());
+        self.unique_hashes_count.len() as f64 / self.input_rows as f64
+            > self.probe_ratio_threshold
     }
 }
 
@@ -413,6 +374,15 @@ pub(crate) struct GroupedHashAggregateStream {
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
+    /// Indicates whether we skip the partial aggregation
+    skip_partial_aggregation: bool,
+
+    /// Store hashes
+    hashes_buffer: Vec<Vec<u64>>,
+
+    /// Random state for creating hashes
+    random_state: RandomState,
+
     // ========================================================================
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
@@ -425,14 +395,6 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// The [`RuntimeEnv`] associated with the [`TaskContext`] argument
     runtime: Arc<RuntimeEnv>,
-
-    /// reused buffer to store hashes
-    hashes_buffer: Vec<Vec<u64>>,
-    random_state: RandomState,
-    unique_hashes_count: HashSet<u64>,
-    accumulated_batch_size: usize,
-    can_skip_partial_aggregation: bool,
-    skip_partial_with_hash_count: bool,
 }
 
 impl GroupedHashAggregateStream {
@@ -530,7 +492,6 @@ impl GroupedHashAggregateStream {
         // - all accumulators support input batch to intermediate
         //   aggregate state conversion
         // - there is only one GROUP BY expressions set
-        let mut can_skip_partial_aggregation = false;
         let skip_aggregation_probe = if agg.mode == AggregateMode::Partial
             && matches!(group_ordering, GroupOrdering::None)
             && accumulators
@@ -538,20 +499,10 @@ impl GroupedHashAggregateStream {
                 .all(|acc| acc.supports_convert_to_state())
             && agg_group_by.is_single()
         {
-            can_skip_partial_aggregation = true;
-
             let options = &context.session_config().options().execution;
-            let probe_rows_threshold =
-                options.skip_partial_aggregation_probe_rows_threshold;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
-            let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
-                .counter("skipped_aggregation_rows", partition);
-            Some(SkipAggregationProbe::new(
-                probe_rows_threshold,
-                probe_ratio_threshold,
-                skipped_aggregation_rows,
-            ))
+            Some(SkipAggregationProbe::new(probe_ratio_threshold))
         } else {
             None
         };
@@ -578,10 +529,7 @@ impl GroupedHashAggregateStream {
             skip_aggregation_probe,
             hashes_buffer: Default::default(),
             random_state: Default::default(),
-            unique_hashes_count: Default::default(),
-            accumulated_batch_size: 0,
-            skip_partial_with_hash_count: false,
-            can_skip_partial_aggregation,
+            skip_partial_aggregation: false,
         })
     }
 }
@@ -629,31 +577,30 @@ impl Stream for GroupedHashAggregateStream {
             match &self.exec_state {
                 ExecutionState::ReadingInput => 'reading_input: {
                     match ready!(self.input.poll_next_unpin(cx)) {
+                        // New batch to aggregate in partial aggregation operator with skip aggregation probe enabled
                         Some(Ok(batch))
                             if self.mode == AggregateMode::Partial
-                                && self.can_skip_partial_aggregation =>
+                                && self.skip_aggregation_probe.is_some() =>
                         {
                             let timer = elapsed_compute.timer();
-                            let input_rows = batch.num_rows();
 
                             // Do the grouping
                             let group_by_values =
                                 self.evalute_grouping_expressions(&batch)?;
+
                             self.compute_group_by_hashes_and_update_skip_aggregation_probe(
                                 &group_by_values,
                             )?;
-
-                            if self.skip_partial_with_hash_count {
+                            if self.skip_partial_aggregation {
                                 let states = self.transform_to_states(batch)?;
                                 self.exec_state = ExecutionState::ProducingOutput(states);
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
+
                             extract_ok!(
                                 self.group_aggregate_batch(batch, group_by_values)
                             );
-
-                            self.update_skip_aggregation_probe(input_rows);
 
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
@@ -678,15 +625,12 @@ impl Stream for GroupedHashAggregateStream {
 
                             extract_ok!(self.emit_early_if_necessary());
 
-                            extract_ok!(self.switch_to_skip_aggregation());
-
                             timer.done();
                         }
 
                         // New batch to aggregate in partial aggregation operator
                         Some(Ok(batch)) if self.mode == AggregateMode::Partial => {
                             let timer = elapsed_compute.timer();
-                            let input_rows = batch.num_rows();
 
                             // Do the grouping
                             let group_by_values =
@@ -696,8 +640,6 @@ impl Stream for GroupedHashAggregateStream {
                                 self.group_aggregate_batch(batch, group_by_values)
                             );
 
-                            self.update_skip_aggregation_probe(input_rows);
-
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
                             assert!(!self.input_done);
@@ -720,8 +662,6 @@ impl Stream for GroupedHashAggregateStream {
                             }
 
                             extract_ok!(self.emit_early_if_necessary());
-
-                            extract_ok!(self.switch_to_skip_aggregation());
 
                             timer.done();
                         }
@@ -784,9 +724,6 @@ impl Stream for GroupedHashAggregateStream {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         Some(Ok(batch)) => {
                             let _timer = elapsed_compute.timer();
-                            if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-                                probe.record_skipped(&batch);
-                            }
                             let states = self.transform_to_states(batch)?;
                             return Poll::Ready(Some(Ok(
                                 states.record_output(&self.baseline_metrics)
@@ -814,10 +751,7 @@ impl Stream for GroupedHashAggregateStream {
                             }
                             // In Partial aggregation, we also need to check
                             // if we should trigger partial skipping
-                            else if self.mode == AggregateMode::Partial
-                                && self.should_skip_aggregation()
-                                || self.skip_partial_with_hash_count
-                            {
+                            else if self.skip_partial_aggregation {
                                 ExecutionState::SkippingAggregation
                             } else {
                                 ExecutionState::ReadingInput
@@ -869,18 +803,10 @@ impl GroupedHashAggregateStream {
             batch_hashes.resize(n_rows, 0);
             create_hashes(group_values, &self.random_state, batch_hashes)?;
 
-            for target_hash in batch_hashes.iter() {
-                self.unique_hashes_count.insert(*target_hash);
-            }
-            self.accumulated_batch_size += batch_hashes.len();
-
-            // if the number of unique hashes are quite high, the partial aggregation won't help
-            // we can skip the partial aggregation and move on to repartition
-            let ratio = self.unique_hashes_count.len() as f32
-                / self.accumulated_batch_size as f32;
-            // TODO: Configure the threshold
-            self.skip_partial_with_hash_count = ratio > 0.1;
-            if self.skip_partial_with_hash_count {
+            // This function should be called if skip aggregation is supported
+            let probe = self.skip_aggregation_probe.as_mut().unwrap();
+            self.skip_partial_aggregation = probe.update_state(batch_hashes);
+            if self.skip_partial_aggregation {
                 return Ok(());
             }
         }
@@ -1186,43 +1112,6 @@ impl GroupedHashAggregateStream {
         };
         timer.done();
         Ok(())
-    }
-
-    /// Updates skip aggregation probe state.
-    ///
-    /// Notice: It should only be called in Partial aggregation
-    fn update_skip_aggregation_probe(&mut self, input_rows: usize) {
-        if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-            // Skip aggregation probe is not supported if stream has any spills,
-            // currently spilling is not supported for Partial aggregation
-            assert!(self.spill_state.spills.is_empty());
-            probe.update_state(input_rows, self.group_values.len());
-        };
-    }
-
-    /// In case the probe indicates that aggregation may be
-    /// skipped, forces stream to produce currently accumulated output.
-    ///
-    /// Notice: It should only be called in Partial aggregation
-    fn switch_to_skip_aggregation(&mut self) -> Result<()> {
-        if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-            if probe.should_skip() {
-                let batch = self.emit(EmitTo::All, false)?;
-                self.exec_state = ExecutionState::ProducingOutput(batch);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Returns true if the aggregation probe indicates that aggregation
-    /// should be skipped.
-    ///
-    /// Notice: It should only be called in Partial aggregation
-    fn should_skip_aggregation(&self) -> bool {
-        self.skip_aggregation_probe
-            .as_ref()
-            .is_some_and(|probe| probe.should_skip())
     }
 
     /// Transforms input batch to intermediate aggregate state, without grouping it
