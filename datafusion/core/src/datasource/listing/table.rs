@@ -33,7 +33,7 @@ use crate::datasource::{
 };
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
@@ -191,6 +191,38 @@ impl ListingTableConfig {
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
     pub async fn infer(self, state: &SessionState) -> Result<Self> {
         self.infer_options(state).await?.infer_schema(state).await
+    }
+
+    /// Infer the partition columns from the path. Requires `self.options` to be set prior to using.
+    pub async fn infer_partitions_from_path(self, state: &SessionState) -> Result<Self> {
+        match self.options {
+            Some(options) => {
+                let Some(url) = self.table_paths.first() else {
+                    return config_err!("No table path found");
+                };
+                let partitions = options
+                    .infer_partitions(state, url)
+                    .await?
+                    .into_iter()
+                    .map(|col_name| {
+                        (
+                            col_name,
+                            DataType::Dictionary(
+                                Box::new(DataType::UInt16),
+                                Box::new(DataType::Utf8),
+                            ),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let options = options.with_table_partition_cols(partitions);
+                Ok(Self {
+                    table_paths: self.table_paths,
+                    file_schema: self.file_schema,
+                    options: Some(options),
+                })
+            }
+            None => config_err!("No `ListingOptions` set for inferring schema"),
+        }
     }
 }
 
@@ -505,7 +537,7 @@ impl ListingOptions {
     /// Infer the partitioning at the given path on the provided object store.
     /// For performance reasons, it doesn't read all the files on disk
     /// and therefore may fail to detect invalid partitioning.
-    async fn infer_partitions(
+    pub(crate) async fn infer_partitions(
         &self,
         state: &SessionState,
         table_path: &ListingTableUrl,
