@@ -88,19 +88,17 @@ macro_rules! create_func {
             /// Singleton instance of [`$UDF`], ensures the UDF is only created once
             /// named STATIC_$(UDF). For example `STATIC_ArrayToString`
             #[allow(non_upper_case_globals)]
-            static [< STATIC_ $UDF >]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
-                std::sync::OnceLock::new();
+            static [< STATIC_ $UDF >]: std::sync::LazyLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
+                std::sync::LazyLock::new(|| {
+                        std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
+                            <$UDF>::new(),
+                        ))
+                    });
 
             #[doc = concat!("ScalarFunction that returns a [`ScalarUDF`](datafusion_expr::ScalarUDF) for ")]
             #[doc = stringify!($UDF)]
             pub fn $SCALAR_UDF_FN() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
-                [< STATIC_ $UDF >]
-                    .get_or_init(|| {
-                        std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
-                            <$UDF>::new(),
-                        ))
-                    })
-                    .clone()
+                [< STATIC_ $UDF >].clone()
             }
         }
     };

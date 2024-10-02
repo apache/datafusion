@@ -39,7 +39,7 @@ use regex::Regex;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 #[derive(Debug)]
 pub struct RegexpReplaceFunc {
     signature: Signature,
@@ -140,8 +140,9 @@ fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
 /// used by regexp_replace
 fn regex_replace_posix_groups(replacement: &str) -> String {
     fn capture_groups_re() -> &'static Regex {
-        static CAPTURE_GROUPS_RE_LOCK: OnceLock<Regex> = OnceLock::new();
-        CAPTURE_GROUPS_RE_LOCK.get_or_init(|| Regex::new(r"(\\)(\d*)").unwrap())
+        static CAPTURE_GROUPS_RE_LOCK: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(\\)(\d*)").unwrap());
+        &CAPTURE_GROUPS_RE_LOCK
     }
     capture_groups_re()
         .replace_all(replacement, "$${$2}")
