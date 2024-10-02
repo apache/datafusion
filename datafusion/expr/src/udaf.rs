@@ -95,8 +95,11 @@ impl fmt::Display for AggregateUDF {
     }
 }
 
+/// Arguments passed to [`AggregateUDFImpl::value_from_stats`]
 pub struct StatisticsArgs<'a> {
+    /// The statistics of the aggregate input
     pub statistics: &'a Statistics,
+    /// The resolved return type of the aggregate function
     pub return_type: &'a DataType,
     /// Whether the aggregate function is distinct.
     ///
@@ -251,13 +254,16 @@ impl AggregateUDF {
     }
 
     /// Returns true if the function is max, false if the function is min
-    /// None in all other cases, used in certain optimizations or
+    /// None in all other cases, used in certain optimizations for
     /// or aggregate
-    ///
     pub fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
     }
 
+    /// Return the value of this aggregate function if it can be determined
+    /// entirely from statistics and arguments.
+    ///
+    /// See [`AggregateUDFImpl::value_from_stats`] for more details.
     pub fn value_from_stats(
         &self,
         statistics_args: &StatisticsArgs,
@@ -577,7 +583,15 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn is_descending(&self) -> Option<bool> {
         None
     }
-    // Return the value of the current UDF from the statistics
+
+    /// Return the value of this aggregate function if it can be determined
+    /// entirely from statistics and arguments.
+    ///
+    /// Using a [`ScalarValue`] rather than a runtime computation can significantly
+    /// improving query performance.
+    ///
+    /// For example, if the minimum value of column `x` is known to be `42` from
+    /// statistics, then the aggregate `MIN(x)` should return `Some(ScalarValue(42))`
     fn value_from_stats(&self, _statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
         None
     }
