@@ -19,9 +19,9 @@
 
 pub use cross_join::CrossJoinExec;
 pub use hash_join::HashJoinExec;
+pub use ie_join::IEJoinExec;
 pub use nested_loop_join::NestedLoopJoinExec;
 // Note: SortMergeJoin is not used in plans yet
-pub use ie_join::IEJoinExec;
 pub use sort_merge_join::SortMergeJoinExec;
 pub use symmetric_hash_join::SymmetricHashJoinExec;
 mod cross_join;

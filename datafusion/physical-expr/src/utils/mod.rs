@@ -39,6 +39,13 @@ use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 
+pub fn conjunction(exprs: Vec<&Arc<dyn PhysicalExpr>>) -> Option<Arc<dyn PhysicalExpr>> {
+    exprs
+        .iter()
+        .map(|expr| Arc::clone(expr))
+        .reduce(|acc, expr| Arc::new(BinaryExpr::new(acc, Operator::And, expr)))
+}
+
 /// Assume the predicate is in the form of CNF, split the predicate to a Vec of PhysicalExprs.
 ///
 /// For example, split "a1 = a2 AND b1 <= b2 AND c1 != c2" into ["a1 = a2", "b1 <= b2", "c1 != c2"]

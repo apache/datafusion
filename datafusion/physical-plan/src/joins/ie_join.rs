@@ -24,7 +24,7 @@ use std::task::Poll;
 
 use crate::joins::utils::{
     apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
-    check_inequality_conditions, check_join_is_valid, estimate_join_statistics,
+    check_inequality_condition, check_join_is_valid, estimate_join_statistics,
     inequality_conditions_to_sort_exprs, is_loose_inequality_operator, ColumnIndex,
     JoinFilter, OnceAsync, OnceFut,
 };
@@ -132,7 +132,9 @@ impl IEJoinExec {
                 inequality_conditions.len()
             );
         }
-        check_inequality_conditions(&left_schema, &right_schema, &inequality_conditions)?;
+        for condition in &inequality_conditions {
+            check_inequality_condition(&left_schema, &right_schema, condition)?;
+        }
         let schema = Arc::new(schema);
         if !matches!(join_type, JoinType::Inner) {
             return plan_err!(

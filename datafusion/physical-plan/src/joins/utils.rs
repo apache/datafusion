@@ -394,49 +394,48 @@ pub fn is_loose_inequality_operator(op: &Operator) -> bool {
     matches!(op, Operator::LtEq | Operator::GtEq)
 }
 
-/// Checks whether the inequality conditions are valid.
-/// The inequality conditions are valid if the expressions are not null and the expressions are not equal, and left expression is from left schema and right expression is from right schema. Maybe we can reorder the expressions to make it statisfy this condition later, like (right.b < left.a) -> (left.a > right.b).
-pub fn check_inequality_conditions(
+/// Checks whether the inequality condition is valid.
+/// The inequality condition is valid if the expressions are not null and the expressions are not equal, and left expression is from left schema and right expression is from right schema.
+/// TODO: Maybe we can reorder the expressions to make it statisfy this condition later, like (right.b < left.a) -> (left.a > right.b).
+pub fn check_inequality_condition(
     left: &Schema,
     _right: &Schema,
-    inequality_conditions: &[Arc<dyn PhysicalExpr>],
+    inequality_condition: &Arc<dyn PhysicalExpr>,
 ) -> Result<()> {
-    for expr in inequality_conditions {
-        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
-            if !is_ineuqality_operator(&binary.op()) && *binary.op() != Operator::NotEq {
-                return plan_err!(
+    if let Some(binary) = inequality_condition.as_any().downcast_ref::<BinaryExpr>() {
+        if !is_ineuqality_operator(&binary.op()) && *binary.op() != Operator::NotEq {
+            return plan_err!(
                     "Inequality conditions must be an inequality binary expression, but got {}",
                     binary.op()
                 );
-            }
-            let max_left_columns = collect_columns(&binary.left())
-                .iter()
-                .map(|c| c.index())
-                .max();
-            let min_right_columns = collect_columns(&binary.right())
-                .iter()
-                .map(|c| c.index())
-                .min();
-            if max_left_columns.is_none() || min_right_columns.is_none() {
-                return plan_err!(
-                    "Inequality condition shouldn't be constant expression, but got {}",
-                    expr
-                );
-            }
-            if max_left_columns.unwrap() >= left.fields().len()
-                || min_right_columns.unwrap() < left.fields().len()
-            {
-                return plan_err!("Left/right side expression of inequality condition should be from left/right side of join, but got {} and {}",
+        }
+        let max_left_columns = collect_columns(&binary.left())
+            .iter()
+            .map(|c| c.index())
+            .max();
+        let min_right_columns = collect_columns(&binary.right())
+            .iter()
+            .map(|c| c.index())
+            .min();
+        if max_left_columns.is_none() || min_right_columns.is_none() {
+            return plan_err!(
+                "Inequality condition shouldn't be constant expression, but got {}",
+                inequality_condition
+            );
+        }
+        if max_left_columns.unwrap() >= left.fields().len()
+            || min_right_columns.unwrap() < left.fields().len()
+        {
+            return plan_err!("Left/right side expression of inequality condition should be from left/right side of join, but got {} and {}",
                 binary.left(),
                 binary.right()
             );
-            }
-        } else {
-            return plan_err!(
-                "Inequality conditions must be an inequality binary expression, but got {}",
-                expr
-            );
         }
+    } else {
+        return plan_err!(
+            "Inequality conditions must be an inequality binary expression, but got {}",
+            inequality_condition
+        );
     }
     Ok(())
 }

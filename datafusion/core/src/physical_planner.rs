@@ -78,12 +78,15 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, SortExpr,
+    DescribeTable, DmlStatement, Extension, Filter, JoinType, RecursiveQuery, SortExpr,
     StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::utils::{conjunction, split_conjunction};
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_plan::joins::utils::JoinFilter;
+use datafusion_physical_plan::joins::IEJoinExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
@@ -1063,14 +1066,23 @@ impl DefaultPhysicalPlanner {
                     session_state.config_options().optimizer.prefer_hash_join;
 
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    // there is no equal join condition, use the nested loop join
-                    // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
-                    Arc::new(NestedLoopJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_filter,
+                    // there is no equal join condition, try to use iejoin or use the nested loop join
+                    if let Some(iejoin) = try_iejoin(
+                        Arc::clone(&physical_left),
+                        Arc::clone(&physical_right),
+                        &join_filter,
                         join_type,
-                    )?)
+                    )? {
+                        iejoin
+                    } else {
+                        // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
+                        Arc::new(NestedLoopJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_filter,
+                            join_type,
+                        )?)
+                    }
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && !prefer_hash_join
@@ -1657,6 +1669,66 @@ pub fn create_physical_sort_expr(
             nulls_first: *nulls_first,
         },
     })
+}
+
+pub fn try_iejoin(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    filter: &Option<JoinFilter>,
+    join_type: &JoinType,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    if join_type != &JoinType::Inner {
+        // TODO: support other join types, only Inner join is supported currently
+        return Ok(None);
+    }
+    if let Some(filter) = filter {
+        // split filter into multiple conditions
+        let mut conditions = split_conjunction(filter.expression());
+        // take first two inequality conditions
+        let inequality_conditions = conditions
+            .iter()
+            .enumerate()
+            .filter(|(_, condition)| {
+                join_utils::check_inequality_condition(
+                    &left.schema(),
+                    &right.schema(),
+                    condition,
+                )
+                .is_ok()
+            })
+            .map(|(index, condition)| (index, Arc::clone(condition)))
+            .take(2)
+            .collect::<Vec<_>>();
+        // if inequality_conditions has less than 2 elements, return None
+        if inequality_conditions.len() < 2 {
+            return Ok(None);
+        }
+        // remove the taken inequality conditions from conditions
+        for (index, _condition) in inequality_conditions.iter() {
+            conditions.remove(*index);
+        }
+        // create a new filter with the remaining conditions
+        let new_filter = conjunction(conditions);
+        let inequality_conditions = inequality_conditions
+            .iter()
+            .map(|(_, condition)| Arc::clone(condition))
+            .collect::<Vec<_>>();
+        Ok(Some(Arc::new(IEJoinExec::try_new(
+            left,
+            right,
+            inequality_conditions,
+            new_filter.map(|expr| {
+                join_utils::JoinFilter::new(
+                    expr,
+                    filter.column_indices().to_vec(),
+                    filter.schema().clone(),
+                )
+            }),
+            join_type,
+        )?)))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Create vector of physical sort expression from a vector of logical expression
