@@ -632,7 +632,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ScalarValue::try_from(data_type)
     }
 
-    /// Returns the documentation for this Scalar UDF.
+    /// Returns the documentation for this Aggregate UDF.
     ///
     /// Documentation can be accessed programmatically as well as
     /// generating publicly facing documentation.
