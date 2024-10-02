@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::equivalence::add_offset_to_expr;
-use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
-use arrow_schema::SortOptions;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::vec::IntoIter;
+
+use crate::equivalence::add_offset_to_expr;
+use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
+use arrow_schema::SortOptions;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
