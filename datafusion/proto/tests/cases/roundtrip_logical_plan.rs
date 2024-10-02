@@ -47,6 +47,7 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
+use datafusion::functions_window::rank::rank_udwf;
 use datafusion::functions_window::row_number::row_number;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
@@ -2300,9 +2301,7 @@ fn roundtrip_window() {
 
     // 1. without window_frame
     let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2313,9 +2312,7 @@ fn roundtrip_window() {
 
     // 2. with default window_frame
     let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2332,9 +2329,7 @@ fn roundtrip_window() {
     );
 
     let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
