@@ -240,7 +240,7 @@ fn scalar_at(
     };
     Ok(value)
 }
-fn try_get_literal<'a>(
+/*fn try_get_literal<'a>(
     partition_evaluator_args: &'a PartitionEvaluatorArgs,
     index: usize,
 ) -> Result<&'a ScalarValue> {
@@ -293,7 +293,7 @@ fn try_get_default_value(
         _ => ScalarValue::try_from(return_type),
     }
 }
-
+*/
 #[derive(Debug)]
 struct WindowShiftEvaluator {
     shift_offset: i64,
