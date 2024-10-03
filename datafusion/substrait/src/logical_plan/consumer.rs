@@ -374,7 +374,7 @@ pub async fn from_substrait_extended_expr(
             }
         }?;
         let expr =
-            from_substrait_rex(ctx, &scalar_expr, &input_schema, &extensions).await?;
+            from_substrait_rex(ctx, scalar_expr, &input_schema, &extensions).await?;
         let (output_type, expected_nullability) =
             expr.data_type_and_nullable(&input_schema)?;
         let mut names_iter = substrait_expr.output_names.iter().map(|n| n.as_str());

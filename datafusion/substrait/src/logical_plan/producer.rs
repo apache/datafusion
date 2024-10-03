@@ -151,7 +151,7 @@ pub fn to_substrait_extended_expr(
                 &mut extensions,
             )?;
             let mut output_names = Vec::new();
-            flatten_names(&field, false, &mut output_names)?;
+            flatten_names(field, false, &mut output_names)?;
             Ok(ExpressionReference {
                 output_names,
                 expr_type: Some(ExprType::Expression(substrait_expr)),
@@ -646,8 +646,8 @@ fn flatten_names(field: &Field, skip_self: bool, names: &mut Vec<String>) -> Res
             }
             Ok(())
         }
-        DataType::List(l) => flatten_names(&l, true, names),
-        DataType::LargeList(l) => flatten_names(&l, true, names),
+        DataType::List(l) => flatten_names(l, true, names),
+        DataType::LargeList(l) => flatten_names(l, true, names),
         DataType::Map(m, _) => match m.data_type() {
             DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
                 flatten_names(&key_and_value[0], true, names)?;
