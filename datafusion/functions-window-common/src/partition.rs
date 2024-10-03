@@ -52,4 +52,8 @@ impl<'a> PartitionEvaluatorArgs<'a> {
     pub fn is_reversed(&self) -> bool {
         self.is_reversed
     }
+
+    pub fn ignore_nulls(&self) -> bool {
+        self.ignore_nulls
+    }
 }
