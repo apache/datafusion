@@ -137,14 +137,6 @@ struct SkipAggregationProbe {
     /// Flag indicating further updates of `SkipAggregationProbe` state won't
     /// make any effect (set either while probing or on probing completion)
     is_locked: bool,
-
-    /// Number of rows where state was output without aggregation.
-    ///
-    /// * If 0, all input rows were aggregated (should_skip was always false)
-    ///
-    /// * if greater than zero, the number of rows which were output directly
-    ///   without aggregation
-    skipped_aggregation_rows: metrics::Count,
 }
 
 impl SkipAggregationProbe {
@@ -160,7 +152,6 @@ impl SkipAggregationProbe {
             probe_ratio_threshold,
             should_skip: false,
             is_locked: false,
-            skipped_aggregation_rows,
         }
     }
 
@@ -184,11 +175,6 @@ impl SkipAggregationProbe {
 
     fn should_skip(&self) -> bool {
         self.should_skip
-    }
-
-    /// Record the number of rows that were output directly without aggregation
-    fn record_skipped(&mut self, batch: &RecordBatch) {
-        self.skipped_aggregation_rows.add(batch.num_rows());
     }
 }
 
@@ -639,9 +625,9 @@ impl Stream for GroupedHashAggregateStream {
                                 break 'reading_input;
                             }
 
-                            extract_ok!(self.emit_early_if_necessary());
-
                             extract_ok!(self.switch_to_skip_aggregation());
+
+                            extract_ok!(self.emit_early_if_necessary());
 
                             timer.done();
                         }
