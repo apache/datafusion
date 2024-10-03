@@ -13,30 +13,32 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use arrow::array::{Array, ArrayRef, AsArray, BinaryBuilder, BinaryViewBuilder, BooleanArray}; 
+use arrow::array::{
+    Array, ArrayRef, AsArray, BinaryBuilder, BinaryViewBuilder, BooleanArray,
+};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 use std::sync::Arc;
 
 pub struct StringGroupsAccumulator<F, const VIEW: bool> {
     states: Vec<String>,
-    fun: F
+    fun: F,
 }
 
-impl<F, const VIEW: bool>  StringGroupsAccumulator<F, VIEW> 
-where 
+impl<F, const VIEW: bool> StringGroupsAccumulator<F, VIEW>
+where
     F: Fn(&[u8], &[u8]) -> bool + Send + Sync,
 {
     pub fn new(s_fn: F) -> Self {
-        Self { 
+        Self {
             states: Vec::new(),
-            fun: s_fn
+            fun: s_fn,
         }
     }
 }
 
-impl<F, const VIEW: bool>  GroupsAccumulator for StringGroupsAccumulator<F, VIEW> 
-where 
+impl<F, const VIEW: bool> GroupsAccumulator for StringGroupsAccumulator<F, VIEW>
+where
     F: Fn(&[u8], &[u8]) -> bool + Send + Sync,
 {
     fn update_batch(
@@ -55,7 +57,7 @@ where
         for (i, &group_index) in group_indices.iter().enumerate() {
             invoke_accumulator::<F, VIEW>(self, input_array, opt_filter, group_index, i)
         }
-        
+
         Ok(())
     }
 
@@ -155,7 +157,7 @@ where
         }
 
         let filter = opt_filter.unwrap();
-        
+
         let array = if VIEW {
             let mut builder = BinaryViewBuilder::new();
 
@@ -208,31 +210,33 @@ where
     }
 }
 
-fn invoke_accumulator<F, const VIEW: bool>(accumulator: &mut StringGroupsAccumulator<F, VIEW>, input_array: &ArrayRef, opt_filter: Option<&BooleanArray>, group_index: usize, i: usize) 
-where
-    F: Fn(&[u8], &[u8]) -> bool + Send + Sync
+fn invoke_accumulator<F, const VIEW: bool>(
+    accumulator: &mut StringGroupsAccumulator<F, VIEW>,
+    input_array: &ArrayRef,
+    opt_filter: Option<&BooleanArray>,
+    group_index: usize,
+    i: usize,
+) where
+    F: Fn(&[u8], &[u8]) -> bool + Send + Sync,
 {
     if let Some(filter) = opt_filter {
         if !filter.value(i) {
-            return
+            return;
         }
     }
     if input_array.is_null(i) {
-        return
+        return;
     }
-    
+
     let value: &[u8] = if VIEW {
         input_array.as_binary_view().value(i)
     } else {
         input_array.as_binary::<i32>().value(i)
     };
 
-    let value_str = std::str::from_utf8(value).map_err(|e| {
-        DataFusionError::Execution(format!(
-            "could not build utf8 {}",
-            e
-        ))
-    }).expect("failed to build utf8");
+    let value_str = std::str::from_utf8(value)
+        .map_err(|e| DataFusionError::Execution(format!("could not build utf8 {}", e)))
+        .expect("failed to build utf8");
 
     if accumulator.states[group_index].is_empty() {
         accumulator.states[group_index] = value_str.to_string();

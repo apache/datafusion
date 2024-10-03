@@ -131,11 +131,9 @@ macro_rules! instantiate_max_accumulator {
 
 macro_rules! instantiate_max_string_accumulator {
     ($VIEW:expr) => {{
-        Ok(Box::new(
-            StringGroupsAccumulator::<_, $VIEW>::new(|a, b| {
-                a > b
-            })
-        ))
+        Ok(Box::new(StringGroupsAccumulator::<_, $VIEW>::new(
+            |a, b| a > b,
+        )))
     }};
 }
 
@@ -158,14 +156,11 @@ macro_rules! instantiate_min_accumulator {
     }};
 }
 
-
 macro_rules! instantiate_min_string_accumulator {
     ($VIEW:expr) => {{
-        Ok(Box::new(
-            StringGroupsAccumulator::<_, $VIEW>::new(|a, b| {
-                a < b
-            })
-        ))
+        Ok(Box::new(StringGroupsAccumulator::<_, $VIEW>::new(
+            |a, b| a < b,
+        )))
     }};
 }
 
@@ -1065,10 +1060,10 @@ impl AggregateUDFImpl for Min {
             }
             BinaryView => {
                 instantiate_min_string_accumulator!(true)
-            },
+            }
             Binary => {
                 instantiate_min_string_accumulator!(false)
-            },
+            }
 
             // It would be nice to have a fast implementation for Strings as well
             // https://github.com/apache/datafusion/issues/6906
