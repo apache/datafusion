@@ -131,6 +131,7 @@ impl DocumentationBuilder {
         self
     }
 
+    /// Adds an argument to the documentation,
     pub fn with_argument(
         mut self,
         arg_name: impl Into<String>,
@@ -140,6 +141,23 @@ impl DocumentationBuilder {
         args.push((arg_name.into(), arg_description.into()));
         self.arguments = Some(args);
         self
+    }
+
+    /// Add a standard "expression" argument to the documentation
+    ///
+    /// This is a common argument for scalar UDFs that operate on an expression and is rendered like
+    ///
+    /// ```no-run
+    /// <arg_name>:
+    ///   <expression_type> expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+    /// ```
+    pub fn with_standard_argument(
+        self,
+        arg_name: impl Into<String>,
+        expression_type: impl AsRef<str>,
+    ) -> Self {
+        let expression_type = expression_type.as_ref();
+        self.with_argument(arg_name, format!("{expression_type} expression to operate on. Can be a constant, column, or function, and any combination of operators."))
     }
 
     pub fn with_related_udf(mut self, related_udf: impl Into<String>) -> Self {

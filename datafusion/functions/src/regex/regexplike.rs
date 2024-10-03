@@ -67,10 +67,9 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 ```
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 "#)
-            .with_argument("str",
-                           "String expression to operate on. Can be a constant, column, or function, and any combination of string operators.")
-            .with_argument("regexp",
-                           "Regular expression to test against the string expression. Can be a constant, column, or function.")
+            .with_standard_argument("str",
+                           "String")
+            .with_argument("regexp","Regular")
             .with_argument("flags",
                            r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
   - **i**: case-insensitive: letters match both upper and lower case

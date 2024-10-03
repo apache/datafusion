@@ -44,8 +44,8 @@ log(numeric_expression)
 
 #### Arguments
 
-- **base**: Base numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **base**: Base numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 ## Conditional Functions
 
@@ -94,7 +94,7 @@ rpad(str, n[, padding_str])
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of string operators.
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **n**: String length to pad to.
 - **padding_str**: String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
 
@@ -160,8 +160,8 @@ regexp_like(str, regexp[, flags])
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of string operators.
-- **regexp**: Regular expression to test against the string expression. Can be a constant, column, or function.
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **regexp**: Regular
 - **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
   - **i**: case-insensitive: letters match both upper and lower case
   - **m**: multi-line mode: ^ and $ match begin/end of line
@@ -208,7 +208,7 @@ to_date('2017-05-31', '%Y-%m-%d')
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
   an error will be returned.
@@ -246,4 +246,4 @@ sha224(expression)
 
 #### Arguments
 
-- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of string operators.
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.

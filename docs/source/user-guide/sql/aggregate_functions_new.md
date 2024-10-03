@@ -47,7 +47,7 @@ bit_and(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 ### `bit_or`
 
@@ -59,7 +59,7 @@ bit_or(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 ### `bit_xor`
 
@@ -71,4 +71,4 @@ bit_xor(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.
