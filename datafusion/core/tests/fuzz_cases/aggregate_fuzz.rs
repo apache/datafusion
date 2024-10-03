@@ -44,6 +44,35 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::task::JoinSet;
 
+use crate::fuzz_cases::aggregation_fuzzer::{
+    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig,
+};
+
+/// Tests that streaming aggregate and batch (non streaming) aggregate produce
+/// same results
+#[tokio::test(flavor = "multi_thread")]
+async fn streaming_aggregate_test2() {
+    let fuzzer_builder = AggregationFuzzerBuilder::default();
+
+    let columns = vec![
+        ColumnDescr::new("a", DataType::Int64),
+        ColumnDescr::new("b", DataType::Int64),
+        ColumnDescr::new("c", DataType::Int64),
+        ColumnDescr::new("d", DataType::Int64),
+    ];
+    let data_gen_config = DatasetGeneratorConfig {
+        columns,
+        rows_num_range: (1024, 2048),
+        sort_keys_set: vec![vec!["a".to_string(), "b".to_string(), "c".to_string()]],
+    };
+
+    let fuzzer_builder = fuzzer_builder
+        .data_gen_config(data_gen_config)
+        .sql("select sum(d) from fuzz_table group by d,a");
+    let fuzzer = fuzzer_builder.build();
+    fuzzer.run().await;
+}
+
 /// Tests that streaming aggregate and batch (non streaming) aggregate produce
 /// same results
 #[tokio::test(flavor = "multi_thread")]

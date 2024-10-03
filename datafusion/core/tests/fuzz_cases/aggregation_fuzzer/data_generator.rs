@@ -155,6 +155,16 @@ pub struct ColumnDescr {
     column_type: DataType,
 }
 
+impl ColumnDescr {
+    #[inline]
+    pub fn new(name: &str, column_type: DataType) -> Self {
+        Self {
+            name: name.to_string(),
+            column_type,
+        }
+    }
+}
+
 /// Record batch generator
 struct RecordBatchGenerator {
     min_rows_nun: usize,

@@ -23,6 +23,9 @@ mod context_generator;
 mod data_generator;
 mod fuzzer;
 
+pub use data_generator::{DatasetGeneratorConfig, ColumnDescr};
+pub use fuzzer::*;
+
 pub(crate) fn check_equality_of_batches(rhs: &[RecordBatch], lhs: &[RecordBatch]) {
     let formatted_batches0 = pretty_format_batches(rhs).unwrap().to_string();
     let mut formatted_batches0_sorted: Vec<&str> =
