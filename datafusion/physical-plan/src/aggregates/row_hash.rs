@@ -382,7 +382,7 @@ pub(crate) struct GroupedHashAggregateStream {
     random_state: RandomState,
 
     /// Reuse buffer to avoid reallocation
-    hashes_buffer: Vec<u64>,
+    hashes_buffer: Vec<Vec<u64>>,
 
     // ========================================================================
     // EXECUTION RESOURCES:
@@ -530,7 +530,8 @@ impl GroupedHashAggregateStream {
             skip_aggregation_probe,
             random_state: Default::default(),
             skip_partial_aggregation: false,
-            hashes_buffer: Default::default(),
+            // Create with one vec, so we don't require length check for non skip partial aggregation case
+            hashes_buffer: vec![Vec::new()],
         })
     }
 }
@@ -785,6 +786,23 @@ impl GroupedHashAggregateStream {
             evaluate_group_by(&self.group_by, batch)
         }?;
 
+        self.hashes_buffer.resize(group_by_values.len(), Vec::new());
+        for (index, group_values) in group_by_values.iter().enumerate() {
+            let n_rows = group_values[0].len();
+            let batch_hashes = &mut self.hashes_buffer[index];
+            batch_hashes.resize(n_rows, 0);
+            // reset hash values to 0 to clear out previous hash
+            batch_hashes.fill(0);
+            create_hashes(group_values, &self.random_state, batch_hashes)?;
+
+            // This function should be called if skip aggregation is supported
+            let probe = self.skip_aggregation_probe.as_mut().unwrap();
+            self.skip_partial_aggregation = probe.update_state(batch_hashes);
+            if self.skip_partial_aggregation {
+                return Ok(());
+            }
+        }
+
         // Evaluate the aggregation expressions.
         let input_values = if self.spill_state.is_stream_merging {
             evaluate_many(&self.spill_state.merging_aggregate_arguments, batch)?
@@ -800,27 +818,13 @@ impl GroupedHashAggregateStream {
             evaluate_optional(&self.filter_expressions, batch)?
         };
 
-        for group_values in group_by_values.iter() {
-            let n_rows = group_values[0].len();
-            let batch_hashes = &mut self.hashes_buffer;
-            batch_hashes.resize(n_rows, 0);
-            // reset hash values to 0 to clear out previous hash
-            batch_hashes.fill(0);
-            create_hashes(group_values, &self.random_state, batch_hashes)?;
-
-            // This function should be called if skip aggregation is supported
-            let probe = self.skip_aggregation_probe.as_mut().unwrap();
-            self.skip_partial_aggregation = probe.update_state(batch_hashes);
-            if self.skip_partial_aggregation {
-                return Ok(());
-            }
-
+        for (index, group_values) in group_by_values.iter().enumerate() {
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
             self.group_values.intern(
                 group_values,
                 &mut self.current_group_indices,
-                batch_hashes,
+                &self.hashes_buffer[index],
             )?;
 
             let group_indices = &self.current_group_indices;
@@ -893,6 +897,7 @@ impl GroupedHashAggregateStream {
         } else {
             evaluate_group_by(&self.group_by, batch)
         }?;
+
         // Evaluate the aggregation expressions.
         let input_values = if self.spill_state.is_stream_merging {
             evaluate_many(&self.spill_state.merging_aggregate_arguments, batch)?
@@ -910,7 +915,7 @@ impl GroupedHashAggregateStream {
 
         for group_values in group_by_values.iter() {
             let n_rows = group_values[0].len();
-            let batch_hashes = &mut self.hashes_buffer;
+            let batch_hashes = &mut self.hashes_buffer[0];
             batch_hashes.resize(n_rows, 0);
             // reset hash values to 0 to clear out previous hash
             batch_hashes.fill(0);
