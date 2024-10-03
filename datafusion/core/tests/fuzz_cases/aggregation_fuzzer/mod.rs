@@ -17,6 +17,7 @@
 
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::RecordBatch;
+use datafusion::prelude::SessionContext;
 
 mod context_generator;
 mod data_generator;
@@ -32,4 +33,8 @@ pub(crate) fn check_equality_of_batches(rhs: &[RecordBatch], lhs: &[RecordBatch]
         formatted_batches1.trim().lines().collect();
     formatted_batches1_sorted.sort_unstable();
     assert_eq!(formatted_batches0_sorted, formatted_batches1_sorted);
+}
+
+pub(crate) async fn run_sql(sql: &str, ctx: &SessionContext) -> Vec<RecordBatch> {
+    ctx.sql(sql).await.unwrap().collect().await.unwrap()
 }
