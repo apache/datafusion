@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::{cmp, sync::Arc, usize};
 
 use datafusion::{
@@ -10,24 +27,21 @@ use rand::{thread_rng, Rng};
 
 use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
 
-#[derive(Debug)]
-pub struct SessionContextGeneratorBuilder {
-    dataset: Option<Dataset>,
-}
-
-impl SessionContextGeneratorBuilder {
-    pub fn build(self) -> SessionContextGenerator {
-        let dataset = self.dataset.expect("dataset is required");
-
-        SessionContextGenerator::new(dataset)
-    }
-
-    pub fn dataset(mut self, dataset: Dataset) -> Self {
-        self.dataset = Some(dataset);
-        self
-    }
-}
-
+/// SessionContext generator
+///
+/// It will generate one random `SessionContext` when `generate` function is called.
+///
+/// Following parameters of [`SessionContext`] used in query running will be generated randomly:
+///   - `batch_size`
+///   - `target_partitions`
+///   - `skip_partial parameters`
+///   - push down `sorted information`` or not
+///   - `spilling` or not (TODO, I think a special `MemoryPool` may be needed
+///      to support this)
+///
+/// Then we will use [`SessionContext`] to accept `sql`, and generate [`DataFrame`] to run related query.
+///
+/// [`DataFrame`]: datafusion::prelude::DataFrame
 pub struct SessionContextGenerator {
     /// Current testing dataset
     dataset: Dataset,
@@ -60,32 +74,6 @@ impl SessionContextGenerator {
             max_batch_size,
             candidate_skip_partial_params,
             max_target_partitions,
-        }
-    }
-}
-
-/// Skip configs
-#[derive(Debug, Clone, Copy)]
-struct SkipPartialParams {
-    /// Related to `skip_partial_aggregation_probe_ratio_threshold` in `ExecutionOptions`
-    pub ratio_threshold: f64,
-
-    /// Related to `skip_partial_aggregation_probe_rows_threshold` in `ExecutionOptions`
-    pub rows_threshold: usize,
-}
-
-impl SkipPartialParams {
-    pub fn ensure_trigger() -> Self {
-        Self {
-            ratio_threshold: 0.0,
-            rows_threshold: 0,
-        }
-    }
-
-    pub fn ensure_not_trigger() -> Self {
-        Self {
-            ratio_threshold: 1.0,
-            rows_threshold: usize::MAX,
         }
     }
 }
@@ -186,5 +174,33 @@ impl SessionContextGenerator {
             .unwrap();
 
         ctx
+    }
+}
+
+/// Partial skipping parameters
+#[derive(Debug, Clone, Copy)]
+struct SkipPartialParams {
+    /// Related to `skip_partial_aggregation_probe_ratio_threshold` in `ExecutionOptions`
+    pub ratio_threshold: f64,
+
+    /// Related to `skip_partial_aggregation_probe_rows_threshold` in `ExecutionOptions`
+    pub rows_threshold: usize,
+}
+
+impl SkipPartialParams {
+    /// Generate `SkipPartialParams` ensuring to trigger partial skipping
+    pub fn ensure_trigger() -> Self {
+        Self {
+            ratio_threshold: 0.0,
+            rows_threshold: 0,
+        }
+    }
+
+    /// Generate `SkipPartialParams` ensuring not to trigger partial skipping
+    pub fn ensure_not_trigger() -> Self {
+        Self {
+            ratio_threshold: 1.0,
+            rows_threshold: usize::MAX,
+        }
     }
 }

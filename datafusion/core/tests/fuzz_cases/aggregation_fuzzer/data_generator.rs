@@ -57,9 +57,9 @@ pub struct DatasetGeneratorConfig {
     pub sort_keys_set: Vec<Vec<String>>,
 }
 
-/// Data sets generator
+/// Dataset generator
 ///
-/// It will generate one `dataset`s when `generate` function is called.
+/// It will generate one random [`Dataset`]s when `generate` function is called.
 ///
 /// The generation logic in `generate`:
 ///
@@ -359,7 +359,7 @@ impl RecordBatchGenerator {
 
 #[cfg(test)]
 mod test {
-    use arrow::{util::pretty::pretty_format_batches};
+    use arrow::util::pretty::pretty_format_batches;
     use arrow_array::UInt32Array;
 
     use super::*;

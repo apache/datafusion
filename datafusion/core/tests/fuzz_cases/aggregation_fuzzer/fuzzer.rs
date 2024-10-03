@@ -4,8 +4,7 @@ use arrow_array::RecordBatch;
 use datafusion::prelude::SessionContext;
 
 use crate::fuzz_cases::aggregation_fuzzer::{
-    context_generator::SessionContextGenerator,
-    data_generator::DatasetGenerator as DatasetGenerator,
+    context_generator::SessionContextGenerator, data_generator::DatasetGenerator,
 };
 
 struct AggregationFuzzer {
@@ -25,9 +24,7 @@ struct AggregationFuzzer {
 }
 
 impl AggregationFuzzer {
-    pub async fn run() {
-
-    }
+    pub async fn run() {}
 }
 
 struct AggregationFuzzTestCase {
