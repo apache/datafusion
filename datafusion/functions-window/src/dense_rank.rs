@@ -176,7 +176,7 @@ impl PartitionEvaluator for DenseRankEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::cast::{as_float64_array, as_uint64_array};
+    use datafusion_common::cast::as_uint64_array;
 
     fn test_with_rank(expr: &DenseRank, expected: Vec<u64>) -> Result<()> {
         test_i32_result(expr, vec![0..2, 2..3, 3..6, 6..7, 7..8], expected)

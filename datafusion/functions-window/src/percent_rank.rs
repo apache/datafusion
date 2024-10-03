@@ -156,7 +156,7 @@ impl PartitionEvaluator for PercentRankEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::cast::{as_float64_array, as_uint64_array};
+    use datafusion_common::cast::as_float64_array;
 
     fn test_f64_result(
         expr: &PercentRank,
@@ -168,20 +168,6 @@ mod tests {
             .partition_evaluator()?
             .evaluate_all_with_rank(num_rows, &ranks)?;
         let result = as_float64_array(&result)?;
-        let result = result.values();
-        assert_eq!(expected, *result);
-        Ok(())
-    }
-
-    fn test_i32_result(
-        expr: &PercentRank,
-        ranks: Vec<Range<usize>>,
-        expected: Vec<u64>,
-    ) -> Result<()> {
-        let result = expr
-            .partition_evaluator()?
-            .evaluate_all_with_rank(8, &ranks)?;
-        let result = as_uint64_array(&result)?;
         let result = result.values();
         assert_eq!(expected, *result);
         Ok(())

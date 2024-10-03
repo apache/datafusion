@@ -191,7 +191,7 @@ impl PartitionEvaluator for RankEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::cast::{as_float64_array, as_uint64_array};
+    use datafusion_common::cast::as_uint64_array;
 
     fn test_with_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {
         test_i32_result(expr, vec![0..2, 2..3, 3..6, 6..7, 7..8], expected)
@@ -200,21 +200,6 @@ mod tests {
     #[allow(clippy::single_range_in_vec_init)]
     fn test_without_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {
         test_i32_result(expr, vec![0..8], expected)
-    }
-
-    fn test_f64_result(
-        expr: &Rank,
-        num_rows: usize,
-        ranks: Vec<Range<usize>>,
-        expected: Vec<f64>,
-    ) -> Result<()> {
-        let result = expr
-            .partition_evaluator()?
-            .evaluate_all_with_rank(num_rows, &ranks)?;
-        let result = as_float64_array(&result)?;
-        let result = result.values();
-        assert_eq!(expected, *result);
-        Ok(())
     }
 
     fn test_i32_result(
