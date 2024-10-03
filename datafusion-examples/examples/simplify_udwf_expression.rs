@@ -27,6 +27,7 @@ use datafusion_expr::{
     expr::WindowFunction, simplify::SimplifyInfo, Expr, PartitionEvaluator, Signature,
     Volatility, WindowUDF, WindowUDFImpl,
 };
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 
 /// This UDWF will show how to use the WindowUDFImpl::simplify() API
 #[derive(Debug, Clone)]
@@ -62,7 +63,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
 
     fn partition_evaluator(
         &self,
-        partition_evaluator_args: PartitionEvaluatorArgs,
+        _partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
         todo!()
     }

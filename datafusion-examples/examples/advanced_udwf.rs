@@ -30,6 +30,7 @@ use datafusion_expr::function::WindowUDFFieldArgs;
 use datafusion_expr::{
     PartitionEvaluator, Signature, WindowFrame, WindowUDF, WindowUDFImpl,
 };
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 
 /// This example shows how to use the full WindowUDFImpl API to implement a user
 /// defined window function. As in the `simple_udwf.rs` example, this struct implements
@@ -76,7 +77,7 @@ impl WindowUDFImpl for SmoothItUdf {
     /// partition.
     fn partition_evaluator(
         &self,
-        partition_evaluator_args: PartitionEvaluatorArgs,
+        _partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(MyPartitionEvaluator::new()))
     }

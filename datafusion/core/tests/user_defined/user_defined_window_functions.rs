@@ -555,7 +555,7 @@ impl OddCounter {
 
             fn partition_evaluator(
                 &self,
-                partition_evaluator_args: PartitionEvaluatorArgs,
+                _partition_evaluator_args: PartitionEvaluatorArgs,
             ) -> Result<Box<dyn PartitionEvaluator>> {
                 Ok(Box::new(OddCounter::new(Arc::clone(&self.test_state))))
             }

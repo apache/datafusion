@@ -2458,7 +2458,7 @@ fn roundtrip_window() {
 
         fn partition_evaluator(
             &self,
-            partition_evaluator_args: PartitionEvaluatorArgs,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
         ) -> Result<Box<dyn PartitionEvaluator>> {
             make_partition_evaluator()
         }

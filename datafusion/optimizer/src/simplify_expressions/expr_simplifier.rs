@@ -3912,7 +3912,7 @@ mod tests {
 
         fn partition_evaluator(
             &self,
-            partition_evaluator_args: PartitionEvaluatorArgs,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
         ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!("not needed for tests")
         }
