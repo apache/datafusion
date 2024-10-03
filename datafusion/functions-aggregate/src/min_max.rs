@@ -53,7 +53,7 @@ use datafusion_common::{
     downcast_value, exec_err, internal_err, DataFusionError, Result,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_string::StringGroupsAccumulator;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::string_op::StringGroupsAccumulator;
 use std::fmt::Debug;
 
 use arrow::datatypes::i256;

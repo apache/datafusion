@@ -22,7 +22,7 @@ pub mod accumulate;
 pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
-pub mod prim_string;
+pub mod string_op;
 
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
