@@ -161,7 +161,7 @@ regexp_like(str, regexp[, flags])
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **regexp**: Regular
+- **regexp**: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
   - **i**: case-insensitive: letters match both upper and lower case
   - **m**: multi-line mode: ^ and $ match begin/end of line
