@@ -118,13 +118,15 @@ pub(crate) fn unproject_agg_exprs(
                 {
                     if let Expr::WindowFunction(func) = &mut unprojected_expr {
                         // Window function can contain an aggregation column, e.g., 'avg(sum(ss_sales_price)) over ...' that needs to be unprojected
-                        for arg in &mut func.args {
+                        func.args.iter_mut().try_for_each(|arg| {
                             if let Expr::Column(c) = arg {
                                 if let Some(expr) = find_agg_expr(agg, c)? {
                                     *arg = expr.clone();
                                 }
                             }
-                        }
+                            Ok::<(), DataFusionError>(())
+                        })?;
+                    }
                     }
                     Ok(Transformed::yes(unprojected_expr))
                 } else {
