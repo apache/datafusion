@@ -1444,6 +1444,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-functions-window-common",
+ "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "log",
 ]
@@ -1453,6 +1454,7 @@ name = "datafusion-functions-window-common"
 version = "42.0.0"
 dependencies = [
  "datafusion-common",
+ "datafusion-physical-expr-common",
 ]
 
 [[package]]
