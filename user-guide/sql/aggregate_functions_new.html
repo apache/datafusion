@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Information Schema &#8212; Apache DataFusion  documentation</title>
+    <title>Aggregate Functions (NEW) &#8212; Apache DataFusion  documentation</title>
     
     <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,8 +34,8 @@
     <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Operators" href="operators.html" />
-    <link rel="prev" title="EXPLAIN" href="explain.html" />
+    <link rel="next" title="Window Functions" href="window_functions.html" />
+    <link rel="prev" title="Aggregate Functions" href="aggregate_functions.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -238,8 +238,8 @@
      EXPLAIN
     </a>
    </li>
-   <li class="toctree-l2 current active">
-    <a class="current reference internal" href="#">
+   <li class="toctree-l2">
+    <a class="reference internal" href="information_schema.html">
      Information Schema
     </a>
    </li>
@@ -253,8 +253,8 @@
      Aggregate Functions
     </a>
    </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="aggregate_functions_new.html">
+   <li class="toctree-l2 current active">
+    <a class="current reference internal" href="#">
      Aggregate Functions (NEW)
     </a>
    </li>
@@ -497,9 +497,69 @@
               
               <div class="toc-item">
                 
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
 
 <nav id="bd-toc-nav">
-    
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#general-functions">
+   General Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#bit-and">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       bit_and
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#arguments">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#bit-or">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       bit_or
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id1">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#bit-xor">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       bit_xor
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id2">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+</ul>
+
 </nav>
               </div>
               
@@ -507,7 +567,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/information_schema.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/aggregate_functions_new.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -544,51 +604,64 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="information-schema">
-<h1>Information Schema<a class="headerlink" href="#information-schema" title="Link to this heading">¶</a></h1>
-<p>DataFusion supports showing metadata about the tables and views available. This information can be accessed using the
-views of the ISO SQL <code class="docutils literal notranslate"><span class="pre">information_schema</span></code> schema or the DataFusion specific <code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">TABLES</span></code> and <code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">COLUMNS</span></code> commands.</p>
-<p>To show tables in the DataFusion catalog, use the <code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">TABLES</span></code> command or the <code class="docutils literal notranslate"><span class="pre">information_schema.tables</span></code> view:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">show</span><span class="w"> </span><span class="n">tables</span><span class="p">;</span>
-<span class="k">or</span>
-<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">information_schema</span><span class="p">.</span><span class="n">tables</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">---------------+--------------------+------------+------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">table_catalog</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">table_schema</span><span class="w">       </span><span class="o">|</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">table_type</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------+--------------------+------------+------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="k">public</span><span class="w">             </span><span class="o">|</span><span class="w"> </span><span class="n">t</span><span class="w">          </span><span class="o">|</span><span class="w"> </span><span class="n">BASE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">information_schema</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">tables</span><span class="w">     </span><span class="o">|</span><span class="w"> </span><span class="k">VIEW</span><span class="w">       </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">information_schema</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">views</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="k">VIEW</span><span class="w">       </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">information_schema</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">columns</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="k">VIEW</span><span class="w">       </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------+--------------------+------------+------------+</span>
+<!---
+This file was generated by the dev/update_function_docs.sh script.
+Do not edit it manually as changes will be overwritten.
+Instead, edit the AggregateUDFImpl's documentation() function to
+update documentation for an individual UDF or the
+dev/update_function_docs.sh file for updating surrounding text.
+-->
+<section id="aggregate-functions-new">
+<h1>Aggregate Functions (NEW)<a class="headerlink" href="#aggregate-functions-new" title="Link to this heading">¶</a></h1>
+<p>This page is a WIP and will replace the Aggregate Functions page once completed.</p>
+<p>Aggregate functions operate on a set of values to compute a single result.</p>
+<section id="general-functions">
+<h2>General Functions<a class="headerlink" href="#general-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#bit-and">bit_and</a></p></li>
+<li><p><a class="reference internal" href="#bit-or">bit_or</a></p></li>
+<li><p><a class="reference internal" href="#bit-xor">bit_xor</a></p></li>
+</ul>
+<section id="bit-and">
+<h3><code class="docutils literal notranslate"><span class="pre">bit_and</span></code><a class="headerlink" href="#bit-and" title="Link to this heading">¶</a></h3>
+<p>Computes the bitwise AND of all non-null input values.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bit_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>To show the schema of a table in DataFusion, use the <code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">COLUMNS</span></code> command or the <code class="docutils literal notranslate"><span class="pre">information_schema.columns</span></code> view:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">show</span><span class="w"> </span><span class="n">columns</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
-<span class="k">or</span>
-<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">table_catalog</span><span class="p">,</span><span class="w"> </span><span class="n">table_schema</span><span class="p">,</span><span class="w"> </span><span class="k">table_name</span><span class="p">,</span><span class="w"> </span><span class="k">column_name</span><span class="p">,</span><span class="w"> </span><span class="n">data_type</span><span class="p">,</span><span class="w"> </span><span class="n">is_nullable</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">information_schema</span><span class="p">.</span><span class="n">columns</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">---------------+--------------+------------+-------------+-----------+-------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">table_catalog</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">table_schema</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">table_name</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">column_name</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">data_type</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">is_nullable</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------+--------------+------------+-------------+-----------+-------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="k">public</span><span class="w">       </span><span class="o">|</span><span class="w"> </span><span class="n">t</span><span class="w">          </span><span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="w">     </span><span class="o">|</span><span class="w"> </span><span class="k">NO</span><span class="w">          </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------+--------------+------------+-------------+-----------+-------------+</span>
+<section id="arguments">
+<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
+</ul>
+</section>
+</section>
+<section id="bit-or">
+<h3><code class="docutils literal notranslate"><span class="pre">bit_or</span></code><a class="headerlink" href="#bit-or" title="Link to this heading">¶</a></h3>
+<p>Computes the bitwise OR of all non-null input values.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bit_or</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>To show the current session configuration options, use the <code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">ALL</span></code> command or the <code class="docutils literal notranslate"><span class="pre">information_schema.df_settings</span></code> view:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">information_schema</span><span class="p">.</span><span class="n">df_settings</span><span class="p">;</span>
-
-<span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">name</span><span class="w">                                            </span><span class="o">|</span><span class="w"> </span><span class="n">setting</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w">                 </span><span class="o">|</span><span class="w"> </span><span class="mi">8192</span><span class="w">    </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">coalesce_batches</span><span class="w">           </span><span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">    </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">time_zone</span><span class="w">                  </span><span class="o">|</span><span class="w"> </span><span class="n">UTC</span><span class="w">     </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="k">explain</span><span class="p">.</span><span class="n">logical_plan_only</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">   </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="k">explain</span><span class="p">.</span><span class="n">physical_plan_only</span><span class="w">           </span><span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">   </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="n">filter_null_join_keys</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">   </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="n">skip_failed_rules</span><span class="w">          </span><span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">    </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
+<section id="id1">
+<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
+</ul>
+</section>
+</section>
+<section id="bit-xor">
+<h3><code class="docutils literal notranslate"><span class="pre">bit_xor</span></code><a class="headerlink" href="#bit-xor" title="Link to this heading">¶</a></h3>
+<p>Computes the bitwise exclusive OR of all non-null input values.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bit_xor</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
+<section id="id2">
+<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
+</ul>
+</section>
+</section>
+</section>
 </section>
 
 
@@ -597,17 +670,17 @@ views of the ISO SQL <code class="docutils literal notranslate"><span class="pre
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="explain.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="aggregate_functions.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">EXPLAIN</p>
+            <p class="prev-next-title">Aggregate Functions</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="operators.html" title="next page">
+    <a class='right-next' id="next-link" href="window_functions.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Operators</p>
+        <p class="prev-next-title">Window Functions</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>

@@ -1,0 +1,1063 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Scalar Functions (NEW) &#8212; Apache DataFusion  documentation</title>
+    
+    <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+  
+    
+    <link rel="stylesheet"
+      href="../../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+  
+    
+      
+  
+    
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=c6d785ac" />
+    
+    <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+  
+    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Status" href="sql_status.html" />
+    <link rel="prev" title="Scalar Functions" href="scalar_functions.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+
+    <div class="container-xl">
+      <div class="row">
+          
+            
+            <!-- Only show if we have sidebars configured, else just a small margin  -->
+            <div class="col-12 col-md-3 bd-sidebar">
+              <div class="sidebar-start-items">
+
+<form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+</form>
+
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  ASF Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://apache.org">
+   Apache Software Foundation
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/licenses/">
+   License
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">
+   Donate
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/thanks.html">
+   Thanks
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/security/">
+   Security
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion">
+   GitHub and Issue Tracker
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://crates.io/crates/datafusion">
+   crates.io
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">
+   API Docs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/blog/">
+   Blog
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
+   Code of conduct
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../download.html">
+   Download
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User Guide
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../introduction.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../example-usage.html">
+   Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../crate-configuration.html">
+   Crate Configuration
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../cli/index.html">
+   DataFusion CLI
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../cli/overview.html">
+     Overview
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../cli/installation.html">
+     Installation
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../cli/usage.html">
+     Usage
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../cli/datasources.html">
+     Local Files / Directories
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../dataframe.html">
+   DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../expressions.html">
+   Expression API
+  </a>
+ </li>
+ <li class="toctree-l1 current active has-children">
+  <a class="reference internal" href="index.html">
+   SQL Reference
+  </a>
+  <input checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul class="current">
+   <li class="toctree-l2">
+    <a class="reference internal" href="data_types.html">
+     Data Types
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="select.html">
+     SELECT syntax
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="subqueries.html">
+     Subqueries
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="ddl.html">
+     DDL
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="dml.html">
+     DML
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="explain.html">
+     EXPLAIN
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="information_schema.html">
+     Information Schema
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="operators.html">
+     Operators
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="aggregate_functions.html">
+     Aggregate Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="aggregate_functions_new.html">
+     Aggregate Functions (NEW)
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="window_functions.html">
+     Window Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="window_functions_new.html">
+     Window Functions (NEW)
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="scalar_functions.html">
+     Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2 current active">
+    <a class="current reference internal" href="#">
+     Scalar Functions (NEW)
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql_status.html">
+     Status
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="write_options.html">
+     Write Options
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../configs.html">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../explain-usage.html">
+   Reading Explain Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../faq.html">
+   Frequently Asked Questions
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Library User Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/extensions.html">
+   Extensions List
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/using-the-sql-api.html">
+   Using the SQL API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/working-with-exprs.html">
+   Working with
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     Expr
+    </span>
+   </code>
+   s
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/using-the-dataframe-api.html">
+   Using the DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/building-logical-plans.html">
+   Building Logical Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/catalogs.html">
+   Catalogs, Schemas, and Tables
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/adding-udfs.html">
+   Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/custom-table-providers.html">
+   Custom Table Provider
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/extending-operators.html">
+   Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/profiling.html">
+   Profiling Cookbook
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../library-user-guide/query-optimizer.html">
+   DataFusion Query Optimizer
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Contributor Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/communication.html">
+   Communication
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/getting_started.html">
+   Getting Started
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/architecture.html">
+   Architecture
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/testing.html">
+   Testing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/howtos.html">
+   HOWTOs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/roadmap.html">
+   Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/governance.html">
+   Governance
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/inviting.html">
+   Inviting New Committers and PMC Members
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../contributor-guide/specification/index.html">
+   Specifications
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/invariants.html">
+     Invariants
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">
+     Output field name semantics
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  DataFusion Subprojects
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://arrow.apache.org/ballista/">
+   DataFusion Ballista
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/comet/">
+   DataFusion Comet
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/python/">
+   DataFusion Python
+  </a>
+ </li>
+</ul>
+
+    
+  </div>
+
+  <a class="navbar-brand" href="../../index.html">
+    <img src="../../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
+  </a>
+</nav>
+
+              </div>
+              <div class="sidebar-end-items">
+              </div>
+            </div>
+            
+          
+
+          
+          <div class="d-none d-xl-block col-xl-2 bd-toc">
+            
+              
+              <div class="toc-item">
+                
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
+
+<nav id="bd-toc-nav">
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#math-functions">
+   Math Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#log">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       log
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#arguments">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#conditional-functions">
+   Conditional Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#coalesce">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       coalesce
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id1">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#string-functions">
+   String Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#ascii">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ascii
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id2">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#rpad">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       rpad
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id3">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#binary-string-functions">
+   Binary String Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#decode">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       decode
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id4">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#encode">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       encode
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id5">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#regular-expression-functions">
+   Regular Expression Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#regexp-like">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       regexp_like
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id6">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#example">
+       Example
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#time-and-date-functions">
+   Time and Date Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#to-date">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       to_date
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id7">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id8">
+       Example
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#hashing-functions">
+   Hashing Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#sha224">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       sha224
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id9">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+</nav>
+              </div>
+              
+              <div class="toc-item">
+                
+
+<div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/scalar_functions_new.md">
+        <i class="fas fa-pencil-alt"></i> Edit this page
+    </a>
+</div>
+
+              </div>
+              
+            
+          </div>
+          
+
+          
+          
+            
+          
+          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
+              
+              <div>
+                
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<!---
+This file was generated by the dev/update_function_docs.sh script.
+Do not edit it manually as changes will be overwritten.
+Instead, edit the ScalarUDFImpl's documentation() function to
+update documentation for an individual UDF or the
+dev/update_function_docs.sh file for updating surrounding text.
+-->
+<section id="scalar-functions-new">
+<h1>Scalar Functions (NEW)<a class="headerlink" href="#scalar-functions-new" title="Link to this heading">¶</a></h1>
+<p>This page is a WIP and will replace the Scalar Functions page once completed.</p>
+<section id="math-functions">
+<h2>Math Functions<a class="headerlink" href="#math-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#log">log</a></p></li>
+</ul>
+<section id="log">
+<h3><code class="docutils literal notranslate"><span class="pre">log</span></code><a class="headerlink" href="#log" title="Link to this heading">¶</a></h3>
+<p>Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">log</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="n">numeric_expression</span><span class="p">)</span>
+<span class="n">log</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="arguments">
+<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>base</strong>: Base numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
+<li><p><strong>numeric_expression</strong>: Numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
+</ul>
+</section>
+</section>
+</section>
+<section id="conditional-functions">
+<h2>Conditional Functions<a class="headerlink" href="#conditional-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#coalesce">coalesce</a></p></li>
+</ul>
+<section id="coalesce">
+<h3><code class="docutils literal notranslate"><span class="pre">coalesce</span></code><a class="headerlink" href="#coalesce" title="Link to this heading">¶</a></h3>
+<p>Returns the first of its arguments that is not <em>null</em>. Returns <em>null</em> if all arguments are <em>null</em>. This function is often used to substitute a default value for <em>null</em> values.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">coalesce</span><span class="p">(</span><span class="n">expression1</span><span class="p">[,</span> <span class="o">...</span><span class="p">,</span> <span class="n">expression_n</span><span class="p">])</span>
+</pre></div>
+</div>
+<section id="id1">
+<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression1, expression_n</strong>: Expression to use if previous expressions are <em>null</em>. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary.</p></li>
+</ul>
+</section>
+</section>
+</section>
+<section id="string-functions">
+<h2>String Functions<a class="headerlink" href="#string-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#ascii">ascii</a></p></li>
+<li><p><a class="reference internal" href="#rpad">rpad</a></p></li>
+</ul>
+<section id="ascii">
+<h3><code class="docutils literal notranslate"><span class="pre">ascii</span></code><a class="headerlink" href="#ascii" title="Link to this heading">¶</a></h3>
+<p>Returns the ASCII value of the first character in a string.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">ascii</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id2">
+<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function that evaluates to or can be coerced to a Utf8, LargeUtf8 or a Utf8View.</p></li>
+</ul>
+<p><strong>Related functions</strong>:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#chr"><span class="xref myst">chr</span></a></p></li>
+</ul>
+</section>
+</section>
+<section id="rpad">
+<h3><code class="docutils literal notranslate"><span class="pre">rpad</span></code><a class="headerlink" href="#rpad" title="Link to this heading">¶</a></h3>
+<p>Pads the right side of a string with another string to a specified string length.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">rpad</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">n</span><span class="p">[,</span> <span class="n">padding_str</span><span class="p">])</span>
+</pre></div>
+</div>
+<section id="id3">
+<h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of string operators.</p></li>
+<li><p><strong>n</strong>: String length to pad to.</p></li>
+<li><p><strong>padding_str</strong>: String expression to pad with. Can be a constant, column, or function, and any combination of string operators. <em>Default is a space.</em></p></li>
+</ul>
+<p><strong>Related functions</strong>:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#lpad"><span class="xref myst">lpad</span></a></p></li>
+</ul>
+</section>
+</section>
+</section>
+<section id="binary-string-functions">
+<h2>Binary String Functions<a class="headerlink" href="#binary-string-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#decode">decode</a></p></li>
+<li><p><a class="reference internal" href="#encode">encode</a></p></li>
+</ul>
+<section id="decode">
+<h3><code class="docutils literal notranslate"><span class="pre">decode</span></code><a class="headerlink" href="#decode" title="Link to this heading">¶</a></h3>
+<p>Decode binary data from textual representation in string.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">decode</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="nb">format</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id4">
+<h4>Arguments<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Expression containing encoded string data</p></li>
+<li><p><strong>format</strong>: Same arguments as <a class="reference internal" href="#encode">encode</a></p></li>
+</ul>
+<p><strong>Related functions</strong>:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#encode">encode</a></p></li>
+</ul>
+</section>
+</section>
+<section id="encode">
+<h3><code class="docutils literal notranslate"><span class="pre">encode</span></code><a class="headerlink" href="#encode" title="Link to this heading">¶</a></h3>
+<p>Encode binary data into a textual representation.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">encode</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="nb">format</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id5">
+<h4>Arguments<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Expression containing string or binary data</p></li>
+<li><p><strong>format</strong>: Supported formats are: <code class="docutils literal notranslate"><span class="pre">base64</span></code>, <code class="docutils literal notranslate"><span class="pre">hex</span></code></p></li>
+</ul>
+<p><strong>Related functions</strong>:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#decode">decode</a></p></li>
+</ul>
+</section>
+</section>
+</section>
+<section id="regular-expression-functions">
+<h2>Regular Expression Functions<a class="headerlink" href="#regular-expression-functions" title="Link to this heading">¶</a></h2>
+<p>Apache DataFusion uses a <a class="reference external" href="https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions">PCRE-like</a>
+regular expression <a class="reference external" href="https://docs.rs/regex/latest/regex/#syntax">syntax</a>
+(minus support for several features including look-around and backreferences).
+The following regular expression functions are supported:</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#regexp-like">regexp_like</a></p></li>
+</ul>
+<section id="regexp-like">
+<h3><code class="docutils literal notranslate"><span class="pre">regexp_like</span></code><a class="headerlink" href="#regexp-like" title="Link to this heading">¶</a></h3>
+<p>Returns true if a <a class="reference external" href="https://docs.rs/regex/latest/regex/#syntax">regular expression</a> has at least one match in a string, false otherwise.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regexp_like</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">regexp</span><span class="p">[,</span> <span class="n">flags</span><span class="p">])</span>
+</pre></div>
+</div>
+<section id="id6">
+<h4>Arguments<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of string operators.</p></li>
+<li><p><strong>regexp</strong>: Regular expression to test against the string expression. Can be a constant, column, or function.</p></li>
+<li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:</p>
+<ul>
+<li><p><strong>i</strong>: case-insensitive: letters match both upper and lower case</p></li>
+<li><p><strong>m</strong>: multi-line mode: ^ and $ match begin/end of line</p></li>
+<li><p><strong>s</strong>: allow . to match \n</p></li>
+<li><p><strong>R</strong>: enables CRLF mode: when multi-line mode is enabled, \r\n is used</p></li>
+<li><p><strong>U</strong>: swap the meaning of x* and x*?</p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="example">
+<h4>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h4>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="n">regexp_like</span><span class="p">(</span><span class="s1">&#39;Köln&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;[a-zA-Z]ö[a-zA-Z]{2}&#39;</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">regexp_like</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;Köln&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;[a-zA-Z]ö[a-zA-Z]{2}&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">regexp_like</span><span class="p">(</span><span class="s1">&#39;aBc&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;(b|d)&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;i&#39;</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">regexp_like</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;aBc&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;(b|d)&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;i&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                             </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+</pre></div>
+</div>
+<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs">here</a></p>
+</section>
+</section>
+</section>
+<section id="time-and-date-functions">
+<h2>Time and Date Functions<a class="headerlink" href="#time-and-date-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#to-date">to_date</a></p></li>
+</ul>
+<section id="to-date">
+<h3><code class="docutils literal notranslate"><span class="pre">to_date</span></code><a class="headerlink" href="#to-date" title="Link to this heading">¶</a></h3>
+<p>Converts a value to a date (<code class="docutils literal notranslate"><span class="pre">YYYY-MM-DD</span></code>).
+Supports strings, integer and double types as input.
+Strings are parsed as YYYY-MM-DD (e.g. ‘2023-07-20’) if no <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a>s are provided.
+Integers and doubles are interpreted as days since the unix epoch (<code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00Z</span></code>).
+Returns the corresponding date.</p>
+<p>Note: <code class="docutils literal notranslate"><span class="pre">to_date</span></code> returns Date32, which represents its values as the number of days since unix epoch(<code class="docutils literal notranslate"><span class="pre">1970-01-01</span></code>) stored as signed 32 bit value. The largest supported date value is <code class="docutils literal notranslate"><span class="pre">9999-12-31</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">to_date</span><span class="p">(</span><span class="s1">&#39;2017-05-31&#39;</span><span class="p">,</span> <span class="s1">&#39;%Y-%m-</span><span class="si">%d</span><span class="s1">&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id7">
+<h4>Arguments<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
+<li><p><strong>format_n</strong>: Optional <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a> strings to use to parse the expression. Formats will be tried in the order
+they appear with the first successful one being returned. If none of the formats successfully parse the expression
+an error will be returned.</p></li>
+</ul>
+</section>
+<section id="id8">
+<h4>Example<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h4>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="s1">&#39;2023-01-31&#39;</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;2023-01-31&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="w">                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="s1">&#39;2023/01/31&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%Y-%m-%d&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%Y/%m/%d&#39;</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;2023/01/31&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;%Y-%m-%d&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;%Y/%m/%d&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="w">                                                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
+</pre></div>
+</div>
+<p>Additional examples can be found <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs">here</a></p>
+</section>
+</section>
+</section>
+<section id="hashing-functions">
+<h2>Hashing Functions<a class="headerlink" href="#hashing-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#sha224">sha224</a></p></li>
+</ul>
+<section id="sha224">
+<h3><code class="docutils literal notranslate"><span class="pre">sha224</span></code><a class="headerlink" href="#sha224" title="Link to this heading">¶</a></h3>
+<p>Computes the SHA-224 hash of a binary string.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha224</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id9">
+<h4>Arguments<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of string operators.</p></li>
+</ul>
+</section>
+</section>
+</section>
+</section>
+
+
+              </div>
+              
+              
+              <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="scalar_functions.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">Scalar Functions</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="sql_status.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Status</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
+</div>
+              
+          </main>
+          
+
+      </div>
+    </div>
+  
+    <script src="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+  
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p class="copyright">
+    &copy; Copyright 2019-2024, Apache Software Foundation.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p class="sphinx-version">
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 8.0.2.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>

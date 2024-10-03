@@ -254,13 +254,28 @@
     </a>
    </li>
    <li class="toctree-l2">
+    <a class="reference internal" href="sql/aggregate_functions_new.html">
+     Aggregate Functions (NEW)
+    </a>
+   </li>
+   <li class="toctree-l2">
     <a class="reference internal" href="sql/window_functions.html">
      Window Functions
     </a>
    </li>
    <li class="toctree-l2">
+    <a class="reference internal" href="sql/window_functions_new.html">
+     Window Functions (NEW)
+    </a>
+   </li>
+   <li class="toctree-l2">
     <a class="reference internal" href="sql/scalar_functions.html">
      Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql/scalar_functions_new.html">
+     Scalar Functions (NEW)
     </a>
    </li>
    <li class="toctree-l2">
@@ -702,7 +717,7 @@ available for creating logical expressions. These are documented below.</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Since <code class="docutils literal notranslate"><span class="pre">&amp;&amp;</span></code> and <code class="docutils literal notranslate"><span class="pre">||</span></code> are existed as logical operators in Rust, but those are not overloadable and not works with expression API.</p>
+<p>Since <code class="docutils literal notranslate"><span class="pre">&amp;&amp;</span></code> and <code class="docutils literal notranslate"><span class="pre">||</span></code> are logical operators in Rust and cannot be overloaded these are not available in the expression API.</p>
 </div>
 </section>
 <section id="bitwise-expressions">
@@ -918,7 +933,7 @@ but these operators always return a <code class="docutils literal notranslate"><
 </table>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g</p>
+<p>Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="n">log</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">),</span><span class="w"> </span><span class="n">log</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">----------------+---------------+-----------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">log</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">log</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>

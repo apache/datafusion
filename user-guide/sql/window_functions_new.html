@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Window Functions &#8212; Apache DataFusion  documentation</title>
+    <title>Window Functions (NEW) &#8212; Apache DataFusion  documentation</title>
     
     <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,8 +34,8 @@
     <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Window Functions (NEW)" href="window_functions_new.html" />
-    <link rel="prev" title="Aggregate Functions (NEW)" href="aggregate_functions_new.html" />
+    <link rel="next" title="Scalar Functions" href="scalar_functions.html" />
+    <link rel="prev" title="Window Functions" href="window_functions.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -258,13 +258,13 @@
      Aggregate Functions (NEW)
     </a>
    </li>
-   <li class="toctree-l2 current active">
-    <a class="current reference internal" href="#">
+   <li class="toctree-l2">
+    <a class="reference internal" href="window_functions.html">
      Window Functions
     </a>
    </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="window_functions_new.html">
+   <li class="toctree-l2 current active">
+    <a class="current reference internal" href="#">
      Window Functions (NEW)
     </a>
    </li>
@@ -515,7 +515,7 @@
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#ranking-functions">
-   Ranking functions
+   Ranking Functions
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
@@ -526,145 +526,6 @@
       </span>
      </code>
     </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#rank">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       rank
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#dense-rank">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       dense_rank
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#ntile">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ntile
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#arguments">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-  </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#analytical-functions">
-   Analytical functions
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#cume-dist">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       cume_dist
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#percent-rank">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       percent_rank
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#lag">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       lag
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id1">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#lead">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       lead
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id2">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#first-value">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       first_value
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id3">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#last-value">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       last_value
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id4">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#nth-value">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       nth_value
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id5">
-       Arguments
-      </a>
-     </li>
-    </ul>
    </li>
   </ul>
  </li>
@@ -677,7 +538,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/window_functions.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/window_functions_new.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -710,12 +571,20 @@
   Unless required by applicable law or agreed to in writing,
   software distributed under the License is distributed on an
   "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either expressioness or implied.  See the License for the
+  KIND, either express or implied.  See the License for the
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="window-functions">
-<h1>Window Functions<a class="headerlink" href="#window-functions" title="Link to this heading">¶</a></h1>
+<!---
+This file was generated by the dev/update_function_docs.sh script.
+Do not edit it manually as changes will be overwritten.
+Instead, edit the WindowUDFImpl's documentation() function to
+update documentation for an individual UDF or the
+dev/update_function_docs.sh file for updating surrounding text.
+-->
+<section id="window-functions-new">
+<h1>Window Functions (NEW)<a class="headerlink" href="#window-functions-new" title="Link to this heading">¶</a></h1>
+<p>This page is a WIP and will replace the Window Functions page once completed.</p>
 <p>A <em>window function</em> performs a calculation across a set of table rows that are somehow related to the current row. This is comparable to the type of calculation that can be done with an aggregate function. However, window functions do not cause rows to become grouped into a single output row like non-window aggregate calls would. Instead, the rows retain their separate identities. Behind the scenes, the window function is able to access more than just the current row of the query result</p>
 <p>Here is an example that shows how to compare each employee’s salary with the average salary in his or her department:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">depname</span><span class="p">,</span><span class="w"> </span><span class="n">empno</span><span class="p">,</span><span class="w"> </span><span class="n">salary</span><span class="p">,</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="n">salary</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">depname</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">empsalary</span><span class="p">;</span>
@@ -819,142 +688,16 @@
 <p>All <a class="reference internal" href="aggregate_functions.html"><span class="std std-doc">aggregate functions</span></a> can be used as window functions.</p>
 </section>
 <section id="ranking-functions">
-<h2>Ranking functions<a class="headerlink" href="#ranking-functions" title="Link to this heading">¶</a></h2>
+<h2>Ranking Functions<a class="headerlink" href="#ranking-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#row-number">row_number</a></p></li>
-<li><p><a class="reference internal" href="#rank">rank</a></p></li>
-<li><p><a class="reference internal" href="#dense-rank">dense_rank</a></p></li>
-<li><p><a class="reference internal" href="#ntile">ntile</a></p></li>
 </ul>
 <section id="row-number">
 <h3><code class="docutils literal notranslate"><span class="pre">row_number</span></code><a class="headerlink" href="#row-number" title="Link to this heading">¶</a></h3>
 <p>Number of the current row within its partition, counting from 1.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">row_number</span><span class="p">()</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">row_number</span><span class="p">()</span>
 </pre></div>
 </div>
-</section>
-<section id="rank">
-<h3><code class="docutils literal notranslate"><span class="pre">rank</span></code><a class="headerlink" href="#rank" title="Link to this heading">¶</a></h3>
-<p>Rank of the current row with gaps; same as row_number of its first peer.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">rank</span><span class="p">()</span>
-</pre></div>
-</div>
-</section>
-<section id="dense-rank">
-<h3><code class="docutils literal notranslate"><span class="pre">dense_rank</span></code><a class="headerlink" href="#dense-rank" title="Link to this heading">¶</a></h3>
-<p>Rank of the current row without gaps; this function counts peer groups.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">dense_rank</span><span class="p">()</span>
-</pre></div>
-</div>
-</section>
-<section id="ntile">
-<h3><code class="docutils literal notranslate"><span class="pre">ntile</span></code><a class="headerlink" href="#ntile" title="Link to this heading">¶</a></h3>
-<p>Integer ranging from 1 to the argument value, dividing the partition as equally as possible.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">ntile</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="arguments">
-<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: An integer describing the number groups the partition should be split into</p></li>
-</ul>
-</section>
-</section>
-</section>
-<section id="analytical-functions">
-<h2>Analytical functions<a class="headerlink" href="#analytical-functions" title="Link to this heading">¶</a></h2>
-<ul class="simple">
-<li><p><a class="reference internal" href="#cume-dist">cume_dist</a></p></li>
-<li><p><a class="reference internal" href="#percent-rank">percent_rank</a></p></li>
-<li><p><a class="reference internal" href="#lag">lag</a></p></li>
-<li><p><a class="reference internal" href="#lead">lead</a></p></li>
-<li><p><a class="reference internal" href="#first-value">first_value</a></p></li>
-<li><p><a class="reference internal" href="#last-value">last_value</a></p></li>
-<li><p><a class="reference internal" href="#nth-value">nth_value</a></p></li>
-</ul>
-<section id="cume-dist">
-<h3><code class="docutils literal notranslate"><span class="pre">cume_dist</span></code><a class="headerlink" href="#cume-dist" title="Link to this heading">¶</a></h3>
-<p>Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">cume_dist</span><span class="p">()</span>
-</pre></div>
-</div>
-</section>
-<section id="percent-rank">
-<h3><code class="docutils literal notranslate"><span class="pre">percent_rank</span></code><a class="headerlink" href="#percent-rank" title="Link to this heading">¶</a></h3>
-<p>Relative rank of the current row: (rank - 1) / (total rows - 1).</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">percent_rank</span><span class="p">()</span>
-</pre></div>
-</div>
-</section>
-<section id="lag">
-<h3><code class="docutils literal notranslate"><span class="pre">lag</span></code><a class="headerlink" href="#lag" title="Link to this heading">¶</a></h3>
-<p>Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value). Both offset and default are evaluated with respect to the current row. If omitted, offset defaults to 1 and default to null.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">lag</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="k">offset</span><span class="p">,</span><span class="w"> </span><span class="k">default</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id1">
-<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: Expression to operate on</p></li>
-<li><p><strong>offset</strong>: Integer. Specifies how many rows back the value of <em>expression</em> should be retrieved. Defaults to 1.</p></li>
-<li><p><strong>default</strong>: The default value if the offset is not within the partition. Must be of the same type as <em>expression</em>.</p></li>
-</ul>
-</section>
-</section>
-<section id="lead">
-<h3><code class="docutils literal notranslate"><span class="pre">lead</span></code><a class="headerlink" href="#lead" title="Link to this heading">¶</a></h3>
-<p>Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value). Both offset and default are evaluated with respect to the current row. If omitted, offset defaults to 1 and default to null.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">lead</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="k">offset</span><span class="p">,</span><span class="w"> </span><span class="k">default</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id2">
-<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: Expression to operate on</p></li>
-<li><p><strong>offset</strong>: Integer. Specifies how many rows forward the value of <em>expression</em> should be retrieved. Defaults to 1.</p></li>
-<li><p><strong>default</strong>: The default value if the offset is not within the partition. Must be of the same type as <em>expression</em>.</p></li>
-</ul>
-</section>
-</section>
-<section id="first-value">
-<h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Link to this heading">¶</a></h3>
-<p>Returns value evaluated at the row that is the first row of the window frame.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">first_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id3">
-<h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: Expression to operate on</p></li>
-</ul>
-</section>
-</section>
-<section id="last-value">
-<h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Link to this heading">¶</a></h3>
-<p>Returns value evaluated at the row that is the last row of the window frame.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">last_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id4">
-<h4>Arguments<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: Expression to operate on</p></li>
-</ul>
-</section>
-</section>
-<section id="nth-value">
-<h3><code class="docutils literal notranslate"><span class="pre">nth_value</span></code><a class="headerlink" href="#nth-value" title="Link to this heading">¶</a></h3>
-<p>Returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">nth_value</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id5">
-<h4>Arguments<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: The name the column of which nth value to retrieve</p></li>
-<li><p><strong>n</strong>: Integer. Specifies the <em>n</em> in nth</p></li>
-</ul>
-</section>
 </section>
 </section>
 </section>
@@ -965,17 +708,17 @@
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="aggregate_functions_new.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="window_functions.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Aggregate Functions (NEW)</p>
+            <p class="prev-next-title">Window Functions</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="window_functions_new.html" title="next page">
+    <a class='right-next' id="next-link" href="scalar_functions.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Window Functions (NEW)</p>
+        <p class="prev-next-title">Scalar Functions</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
