@@ -731,14 +731,21 @@ message PartitionColumn {
 
 message FileSinkConfig {
   reserved 6; // writer_mode
+  reserved 8; // was `overwrite` which has been superseded by `insert_op`
 
   string object_store_url = 1;
   repeated PartitionedFile file_groups = 2;
   repeated string table_paths = 3;
   datafusion_common.Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
-  bool overwrite = 8;
   bool keep_partition_by_columns = 9;
+  InsertOp insert_op = 10; 
+}
+
+enum InsertOp {
+  Append = 0;
+  Overwrite = 1;
+  Replace = 2;
 }
 
 message JsonSink {

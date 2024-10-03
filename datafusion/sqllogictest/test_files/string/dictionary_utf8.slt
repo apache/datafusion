@@ -37,6 +37,22 @@ select arrow_cast(col1, 'Dictionary(Int32, Utf8)') as c1 from test_substr_base;
 statement ok
 drop table test_source
 
+# TODO: move it back to `string_query.slt.part` after fixing the issue
+# see detail: https://github.com/apache/datafusion/issues/12637
+# Test pattern with wildcard characters
+query TTBBBB
+select ascii_1, unicode_1,
+       ascii_1 like 'An%' as ascii_like,
+       unicode_1 like '%ion数据%' as unicode_like,
+       ascii_1 ilike 'An%' as ascii_ilike,
+       unicode_1 ilike '%ion数据%' as unicode_ilik
+from test_basic_operator;
+----
+Andrew datafusion📊🔥 true false true false
+Xiangpeng datafusion数据融合 false true false true
+Raphael datafusionДатаФусион false false false false
+NULL NULL NULL NULL NULL NULL
+
 #
 # common test for string-like functions and operators
 #

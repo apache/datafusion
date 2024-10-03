@@ -37,7 +37,7 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, SchemaError, SchemaReference, TableReference,
     ToDFSchema,
 };
-use datafusion_expr::dml::CopyTo;
+use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
@@ -53,7 +53,7 @@ use datafusion_expr::{
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
     Volatility, WriteOp,
 };
-use sqlparser::ast;
+use sqlparser::ast::{self, SqliteOnConflict};
 use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
     CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, FromTable, Ident, Insert,
@@ -665,12 +665,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 returning,
                 ignore,
                 table_alias,
-                replace_into,
+                mut replace_into,
                 priority,
                 insert_alias,
             }) => {
-                if or.is_some() {
-                    plan_err!("Inserts with or clauses not supported")?;
+                if let Some(or) = or {
+                    match or {
+                        SqliteOnConflict::Replace => replace_into = true,
+                        _ => plan_err!("Inserts with {or} clause is not supported")?,
+                    }
                 }
                 if partitioned.is_some() {
                     plan_err!("Partitioned inserts not yet supported")?;
@@ -698,9 +701,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Inserts with a table alias not supported: {table_alias:?}"
                     )?
                 };
-                if replace_into {
-                    plan_err!("Inserts with a `REPLACE INTO` clause not supported")?
-                };
                 if let Some(priority) = priority {
                     plan_err!(
                         "Inserts with a `PRIORITY` clause not supported: {priority:?}"
@@ -710,7 +710,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     plan_err!("Inserts with an alias not supported")?;
                 }
                 let _ = into; // optional keyword doesn't change behavior
-                self.insert_to_plan(table_name, columns, source, overwrite)
+                self.insert_to_plan(table_name, columns, source, overwrite, replace_into)
             }
             Statement::Update {
                 table,
@@ -1239,8 +1239,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let ordered_exprs =
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
 
-        // External tables do not support schemas at the moment, so the name is just a table name
-        let name = TableReference::bare(name);
+        let name = self.object_name_to_table_reference(name)?;
         let constraints =
             Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
@@ -1605,6 +1604,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         columns: Vec<Ident>,
         source: Box<Query>,
         overwrite: bool,
+        replace_into: bool,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
@@ -1707,16 +1707,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<Expr>>>()?;
         let source = project(source, exprs)?;
 
-        let op = if overwrite {
-            WriteOp::InsertOverwrite
-        } else {
-            WriteOp::InsertInto
+        let insert_op = match (overwrite, replace_into) {
+            (false, false) => InsertOp::Append,
+            (true, false) => InsertOp::Overwrite,
+            (false, true) => InsertOp::Replace,
+            (true, true) => plan_err!("Conflicting insert operations: `overwrite` and `replace_into` cannot both be true")?,
         };
 
         let plan = LogicalPlan::Dml(DmlStatement::new(
             table_name,
             Arc::new(table_schema),
-            op,
+            WriteOp::Insert(insert_op),
             Arc::new(source),
         ));
         Ok(plan)

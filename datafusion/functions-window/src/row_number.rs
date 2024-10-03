@@ -27,31 +27,15 @@ use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::expr::WindowFunction;
-use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 use datafusion_functions_window_common::field;
 use field::WindowUDFFieldArgs;
 
-/// Create a [`WindowFunction`](Expr::WindowFunction) expression for
-/// `row_number` user-defined window function.
-pub fn row_number() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(row_number_udwf(), vec![]))
-}
-
-/// Singleton instance of `row_number`, ensures the UDWF is only created once.
-#[allow(non_upper_case_globals)]
-static STATIC_RowNumber: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
-    std::sync::OnceLock::new();
-
-/// Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for `row_number`
-/// user-defined window function.
-pub fn row_number_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-    STATIC_RowNumber
-        .get_or_init(|| {
-            std::sync::Arc::new(datafusion_expr::WindowUDF::from(RowNumber::default()))
-        })
-        .clone()
-}
+define_udwf_and_expr!(
+    RowNumber,
+    row_number,
+    "Returns a unique row number for each row in window partition beginning at 1."
+);
 
 /// row_number expression
 #[derive(Debug)]

@@ -197,9 +197,9 @@ impl PlannerContext {
 
     /// extends the FROM schema, returning the existing one, if any
     pub fn extend_outer_from_schema(&mut self, schema: &DFSchemaRef) -> Result<()> {
-        self.outer_from_schema = match self.outer_from_schema.as_ref() {
-            Some(from_schema) => Some(Arc::new(from_schema.join(schema)?)),
-            None => Some(Arc::clone(schema)),
+        match self.outer_from_schema.as_mut() {
+            Some(from_schema) => Arc::make_mut(from_schema).merge(schema),
+            None => self.outer_from_schema = Some(Arc::clone(schema)),
         };
         Ok(())
     }

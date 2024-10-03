@@ -694,3 +694,295 @@ Andrew nice Andrew and X datafusion📊🔥 cool datafusion📊🔥 and 🔥 And
 Xiangpeng nice Xiangpeng and Xiangpeng datafusion数据融合 cool datafusion数据融合 and datafusion数据融合 Xiangpeng 🔥 datafusion数据融合
 Raphael nice Raphael and R datafusionДатаФусион cool datafusionДатаФусион and аФус Raphael 🔥 datafusionДатаФусион
 NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test LIKE / ILIKE
+# --------------------------------------
+
+# TODO: StringView has wrong behavior for LIKE/ILIKE. Enable this after fixing the issue
+# see issue: https://github.com/apache/datafusion/issues/12637
+# Test pattern with wildcard characters
+#query TTBBBB
+#select ascii_1, unicode_1,
+#       ascii_1 like 'An%' as ascii_like,
+#       unicode_1 like '%ion数据%' as unicode_like,
+#       ascii_1 ilike 'An%' as ascii_ilike,
+#       unicode_1 ilike '%ion数据%' as unicode_ilik
+#from test_basic_operator;
+#----
+#Andrew datafusion📊🔥 true false true false
+#Xiangpeng datafusion数据融合 false true false true
+#Raphael datafusionДатаФусион false false false false
+#NULL NULL NULL NULL NULL NULL
+
+# Test pattern without wildcard characters
+query TTBBBB
+select ascii_1, unicode_1,
+       ascii_1 like 'An' as ascii_like,
+       unicode_1 like 'ion数据' as unicode_like,
+       ascii_1 ilike 'An' as ascii_ilike,
+       unicode_1 ilike 'ion数据' as unicode_ilik
+from test_basic_operator;
+----
+Andrew datafusion📊🔥 false false false false
+Xiangpeng datafusion数据融合 false false false false
+Raphael datafusionДатаФусион false false false false
+NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test CHARACTER_LENGTH
+# --------------------------------------
+
+query II
+SELECT
+  CHARACTER_LENGTH(ascii_1),
+  CHARACTER_LENGTH(unicode_1)
+FROM
+    test_basic_operator
+----
+6 12
+9 14
+7 20
+NULL NULL
+
+# --------------------------------------
+# Test Start_With
+# --------------------------------------
+
+query BBBB
+SELECT
+  STARTS_WITH(ascii_1, 'And'),
+  STARTS_WITH(unicode_1, 'data'),
+  STARTS_WITH(ascii_1, NULL),
+  STARTS_WITH(unicode_1, NULL)
+FROM test_basic_operator;
+----
+true true NULL NULL
+false true NULL NULL
+false true NULL NULL
+NULL NULL NULL NULL
+
+# --------------------------------------
+# Test ENDS_WITH
+# --------------------------------------
+
+query BBBB
+SELECT
+  ENDS_WITH(ascii_1, 'w'),
+  ENDS_WITH(unicode_1, 'ион'),
+  ENDS_WITH(ascii_1, NULL),
+  ENDS_WITH(unicode_1, NULL)
+FROM test_basic_operator;
+----
+true false NULL NULL
+false false NULL NULL
+false true NULL NULL
+NULL NULL NULL NULL
+
+# --------------------------------------
+# Test LEVENSHTEIN
+# --------------------------------------
+
+query IIII
+SELECT
+  LEVENSHTEIN(ascii_1, 'Andrew'),
+  LEVENSHTEIN(unicode_1, 'datafusion数据融合'),
+  LEVENSHTEIN(ascii_1, NULL),
+  LEVENSHTEIN(unicode_1, NULL)
+FROM test_basic_operator;
+----
+0 4 NULL NULL
+7 0 NULL NULL
+6 10 NULL NULL
+NULL NULL NULL NULL
+
+# --------------------------------------
+# Test LPAD
+# --------------------------------------
+
+query TTTT
+SELECT
+  LPAD(ascii_1, 20, 'x'),
+  LPAD(ascii_1, 20, NULL),
+  LPAD(unicode_1, 20, '🔥'),
+  LPAD(unicode_1, 20, NULL)
+FROM test_basic_operator;
+----
+xxxxxxxxxxxxxxAndrew NULL 🔥🔥🔥🔥🔥🔥🔥🔥datafusion📊🔥 NULL
+xxxxxxxxxxxXiangpeng NULL 🔥🔥🔥🔥🔥🔥datafusion数据融合 NULL
+xxxxxxxxxxxxxRaphael NULL datafusionДатаФусион NULL
+NULL NULL NULL NULL
+
+query TT
+SELECT
+  LPAD(ascii_1, 20),
+  LPAD(unicode_1, 20)
+FROM test_basic_operator;
+----
+              Andrew         datafusion📊🔥
+           Xiangpeng       datafusion数据融合
+             Raphael datafusionДатаФусион
+NULL NULL
+
+# --------------------------------------
+# Test RPAD
+# --------------------------------------
+
+query TTTT
+SELECT
+  RPAD(ascii_1, 20, 'x'),
+  RPAD(ascii_1, 20, NULL),
+  RPAD(unicode_1, 20, '🔥'),
+  RPAD(unicode_1, 20, NULL)
+FROM test_basic_operator;
+----
+Andrewxxxxxxxxxxxxxx NULL datafusion📊🔥🔥🔥🔥🔥🔥🔥🔥🔥 NULL
+Xiangpengxxxxxxxxxxx NULL datafusion数据融合🔥🔥🔥🔥🔥🔥 NULL
+Raphaelxxxxxxxxxxxxx NULL datafusionДатаФусион NULL
+NULL NULL NULL NULL
+
+query TT
+SELECT
+  RPAD(ascii_1, 20),
+  RPAD(unicode_1, 20)
+FROM test_basic_operator;
+----
+Andrew              datafusion📊🔥
+Xiangpeng           datafusion数据融合
+Raphael             datafusionДатаФусион
+NULL NULL
+
+# --------------------------------------
+# Test REGEXP_LIKE
+# --------------------------------------
+
+query BBBBBBBB
+SELECT
+  -- without flags
+  REGEXP_LIKE(ascii_1, 'an'),
+  REGEXP_LIKE(unicode_1, 'таФ'),
+  REGEXP_LIKE(ascii_1, NULL),
+  REGEXP_LIKE(unicode_1, NULL),
+  -- with flags
+  REGEXP_LIKE(ascii_1, 'AN', 'i'),
+  REGEXP_LIKE(unicode_1, 'ТаФ', 'i'),
+  REGEXP_LIKE(ascii_1, NULL, 'i'),
+  REGEXP_LIKE(unicode_1, NULL, 'i')
+  FROM test_basic_operator;
+----
+false false NULL NULL true false NULL NULL
+true false NULL NULL true false NULL NULL
+false true NULL NULL false true NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test REGEXP_MATCH
+# --------------------------------------
+
+query ????????
+SELECT
+  -- without flags
+  REGEXP_MATCH(ascii_1, 'an'),
+  REGEXP_MATCH(unicode_1, 'ТаФ'),
+  REGEXP_MATCH(ascii_1, NULL),
+  REGEXP_MATCH(unicode_1, NULL),
+  -- with flags
+  REGEXP_MATCH(ascii_1, 'AN', 'i'),
+  REGEXP_MATCH(unicode_1, 'таФ', 'i'),
+  REGEXP_MATCH(ascii_1, NULL, 'i'),
+  REGEXP_MATCH(unicode_1, NULL, 'i')
+FROM test_basic_operator;
+----
+NULL NULL NULL NULL [An] NULL NULL NULL
+[an] NULL NULL NULL [an] NULL NULL NULL
+NULL NULL NULL NULL NULL [таФ] NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test REPEAT
+# --------------------------------------
+
+query TT
+SELECT
+  REPEAT(ascii_1, 3),
+  REPEAT(unicode_1, 3)
+FROM test_basic_operator;
+----
+AndrewAndrewAndrew datafusion📊🔥datafusion📊🔥datafusion📊🔥
+XiangpengXiangpengXiangpeng datafusion数据融合datafusion数据融合datafusion数据融合
+RaphaelRaphaelRaphael datafusionДатаФусионdatafusionДатаФусионdatafusionДатаФусион
+NULL NULL
+
+# --------------------------------------
+# Test SPLIT_PART
+# --------------------------------------
+
+query TTTTTT
+SELECT
+  SPLIT_PART(ascii_1, 'e', 1),
+  SPLIT_PART(ascii_1, 'e', 2),
+  SPLIT_PART(ascii_1, NULL, 1),
+  SPLIT_PART(unicode_1, 'и', 1),
+  SPLIT_PART(unicode_1, 'и', 2),
+  SPLIT_PART(unicode_1, NULL, 1)
+FROM test_basic_operator;
+----
+Andr w NULL datafusion📊🔥 (empty) NULL
+Xiangp ng NULL datafusion数据融合 (empty) NULL
+Rapha l NULL datafusionДатаФус он NULL
+NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test REVERSE
+# --------------------------------------
+
+query TT
+SELECT
+  REVERSE(ascii_1),
+  REVERSE(unicode_1)
+FROM test_basic_operator;
+----
+werdnA 🔥📊noisufatad
+gnepgnaiX 合融据数noisufatad
+leahpaR ноисуФатаДnoisufatad
+NULL NULL
+
+# --------------------------------------
+# Test STRPOS
+# --------------------------------------
+
+# TODO: DictionaryString does not support STRPOS. Enable this after fixing the issue
+# see issue: https://github.com/apache/datafusion/issues/12670
+#query IIIIII
+#SELECT
+#  STRPOS(ascii_1, 'e'),
+#  STRPOS(ascii_1, 'ang'),
+#  STRPOS(ascii_1, NULL),
+#  STRPOS(unicode_1, 'и'),
+#  STRPOS(unicode_1, 'ион'),
+#  STRPOS(unicode_1, NULL)
+#FROM test_basic_operator;
+#----
+#5 0 NULL 0 0 NULL
+#7 3 NULL 0 0 NULL
+#6 0 NULL 18 18 NULL
+#NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test SUBSTR_INDEX
+# --------------------------------------
+
+query TTTTTT
+SELECT
+  SUBSTR_INDEX(ascii_1, 'e', 1),
+  SUBSTR_INDEX(ascii_1, 'ang', 1),
+  SUBSTR_INDEX(ascii_1, NULL, 1),
+  SUBSTR_INDEX(unicode_1, 'и', 1),
+  SUBSTR_INDEX(unicode_1, '据融', 1),
+  SUBSTR_INDEX(unicode_1, NULL, 1)
+FROM test_basic_operator;
+----
+Andr Andrew NULL datafusion📊🔥 datafusion📊🔥 NULL
+Xiangp Xi NULL datafusion数据融合 datafusion数 NULL
+Rapha Raphael NULL datafusionДатаФус datafusionДатаФусион NULL
+NULL NULL NULL NULL NULL NULL

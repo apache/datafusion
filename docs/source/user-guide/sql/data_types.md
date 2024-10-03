@@ -97,7 +97,7 @@ select arrow_cast(now(), 'Timestamp(Second, None)');
 | `BYTEA`      | `Binary`       |
 
 You can create binary literals using a hex string literal such as
-`X'1234` to create a `Binary` value of two bytes, `0x12` and `0x34`.
+`X'1234'` to create a `Binary` value of two bytes, `0x12` and `0x34`.
 
 ## Unsupported SQL Types
 
