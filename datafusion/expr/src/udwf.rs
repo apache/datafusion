@@ -212,6 +212,8 @@ where
 /// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
 /// use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+///
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
 ///   signature: Signature
@@ -231,7 +233,12 @@ where
 ///    fn name(&self) -> &str { "smooth_it" }
 ///    fn signature(&self) -> &Signature { &self.signature }
 ///    // The actual implementation would add one to the argument
-///    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
+///    fn partition_evaluator(
+///        &self,
+///        _partition_evaluator_args: PartitionEvaluatorArgs,
+///    ) -> Result<Box<dyn PartitionEvaluator>> {
+///        unimplemented!()
+///    }
 ///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
 ///      if let Some(DataType::Int32) = field_args.get_input_type(0) {
 ///        Ok(Field::new(field_args.name(), DataType::Int32, false))
