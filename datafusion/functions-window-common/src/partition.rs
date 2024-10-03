@@ -45,6 +45,10 @@ impl<'a> PartitionEvaluatorArgs<'a> {
         self.input_exprs.get(index)
     }
 
+    pub fn input_types_at(&self, index: usize) -> Option<&DataType> {
+        self.input_types.get(index)
+    }
+
     pub fn is_reversed(&self) -> bool {
         self.is_reversed
     }

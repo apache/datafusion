@@ -104,8 +104,9 @@ impl WindowUDFImpl for WindowShift {
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
-        let shift_offset = try_get_shift_offset(&self.kind, &partition_evaluator_args, 1)?;
-
+        let shift_offset =
+            try_get_shift_offset(&self.kind, &partition_evaluator_args, 1)?;
+        let default_value = try_get_default_value(&partition_evaluator_args, 2)?;
         todo!()
     }
 
@@ -161,6 +162,19 @@ fn try_get_shift_offset(
                 offset
             }
         })
+}
+
+fn try_get_default_value(
+    partition_evaluator_args: &PartitionEvaluatorArgs,
+    index: usize,
+) -> Result<ScalarValue> {
+    let return_type = partition_evaluator_args.input_types_at(0).unwrap();
+    match try_get_literal(partition_evaluator_args, index) {
+        Ok(default_value) if !default_value.is_null() => {
+            default_value.cast_to(return_type)
+        }
+        _ => ScalarValue::try_from(return_type),
+    }
 }
 
 /// /// window shift expression
