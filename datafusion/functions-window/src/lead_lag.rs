@@ -27,7 +27,6 @@ use datafusion_expr::{
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-use datafusion_physical_expr::expressions::Literal;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
@@ -186,7 +185,7 @@ fn try_get_literal<'a>(
 ) -> Result<&'a ScalarValue> {
     partition_evaluator_args
         .input_expr_at(index)
-        .and_then(|expr| expr.as_any().downcast_ref::<Literal>())
+        .and_then(|expr| expr.as_any().downcast_ref::<datafusion_physical_expr::expressions::Literal>())
         .ok_or_else(|| DataFusionError::NotImplemented(
             format!("There is only support for Literal types at field idx: {index} in Window Function")
         )).map(|lit| lit.value())
