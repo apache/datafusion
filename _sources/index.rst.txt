@@ -34,7 +34,20 @@ Apache DataFusion
 
 
 DataFusion is an extensible query engine written in `Rust <http://rustlang.org>`_ that
-uses `Apache Arrow <https://arrow.apache.org>`_ as its in-memory format. DataFusion's target users are
+uses `Apache Arrow <https://arrow.apache.org>`_ as its in-memory format.
+
+This documentation is for the <a href="https://github.com/apache/datafusion">core DataFusion project</a>, which contains
+libraries that are used to build data-centric system software. DataFusion also offers the following subprojects, which
+provide packaged versions of DataFusion intended for end users, and these have separate documentation.
+
+- <a href="https://datafusion.apache.org/python/">DataFusion Python</a> offers a Python interface for SQL and DataFrame
+  queries.
+- <a href="https://github.com/apache/datafusion-ray/">DataFusion Ray</a> provides a distributed version of DataFusion
+  that scales out on <a href="https://www.ray.io">Ray</a> clusters.
+- <a href="https://datafusion.apache.org/comet/">DataFusion Comet</a> is an accelerator for Apache Spark based on
+  DataFusion.
+
+DataFusion's target users are
 developers building fast and feature rich database and analytic systems,
 customized to particular workloads. See `use cases <https://datafusion.apache.org/user-guide/introduction.html#use-cases>`_ for examples.
 
