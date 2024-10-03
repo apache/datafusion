@@ -18,6 +18,7 @@
 //! Defines physical expression for `lead` and `lag` that can evaluated
 //! at runtime during query execution
 use datafusion_common::arrow::array::ArrayRef;
+use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
@@ -96,6 +97,9 @@ impl WindowUDFImpl for WindowShift {
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
+        let shift_offset = try_get_literal(&partition_evaluator_args, 1)
+            .and_then(try_get_signed_integer);
+
         todo!()
     }
 
@@ -109,6 +113,29 @@ impl WindowUDFImpl for WindowShift {
 
     fn reverse_expr(&self) -> ReversedUDWF {
         todo!()
+    }
+}
+
+fn try_get_literal<'a>(
+    partition_evaluator_args: &'a PartitionEvaluatorArgs,
+    index: usize,
+) -> Result<&'a ScalarValue> {
+    partition_evaluator_args
+        .input_expr_at(index)
+        .and_then(|expr| expr.as_any().downcast_ref::<Literal>())
+        .ok_or_else(|| DataFusionError::NotImplemented(
+            format!("There is only support for Literal types at field idx: {index} in Window Function")
+        )).map(|lit| lit.value())
+}
+
+fn try_get_signed_integer(value: &ScalarValue) -> Result<i64> {
+    if value.data_type().is_integer() {
+        value.cast_to(&DataType::Int64)?.try_into()
+    } else {
+        Err(DataFusionError::Execution(format!(
+            "Expected an integer value, but got {:?}",
+            value.data_type()
+        )))
     }
 }
 
