@@ -231,14 +231,6 @@ impl TestFile {
 
         options.include_tpch
     }
-
-    fn check_imdb(&self, options: &Options) -> bool {
-        if !self.relative_path.starts_with("imdb") {
-            return true;
-        }
-
-        options.include_imdb
-    }
 }
 
 fn read_test_files<'a>(
@@ -251,7 +243,6 @@ fn read_test_files<'a>(
             .filter(|f| options.check_test_file(&f.relative_path))
             .filter(|f| f.is_slt_file())
             .filter(|f| f.check_tpch(options))
-            .filter(|f| f.check_imdb(options))
             .filter(|f| options.check_pg_compat_file(f.path.as_path())),
     ))
 }
@@ -304,9 +295,6 @@ struct Options {
 
     #[clap(long, env = "INCLUDE_TPCH", help = "Include tpch files")]
     include_tpch: bool,
-
-    #[clap(long, env = "INCLUDE_IMDB", help = "Include imdb files")]
-    include_imdb: bool,
 
     #[clap(
         action,
