@@ -699,9 +699,9 @@ impl Stream for GroupedHashAggregateStream {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         Some(Ok(batch)) => {
                             let _timer = elapsed_compute.timer();
-                            if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-                                probe.record_skipped(&batch);
-                            }
+                            // if let Some(probe) = self.skip_aggregation_probe.as_mut() {
+                            //     probe.record_skipped(&batch);
+                            // }
                             let states = self.transform_to_states(batch)?;
                             return Poll::Ready(Some(Ok(
                                 states.record_output(&self.baseline_metrics)
