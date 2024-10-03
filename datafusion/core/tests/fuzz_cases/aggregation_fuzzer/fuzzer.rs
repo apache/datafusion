@@ -5,7 +5,7 @@ use datafusion::prelude::SessionContext;
 
 use crate::fuzz_cases::aggregation_fuzzer::{
     context_generator::SessionContextGenerator,
-    data_generator::DatasetsGenerator as DatasetGenerator,
+    data_generator::DatasetGenerator as DatasetGenerator,
 };
 
 struct AggregationFuzzer {

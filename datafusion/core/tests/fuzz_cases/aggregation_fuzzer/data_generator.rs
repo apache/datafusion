@@ -17,7 +17,6 @@
 
 use std::sync::Arc;
 
-use arrow::array::ArrayBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
@@ -26,10 +25,9 @@ use rand::{
     rngs::{StdRng, ThreadRng},
     thread_rng, Rng, SeedableRng,
 };
-use rand_distr::Alphanumeric;
 use test_utils::{
     array_gen::{PrimitiveArrayGenerator, StringArrayGenerator},
-    stagger_batch, StringBatchGenerator,
+    stagger_batch,
 };
 
 /// Config for Data sets generator
@@ -48,45 +46,15 @@ use test_utils::{
 ///      will be returned
 ///
 #[derive(Debug, Clone)]
-pub struct DatasetsGeneratorBuilder {
+pub struct DatasetGeneratorConfig {
     // Descriptions of columns in datasets, it's `required`
-    columns: Option<Vec<ColumnDescr>>,
+    pub columns: Vec<ColumnDescr>,
 
     // Rows num range of the generated datasets, it's `required`
-    rows_num_range: Option<(usize, usize)>,
+    pub rows_num_range: (usize, usize),
 
     // Sort keys used to generate the sorted data set, it's optional
-    sort_keys_set: Vec<Vec<String>>,
-}
-
-impl DatasetsGeneratorBuilder {
-    pub fn build(self) -> DatasetsGenerator {
-        let columns = self.columns.expect("columns is required");
-        let rows_num_range = self.rows_num_range.expect("rows_num_range is required");
-
-        let batch_generator =
-            RecordBatchGenerator::new(rows_num_range.0, rows_num_range.1, columns);
-
-        DatasetsGenerator {
-            sort_keys_set: self.sort_keys_set,
-            batch_generator,
-        }
-    }
-
-    pub fn columns(mut self, columns: Vec<ColumnDescr>) -> Self {
-        self.columns = Some(columns);
-        self
-    }
-
-    pub fn rows_num_range(mut self, rows_num_range: (usize, usize)) -> Self {
-        self.rows_num_range = Some(rows_num_range);
-        self
-    }
-
-    pub fn sort_keys_set(mut self, sort_keys_set: Vec<Vec<String>>) -> Self {
-        self.sort_keys_set = sort_keys_set;
-        self
-    }
+    pub sort_keys_set: Vec<Vec<String>>,
 }
 
 /// Data sets generator
@@ -105,13 +73,26 @@ impl DatasetsGeneratorBuilder {
 ///   - Split each batch to multiple batches which each sub-batch in has the randomly `rows num`,
 ///     and this multiple batches will be used to create the `Dataset`.
 ///
-pub struct DatasetsGenerator {
-    sort_keys_set: Vec<Vec<String>>,
+pub struct DatasetGenerator {
     batch_generator: RecordBatchGenerator,
+    sort_keys_set: Vec<Vec<String>>,
 }
 
-impl DatasetsGenerator {
-    fn generate(&self) -> Vec<Dataset> {
+impl DatasetGenerator {
+    pub fn new(config: DatasetGeneratorConfig) -> Self {
+        let batch_generator = RecordBatchGenerator::new(
+            config.rows_num_range.0,
+            config.rows_num_range.1,
+            config.columns,
+        );
+
+        Self {
+            batch_generator,
+            sort_keys_set: config.sort_keys_set,
+        }
+    }
+
+    pub fn generate(&self) -> Vec<Dataset> {
         let mut datasets = Vec::with_capacity(self.sort_keys_set.len() + 1);
 
         // Generate the base batch
@@ -163,7 +144,7 @@ pub struct Dataset {
 }
 
 #[derive(Debug, Clone)]
-struct ColumnDescr {
+pub struct ColumnDescr {
     // Column name
     name: String,
 
@@ -378,39 +359,102 @@ impl RecordBatchGenerator {
 
 #[cfg(test)]
 mod test {
-    // use arrow::util::pretty::pretty_format_batches;
+    use arrow::{util::pretty::pretty_format_batches};
+    use arrow_array::UInt32Array;
 
-    // use super::*;
+    use super::*;
 
-    // #[test]
-    // fn simple_test() {
-    //     let config = DatasetsGeneratorBuilder {
-    //         columns: vec![
-    //             ColumnDescr {
-    //                 name: "a".to_string(),
-    //                 column_type: DataType::Utf8,
-    //             },
-    //             ColumnDescr {
-    //                 name: "b".to_string(),
-    //                 column_type: DataType::UInt32,
-    //             },
-    //         ],
-    //         rows_num_range: (16, 32),
-    //         sort_keys_set: vec![vec!["b".to_string()]],
-    //     };
+    #[test]
+    fn test_generated_datasets() {
+        // The test datasets generation config
+        // We expect that after calling `generate`
+        //  - Generate 2 datasets
+        //  - They have 2 column "a" and "b",
+        //    "a"'s type is `Utf8`, and "b"'s type is `UInt32`
+        //  - One of them is unsorted, another is sorted by column "b"
+        //  - Their rows num should be same and between [16, 32]
+        let config = DatasetGeneratorConfig {
+            columns: vec![
+                ColumnDescr {
+                    name: "a".to_string(),
+                    column_type: DataType::Utf8,
+                },
+                ColumnDescr {
+                    name: "b".to_string(),
+                    column_type: DataType::UInt32,
+                },
+            ],
+            rows_num_range: (16, 32),
+            sort_keys_set: vec![vec!["b".to_string()]],
+        };
 
-    //     let gen = DataSetsGenerator::new(config);
-    //     let datasets = gen.generate();
+        let gen = DatasetGenerator::new(config);
+        let datasets = gen.generate();
 
-    //     for (round, dataset) in datasets.into_iter().enumerate() {
-    //         println!("### round:{round} ###");
-    //         let num_rows = dataset
-    //             .batches
-    //             .iter()
-    //             .map(|batch| batch.num_rows())
-    //             .collect::<Vec<_>>();
-    //         println!("num_rows:{num_rows:?}");
-    //         println!("{}", pretty_format_batches(&dataset.batches).unwrap());
-    //     }
-    // }
+        // Should Generate 2 datasets
+        assert_eq!(datasets.len(), 2);
+
+        // Should have 2 column "a" and "b",
+        // "a"'s type is `Utf8`, and "b"'s type is `UInt32`
+        let check_fields = |batch: &RecordBatch| {
+            assert_eq!(batch.num_columns(), 2);
+            let fields = batch.schema().fields().clone();
+            assert_eq!(fields[0].name(), "a");
+            assert_eq!(*fields[0].data_type(), DataType::Utf8);
+            assert_eq!(fields[1].name(), "b");
+            assert_eq!(*fields[1].data_type(), DataType::UInt32);
+        };
+
+        let batch = &datasets[0].batches[0];
+        check_fields(batch);
+        let batch = &datasets[1].batches[0];
+        check_fields(batch);
+
+        // One batches should be sort by "b"
+        let sorted_batches = &datasets[1].batches;
+        let b_vals = sorted_batches.iter().flat_map(|batch| {
+            let uint_array = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .unwrap();
+            uint_array.iter()
+        });
+        let mut prev_b_val = u32::MIN;
+        for b_val in b_vals {
+            let b_val = b_val.unwrap_or(u32::MIN);
+            assert!(b_val >= prev_b_val);
+            prev_b_val = b_val;
+        }
+
+        // Two batches should be same after sorting
+        let formatted_batches0 = pretty_format_batches(&datasets[0].batches)
+            .unwrap()
+            .to_string();
+        let mut formatted_batches0_sorted: Vec<&str> =
+            formatted_batches0.trim().lines().collect();
+        formatted_batches0_sorted.sort_unstable();
+        let formatted_batches1 = pretty_format_batches(&datasets[1].batches)
+            .unwrap()
+            .to_string();
+        let mut formatted_batches1_sorted: Vec<&str> =
+            formatted_batches1.trim().lines().collect();
+        formatted_batches1_sorted.sort_unstable();
+        assert_eq!(formatted_batches0_sorted, formatted_batches1_sorted);
+
+        // Rows num should between [16, 32]
+        let rows_num0 = datasets[0]
+            .batches
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>();
+        let rows_num1 = datasets[1]
+            .batches
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum::<usize>();
+        assert_eq!(rows_num0, rows_num1);
+        assert!(rows_num0 >= 16);
+        assert!(rows_num0 <= 32);
+    }
 }

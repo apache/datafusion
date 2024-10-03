@@ -10,7 +10,7 @@ use rand::{thread_rng, Rng};
 
 use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SessionContextGeneratorBuilder {
     dataset: Option<Dataset>,
 }
@@ -120,7 +120,7 @@ impl SessionContextGenerator {
             &ScalarValue::Float64(Some(skip_partial_params.ratio_threshold)),
         );
 
-        let mut ctx = SessionContext::new_with_config(session_config);
+        let ctx = SessionContext::new_with_config(session_config);
         ctx.register_table("fuzz_table", Arc::new(provider))
             .unwrap();
 
@@ -181,7 +181,7 @@ impl SessionContextGenerator {
             &ScalarValue::Float64(Some(skip_partial_params.ratio_threshold)),
         );
 
-        let mut ctx = SessionContext::new_with_config(session_config);
+        let ctx = SessionContext::new_with_config(session_config);
         ctx.register_table("fuzz_table", Arc::new(provider))
             .unwrap();
 

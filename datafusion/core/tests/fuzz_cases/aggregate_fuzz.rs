@@ -23,7 +23,6 @@ use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::types::Int64Type;
-use arrow_schema::Schema;
 use datafusion::common::Result;
 use datafusion::datasource::MemTable;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;

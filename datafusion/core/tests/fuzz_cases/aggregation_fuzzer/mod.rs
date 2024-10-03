@@ -17,5 +17,4 @@
 
 mod context_generator;
 mod data_generator;
-
-struct Test {}
+mod fuzzer;
