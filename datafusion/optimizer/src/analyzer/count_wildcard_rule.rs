@@ -48,13 +48,7 @@ impl AnalyzerRule for CountWildcardRule {
 }
 
 fn is_wildcard(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::Wildcard {
-            qualifier: None,
-            ..
-        }
-    )
+    matches!(expr, Expr::Wildcard { .. })
 }
 
 fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {

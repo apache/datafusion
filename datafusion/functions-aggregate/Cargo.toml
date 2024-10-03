@@ -51,7 +51,6 @@ half = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 paste = "1.0.14"
-sqlparser = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
