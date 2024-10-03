@@ -192,7 +192,10 @@ impl WindowUDFImpl for WindowShift {
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
-        todo!()
+        match self.kind {
+            WindowShiftKind::Lag => ReversedUDWF::Reversed(lag_udwf()),
+            WindowShiftKind::Lead => ReversedUDWF::Reversed(lead_udwf()),
+        }
     }
 }
 fn get_signed_integer(value: ScalarValue) -> Result<i64> {
