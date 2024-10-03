@@ -1060,11 +1060,8 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<()> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
-                dbg!("should skip");
                 let batch = self.emit(EmitTo::All, false)?;
                 self.exec_state = ExecutionState::ProducingOutput(batch);
-            } else {
-                dbg!("should not skip");
             }
         }
 
