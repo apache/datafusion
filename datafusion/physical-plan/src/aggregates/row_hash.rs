@@ -804,6 +804,8 @@ impl GroupedHashAggregateStream {
             let n_rows = group_values[0].len();
             let batch_hashes = &mut self.hashes_buffer;
             batch_hashes.resize(n_rows, 0);
+            // reset hash values to 0 to clear out previous hash
+            batch_hashes.fill(0);
             create_hashes(group_values, &self.random_state, batch_hashes)?;
 
             // This function should be called if skip aggregation is supported
@@ -910,6 +912,8 @@ impl GroupedHashAggregateStream {
             let n_rows = group_values[0].len();
             let batch_hashes = &mut self.hashes_buffer;
             batch_hashes.resize(n_rows, 0);
+            // reset hash values to 0 to clear out previous hash
+            batch_hashes.fill(0);
             create_hashes(group_values, &self.random_state, batch_hashes)?;
 
             // calculate the group indices for each input row
