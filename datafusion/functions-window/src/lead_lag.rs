@@ -154,10 +154,27 @@ impl WindowUDFImpl for WindowShift {
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
-        let shift_offset =
-            try_get_shift_offset(&self.kind, &partition_evaluator_args, 1)?;
-        let default_value = try_get_default_value(&partition_evaluator_args, 2)?;
+        let shift_offset = scalar_at(&partition_evaluator_args, 1)?
+            .map(get_signed_integer)
+            .map_or(Ok(None), |v| v.map(Some))
+            .map(|n| self.kind.shift_offset(n))
+            .map(|offset| {
+                if partition_evaluator_args.is_reversed() {
+                    -offset
+                } else {
+                    offset
+                }
+            })?;
+        let return_type = partition_evaluator_args
+            .input_types_at(0)
+            .unwrap_or(&DataType::Null);
+        let default_value = scalar_at(&partition_evaluator_args, 2)
+            .and_then(|scalar| get_default_value(return_type, scalar))?;
 
+        /*        let shift_offset =
+                    try_get_shift_offset(&self.kind, &partition_evaluator_args, 1)?;
+                let default_value = try_get_default_value(&partition_evaluator_args, 2)?;
+        */
         Ok(Box::new(WindowShiftEvaluator {
             shift_offset,
             default_value,
@@ -178,7 +195,48 @@ impl WindowUDFImpl for WindowShift {
         todo!()
     }
 }
+fn get_signed_integer(value: ScalarValue) -> Result<i64> {
+    if value.data_type().is_integer() {
+        value.cast_to(&DataType::Int64)?.try_into()
+    } else {
+        Err(DataFusionError::Execution(
+            "Expected an integer value".to_string(),
+        ))
+    }
+}
 
+fn get_default_value(
+    return_type: &DataType,
+    value: Option<ScalarValue>,
+) -> Result<ScalarValue> {
+    match value {
+        Some(default_value) if !default_value.is_null() => {
+            default_value.cast_to(return_type)
+        }
+        // If None or Null datatype
+        _ => ScalarValue::try_from(return_type),
+    }
+}
+
+fn scalar_at(
+    partition_evaluator_args: &PartitionEvaluatorArgs,
+    index: usize,
+) -> Result<Option<ScalarValue>> {
+    let value = if let Some(expr) = partition_evaluator_args.input_expr_at(index) {
+        let inner = expr
+            .as_any()
+            .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
+            .ok_or_else(|| DataFusionError::NotImplemented(
+                format!("There is only support Literal types for field at idx: {index} in Window Function."),
+            ))?
+            .value()
+            .clone();
+        Some(inner)
+    } else {
+        None
+    };
+    Ok(value)
+}
 fn try_get_literal<'a>(
     partition_evaluator_args: &'a PartitionEvaluatorArgs,
     index: usize,
