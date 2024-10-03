@@ -54,6 +54,7 @@ pub(crate) struct MockSessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
+    window_functions: HashMap<String, Arc<WindowUDF>>,
     pub config_options: ConfigOptions,
 }
 
@@ -77,6 +78,14 @@ impl MockSessionState {
         self.aggregate_functions.insert(
             aggregate_function.name().to_string().to_lowercase(),
             aggregate_function,
+        );
+        self
+    }
+
+    pub fn with_window_function(mut self, window_function: Arc<WindowUDF>) -> Self {
+        self.window_functions.insert(
+            window_function.name().to_string().to_lowercase(),
+            window_function,
         );
         self
     }
