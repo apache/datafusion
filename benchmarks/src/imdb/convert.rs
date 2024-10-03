@@ -51,11 +51,12 @@ impl ConvertOpt {
     pub async fn run(self) -> Result<()> {
         let input_path = self.input_path.to_str().unwrap();
         let output_path = self.output_path.to_str().unwrap();
+        let config = SessionConfig::new().with_batch_size(self.batch_size);
+        let ctx = SessionContext::new_with_config(config);
 
         for table in IMDB_TABLES {
             let start = Instant::now();
             let schema = get_imdb_table_schema(table);
-
             let input_path = format!("{input_path}/{table}.csv");
             let output_path = format!("{output_path}/{table}.parquet");
             let options = CsvReadOptions::new()
@@ -64,9 +65,6 @@ impl ConvertOpt {
                 .delimiter(b',')
                 .escape(b'\\')
                 .file_extension(".csv");
-
-            let config = SessionConfig::new().with_batch_size(self.batch_size);
-            let ctx = SessionContext::new_with_config(config);
 
             let mut csv = ctx.read_csv(&input_path, options).await?;
 
