@@ -153,8 +153,22 @@ fn roundtrip_statement() -> Result<()> {
             SUM(id) AS total_sum,
             SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
             MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total
-            FROM person GROUP BY id, first_name"#,
-            "SELECT id, first_name, last_name, SUM(id) AS total_sum FROM person GROUP BY ROLLUP(id, first_name, last_name)",
+            FROM person JOIN orders ON person.id = orders.customer_id GROUP BY id, first_name"#,
+            r#"SELECT id, first_name,
+            SUM(id) AS total_sum,
+            SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
+            MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total
+            FROM (SELECT id, first_name from person) person JOIN (SELECT customer_id FROM orders) orders ON person.id = orders.customer_id GROUP BY id, first_name"#,
+            r#"SELECT id, first_name, last_name, customer_id, SUM(id) AS total_sum
+            FROM person
+            JOIN orders ON person.id = orders.customer_id
+            GROUP BY ROLLUP(id, first_name, last_name, customer_id)"#,
+            r#"SELECT id, first_name, last_name,
+            SUM(id) AS total_sum,
+            COUNT(*) AS total_count,
+            SUM(id) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+            FROM person
+            GROUP BY GROUPING SETS ((id, first_name, last_name), (first_name, last_name), (last_name))"#,
     ];
 
     // For each test sql string, we transform as follows:
