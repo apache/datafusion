@@ -381,6 +381,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// Random state for creating hashes
     random_state: RandomState,
 
+    /// Reuse buffer to avoid reallocation
+    hashes_buffer: Vec<u64>,
+
     // ========================================================================
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
@@ -527,6 +530,7 @@ impl GroupedHashAggregateStream {
             skip_aggregation_probe,
             random_state: Default::default(),
             skip_partial_aggregation: false,
+            hashes_buffer: Default::default(),
         })
     }
 }
@@ -582,22 +586,15 @@ impl Stream for GroupedHashAggregateStream {
                             let timer = elapsed_compute.timer();
 
                             // Do the grouping
-                            let group_by_values =
-                                self.evalute_grouping_expressions(&batch)?;
-                            let hashes_buffer = self.compute_group_by_hashes_and_update_skip_aggregation_probe(
-                                &group_by_values,
-                            )?;
+                            extract_ok!(
+                                self.group_aggregate_batch_with_skipping_partial(&batch,)
+                            );
                             if self.skip_partial_aggregation {
                                 let states = self.transform_to_states(batch)?;
                                 self.exec_state = ExecutionState::ProducingOutput(states);
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
-                            extract_ok!(self.group_aggregate_batch(
-                                batch,
-                                group_by_values,
-                                &hashes_buffer
-                            ));
 
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
@@ -630,15 +627,7 @@ impl Stream for GroupedHashAggregateStream {
                             let timer = elapsed_compute.timer();
 
                             // Do the grouping
-                            let group_by_values =
-                                self.evalute_grouping_expressions(&batch)?;
-                            let hashes_buffer =
-                                self.compute_group_by_hashes(&group_by_values)?;
-                            extract_ok!(self.group_aggregate_batch(
-                                batch,
-                                group_by_values,
-                                &hashes_buffer
-                            ));
+                            extract_ok!(self.group_aggregate_batch(&batch));
 
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
@@ -675,15 +664,7 @@ impl Stream for GroupedHashAggregateStream {
                             extract_ok!(self.spill_previous_if_necessary(&batch));
 
                             // Do the grouping
-                            let group_by_values =
-                                self.evalute_grouping_expressions(&batch)?;
-                            let hashes_buffer =
-                                self.compute_group_by_hashes(&group_by_values)?;
-                            extract_ok!(self.group_aggregate_batch(
-                                batch,
-                                group_by_values,
-                                &hashes_buffer
-                            ));
+                            extract_ok!(self.group_aggregate_batch(&batch,));
 
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
@@ -793,16 +774,35 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 }
 
 impl GroupedHashAggregateStream {
-    /// compute hashes with counting hashes for skipping partial aggregation
-    fn compute_group_by_hashes_and_update_skip_aggregation_probe(
+    /// Group aggregation with skip partial logic
+    fn group_aggregate_batch_with_skipping_partial(
         &mut self,
-        group_by_values: &[Vec<ArrayRef>],
-    ) -> Result<Vec<Vec<u64>>> {
-        let mut hashes_buffer: Vec<Vec<u64>> = Vec::default();
-        hashes_buffer.resize(group_by_values.len(), Vec::new());
-        for (index, group_values) in group_by_values.iter().enumerate() {
+        batch: &RecordBatch,
+    ) -> Result<()> {
+        let group_by_values = if self.spill_state.is_stream_merging {
+            evaluate_group_by(&self.spill_state.merging_group_by, batch)
+        } else {
+            evaluate_group_by(&self.group_by, batch)
+        }?;
+
+        // Evaluate the aggregation expressions.
+        let input_values = if self.spill_state.is_stream_merging {
+            evaluate_many(&self.spill_state.merging_aggregate_arguments, batch)?
+        } else {
+            evaluate_many(&self.aggregate_arguments, batch)?
+        };
+
+        // Evaluate the filter expressions, if any, against the inputs
+        let filter_values = if self.spill_state.is_stream_merging {
+            let filter_expressions = vec![None; self.accumulators.len()];
+            evaluate_optional(&filter_expressions, batch)?
+        } else {
+            evaluate_optional(&self.filter_expressions, batch)?
+        };
+
+        for group_values in group_by_values.iter() {
             let n_rows = group_values[0].len();
-            let batch_hashes = &mut hashes_buffer[index];
+            let batch_hashes = &mut self.hashes_buffer;
             batch_hashes.resize(n_rows, 0);
             create_hashes(group_values, &self.random_state, batch_hashes)?;
 
@@ -810,70 +810,114 @@ impl GroupedHashAggregateStream {
             let probe = self.skip_aggregation_probe.as_mut().unwrap();
             self.skip_partial_aggregation = probe.update_state(batch_hashes);
             if self.skip_partial_aggregation {
-                return Ok(vec![]);
+                return Ok(());
             }
-        }
 
-        Ok(hashes_buffer)
-    }
-
-    /// compute hashes without counting hashes
-    fn compute_group_by_hashes(
-        &mut self,
-        group_by_values: &[Vec<ArrayRef>],
-    ) -> Result<Vec<Vec<u64>>> {
-        let mut hashes_buffer: Vec<Vec<u64>> = Vec::default();
-        hashes_buffer.resize(group_by_values.len(), Vec::new());
-        for (index, group_values) in group_by_values.iter().enumerate() {
-            let n_rows = group_values[0].len();
-            let batch_hashes = &mut hashes_buffer[index];
-            batch_hashes.resize(n_rows, 0);
-            create_hashes(group_values, &self.random_state, batch_hashes)?;
-        }
-
-        Ok(hashes_buffer)
-    }
-
-    fn evalute_grouping_expressions(
-        &mut self,
-        batch: &RecordBatch,
-    ) -> Result<Vec<Vec<ArrayRef>>> {
-        if self.spill_state.is_stream_merging {
-            evaluate_group_by(&self.spill_state.merging_group_by, batch)
-        } else {
-            evaluate_group_by(&self.group_by, batch)
-        }
-    }
-
-    /// Perform group-by aggregation for the given [`RecordBatch`].
-    fn group_aggregate_batch(
-        &mut self,
-        batch: RecordBatch,
-        group_by_values: Vec<Vec<ArrayRef>>,
-        hashes_buffer: &[Vec<u64>],
-    ) -> Result<()> {
-        // Evaluate the aggregation expressions.
-        let input_values = if self.spill_state.is_stream_merging {
-            evaluate_many(&self.spill_state.merging_aggregate_arguments, &batch)?
-        } else {
-            evaluate_many(&self.aggregate_arguments, &batch)?
-        };
-
-        // Evaluate the filter expressions, if any, against the inputs
-        let filter_values = if self.spill_state.is_stream_merging {
-            let filter_expressions = vec![None; self.accumulators.len()];
-            evaluate_optional(&filter_expressions, &batch)?
-        } else {
-            evaluate_optional(&self.filter_expressions, &batch)?
-        };
-
-        for (index, group_values) in group_by_values.iter().enumerate() {
             // calculate the group indices for each input row
             let starting_num_groups = self.group_values.len();
             self.group_values.intern(
                 group_values,
                 &mut self.current_group_indices,
-                &hashes_buffer[index],
+                batch_hashes,
+            )?;
+
+            let group_indices = &self.current_group_indices;
+
+            // Update ordering information if necessary
+            let total_num_groups = self.group_values.len();
+            if total_num_groups > starting_num_groups {
+                self.group_ordering.new_groups(
+                    group_values,
+                    group_indices,
+                    total_num_groups,
+                )?;
+            }
+
+            // Gather the inputs to call the actual accumulator
+            let t = self
+                .accumulators
+                .iter_mut()
+                .zip(input_values.iter())
+                .zip(filter_values.iter());
+
+            for ((acc, values), opt_filter) in t {
+                let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
+
+                // Call the appropriate method on each aggregator with
+                // the entire input row and the relevant group indexes
+                match self.mode {
+                    AggregateMode::Partial
+                    | AggregateMode::Single
+                    | AggregateMode::SinglePartitioned
+                        if !self.spill_state.is_stream_merging =>
+                    {
+                        acc.update_batch(
+                            values,
+                            group_indices,
+                            opt_filter,
+                            total_num_groups,
+                        )?;
+                    }
+                    _ => {
+                        // if aggregation is over intermediate states,
+                        // use merge
+                        acc.merge_batch(
+                            values,
+                            group_indices,
+                            opt_filter,
+                            total_num_groups,
+                        )?;
+                    }
+                }
+            }
+        }
+
+        match self.update_memory_reservation() {
+            // Here we can ignore `insufficient_capacity_err` because we will spill later,
+            // but at least one batch should fit in the memory
+            Err(DataFusionError::ResourcesExhausted(_))
+                if self.group_values.len() >= self.batch_size =>
+            {
+                Ok(())
+            }
+            other => other,
+        }
+    }
+
+    /// Perform group-by aggregation for the given [`RecordBatch`].
+    fn group_aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let group_by_values = if self.spill_state.is_stream_merging {
+            evaluate_group_by(&self.spill_state.merging_group_by, batch)
+        } else {
+            evaluate_group_by(&self.group_by, batch)
+        }?;
+        // Evaluate the aggregation expressions.
+        let input_values = if self.spill_state.is_stream_merging {
+            evaluate_many(&self.spill_state.merging_aggregate_arguments, batch)?
+        } else {
+            evaluate_many(&self.aggregate_arguments, batch)?
+        };
+
+        // Evaluate the filter expressions, if any, against the inputs
+        let filter_values = if self.spill_state.is_stream_merging {
+            let filter_expressions = vec![None; self.accumulators.len()];
+            evaluate_optional(&filter_expressions, batch)?
+        } else {
+            evaluate_optional(&self.filter_expressions, batch)?
+        };
+
+        for group_values in group_by_values.iter() {
+            let n_rows = group_values[0].len();
+            let batch_hashes = &mut self.hashes_buffer;
+            batch_hashes.resize(n_rows, 0);
+            create_hashes(group_values, &self.random_state, batch_hashes)?;
+
+            // calculate the group indices for each input row
+            let starting_num_groups = self.group_values.len();
+            self.group_values.intern(
+                group_values,
+                &mut self.current_group_indices,
+                batch_hashes,
             )?;
 
             let group_indices = &self.current_group_indices;
