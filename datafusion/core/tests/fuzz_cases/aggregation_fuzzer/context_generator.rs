@@ -22,6 +22,7 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use datafusion_catalog::TableProvider;
+use datafusion_common::error::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::col;
 use rand::{thread_rng, Rng};
@@ -85,10 +86,10 @@ impl SessionContextGenerator {
 
 impl SessionContextGenerator {
     /// Generate the `SessionContext` for the baseline run
-    pub fn generate_baseline(&self) -> SessionContext {
+    pub fn generate_baseline(&self) -> Result<SessionContext> {
         let schema = self.dataset.batches[0].schema();
         let batches = self.dataset.batches.clone();
-        let provider = MemTable::try_new(schema, vec![batches]).unwrap();
+        let provider = MemTable::try_new(schema, vec![batches])?;
 
         // The baseline context should try best to disable all optimizations,
         // and pursuing the rightness.
@@ -100,7 +101,7 @@ impl SessionContextGenerator {
             batch_size,
             target_partitions,
             skip_partial_params,
-            table_name: &self.table_name,
+            table_name: self.table_name.clone(),
             table_provider: Arc::new(provider),
         };
 
@@ -108,11 +109,11 @@ impl SessionContextGenerator {
     }
 
     /// Randomly generate session context
-    pub fn generate(&self) -> SessionContext {
+    pub fn generate(&self) -> Result<SessionContext> {
         let mut rng = thread_rng();
         let schema = self.dataset.batches[0].schema();
         let batches = self.dataset.batches.clone();
-        let provider = MemTable::try_new(schema, vec![batches]).unwrap();
+        let provider = MemTable::try_new(schema, vec![batches])?;
 
         // We will randomly generate following options:
         //   - `batch_size`, from range: [1, `total_rows_num`]
@@ -146,7 +147,7 @@ impl SessionContextGenerator {
             batch_size,
             target_partitions,
             skip_partial_params,
-            table_name: &self.table_name,
+            table_name: self.table_name.clone(),
             table_provider: Arc::new(provider),
         };
 
@@ -155,16 +156,16 @@ impl SessionContextGenerator {
 }
 
 /// Collect the generated params, and build the [`SessionContext`]
-struct GeneratedSessionContextBuilder<'a> {
+struct GeneratedSessionContextBuilder {
     batch_size: usize,
     target_partitions: usize,
     skip_partial_params: SkipPartialParams,
-    table_name: &'a str,
+    table_name: String,
     table_provider: Arc<dyn TableProvider>,
 }
 
 impl GeneratedSessionContextBuilder {
-    fn build(self) -> SessionContext {
+    fn build(self) -> Result<SessionContext> {
         // Build session context
         let mut session_config = SessionConfig::default();
         session_config = session_config.set(
@@ -185,10 +186,9 @@ impl GeneratedSessionContextBuilder {
         );
 
         let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_table("fuzz_table", self.table_provider)
-            .unwrap();
+        ctx.register_table(self.table_name, self.table_provider)?;
 
-        ctx
+        Ok(ctx)
     }
 }
 
@@ -222,7 +222,6 @@ impl SkipPartialParams {
 
 #[cfg(test)]
 mod test {
-    use arrow::util::pretty::pretty_format_batches;
     use arrow_array::{RecordBatch, StringArray, UInt32Array};
     use arrow_schema::{DataType, Field, Schema};
 
@@ -282,10 +281,10 @@ mod test {
         let ctx_generator = SessionContextGenerator::new(dataset, "fuzz_table");
 
         let query = "select b, count(a) from fuzz_table group by b";
-        let baseline_ctx = ctx_generator.generate_baseline();
+        let baseline_ctx = ctx_generator.generate_baseline().unwrap();
         let mut random_ctxs = Vec::with_capacity(8);
         for _ in 0..8 {
-            let ctx = ctx_generator.generate();
+            let ctx = ctx_generator.generate().unwrap();
             random_ctxs.push(ctx);
         }
 

@@ -130,7 +130,10 @@ impl AggregationFuzzer {
 
         // Loop to generate datasets
         for _ in 0..self.data_gen_rounds {
-            let datasets = self.dataset_generator.generate();
+            let datasets = self
+                .dataset_generator
+                .generate()
+                .expect("should success to generate dataset");
             let tasks = self.generate_fuzz_tasks(datasets).await;
             for task in tasks {
                 join_set.spawn(async move {
@@ -154,13 +157,17 @@ impl AggregationFuzzer {
             let ctx_generator = SessionContextGenerator::new(dataset, &self.table_name);
 
             // Generate the baseline context, and get the baseline result firstly
-            let baseline_ctx = ctx_generator.generate_baseline();
+            let baseline_ctx = ctx_generator
+                .generate_baseline()
+                .expect("should success to generate baseline session context");
             let baseline_result = run_sql(&self.sql, &baseline_ctx).await;
             let baseline_result = Arc::new(baseline_result);
 
             // Generate test tasks
             for _ in 0..self.ctx_gen_rounds {
-                let ctx = ctx_generator.generate();
+                let ctx = ctx_generator
+                    .generate()
+                    .expect("should success to generate session context");
                 let task = AggregationFuzzTestTask {
                     expected_result: baseline_result.clone(),
                     query: self.sql.clone(),

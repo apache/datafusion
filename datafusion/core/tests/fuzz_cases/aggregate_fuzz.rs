@@ -44,10 +44,6 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::task::JoinSet;
 
-use crate::fuzz_cases::aggregation_fuzzer::{
-    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig,
-};
-
 /// Tests that streaming aggregate and batch (non streaming) aggregate produce
 /// same results
 #[tokio::test(flavor = "multi_thread")]

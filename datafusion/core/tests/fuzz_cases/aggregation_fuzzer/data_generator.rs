@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 use datafusion_physical_plan::sorts::sort::sort_batch;
 use rand::{
@@ -92,11 +93,11 @@ impl DatasetGenerator {
         }
     }
 
-    pub fn generate(&self) -> Vec<Dataset> {
+    pub fn generate(&self) -> Result<Vec<Dataset>> {
         let mut datasets = Vec::with_capacity(self.sort_keys_set.len() + 1);
 
         // Generate the base batch
-        let base_batch = self.batch_generator.generate();
+        let base_batch = self.batch_generator.generate()?;
         let batches = stagger_batch(base_batch.clone());
         let dataset = Dataset::new(batches, Vec::new());
         datasets.push(dataset);
@@ -107,22 +108,18 @@ impl DatasetGenerator {
             let sort_exprs = sort_keys
                 .iter()
                 .map(|key| {
-                    let col_expr = col(&key, &schema)
-                        .expect(
-                            &format!("sort key must be valid, invalid sort key:{key}, schema:{schema:?}")
-                        );
-                    PhysicalSortExpr::new_default(col_expr)
+                    let col_expr = col(&key, &schema)?;
+                    Ok(PhysicalSortExpr::new_default(col_expr))
                 })
-                .collect::<Vec<_>>();
-            let sorted_batch = sort_batch(&base_batch, &sort_exprs, None)
-                .expect("sort batch should not fail");
+                .collect::<Result<Vec<_>>>()?;
+            let sorted_batch = sort_batch(&base_batch, &sort_exprs, None)?;
 
             let batches = stagger_batch(sorted_batch);
             let dataset = Dataset::new(batches, sort_keys);
             datasets.push(dataset);
         }
 
-        datasets
+        Ok(datasets)
     }
 }
 
@@ -233,7 +230,7 @@ impl RecordBatchGenerator {
         }
     }
 
-    fn generate(&self) -> RecordBatch {
+    fn generate(&self) -> Result<RecordBatch> {
         let mut rng = thread_rng();
         let num_rows = rng.gen_range(self.min_rows_nun..=self.max_rows_num);
         let array_gen_rng = StdRng::from_seed(rng.gen());
@@ -258,7 +255,7 @@ impl RecordBatchGenerator {
             .collect::<Vec<_>>();
         let schema = Arc::new(Schema::new(fields));
 
-        RecordBatch::try_new(schema, arrays).unwrap()
+        RecordBatch::try_new(schema, arrays).map_err(|e| arrow_datafusion_err!(e))
     }
 
     fn generate_array_of_type(
@@ -372,7 +369,6 @@ impl RecordBatchGenerator {
 
 #[cfg(test)]
 mod test {
-    use arrow::util::pretty::pretty_format_batches;
     use arrow_array::UInt32Array;
 
     use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
@@ -404,7 +400,7 @@ mod test {
         };
 
         let gen = DatasetGenerator::new(config);
-        let datasets = gen.generate();
+        let datasets = gen.generate().unwrap();
 
         // Should Generate 2 datasets
         assert_eq!(datasets.len(), 2);
