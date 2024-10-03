@@ -1345,6 +1345,7 @@ dependencies = [
  "datafusion-functions-aggregate-common",
  "datafusion-functions-window-common",
  "datafusion-physical-expr-common",
+ "indexmap",
  "paste",
  "serde_json",
  "sqlparser",
@@ -1402,7 +1403,6 @@ dependencies = [
  "half",
  "log",
  "paste",
- "sqlparser",
 ]
 
 [[package]]

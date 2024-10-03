@@ -345,7 +345,7 @@ fn select_wildcard_with_repeated_column() {
     let sql = "SELECT *, col_int32 FROM test";
     let err = test_sql(sql).expect_err("query should have failed");
     assert_eq!(
-        "expand_wildcard_rule\ncaused by\nError during planning: Projections require unique expression names but the expression \"test.col_int32\" at position 0 and \"test.col_int32\" at position 7 have the same name. Consider aliasing (\"AS\") one of them.",
+        "Schema error: Schema contains duplicate qualified field name test.col_int32",
         err.strip_backtrace()
     );
 }
@@ -396,7 +396,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         .with_udaf(count_udaf())
         .with_udaf(avg_udaf());
     let sql_to_rel = SqlToRel::new(&context_provider);
-    let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
+    let plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
 
     let config = OptimizerContext::new().with_skip_failing_rules(false);
     let analyzer = Analyzer::new();

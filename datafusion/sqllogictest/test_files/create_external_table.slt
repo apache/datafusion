@@ -275,3 +275,15 @@ DROP TABLE t;
 # query should fail with bad column
 statement error DataFusion error: Error during planning: Column foo is not in schema
 CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (foo);
+
+# Create external table with qualified name should belong to the schema
+statement ok
+CREATE SCHEMA staging;
+
+statement ok
+CREATE EXTERNAL TABLE staging.foo STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+
+# Create external table with qualified name, but no schema should error
+statement error DataFusion error: Error during planning: failed to resolve schema: release
+CREATE EXTERNAL TABLE release.bar STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+

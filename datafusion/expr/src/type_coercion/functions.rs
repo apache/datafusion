@@ -602,89 +602,48 @@ fn coerced_from<'a>(
             Some(type_into.clone())
         }
         // coerced into type_into
-        (Int8, _) if matches!(type_from, Null | Int8) => Some(type_into.clone()),
-        (Int16, _) if matches!(type_from, Null | Int8 | Int16 | UInt8) => {
+        (Int8, Null | Int8) => Some(type_into.clone()),
+        (Int16, Null | Int8 | Int16 | UInt8) => Some(type_into.clone()),
+        (Int32, Null | Int8 | Int16 | Int32 | UInt8 | UInt16) => Some(type_into.clone()),
+        (Int64, Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32) => {
             Some(type_into.clone())
         }
-        (Int32, _)
-            if matches!(type_from, Null | Int8 | Int16 | Int32 | UInt8 | UInt16) =>
-        {
-            Some(type_into.clone())
-        }
-        (Int64, _)
-            if matches!(
-                type_from,
-                Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
-            ) =>
-        {
-            Some(type_into.clone())
-        }
-        (UInt8, _) if matches!(type_from, Null | UInt8) => Some(type_into.clone()),
-        (UInt16, _) if matches!(type_from, Null | UInt8 | UInt16) => {
-            Some(type_into.clone())
-        }
-        (UInt32, _) if matches!(type_from, Null | UInt8 | UInt16 | UInt32) => {
-            Some(type_into.clone())
-        }
-        (UInt64, _) if matches!(type_from, Null | UInt8 | UInt16 | UInt32 | UInt64) => {
-            Some(type_into.clone())
-        }
-        (Float32, _)
-            if matches!(
-                type_from,
-                Null | Int8
-                    | Int16
-                    | Int32
-                    | Int64
-                    | UInt8
-                    | UInt16
-                    | UInt32
-                    | UInt64
-                    | Float32
-            ) =>
-        {
-            Some(type_into.clone())
-        }
-        (Float64, _)
-            if matches!(
-                type_from,
-                Null | Int8
-                    | Int16
-                    | Int32
-                    | Int64
-                    | UInt8
-                    | UInt16
-                    | UInt32
-                    | UInt64
-                    | Float32
-                    | Float64
-                    | Decimal128(_, _)
-            ) =>
-        {
-            Some(type_into.clone())
-        }
-        (Timestamp(TimeUnit::Nanosecond, None), _)
-            if matches!(
-                type_from,
-                Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8
-            ) =>
-        {
-            Some(type_into.clone())
-        }
-        (Interval(_), _) if matches!(type_from, Utf8 | LargeUtf8) => {
-            Some(type_into.clone())
-        }
+        (UInt8, Null | UInt8) => Some(type_into.clone()),
+        (UInt16, Null | UInt8 | UInt16) => Some(type_into.clone()),
+        (UInt32, Null | UInt8 | UInt16 | UInt32) => Some(type_into.clone()),
+        (UInt64, Null | UInt8 | UInt16 | UInt32 | UInt64) => Some(type_into.clone()),
+        (
+            Float32,
+            Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
+            | Float32,
+        ) => Some(type_into.clone()),
+        (
+            Float64,
+            Null
+            | Int8
+            | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float32
+            | Float64
+            | Decimal128(_, _),
+        ) => Some(type_into.clone()),
+        (
+            Timestamp(TimeUnit::Nanosecond, None),
+            Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8,
+        ) => Some(type_into.clone()),
+        (Interval(_), Utf8 | LargeUtf8) => Some(type_into.clone()),
         // We can go into a Utf8View from a Utf8 or LargeUtf8
-        (Utf8View, _) if matches!(type_from, Utf8 | LargeUtf8 | Null) => {
-            Some(type_into.clone())
-        }
+        (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
-        (List(_), _) if matches!(type_from, FixedSizeList(_, _)) => {
-            Some(type_into.clone())
-        }
+        (List(_), FixedSizeList(_, _)) => Some(type_into.clone()),
 
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
         // List or LargeList with different dimensions should be handled in TypeSignature or other places before this
@@ -695,18 +654,16 @@ fn coerced_from<'a>(
             Some(type_into.clone())
         }
         // should be able to coerce wildcard fixed size list to non wildcard fixed size list
-        (FixedSizeList(f_into, FIXED_SIZE_LIST_WILDCARD), _) => match type_from {
-            FixedSizeList(f_from, size_from) => {
-                match coerced_from(f_into.data_type(), f_from.data_type()) {
-                    Some(data_type) if &data_type != f_into.data_type() => {
-                        let new_field =
-                            Arc::new(f_into.as_ref().clone().with_data_type(data_type));
-                        Some(FixedSizeList(new_field, *size_from))
-                    }
-                    Some(_) => Some(FixedSizeList(Arc::clone(f_into), *size_from)),
-                    _ => None,
-                }
+        (
+            FixedSizeList(f_into, FIXED_SIZE_LIST_WILDCARD),
+            FixedSizeList(f_from, size_from),
+        ) => match coerced_from(f_into.data_type(), f_from.data_type()) {
+            Some(data_type) if &data_type != f_into.data_type() => {
+                let new_field =
+                    Arc::new(f_into.as_ref().clone().with_data_type(data_type));
+                Some(FixedSizeList(new_field, *size_from))
             }
+            Some(_) => Some(FixedSizeList(Arc::clone(f_into), *size_from)),
             _ => None,
         },
         (Timestamp(unit, Some(tz)), _) if tz.as_ref() == TIMEZONE_WILDCARD => {
@@ -721,12 +678,7 @@ fn coerced_from<'a>(
                 _ => None,
             }
         }
-        (Timestamp(_, Some(_)), _)
-            if matches!(
-                type_from,
-                Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8
-            ) =>
-        {
+        (Timestamp(_, Some(_)), Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8) => {
             Some(type_into.clone())
         }
         _ => None,

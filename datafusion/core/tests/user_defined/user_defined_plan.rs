@@ -443,6 +443,10 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
             expr: replace_sort_expression(self.expr.clone(), exprs.swap_remove(0)),
         })
     }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
+    }
 }
 
 /// Physical planner for TopK nodes

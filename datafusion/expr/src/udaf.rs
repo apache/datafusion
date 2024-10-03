@@ -26,7 +26,8 @@ use std::vec;
 
 use arrow::datatypes::{DataType, Field};
 
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::AggregateFunction;
 use crate::function::{
@@ -92,6 +93,22 @@ impl fmt::Display for AggregateUDF {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", self.name())
     }
+}
+
+/// Arguments passed to [`AggregateUDFImpl::value_from_stats`]
+pub struct StatisticsArgs<'a> {
+    /// The statistics of the aggregate input
+    pub statistics: &'a Statistics,
+    /// The resolved return type of the aggregate function
+    pub return_type: &'a DataType,
+    /// Whether the aggregate function is distinct.
+    ///
+    /// ```sql
+    /// SELECT COUNT(DISTINCT column1) FROM t;
+    /// ```
+    pub is_distinct: bool,
+    /// The physical expression of arguments the aggregate function takes.
+    pub exprs: &'a [Arc<dyn PhysicalExpr>],
 }
 
 impl AggregateUDF {
@@ -237,11 +254,21 @@ impl AggregateUDF {
     }
 
     /// Returns true if the function is max, false if the function is min
-    /// None in all other cases, used in certain optimizations or
+    /// None in all other cases, used in certain optimizations for
     /// or aggregate
-    ///
     pub fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
+    }
+
+    /// Return the value of this aggregate function if it can be determined
+    /// entirely from statistics and arguments.
+    ///
+    /// See [`AggregateUDFImpl::value_from_stats`] for more details.
+    pub fn value_from_stats(
+        &self,
+        statistics_args: &StatisticsArgs,
+    ) -> Option<ScalarValue> {
+        self.inner.value_from_stats(statistics_args)
     }
 
     /// See [`AggregateUDFImpl::default_value`] for more details.
@@ -554,6 +581,18 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// Note: this is used to use special aggregate implementations in certain conditions
     fn is_descending(&self) -> Option<bool> {
+        None
+    }
+
+    /// Return the value of this aggregate function if it can be determined
+    /// entirely from statistics and arguments.
+    ///
+    /// Using a [`ScalarValue`] rather than a runtime computation can significantly
+    /// improving query performance.
+    ///
+    /// For example, if the minimum value of column `x` is known to be `42` from
+    /// statistics, then the aggregate `MIN(x)` should return `Some(ScalarValue(42))`
+    fn value_from_stats(&self, _statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
         None
     }
 
