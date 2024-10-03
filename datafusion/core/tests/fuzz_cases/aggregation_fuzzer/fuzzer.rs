@@ -160,7 +160,9 @@ impl AggregationFuzzer {
             let baseline_ctx = ctx_generator
                 .generate_baseline()
                 .expect("should success to generate baseline session context");
-            let baseline_result = run_sql(&self.sql, &baseline_ctx).await;
+            let baseline_result = run_sql(&self.sql, &baseline_ctx)
+                .await
+                .expect("should success to run baseline sql");
             let baseline_result = Arc::new(baseline_result);
 
             // Generate test tasks
@@ -197,7 +199,9 @@ struct AggregationFuzzTestTask {
 
 impl AggregationFuzzTestTask {
     async fn run(&self) {
-        let task_result = run_sql(&self.query, &self.ctx).await;
+        let task_result = run_sql(&self.query, &self.ctx)
+            .await
+            .expect("should success to run sql");
         check_equality_of_batches(&self.expected_result, &task_result);
     }
 }
