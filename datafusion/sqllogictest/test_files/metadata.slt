@@ -111,11 +111,17 @@ FROM
 6
 
 # Regression test: missing field metadata, from the NULL field on the left side of the union
-statement error DataFusion error: Internal error: Physical input schema should be the same as the one converted from logical input schema..
+query ITT
 (SELECT id, NULL::string as name, l_name FROM "table_with_metadata")
   UNION
 (SELECT id, name, NULL::string as l_name FROM "table_with_metadata")
 ORDER BY id, name, l_name;
+----
+1 NULL NULL
+3 baz NULL
+3 NULL l_baz
+NULL bar NULL
+NULL NULL l_bar
 
 
 

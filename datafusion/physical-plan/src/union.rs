@@ -474,7 +474,12 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
                 .iter()
                 .filter_map(|input| {
                     if input.schema().fields().len() > i {
-                        Some(input.schema().field(i).clone())
+                        let field = input.schema().field(i).clone();
+                        let right_hand_metdata =
+                            inputs[1].schema().field(i).metadata().clone();
+                        let mut metadata = field.metadata().clone();
+                        metadata.extend(right_hand_metdata);
+                        Some(field.with_metadata(metadata))
                     } else {
                         None
                     }
