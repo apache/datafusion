@@ -44,4 +44,8 @@ impl<'a> PartitionEvaluatorArgs<'a> {
     pub fn input_expr_at(&self, index: usize) -> Option<&Arc<dyn PhysicalExpr>> {
         self.input_exprs.get(index)
     }
+
+    pub fn is_reversed(&self) -> bool {
+        self.is_reversed
+    }
 }

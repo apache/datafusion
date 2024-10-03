@@ -31,7 +31,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
-use std::ops::Range;
+use std::ops::{Neg, Range};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -45,6 +45,13 @@ impl WindowShiftKind {
         match self {
             WindowShiftKind::Lag => "lag",
             WindowShiftKind::Lead => "lead",
+        }
+    }
+
+    fn shift_offset(&self, value: Option<i64>) -> i64 {
+        match self {
+            WindowShiftKind::Lag => value.unwrap_or(1),
+            WindowShiftKind::Lead => value.map(|v| v.neg()).unwrap_or(-1),
         }
     }
 }
@@ -97,8 +104,7 @@ impl WindowUDFImpl for WindowShift {
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
-        let shift_offset = try_get_literal(&partition_evaluator_args, 1)
-            .and_then(try_get_signed_integer);
+        let shift_offset = try_get_shift_offset(&self.kind, &partition_evaluator_args, 1)?;
 
         todo!()
     }
@@ -137,6 +143,24 @@ fn try_get_signed_integer(value: &ScalarValue) -> Result<i64> {
             value.data_type()
         )))
     }
+}
+
+fn try_get_shift_offset(
+    kind: &WindowShiftKind,
+    partition_evaluator_args: &PartitionEvaluatorArgs,
+    index: usize,
+) -> Result<i64> {
+    try_get_literal(partition_evaluator_args, index)
+        .and_then(try_get_signed_integer)
+        .map_or(Ok(None), |n| Ok(Some(n)))
+        .map(|n| kind.shift_offset(n))
+        .map(|offset| {
+            if partition_evaluator_args.is_reversed() {
+                offset.neg()
+            } else {
+                offset
+            }
+        })
 }
 
 /// /// window shift expression
