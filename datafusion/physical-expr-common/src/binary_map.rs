@@ -530,7 +530,7 @@ where
     /// Generic version of [`Self::get_payloads`] that handles `ByteArrayType`
     /// (both String and Binary).
     ///
-    /// See [`get_payloads`] for more details.
+    /// See `get_payloads` for more details.
     fn get_payloads_inner<B>(self, values: &ArrayRef) -> Vec<Option<V>>
     where
         B: ByteArrayType,
