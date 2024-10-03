@@ -61,7 +61,7 @@ pub struct SessionContextGenerator {
 }
 
 impl SessionContextGenerator {
-    fn new(dataset: Dataset) -> Self {
+    pub fn new(dataset: Dataset) -> Self {
         let candidate_skip_partial_params = vec![
             SkipPartialParams::ensure_trigger(),
             SkipPartialParams::ensure_not_trigger(),
@@ -96,7 +96,7 @@ impl SessionContextGenerator {
             batch_size,
             target_partitions,
             skip_partial_params,
-            table_provider: provider,
+            table_provider: Arc::new(provider),
         };
 
         builder.build()
@@ -141,7 +141,7 @@ impl SessionContextGenerator {
             batch_size,
             target_partitions,
             skip_partial_params,
-            table_provider: provider,
+            table_provider: Arc::new(provider),
         };
 
         builder.build()
@@ -150,10 +150,10 @@ impl SessionContextGenerator {
 
 /// Collect the generated params, and build the [`SessionContext`]
 struct GeneratedSessionContextBuilder {
-    pub batch_size: usize,
-    pub target_partitions: usize,
-    pub skip_partial_params: SkipPartialParams,
-    pub table_provider: Arc<dyn TableProvider>,
+    batch_size: usize,
+    target_partitions: usize,
+    skip_partial_params: SkipPartialParams,
+    table_provider: Arc<dyn TableProvider>,
 }
 
 impl GeneratedSessionContextBuilder {
@@ -178,7 +178,7 @@ impl GeneratedSessionContextBuilder {
         );
 
         let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_table("fuzz_table", Arc::new(self.provider))
+        ctx.register_table("fuzz_table", self.table_provider)
             .unwrap();
 
         ctx
@@ -209,6 +209,90 @@ impl SkipPartialParams {
         Self {
             ratio_threshold: 1.0,
             rows_threshold: usize::MAX,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use arrow::util::pretty::pretty_format_batches;
+    use arrow_array::{RecordBatch, StringArray, UInt32Array};
+    use arrow_schema::{DataType, Field, Schema};
+
+    use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_generated_context() {
+        // 1. Define a test dataset firstly
+        let a_col: StringArray = [
+            Some("rust"),
+            Some("java"),
+            Some("cpp"),
+            Some("go"),
+            Some("go1"),
+            Some("python"),
+            Some("python1"),
+            Some("python2"),
+        ]
+        .into_iter()
+        .collect();
+        // Sort by "b"
+        let b_col: UInt32Array = [
+            Some(1),
+            Some(2),
+            Some(4),
+            Some(8),
+            Some(8),
+            Some(16),
+            Some(16),
+            Some(16),
+        ]
+        .into_iter()
+        .collect();
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::UInt32, true),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(a_col), Arc::new(b_col)],
+        )
+        .unwrap();
+
+        // One row a group to create batches
+        let mut batches = Vec::with_capacity(batch.num_rows());
+        for start in 0..batch.num_rows() {
+            let sub_batch = batch.slice(start, 1);
+            batches.push(sub_batch);
+        }
+
+        let dataset = Dataset::new(batches, vec!["b".to_string()]);
+
+        // 2. Generate baseline context, and some randomly session contexts.
+        // Run the same query on them, and all randoms' results should equal to baseline's
+        let ctx_generator = SessionContextGenerator::new(dataset);
+
+        let query = "select b, count(a) from fuzz_table group by b";
+        let baseline_ctx = ctx_generator.generate_baseline();
+        let mut random_ctxs = Vec::with_capacity(8);
+        for _ in 0..8 {
+            let ctx = ctx_generator.generate();
+            random_ctxs.push(ctx);
+        }
+
+        let base_result = baseline_ctx
+            .sql(query)
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        for ctx in random_ctxs {
+            let random_result = ctx.sql(query).await.unwrap().collect().await.unwrap();
+            check_equality_of_batches(&base_result, &random_result);
         }
     }
 }
