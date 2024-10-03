@@ -43,9 +43,14 @@ impl ArrowBytesViewSet {
     /// Inserts each value from `values` into the set
     pub fn insert(&mut self, values: &ArrayRef) {
         fn make_payload_fn(_value: Option<&[u8]>) {}
+        fn update_payload_fn(_payload: &mut ()) {}
         fn observe_payload_fn(_payload: ()) {}
-        self.0
-            .insert_if_new(values, make_payload_fn, observe_payload_fn);
+        self.0.insert_if_new(
+            values,
+            make_payload_fn,
+            update_payload_fn,
+            observe_payload_fn,
+        );
     }
 
     /// Return the contents of this map and replace it with a new empty map with
@@ -178,8 +183,12 @@ where
     /// `make_payload_fn`:  invoked for each value that is not already present
     /// to create the payload, in order of the values in `values`
     ///
-    /// `observe_payload_fn`: invoked once, for each value in `values`, that was
-    /// already present in the map, with corresponding payload value.
+    /// `update_payload_fn`: invoked when the value is already present in the map.
+    /// It receives a mutable reference to the existing payload, allowing it to modify it.
+    ///
+    /// `observe_payload_fn`: invoked for each value in `values` that was
+    /// already present in the map. If `update_payload_fn` is defined, it will be called
+    /// **after** the payload is updated. It is called with the corresponding payload value.
     ///
     /// # Returns
     ///
@@ -188,32 +197,36 @@ where
     ///
     /// # Safety:
     ///
-    /// Note that `make_payload_fn` and `observe_payload_fn` are only invoked
+    /// Note that `make_payload_fn`, `update_payload_fn` and `observe_payload_fn` are only invoked
     /// with valid values from `values`, not for the `NULL` value.
-    pub fn insert_if_new<MP, OP>(
+    pub fn insert_if_new<MP, UP, OP>(
         &mut self,
         values: &ArrayRef,
         make_payload_fn: MP,
+        update_payload_fn: UP,
         observe_payload_fn: OP,
     ) where
         MP: FnMut(Option<&[u8]>) -> V,
+        UP: FnMut(&mut V),
         OP: FnMut(V),
     {
         // Sanity check array type
         match self.output_type {
             OutputType::BinaryView => {
                 assert!(matches!(values.data_type(), DataType::BinaryView));
-                self.insert_if_new_inner::<MP, OP, BinaryViewType>(
+                self.insert_if_new_inner::<MP, UP, OP, BinaryViewType>(
                     values,
                     make_payload_fn,
+                    update_payload_fn,
                     observe_payload_fn,
                 )
             }
             OutputType::Utf8View => {
                 assert!(matches!(values.data_type(), DataType::Utf8View));
-                self.insert_if_new_inner::<MP, OP, StringViewType>(
+                self.insert_if_new_inner::<MP, UP, OP, StringViewType>(
                     values,
                     make_payload_fn,
+                    update_payload_fn,
                     observe_payload_fn,
                 )
             }
@@ -229,13 +242,15 @@ where
     /// simpler and understand and reducing code bloat due to duplication.
     ///
     /// See comments on `insert_if_new` for more details
-    fn insert_if_new_inner<MP, OP, B>(
+    fn insert_if_new_inner<MP, UP, OP, B>(
         &mut self,
         values: &ArrayRef,
         mut make_payload_fn: MP,
+        mut update_payload_fn: UP,
         mut observe_payload_fn: OP,
     ) where
         MP: FnMut(Option<&[u8]>) -> V,
+        UP: FnMut(&mut V),
         OP: FnMut(V),
         B: ByteViewType,
     {
@@ -257,8 +272,9 @@ where
         for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
             // handle null value
             let Some(value) = value else {
-                let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
-                    payload
+                let payload = if let Some((ref mut payload, _)) = self.null {
+                    update_payload_fn(payload);
+                    *payload
                 } else {
                     let payload = make_payload_fn(None);
                     let null_index = self.builder.len();
@@ -284,6 +300,7 @@ where
             });
 
             let payload = if let Some(entry) = entry {
+                update_payload_fn(&mut entry.payload);
                 entry.payload
             } else {
                 // no existing value, make a new one.
@@ -306,149 +323,37 @@ where
         }
     }
 
-    /// Inserts each value from `values` into the map, invoking `make_payload_fn` for
-    /// each value if not already present, or `update_payload_fn` if the value already exists.
+    /// Retrieves the payloads for each value from `values`, either by using
+    /// small value optimizations or larger value handling.
     ///
-    /// This function handles both the insert and update cases.
+    /// This function will compute hashes for each value and attempt to retrieve
+    /// the corresponding payload from the map. If the value is not found, it will return `None`.
     ///
     /// # Arguments:
     ///
-    /// `values`: The array whose values are inserted or updated in the map.
+    /// `values`: The array whose payloads need to be retrieved.
     ///
-    /// `make_payload_fn`: Invoked for each value that is not already present
-    /// to create the payload, in the order of the values in `values`.
+    /// # Returns
     ///
-    /// `update_payload_fn`: Invoked for each value that is already present,
-    /// allowing the payload to be updated in-place.
-    pub fn insert_or_update<MP, UP>(
-        &mut self,
-        values: &ArrayRef,
-        make_payload_fn: MP,
-        update_payload_fn: UP,
-    ) where
-        MP: FnMut(Option<&[u8]>) -> V,
-        UP: FnMut(&mut V),
-    {
-        // Check the output type and dispatch to the appropriate internal function
+    /// A vector of payloads for each value, or `None` if the value is not found.
+    pub fn get_payloads(self, values: &ArrayRef) -> Vec<Option<V>> {
         match self.output_type {
             OutputType::BinaryView => {
                 assert!(matches!(values.data_type(), DataType::BinaryView));
-                self.insert_or_update_inner::<MP, UP, BinaryViewType>(
-                    values,
-                    make_payload_fn,
-                    update_payload_fn,
-                )
+                self.get_payloads_inner::<BinaryViewType>(values)
             }
             OutputType::Utf8View => {
                 assert!(matches!(values.data_type(), DataType::Utf8View));
-                self.insert_or_update_inner::<MP, UP, StringViewType>(
-                    values,
-                    make_payload_fn,
-                    update_payload_fn,
-                )
+                self.get_payloads_inner::<StringViewType>(values)
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
-        };
-    }
-
-    /// Generic version of [`Self::insert_or_update`] that handles `ByteViewType`
-    /// (both StringView and BinaryView).
-    ///
-    /// This is the only function that is generic on [`ByteViewType`], which avoids having
-    /// to template the entire structure, simplifying the code and reducing code bloat due
-    /// to duplication.
-    ///
-    /// See comments on `insert_or_update` for more details.
-    fn insert_or_update_inner<MP, UP, B>(
-        &mut self,
-        values: &ArrayRef,
-        mut make_payload_fn: MP,
-        mut update_payload_fn: UP,
-    ) where
-        MP: FnMut(Option<&[u8]>) -> V,
-        UP: FnMut(&mut V),
-        B: ByteViewType,
-    {
-        // step 1: compute hashes
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(values.len(), 0);
-        create_hashes(&[values.clone()], &self.random_state, batch_hashes)
-            // hash is supported for all types and create_hashes only
-            // returns errors for unsupported types
-            .unwrap();
-
-        // step 2: insert each value into the set, if not already present
-        let values = values.as_byte_view::<B>();
-
-        // Ensure lengths are equivalent
-        assert_eq!(values.len(), batch_hashes.len());
-
-        for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
-            // Handle null value
-            let Some(value) = value else {
-                if let Some((ref mut payload, _)) = self.null {
-                    update_payload_fn(payload);
-                } else {
-                    let payload = make_payload_fn(None);
-                    let null_index = self.builder.len();
-                    self.builder.append_null();
-                    self.null = Some((payload, null_index));
-                }
-                continue;
-            };
-
-            let value: &[u8] = value.as_ref();
-
-            let entry = self.map.get_mut(hash, |header| {
-                let v = self.builder.get_value(header.view_idx);
-
-                if v.len() != value.len() {
-                    return false;
-                }
-
-                v == value
-            });
-
-            if let Some(entry) = entry {
-                update_payload_fn(&mut entry.payload);
-            } else {
-                // no existing value, make a new one.
-                let payload = make_payload_fn(Some(value));
-
-                let inner_view_idx = self.builder.len();
-                let new_header = Entry {
-                    view_idx: inner_view_idx,
-                    hash,
-                    payload,
-                };
-
-                self.builder.append_value(value);
-
-                self.map
-                    .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
-            };
         }
     }
 
     /// Generic version of [`Self::get_payloads`] that handles `ByteViewType`
     /// (both StringView and BinaryView).
     ///
-    /// This function computes the hashes for each value and retrieves the payloads
-    /// stored in the map, leveraging small value optimizations when possible.
-    ///
-    /// # Arguments:
-    ///
-    /// `values`: The array whose payloads are being retrieved.
-    ///
-    /// # Returns
-    ///
-    /// A vector of payloads for each value, or `None` if the value is not found.
-    ///
-    /// # Safety:
-    ///
-    /// This function ensures that small values are handled using inline optimization
-    /// and larger values are safely retrieved from the builder.
+    /// See [`get_payloads`] for more details.
     fn get_payloads_inner<B>(self, values: &ArrayRef) -> Vec<Option<V>>
     where
         B: ByteViewType,
@@ -486,33 +391,6 @@ where
         }
 
         payloads
-    }
-
-    /// Retrieves the payloads for each value from `values`, either by using
-    /// small value optimizations or larger value handling.
-    ///
-    /// This function will compute hashes for each value and attempt to retrieve
-    /// the corresponding payload from the map. If the value is not found, it will return `None`.
-    ///
-    /// # Arguments:
-    ///
-    /// `values`: The array whose payloads need to be retrieved.
-    ///
-    /// # Returns
-    ///
-    /// A vector of payloads for each value, or `None` if the value is not found.
-    pub fn get_payloads(self, values: &ArrayRef) -> Vec<Option<V>> {
-        match self.output_type {
-            OutputType::BinaryView => {
-                assert!(matches!(values.data_type(), DataType::BinaryView));
-                self.get_payloads_inner::<BinaryViewType>(values)
-            }
-            OutputType::Utf8View => {
-                assert!(matches!(values.data_type(), DataType::Utf8View));
-                self.get_payloads_inner::<StringViewType>(values)
-            }
-            _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
-        }
     }
 
     /// Converts this set into a `StringViewArray`, or `BinaryViewArray`,
@@ -791,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_or_update_count_u8() {
+    fn test_update_payload_count_u8() {
         let values = GenericByteViewArray::from(vec![
             Some("a"),
             Some("✨🔥✨🔥✨🔥✨🔥✨🔥✨🔥✨🔥✨🔥"),
@@ -805,12 +683,13 @@ mod tests {
         let mut map: ArrowBytesViewMap<u8> = ArrowBytesViewMap::new(OutputType::Utf8View);
         let arr: ArrayRef = Arc::new(values);
 
-        map.insert_or_update(
+        map.insert_if_new(
             &arr,
             |_| 1u8,
             |count| {
                 *count += 1;
             },
+            |_| {},
         );
 
         let expected_counts = [
@@ -827,7 +706,7 @@ mod tests {
 
             let mut result_payload: Option<u8> = None;
 
-            map.insert_or_update(
+            map.insert_if_new(
                 &arr,
                 |_| {
                     panic!("Unexpected new entry during verification");
@@ -835,6 +714,7 @@ mod tests {
                 |count| {
                     result_payload = Some(*count);
                 },
+                |_| {},
             );
 
             assert_eq!(result_payload.unwrap(), value.1);
@@ -842,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_if_new_after_insert_or_update() {
+    fn test_observe_after_update() {
         let initial_values = GenericByteViewArray::from(vec![
             Some("A"),
             Some("B"),
@@ -854,19 +734,20 @@ mod tests {
         let mut map: ArrowBytesViewMap<u8> = ArrowBytesViewMap::new(OutputType::Utf8View);
         let arr: ArrayRef = Arc::new(initial_values);
 
-        map.insert_or_update(
+        map.insert_if_new(
             &arr,
             |_| 1u8,
             |count| {
                 *count += 1;
             },
+            |_| {},
         );
 
         let additional_values =
             GenericByteViewArray::from(vec![Some("A"), Some("D"), Some("E")]);
         let arr_additional: ArrayRef = Arc::new(additional_values);
 
-        map.insert_if_new(&arr_additional, |_| 5u8, |_| {});
+        map.insert_if_new(&arr_additional, |_| 5u8, |_| {}, |_| {});
 
         let expected_payloads = [Some(1u8), Some(2u8), Some(2u8), Some(5u8), Some(5u8)];
 
@@ -903,12 +784,13 @@ mod tests {
         let mut map: ArrowBytesViewMap<u8> = ArrowBytesViewMap::new(OutputType::Utf8View);
         let arr: ArrayRef = Arc::new(values);
 
-        map.insert_or_update(
+        map.insert_if_new(
             &arr,
             |_| 1u8,
             |count| {
                 *count += 1;
             },
+            |_| {},
         );
 
         let expected_payloads = [
@@ -994,6 +876,7 @@ mod tests {
                     seen_new_strings.push(value);
                     TestPayload { index }
                 },
+                |_| {},
                 |payload| {
                     seen_indexes.push(payload.index);
                 },

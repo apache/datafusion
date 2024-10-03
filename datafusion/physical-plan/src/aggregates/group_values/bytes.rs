@@ -61,6 +61,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
                 self.num_groups += 1;
                 group_idx
             },
+            |_| {},
             // called for each group
             |group_idx| {
                 groups.push(group_idx);
