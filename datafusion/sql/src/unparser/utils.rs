@@ -18,7 +18,7 @@
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TreeNode},
-    Column, Result,
+    Column, DataFusionError, Result,
 };
 use datafusion_expr::{
     utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan, Window,
@@ -126,7 +126,6 @@ pub(crate) fn unproject_agg_exprs(
                             }
                             Ok::<(), DataFusionError>(())
                         })?;
-                    }
                     }
                     Ok(Transformed::yes(unprojected_expr))
                 } else {
