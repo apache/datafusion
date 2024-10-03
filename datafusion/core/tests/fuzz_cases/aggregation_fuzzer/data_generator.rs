@@ -439,7 +439,7 @@ mod test {
         }
 
         // Two batches should be same after sorting
-        check_equality_of_batches(&datasets[0].batches, &datasets[1].batches);
+        check_equality_of_batches(&datasets[0].batches, &datasets[1].batches).unwrap();
 
         // Rows num should between [16, 32]
         let rows_num0 = datasets[0]

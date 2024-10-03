@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use arrow::util::pretty::pretty_format_batches;
 use arrow_array::RecordBatch;
 use datafusion::prelude::SessionContext;
 use tokio::task::JoinSet;
@@ -154,7 +155,9 @@ impl AggregationFuzzer {
     ) -> Vec<AggregationFuzzTestTask> {
         let mut tasks = Vec::with_capacity(datasets.len() * self.ctx_gen_rounds);
         for dataset in datasets {
-            let ctx_generator = SessionContextGenerator::new(dataset, &self.table_name);
+            let dataset_ref = Arc::new(dataset);
+            let ctx_generator =
+                SessionContextGenerator::new(dataset_ref.clone(), &self.table_name);
 
             // Generate the baseline context, and get the baseline result firstly
             let baseline_ctx = ctx_generator
@@ -164,13 +167,13 @@ impl AggregationFuzzer {
                 .await
                 .expect("should success to run baseline sql");
             let baseline_result = Arc::new(baseline_result);
-
             // Generate test tasks
             for _ in 0..self.ctx_gen_rounds {
                 let ctx = ctx_generator
                     .generate()
-                    .expect("should success to generate session context");
+                    .expect("should success toenerate session context");
                 let task = AggregationFuzzTestTask {
+                    dataset_ref: dataset_ref.clone(),
                     expected_result: baseline_result.clone(),
                     query: self.sql.clone(),
                     ctx,
@@ -179,12 +182,14 @@ impl AggregationFuzzer {
                 tasks.push(task);
             }
         }
-
         tasks
     }
 }
 
 struct AggregationFuzzTestTask {
+    /// The test dataset
+    dataset_ref: Arc<Dataset>,
+
     /// Expected result in current test case
     /// It is generate from `query` + `baseline session context`
     expected_result: Arc<Vec<RecordBatch>>,
@@ -202,6 +207,36 @@ impl AggregationFuzzTestTask {
         let task_result = run_sql(&self.query, &self.ctx)
             .await
             .expect("should success to run sql");
-        check_equality_of_batches(&self.expected_result, &task_result);
+        self.check_result(&task_result, &self.expected_result);
+    }
+
+    fn check_result(&self, task_result: &[RecordBatch], expected_result: &[RecordBatch]) {
+        let result = check_equality_of_batches(task_result, expected_result);
+        if let Err(e) = result {
+            // If we found inconsistent result, we print the test details for reproducing at first
+            println!(
+                "##### AggregationFuzzer error report #####
+                 ### Sql:\n{}\n\
+                 ### Schema:\n{}\n\
+                 ### Session context params:\n\
+                 ### Inconsistent row:\n\
+                 - row_idx:{}\n\
+                 - task_row:{}\n\
+                 - expected_row:{}\n\
+                 ### Task total result:\n{}\n\
+                 ### Expected total result:\n{}\n\
+                 ",
+                self.query,
+                self.dataset_ref.batches[0].schema_ref(),
+                e.row_idx,
+                e.lhs_row,
+                e.rhs_row,
+                pretty_format_batches(&task_result).unwrap(),
+                pretty_format_batches(&expected_result).unwrap(),
+            );
+
+            // Then we just panic
+            panic!();
+        }
     }
 }

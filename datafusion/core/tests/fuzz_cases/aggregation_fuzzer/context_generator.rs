@@ -46,7 +46,7 @@ use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
 /// [`DataFrame`]: datafusion::prelude::DataFrame
 pub struct SessionContextGenerator {
     /// Current testing dataset
-    dataset: Dataset,
+    dataset: Arc<Dataset>,
 
     /// Table name of the test table
     table_name: String,
@@ -65,17 +65,17 @@ pub struct SessionContextGenerator {
 }
 
 impl SessionContextGenerator {
-    pub fn new(dataset: Dataset, table_name: &str) -> Self {
+    pub fn new(dataset_ref: Arc<Dataset>, table_name: &str) -> Self {
         let candidate_skip_partial_params = vec![
             SkipPartialParams::ensure_trigger(),
             SkipPartialParams::ensure_not_trigger(),
         ];
 
-        let max_batch_size = cmp::max(1, dataset.total_rows_num);
+        let max_batch_size = cmp::max(1, dataset_ref.total_rows_num);
         let max_target_partitions = num_cpus::get();
 
         Self {
-            dataset,
+            dataset: dataset_ref,
             table_name: table_name.to_string(),
             max_batch_size,
             candidate_skip_partial_params,
@@ -278,7 +278,7 @@ mod test {
 
         // 2. Generate baseline context, and some randomly session contexts.
         // Run the same query on them, and all randoms' results should equal to baseline's
-        let ctx_generator = SessionContextGenerator::new(dataset, "fuzz_table");
+        let ctx_generator = SessionContextGenerator::new(Arc::new(dataset), "fuzz_table");
 
         let query = "select b, count(a) from fuzz_table group by b";
         let baseline_ctx = ctx_generator.generate_baseline().unwrap();

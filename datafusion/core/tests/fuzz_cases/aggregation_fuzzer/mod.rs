@@ -27,16 +27,41 @@ mod fuzzer;
 pub use data_generator::{ColumnDescr, DatasetGeneratorConfig};
 pub use fuzzer::*;
 
-pub(crate) fn check_equality_of_batches(rhs: &[RecordBatch], lhs: &[RecordBatch]) {
-    let formatted_batches0 = pretty_format_batches(rhs).unwrap().to_string();
-    let mut formatted_batches0_sorted: Vec<&str> =
-        formatted_batches0.trim().lines().collect();
-    formatted_batches0_sorted.sort_unstable();
-    let formatted_batches1 = pretty_format_batches(lhs).unwrap().to_string();
-    let mut formatted_batches1_sorted: Vec<&str> =
-        formatted_batches1.trim().lines().collect();
-    formatted_batches1_sorted.sort_unstable();
-    assert_eq!(formatted_batches0_sorted, formatted_batches1_sorted);
+#[derive(Debug)]
+struct InconsistentResult {
+    pub row_idx: usize,
+    pub lhs_row: String,
+    pub rhs_row: String,
+}
+
+pub(crate) fn check_equality_of_batches(
+    lhs: &[RecordBatch],
+    rhs: &[RecordBatch],
+) -> std::result::Result<(), InconsistentResult> {
+    let lhs_formatted_batches = pretty_format_batches(lhs).unwrap().to_string();
+    let mut lhs_formatted_batches_sorted: Vec<&str> =
+        lhs_formatted_batches.trim().lines().collect();
+    lhs_formatted_batches_sorted.sort_unstable();
+    let rhs_formatted_batches = pretty_format_batches(rhs).unwrap().to_string();
+    let mut rhs_formatted_batches_sorted: Vec<&str> =
+        rhs_formatted_batches.trim().lines().collect();
+    rhs_formatted_batches_sorted.sort_unstable();
+
+    for (row_idx, (lhs_row, rhs_row)) in lhs_formatted_batches_sorted
+        .iter()
+        .zip(&rhs_formatted_batches_sorted)
+        .enumerate()
+    {
+        if lhs_row != rhs_row {
+            return Err(InconsistentResult {
+                row_idx,
+                lhs_row: lhs_row.to_string(),
+                rhs_row: rhs_row.to_string(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 pub(crate) async fn run_sql(sql: &str, ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
