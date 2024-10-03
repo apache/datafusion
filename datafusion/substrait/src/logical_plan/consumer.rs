@@ -267,74 +267,6 @@ pub struct ExprContainer {
     pub exprs: Vec<(Expr, Field)>,
 }
 
-// Substrait fields (DataType, nullable) typically don't have names.  In the few cases they do
-// those names are provided as Vec<String>.  This method attaches names to a (DataType, nullable)
-// pair to create a Field
-fn field_from_type_and_names<S: Into<String>, T: Iterator<Item = S>>(
-    names: &mut T,
-    data_type: DataType,
-    nullable: bool,
-    self_name: Option<&'static str>, // E.g. "item" for list fields
-                                     // which don't have names in Substrait
-) -> Result<Field> {
-    let self_name =
-        self_name
-            .map(|s| Ok(s.to_string()))
-            .unwrap_or_else(|| match names.next() {
-                Some(name) => Ok(name.into()),
-                None => {
-                    plan_err!(
-                        "Substrait message did not have enough field names for data type"
-                    )
-                }
-            })?;
-    let data_type: Result<DataType> = match data_type {
-        DataType::Struct(fields) => {
-            let fields = fields
-                .iter()
-                .map(|f| {
-                    field_from_type_and_names(
-                        names,
-                        f.data_type().clone(),
-                        f.is_nullable(),
-                        None,
-                    )
-                })
-                .collect::<Result<_>>()?;
-            Ok(DataType::Struct(fields))
-        }
-        DataType::List(inner) => {
-            let inner = field_from_type_and_names(
-                names,
-                inner.data_type().clone(),
-                inner.is_nullable(),
-                Some("item"),
-            )?;
-            Ok(DataType::List(Arc::new(inner)))
-        }
-        DataType::LargeList(inner) => {
-            let inner = field_from_type_and_names(
-                names,
-                inner.data_type().clone(),
-                inner.is_nullable(),
-                Some("item"),
-            )?;
-            Ok(DataType::List(Arc::new(inner)))
-        }
-        DataType::Map(map_struct, sorted_keys) => {
-            let map_struct = field_from_type_and_names(
-                names,
-                map_struct.data_type().clone(),
-                map_struct.is_nullable(),
-                None,
-            )?;
-            Ok(DataType::Map(Arc::new(map_struct), sorted_keys))
-        }
-        _ => Ok(data_type),
-    };
-    Ok(Field::new(&self_name, data_type?, nullable))
-}
-
 /// Convert Substrait ExtendedExpression to ExprContainer
 ///
 /// A Substrait ExtendedExpression message contains one or more expressions,
@@ -363,7 +295,7 @@ pub async fn from_substrait_extended_expr(
 
     // Parse expressions
     let mut exprs = Vec::with_capacity(extended_expr.referred_expr.len());
-    for substrait_expr in &extended_expr.referred_expr {
+    for (expr_idx, substrait_expr) in extended_expr.referred_expr.iter().enumerate() {
         let scalar_expr = match &substrait_expr.expr_type {
             Some(ExprType::Expression(scalar_expr)) => Ok(scalar_expr),
             Some(ExprType::Measure(_)) => {
@@ -377,12 +309,14 @@ pub async fn from_substrait_extended_expr(
             from_substrait_rex(ctx, scalar_expr, &input_schema, &extensions).await?;
         let (output_type, expected_nullability) =
             expr.data_type_and_nullable(&input_schema)?;
-        let mut names_iter = substrait_expr.output_names.iter().map(|n| n.as_str());
-        let output_field = field_from_type_and_names(
-            &mut names_iter,
-            output_type,
-            expected_nullability,
-            None,
+        let output_field = Field::new("", output_type, expected_nullability);
+        let mut names_idx = 0;
+        let output_field = rename_field(
+            &output_field,
+            &substrait_expr.output_names,
+            expr_idx,
+            &mut names_idx,
+            /*rename_self=*/ true,
         )?;
         exprs.push((expr, output_field));
     }
@@ -476,6 +410,68 @@ fn rename_expressions(
         .collect()
 }
 
+fn rename_field(
+    field: &Field,
+    dfs_names: &Vec<String>,
+    unnamed_field_suffix: usize, // If Substrait doesn't provide a name, we'll use this "c{unnamed_field_suffix}"
+    name_idx: &mut usize,        // Index into dfs_names
+    rename_self: bool, // Some fields (e.g. list items) don't have names in Substrait and this will be false to keep old name
+) -> Result<Field> {
+    let name = if rename_self {
+        next_struct_field_name(unnamed_field_suffix, dfs_names, name_idx)?
+    } else {
+        field.name().to_string()
+    };
+    match field.data_type() {
+        DataType::Struct(children) => {
+            let children = children
+                .iter()
+                .enumerate()
+                .map(|(child_idx, f)| {
+                    rename_field(
+                        f.as_ref(),
+                        dfs_names,
+                        child_idx,
+                        name_idx,
+                        /*rename_self=*/ true,
+                    )
+                })
+                .collect::<Result<_>>()?;
+            Ok(field
+                .to_owned()
+                .with_name(name)
+                .with_data_type(DataType::Struct(children)))
+        }
+        DataType::List(inner) => {
+            let renamed_inner = rename_field(
+                inner.as_ref(),
+                dfs_names,
+                0,
+                name_idx,
+                /*rename_self=*/ false,
+            )?;
+            Ok(field
+                .to_owned()
+                .with_data_type(DataType::List(FieldRef::new(renamed_inner)))
+                .with_name(name))
+        }
+        DataType::LargeList(inner) => {
+            let renamed_inner = rename_field(
+                inner.as_ref(),
+                dfs_names,
+                0,
+                name_idx,
+                /*rename_self= */ false,
+            )?;
+            Ok(field
+                .to_owned()
+                .with_data_type(DataType::LargeList(FieldRef::new(renamed_inner)))
+                .with_name(name))
+        }
+        _ => Ok(field.to_owned().with_name(name)),
+    }
+}
+
 /// Produce a version of the given schema with names matching the given list of names.
 /// Substrait doesn't deal with column (incl. nested struct field) names within the schema,
 /// but it does give us the list of expected names at the end of the plan, so we use this
@@ -484,59 +480,20 @@ fn make_renamed_schema(
     schema: &DFSchemaRef,
     dfs_names: &Vec<String>,
 ) -> Result<DFSchema> {
-    fn rename_inner_fields(
-        dtype: &DataType,
-        dfs_names: &Vec<String>,
-        name_idx: &mut usize,
-    ) -> Result<DataType> {
-        match dtype {
-            DataType::Struct(fields) => {
-                let fields = fields
-                    .iter()
-                    .map(|f| {
-                        let name = next_struct_field_name(0, dfs_names, name_idx)?;
-                        Ok((**f).to_owned().with_name(name).with_data_type(
-                            rename_inner_fields(f.data_type(), dfs_names, name_idx)?,
-                        ))
-                    })
-                    .collect::<Result<_>>()?;
-                Ok(DataType::Struct(fields))
-            }
-            DataType::List(inner) => Ok(DataType::List(FieldRef::new(
-                (**inner).to_owned().with_data_type(rename_inner_fields(
-                    inner.data_type(),
-                    dfs_names,
-                    name_idx,
-                )?),
-            ))),
-            DataType::LargeList(inner) => Ok(DataType::LargeList(FieldRef::new(
-                (**inner).to_owned().with_data_type(rename_inner_fields(
-                    inner.data_type(),
-                    dfs_names,
-                    name_idx,
-                )?),
-            ))),
-            _ => Ok(dtype.to_owned()),
-        }
-    }
-
     let mut name_idx = 0;
 
     let (qualifiers, fields): (_, Vec<Field>) = schema
         .iter()
-        .map(|(q, f)| {
-            let name = next_struct_field_name(0, dfs_names, &mut name_idx)?;
-            Ok((
-                q.cloned(),
-                (**f)
-                    .to_owned()
-                    .with_name(name)
-                    .with_data_type(rename_inner_fields(
-                        f.data_type(),
-                        dfs_names,
-                        &mut name_idx,
-                    )?),
-            ))
+        .enumerate()
+        .map(|(field_idx, (q, f))| {
+            let renamed_f = rename_field(
+                f.as_ref(),
+                dfs_names,
+                field_idx,
+                &mut name_idx,
+                /*rename_self=*/ true,
+            )?;
+            Ok((q.cloned(), renamed_f))
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -1823,14 +1780,14 @@ fn from_substrait_struct_type(
 }
 
 fn next_struct_field_name(
-    i: usize,
+    column_idx: usize,
     dfs_names: &[String],
     name_idx: &mut usize,
 ) -> Result<String> {
     if dfs_names.is_empty() {
         // If names are not given, create dummy names
         // c0, c1, ... align with e.g. SqlToRel::create_named_struct
-        Ok(format!("c{i}"))
+        Ok(format!("c{column_idx}"))
     } else {
         let name = dfs_names.get(*name_idx).cloned().ok_or_else(|| {
             substrait_datafusion_err!("Named schema must contain names for all fields")
