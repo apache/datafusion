@@ -162,9 +162,6 @@ impl SkipAggregationProbe {
     ///   aggregation ratio and sets `should_skip` flag
     /// - if `should_skip` is set, locks further state updates
     fn update_state(&mut self, input_rows: usize, num_groups: usize) {
-        if self.is_locked {
-            return;
-        }
         self.input_rows += input_rows;
         self.num_groups = num_groups;
         if self.input_rows >= self.probe_rows_threshold {
@@ -1046,8 +1043,7 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<()> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
-                // let batch = self.emit(EmitTo::All, false)?;
-                let batch = RecordBatch::new_empty(self.schema.clone());
+                let batch = self.emit(EmitTo::All, false)?;
                 self.exec_state = ExecutionState::ProducingOutput(batch);
             }
         }
