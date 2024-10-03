@@ -97,7 +97,6 @@ impl DatasetGenerator {
 
         // Generate the base batch
         let base_batch = self.batch_generator.generate();
-        let total_rows_num = base_batch.num_rows();
         let batches = stagger_batch(base_batch.clone());
         let dataset = Dataset::new(batches, Vec::new());
         datasets.push(dataset);

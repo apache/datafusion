@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use datafusion::prelude::SessionContext;
+use tokio::task::JoinSet;
 
 use crate::fuzz_cases::aggregation_fuzzer::{
     context_generator::SessionContextGenerator, data_generator::DatasetGenerator,
@@ -24,7 +25,12 @@ struct AggregationFuzzer {
 }
 
 impl AggregationFuzzer {
-    pub async fn run() {}
+    pub async fn run(&self) {
+        
+
+
+        let mut join_set = JoinSet::new();
+    }
 }
 
 struct AggregationFuzzTestCase {
