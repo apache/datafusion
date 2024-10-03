@@ -616,7 +616,7 @@ impl Stream for GroupedHashAggregateStream {
 
                             // Do the grouping
                             extract_ok!(self.group_aggregate_batch(batch));
-
+                            
                             self.update_skip_aggregation_probe(input_rows);
 
                             // If we can begin emitting rows, do so,
@@ -1061,8 +1061,11 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<()> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
+                dbg!("should skip");
                 let batch = self.emit(EmitTo::All, false)?;
                 self.exec_state = ExecutionState::ProducingOutput(batch);
+            } else {
+                dbg!("should not skip");
             }
         }
 
