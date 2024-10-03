@@ -170,7 +170,7 @@ impl WindowUDFImpl for WindowShift {
         Ok(Field::new(
             field_args.name(),
             field_args.get_input_type(0).unwrap(),
-            false,
+            true,
         ))
     }
 
