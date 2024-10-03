@@ -21,6 +21,12 @@
 
 Aggregate functions operate on a set of values to compute a single result.
 
+Note: this documentation is in the process of being migrated to be [automatically created from the codebase].
+Please see the [Aggregate Functions (new)](aggregate_functions_new.md) page for
+the rest of the documentation.
+
+[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
+
 ## General
 
 - [avg](#avg)
