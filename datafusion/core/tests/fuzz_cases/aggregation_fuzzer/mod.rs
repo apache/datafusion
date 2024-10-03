@@ -15,6 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::util::pretty::pretty_format_batches;
+use arrow_array::RecordBatch;
+
 mod context_generator;
 mod data_generator;
 mod fuzzer;
+
+pub(crate) fn check_equality_of_batches(rhs: &[RecordBatch], lhs: &[RecordBatch]) {
+    let formatted_batches0 = pretty_format_batches(rhs).unwrap().to_string();
+    let mut formatted_batches0_sorted: Vec<&str> =
+        formatted_batches0.trim().lines().collect();
+    formatted_batches0_sorted.sort_unstable();
+    let formatted_batches1 = pretty_format_batches(lhs).unwrap().to_string();
+    let mut formatted_batches1_sorted: Vec<&str> =
+        formatted_batches1.trim().lines().collect();
+    formatted_batches1_sorted.sort_unstable();
+    assert_eq!(formatted_batches0_sorted, formatted_batches1_sorted);
+}
