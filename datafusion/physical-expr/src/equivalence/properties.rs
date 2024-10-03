@@ -1679,7 +1679,9 @@ pub fn calculate_union(
     //       classes. Add support for such cases.
     let mut iter = eqps.into_iter();
     let Some(mut acc) = iter.next() else {
-        return internal_err!("Cannot calculate EquivalenceProperties for a union with no inputs");
+        return internal_err!(
+            "Cannot calculate EquivalenceProperties for a union with no inputs"
+        );
     };
 
     // Harmonize the schema of the init with the schema of the union:
