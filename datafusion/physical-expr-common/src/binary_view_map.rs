@@ -722,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn test_observe_after_update() {
+    fn test_make_after_update() {
         let initial_values = GenericByteViewArray::from(vec![
             Some("A"),
             Some("B"),
