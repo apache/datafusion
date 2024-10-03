@@ -1072,6 +1072,7 @@ impl DefaultPhysicalPlanner {
                         Arc::clone(&physical_right),
                         &join_filter,
                         join_type,
+                        session_state.config().target_partitions(),
                     )? {
                         iejoin
                     } else {
@@ -1671,11 +1672,13 @@ pub fn create_physical_sort_expr(
     })
 }
 
+/// Try to create an IEJoin execution plan for join without equality conditions
 pub fn try_iejoin(
     left: Arc<dyn ExecutionPlan>,
     right: Arc<dyn ExecutionPlan>,
     filter: &Option<JoinFilter>,
     join_type: &JoinType,
+    target_partitions: usize,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     if join_type != &JoinType::Inner {
         // TODO: support other join types, only Inner join is supported currently
@@ -1688,15 +1691,19 @@ pub fn try_iejoin(
         let inequality_conditions = conditions
             .iter()
             .enumerate()
-            .filter(|(_, condition)| {
-                join_utils::check_inequality_condition(
-                    &left.schema(),
-                    &right.schema(),
-                    condition,
+            .map(|(index, condition)| {
+                (
+                    index,
+                    JoinFilter::new(
+                        Arc::clone(condition),
+                        filter.column_indices().to_vec(),
+                        filter.schema().clone(),
+                    ),
                 )
-                .is_ok()
             })
-            .map(|(index, condition)| (index, Arc::clone(condition)))
+            .filter(|(_, condition)| {
+                join_utils::check_inequality_condition(condition).is_ok()
+            })
             .take(2)
             .collect::<Vec<_>>();
         // if inequality_conditions has less than 2 elements, return None
@@ -1711,7 +1718,7 @@ pub fn try_iejoin(
         let new_filter = conjunction(conditions);
         let inequality_conditions = inequality_conditions
             .iter()
-            .map(|(_, condition)| Arc::clone(condition))
+            .map(|(_, condition)| condition.clone())
             .collect::<Vec<_>>();
         Ok(Some(Arc::new(IEJoinExec::try_new(
             left,
@@ -1725,6 +1732,7 @@ pub fn try_iejoin(
                 )
             }),
             join_type,
+            target_partitions,
         )?)))
     } else {
         Ok(None)

@@ -88,6 +88,29 @@ pub fn build_table_i32(
     .unwrap()
 }
 
+/// returns record batch with 3 columns of i32 in memory
+pub fn build_table_i32_with_nulls(
+    a: (&str, &Vec<Option<i32>>),
+    b: (&str, &Vec<Option<i32>>),
+    c: (&str, &Vec<Option<i32>>),
+) -> RecordBatch {
+    let schema = Schema::new(vec![
+        Field::new(a.0, DataType::Int32, false),
+        Field::new(b.0, DataType::Int32, false),
+        Field::new(c.0, DataType::Int32, false),
+    ]);
+
+    RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(Int32Array::from(a.1.clone())),
+            Arc::new(Int32Array::from(b.1.clone())),
+            Arc::new(Int32Array::from(c.1.clone())),
+        ],
+    )
+    .unwrap()
+}
+
 /// returns memory table scan wrapped around record batch with 3 columns of i32
 pub fn build_table_scan_i32(
     a: (&str, &Vec<i32>),

@@ -48,7 +48,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
-use datafusion_physical_expr::{Partitioning, PhysicalExprRef, PhysicalSortExpr};
+use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
 use futures::{ready, Stream};
 use parking_lot::Mutex;
 
@@ -86,7 +86,7 @@ pub struct IEJoinExec {
     /// right side
     pub(crate) right: Arc<dyn ExecutionPlan>,
     /// inequality conditions for iejoin, for example, t1.time > t2.time and t1.cost < t2.cost, only support two inequality conditions, other conditions will be stored in `filter`
-    pub(crate) inequality_conditions: Vec<PhysicalExprRef>,
+    pub(crate) inequality_conditions: Vec<JoinFilter>,
     /// filters which are applied while finding matching rows
     pub(crate) filter: Option<JoinFilter>,
     /// how the join is performed
@@ -106,6 +106,7 @@ pub struct IEJoinExec {
     pairs: Arc<Mutex<u64>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
+    // TODO: add metric and memory reservation
     /// execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// cache holding plan properties like equivalences, output partitioning etc.
@@ -117,9 +118,10 @@ impl IEJoinExec {
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
-        inequality_conditions: Vec<PhysicalExprRef>,
+        inequality_conditions: Vec<JoinFilter>,
         filter: Option<JoinFilter>,
         join_type: &JoinType,
+        target_partitions: usize,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -133,7 +135,7 @@ impl IEJoinExec {
             );
         }
         for condition in &inequality_conditions {
-            check_inequality_condition(&left_schema, &right_schema, condition)?;
+            check_inequality_condition(condition)?;
         }
         let schema = Arc::new(schema);
         if !matches!(join_type, JoinType::Inner) {
@@ -142,8 +144,13 @@ impl IEJoinExec {
                 join_type
             );
         }
-        let cache =
-            Self::compute_properties(&left, &right, Arc::clone(&schema), *join_type);
+        let cache = Self::compute_properties(
+            &left,
+            &right,
+            Arc::clone(&schema),
+            *join_type,
+            target_partitions,
+        );
         let condition_parts =
             inequality_conditions_to_sort_exprs(&inequality_conditions)?;
         let left_conditions =
@@ -182,6 +189,7 @@ impl IEJoinExec {
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         join_type: JoinType,
+        target_partitions: usize,
     ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
@@ -195,9 +203,7 @@ impl IEJoinExec {
             &[],
         );
 
-        let output_partitioning = Partitioning::UnknownPartitioning(
-            right.output_partitioning().partition_count(),
-        );
+        let output_partitioning = Partitioning::UnknownPartitioning(target_partitions);
 
         // Determine execution mode:
         let mut mode = execution_mode_from_children([left, right]);
@@ -220,7 +226,7 @@ impl DisplayAs for IEJoinExec {
                 let display_inequality_conditions = self
                     .inequality_conditions
                     .iter()
-                    .map(|c| format!("({})", c))
+                    .map(|c| format!("({})", c.expression()))
                     .collect::<Vec<String>>()
                     .join(", ");
                 write!(
@@ -287,6 +293,7 @@ impl ExecutionPlan for IEJoinExec {
             self.inequality_conditions.clone(),
             self.filter.clone(),
             &self.join_type,
+            self.cache.output_partitioning().partition_count(),
         )?))
     }
 
@@ -808,11 +815,30 @@ impl RecordBatchStream for IEJoinStream {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{memory::MemoryExec, test::build_table_i32_with_nulls};
+
+    // use arrow::datatypes::{DataType, Field};
+    // use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
+    // use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    // use datafusion_expr::Operator;
+    // use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+    // use datafusion_physical_expr::{Partitioning, PhysicalExpr};
     use std::cmp::Ordering;
 
     use arrow::array::make_comparator;
     use arrow_array::Int32Array;
     use arrow_schema::SortOptions;
+
+    fn build_table(
+        a: (&str, &Vec<Option<i32>>),
+        b: (&str, &Vec<Option<i32>>),
+        c: (&str, &Vec<Option<i32>>),
+    ) -> Arc<dyn ExecutionPlan> {
+        let batch = build_table_i32_with_nulls(a, b, c);
+        let schema = batch.schema();
+        Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
+    }
 
     #[test]
     fn test_compactor() {

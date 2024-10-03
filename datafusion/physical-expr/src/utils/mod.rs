@@ -221,6 +221,31 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     columns
 }
 
+/// map physical columns according to given index mapping
+pub fn map_columns(
+    expr: Arc<dyn PhysicalExpr>,
+    mapping: &HashMap<usize, usize>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform(|expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            let new_index = mapping.get(&column.index()).cloned();
+            if let Some(new_index) = new_index {
+                return Ok(Transformed::yes(Arc::new(Column::new(
+                    column.name(),
+                    new_index,
+                ))));
+            } else {
+                return datafusion_common::internal_err!(
+                    "column index {} not found in mapping",
+                    column.index()
+                );
+            }
+        }
+        Ok(Transformed::no(expr))
+    })
+    .data()
+}
+
 /// Re-assign column indices referenced in predicate according to given schema.
 /// This may be helpful when dealing with projections.
 pub fn reassign_predicate_columns(
@@ -552,6 +577,28 @@ pub(crate) mod tests {
         expected.insert(Column::new("col1", 2));
         expected.insert(Column::new("col2", 5));
         assert_eq!(collect_columns(&expr3), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_columns() -> Result<()> {
+        let col1 = Arc::new(Column::new("col1", 0));
+        let col2 = Arc::new(Column::new("col2", 1));
+        let col3 = Arc::new(Column::new("col3", 2));
+        let expr = Arc::new(BinaryExpr::new(col1, Operator::Plus, col2)) as _;
+        let mapping = HashMap::from([(0, 2), (1, 0)]);
+        let mapped = map_columns(expr, &mapping)?;
+        assert_eq!(
+            mapped.as_ref(),
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("col1", 2)),
+                Operator::Plus,
+                Arc::new(Column::new("col2", 0))
+            ))
+            .as_any()
+        );
+        // test mapping with non-existing index
+        assert!(map_columns(col3, &mapping).is_err());
         Ok(())
     }
 }
