@@ -23,7 +23,7 @@ mod context_generator;
 mod data_generator;
 mod fuzzer;
 
-pub use data_generator::{DatasetGeneratorConfig, ColumnDescr};
+pub use data_generator::{ColumnDescr, DatasetGeneratorConfig};
 pub use fuzzer::*;
 
 pub(crate) fn check_equality_of_batches(rhs: &[RecordBatch], lhs: &[RecordBatch]) {
