@@ -38,10 +38,10 @@ pub struct AggregationFuzzerBuilder {
     ctx_gen_rounds: usize,
 
     /// Test query represented by sql
-    sql: Option<Arc<String>>,
+    sql: Option<Arc<str>>,
 
     /// The queried table name
-    table_name: Option<String>,
+    table_name: Option<Arc<str>>,
 
     /// Config for the random datasets generator
     data_gen_config: Option<DatasetGeneratorConfig>,
@@ -71,12 +71,12 @@ impl AggregationFuzzerBuilder {
     }
 
     pub fn sql(mut self, sql: &str) -> Self {
-        self.sql = Some(Arc::new(sql.to_string()));
+        self.sql = Some(Arc::from(sql));
         self
     }
 
     pub fn table_name(mut self, table_name: &str) -> Self {
-        self.table_name = Some(table_name.to_string());
+        self.table_name = Some(Arc::from(table_name));
         self
     }
 
@@ -117,9 +117,9 @@ pub struct AggregationFuzzer {
     /// `ctx_gen_rounds` datasets will generated.
     ctx_gen_rounds: usize,
 
-    sql: Arc<String>,
+    sql: Arc<str>,
 
-    table_name: String,
+    table_name: Arc<str>,
 
     dataset_generator: DatasetGenerator,
 }
@@ -189,7 +189,7 @@ struct AggregationFuzzTestTask {
 
     /// The test query
     /// Use sql to represent it currently.
-    query: Arc<String>,
+    query: Arc<str>,
 
     /// Generated session context in current test case
     ctx: SessionContext,
