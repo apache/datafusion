@@ -177,8 +177,10 @@ impl SkipAggregationProbe {
         self.input_rows += input_rows;
         self.num_groups = num_groups;
         if self.input_rows >= self.probe_rows_threshold {
-            self.should_skip = self.num_groups as f64 / self.input_rows as f64
-                >= self.probe_ratio_threshold;
+            dbg!(self.input_rows);
+            dbg!(self.num_groups);
+            self.should_skip = dbg!(self.num_groups as f64 / self.input_rows as f64
+                >= self.probe_ratio_threshold);
             self.is_locked = true;
         }
     }
