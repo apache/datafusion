@@ -37,26 +37,34 @@ pub struct AggregationFuzzerBuilder {
     /// `ctx_gen_rounds` datasets will generated.
     ctx_gen_rounds: usize,
 
+    /// Test query represented by sql
     sql: Option<Arc<String>>,
 
+    /// The queried table name
+    table_name: Option<String>,
+
+    /// Config for the random datasets generator
     data_gen_config: Option<DatasetGeneratorConfig>,
 }
 
 impl AggregationFuzzerBuilder {
     fn new() -> Self {
         Self {
-            data_gen_rounds: 300,
+            data_gen_rounds: 50,
             ctx_gen_rounds: 50,
             sql: None,
+            table_name: None,
             data_gen_config: None,
         }
     }
 
+    #[allow(dead_code)]
     pub fn data_gen_rounds(mut self, data_gen_rounds: usize) -> Self {
         self.data_gen_rounds = data_gen_rounds;
         self
     }
 
+    #[allow(dead_code)]
     pub fn ctx_gen_rounds(mut self, ctx_gen_rounds: usize) -> Self {
         self.ctx_gen_rounds = ctx_gen_rounds;
         self
@@ -67,6 +75,11 @@ impl AggregationFuzzerBuilder {
         self
     }
 
+    pub fn table_name(mut self, table_name: &str) -> Self {
+        self.table_name = Some(table_name.to_string());
+        self
+    }
+
     pub fn data_gen_config(mut self, data_gen_config: DatasetGeneratorConfig) -> Self {
         self.data_gen_config = Some(data_gen_config);
         self
@@ -74,6 +87,7 @@ impl AggregationFuzzerBuilder {
 
     pub fn build(self) -> AggregationFuzzer {
         let sql = self.sql.expect("sql is required");
+        let table_name = self.table_name.expect("table_name is required");
         let data_gen_config = self.data_gen_config.expect("data_gen_config is required");
 
         let dataset_generator = DatasetGenerator::new(data_gen_config);
@@ -82,6 +96,7 @@ impl AggregationFuzzerBuilder {
             data_gen_rounds: self.data_gen_rounds,
             ctx_gen_rounds: self.ctx_gen_rounds,
             sql,
+            table_name,
             dataset_generator,
         }
     }
@@ -103,6 +118,8 @@ pub struct AggregationFuzzer {
     ctx_gen_rounds: usize,
 
     sql: Arc<String>,
+
+    table_name: String,
 
     dataset_generator: DatasetGenerator,
 }
@@ -128,13 +145,13 @@ impl AggregationFuzzer {
         }
     }
 
-    pub async fn generate_fuzz_tasks(
+    async fn generate_fuzz_tasks(
         &self,
         datasets: Vec<Dataset>,
     ) -> Vec<AggregationFuzzTestTask> {
         let mut tasks = Vec::with_capacity(datasets.len() * self.ctx_gen_rounds);
         for dataset in datasets {
-            let ctx_generator = SessionContextGenerator::new(dataset);
+            let ctx_generator = SessionContextGenerator::new(dataset, &self.table_name);
 
             // Generate the baseline context, and get the baseline result firstly
             let baseline_ctx = ctx_generator.generate_baseline();

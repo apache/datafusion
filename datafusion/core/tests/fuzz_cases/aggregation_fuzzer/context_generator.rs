@@ -47,6 +47,9 @@ pub struct SessionContextGenerator {
     /// Current testing dataset
     dataset: Dataset,
 
+    /// Table name of the test table
+    table_name: String,
+
     /// Used in generate the random `batch_size`
     ///
     /// The generated `batch_size` is between (0, total_rows_num]
@@ -61,7 +64,7 @@ pub struct SessionContextGenerator {
 }
 
 impl SessionContextGenerator {
-    pub fn new(dataset: Dataset) -> Self {
+    pub fn new(dataset: Dataset, table_name: &str) -> Self {
         let candidate_skip_partial_params = vec![
             SkipPartialParams::ensure_trigger(),
             SkipPartialParams::ensure_not_trigger(),
@@ -72,6 +75,7 @@ impl SessionContextGenerator {
 
         Self {
             dataset,
+            table_name: table_name.to_string(),
             max_batch_size,
             candidate_skip_partial_params,
             max_target_partitions,
@@ -96,6 +100,7 @@ impl SessionContextGenerator {
             batch_size,
             target_partitions,
             skip_partial_params,
+            table_name: &self.table_name,
             table_provider: Arc::new(provider),
         };
 
@@ -141,6 +146,7 @@ impl SessionContextGenerator {
             batch_size,
             target_partitions,
             skip_partial_params,
+            table_name: &self.table_name,
             table_provider: Arc::new(provider),
         };
 
@@ -149,10 +155,11 @@ impl SessionContextGenerator {
 }
 
 /// Collect the generated params, and build the [`SessionContext`]
-struct GeneratedSessionContextBuilder {
+struct GeneratedSessionContextBuilder<'a> {
     batch_size: usize,
     target_partitions: usize,
     skip_partial_params: SkipPartialParams,
+    table_name: &'a str,
     table_provider: Arc<dyn TableProvider>,
 }
 
@@ -272,7 +279,7 @@ mod test {
 
         // 2. Generate baseline context, and some randomly session contexts.
         // Run the same query on them, and all randoms' results should equal to baseline's
-        let ctx_generator = SessionContextGenerator::new(dataset);
+        let ctx_generator = SessionContextGenerator::new(dataset, "fuzz_table");
 
         let query = "select b, count(a) from fuzz_table group by b";
         let baseline_ctx = ctx_generator.generate_baseline();
