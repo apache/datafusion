@@ -2561,30 +2561,6 @@ mod test {
     }
 
     #[test]
-    fn test_lead_return_type() -> Result<()> {
-        let fun = find_df_window_func("lead").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
-        assert_eq!(DataType::Utf8, observed);
-
-        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_lag_return_type() -> Result<()> {
-        let fun = find_df_window_func("lag").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
-        assert_eq!(DataType::Utf8, observed);
-
-        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_nth_value_return_type() -> Result<()> {
         let fun = find_df_window_func("nth_value").unwrap();
         let observed =
