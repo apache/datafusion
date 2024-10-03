@@ -53,8 +53,7 @@ use datafusion_common::{
     downcast_value, exec_err, internal_err, DataFusionError, Result,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use datafusion_functions_aggregate_common::aggregate::min_max::groups_accumulator_max_view::GroupsAccumulatorMaxStringView;
-use datafusion_functions_aggregate_common::aggregate::min_max::groups_accumulator_min_view::GroupsAccumulatorMinStringView;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_string::StringGroupsAccumulator;
 use std::fmt::Debug;
 
 use arrow::datatypes::i256;
@@ -130,6 +129,16 @@ macro_rules! instantiate_max_accumulator {
     }};
 }
 
+macro_rules! instantiate_max_string_accumulator {
+    ($VIEW:expr) => {{
+        Ok(Box::new(
+            StringGroupsAccumulator::<_, $VIEW>::new(|a, b| {
+                a > b
+            })
+        ))
+    }};
+}
+
 /// Creates a [`PrimitiveGroupsAccumulator`] for computing `MIN`
 /// the specified [`ArrowPrimitiveType`].
 ///
@@ -145,6 +154,17 @@ macro_rules! instantiate_min_accumulator {
             })
             // Initialize each accumulator to $NATIVE::MAX
             .with_starting_value($NATIVE::MAX),
+        ))
+    }};
+}
+
+
+macro_rules! instantiate_min_string_accumulator {
+    ($VIEW:expr) => {{
+        Ok(Box::new(
+            StringGroupsAccumulator::<_, $VIEW>::new(|a, b| {
+                a < b
+            })
         ))
     }};
 }
@@ -256,7 +276,12 @@ impl AggregateUDFImpl for Max {
             Decimal256(_, _) => {
                 instantiate_max_accumulator!(data_type, i256, Decimal256Type)
             }
-            BinaryView => Ok(Box::new(GroupsAccumulatorMaxStringView::default())),
+            BinaryView => {
+                instantiate_max_string_accumulator!(true)
+            }
+            Binary => {
+                instantiate_max_string_accumulator!(false)
+            }
 
             // It would be nice to have a fast implementation for Strings as well
             // https://github.com/apache/datafusion/issues/6906
@@ -977,6 +1002,7 @@ impl AggregateUDFImpl for Min {
                 | Time64(_)
                 | Timestamp(_, _)
                 | BinaryView
+                | Binary
         )
     }
 
@@ -1037,7 +1063,12 @@ impl AggregateUDFImpl for Min {
             Decimal256(_, _) => {
                 instantiate_min_accumulator!(data_type, i256, Decimal256Type)
             }
-            BinaryView => Ok(Box::new(GroupsAccumulatorMinStringView::default())),
+            BinaryView => {
+                instantiate_min_string_accumulator!(true)
+            },
+            Binary => {
+                instantiate_min_string_accumulator!(false)
+            },
 
             // It would be nice to have a fast implementation for Strings as well
             // https://github.com/apache/datafusion/issues/6906

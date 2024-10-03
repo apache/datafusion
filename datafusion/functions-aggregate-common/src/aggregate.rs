@@ -17,4 +17,3 @@
 
 pub mod count_distinct;
 pub mod groups_accumulator;
-pub mod min_max;
