@@ -165,13 +165,13 @@ fn find_agg_expr<'a>(agg: &'a Aggregate, column: &Column) -> Result<Option<&'a E
         if matches!(agg.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
             // For grouping set expr, we must operate by expression list from the grouping set
             let grouping_expr = grouping_set_to_exprlist(agg.group_expr.as_slice())?;
-            return Ok(grouping_expr
+            Ok(grouping_expr
                 .into_iter()
                 .chain(agg.aggr_expr.iter())
-                .nth(index));
+                .nth(index))
         } else {
-            return Ok(agg.group_expr.iter().chain(agg.aggr_expr.iter()).nth(index));
-        };
+            Ok(agg.group_expr.iter().chain(agg.aggr_expr.iter()).nth(index))
+        }
     } else {
         Ok(None)
     }
