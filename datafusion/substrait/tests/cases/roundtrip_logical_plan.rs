@@ -149,6 +149,10 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
     fn dyn_ord(&self, _: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
         unimplemented!()
     }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
+    }
 }
 
 impl MockUserDefinedLogicalPlan {

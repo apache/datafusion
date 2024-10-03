@@ -51,6 +51,7 @@ use datafusion_common::{
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
     FunctionalDependencies, ParamValues, Result, TableReference, UnnestOptions,
 };
+use indexmap::IndexSet;
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
@@ -3071,6 +3072,8 @@ fn calc_func_dependencies_for_aggregate(
         let group_by_expr_names = group_expr
             .iter()
             .map(|item| item.schema_name().to_string())
+            .collect::<IndexSet<_>>()
+            .into_iter()
             .collect::<Vec<_>>();
         let aggregate_func_dependencies = aggregate_functional_dependencies(
             input.schema(),
