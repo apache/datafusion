@@ -21,6 +21,7 @@ use datafusion::{
     datasource::MemTable,
     prelude::{SessionConfig, SessionContext},
 };
+use datafusion_catalog::TableProvider;
 use datafusion_common::ScalarValue;
 use datafusion_expr::col;
 use rand::{thread_rng, Rng};
@@ -85,36 +86,23 @@ impl SessionContextGenerator {
         let batches = self.dataset.batches.clone();
         let provider = MemTable::try_new(schema, vec![batches]).unwrap();
 
+        // The baseline context should try best to disable all optimizations,
+        // and pursuing the rightness.
         let batch_size = self.max_batch_size;
         let target_partitions = 1;
         let skip_partial_params = SkipPartialParams::ensure_not_trigger();
 
-        // Generate session context
-        let mut session_config = SessionConfig::default();
-        session_config = session_config.set(
-            "datafusion.execution.batch_size",
-            &ScalarValue::UInt64(Some(batch_size as u64)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.target_partitions",
-            &ScalarValue::UInt64(Some(target_partitions as u64)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &ScalarValue::UInt64(Some(skip_partial_params.rows_threshold as u64)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &ScalarValue::Float64(Some(skip_partial_params.ratio_threshold)),
-        );
+        let builder = GeneratedSessionContextBuilder {
+            batch_size,
+            target_partitions,
+            skip_partial_params,
+            table_provider: provider,
+        };
 
-        let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_table("fuzz_table", Arc::new(provider))
-            .unwrap();
-
-        ctx
+        builder.build()
     }
 
+    /// Randomly generate session context
     pub fn generate(&self) -> SessionContext {
         let mut rng = thread_rng();
         let schema = self.dataset.batches[0].schema();
@@ -126,8 +114,7 @@ impl SessionContextGenerator {
         //   - `target_partitions`, from range: [1, cpu_num]
         //   - `skip_partial`, trigger or not trigger currently for simplicity
         //   - `sorted`, if found a sorted dataset, will or will not push down this information
-        //   - `spilling`, still not supported now, I think a special `MemoryPool` may be needed
-        //      to support this
+        //   - `spilling`(TODO)
         let batch_size = rng.gen_range(1..=self.max_batch_size);
 
         let target_partitions = rng.gen_range(1..=self.max_target_partitions);
@@ -150,27 +137,48 @@ impl SessionContextGenerator {
             provider
         };
 
-        // Generate session context
+        let builder = GeneratedSessionContextBuilder {
+            batch_size,
+            target_partitions,
+            skip_partial_params,
+            table_provider: provider,
+        };
+
+        builder.build()
+    }
+}
+
+/// Collect the generated params, and build the [`SessionContext`]
+struct GeneratedSessionContextBuilder {
+    pub batch_size: usize,
+    pub target_partitions: usize,
+    pub skip_partial_params: SkipPartialParams,
+    pub table_provider: Arc<dyn TableProvider>,
+}
+
+impl GeneratedSessionContextBuilder {
+    fn build(self) -> SessionContext {
+        // Build session context
         let mut session_config = SessionConfig::default();
         session_config = session_config.set(
             "datafusion.execution.batch_size",
-            &ScalarValue::UInt64(Some(batch_size as u64)),
+            &ScalarValue::UInt64(Some(self.batch_size as u64)),
         );
         session_config = session_config.set(
             "datafusion.execution.target_partitions",
-            &ScalarValue::UInt64(Some(target_partitions as u64)),
+            &ScalarValue::UInt64(Some(self.target_partitions as u64)),
         );
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &ScalarValue::UInt64(Some(skip_partial_params.rows_threshold as u64)),
+            &ScalarValue::UInt64(Some(self.skip_partial_params.rows_threshold as u64)),
         );
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &ScalarValue::Float64(Some(skip_partial_params.ratio_threshold)),
+            &ScalarValue::Float64(Some(self.skip_partial_params.ratio_threshold)),
         );
 
         let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_table("fuzz_table", Arc::new(provider))
+        ctx.register_table("fuzz_table", Arc::new(self.provider))
             .unwrap();
 
         ctx
