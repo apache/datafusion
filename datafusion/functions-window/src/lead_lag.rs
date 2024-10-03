@@ -22,7 +22,8 @@ use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    PartitionEvaluator, ReversedUDWF, Signature, TypeSignature, Volatility, WindowUDFImpl,
+    Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature, Volatility,
+    WindowUDFImpl,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -32,6 +33,57 @@ use std::cmp::min;
 use std::collections::VecDeque;
 use std::ops::{Neg, Range};
 use std::sync::Arc;
+#[allow(non_upper_case_globals)]
+static STATIC_Lag: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
+    std::sync::OnceLock::new();
+
+pub fn lag_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
+    STATIC_Lag
+        .get_or_init(|| {
+            std::sync::Arc::new(datafusion_expr::WindowUDF::from(WindowShift::lag()))
+        })
+        .clone()
+}
+
+/// Create an expression to represent the `lag` window function
+pub fn lag(
+    arg: datafusion_expr::Expr,
+    shift_offset: Option<i64>,
+    default_value: Option<ScalarValue>,
+) -> datafusion_expr::Expr {
+    let shift_offset_lit = shift_offset
+        .map(|v| v.lit())
+        .unwrap_or(ScalarValue::Null.lit());
+    let default_lit = default_value.unwrap_or(ScalarValue::Null).lit();
+
+    lag_udwf().call(vec![arg, shift_offset_lit, default_lit])
+}
+
+#[allow(non_upper_case_globals)]
+static STATIC_Lead: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
+    std::sync::OnceLock::new();
+
+pub fn lead_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
+    STATIC_Lead
+        .get_or_init(|| {
+            std::sync::Arc::new(datafusion_expr::WindowUDF::from(WindowShift::lead()))
+        })
+        .clone()
+}
+
+/// Create an expression to represent the `lead` window function
+pub fn lead(
+    arg: datafusion_expr::Expr,
+    shift_offset: Option<i64>,
+    default_value: Option<ScalarValue>,
+) -> datafusion_expr::Expr {
+    let shift_offset_lit = shift_offset
+        .map(|v| v.lit())
+        .unwrap_or(ScalarValue::Null.lit());
+    let default_lit = default_value.unwrap_or(ScalarValue::Null).lit();
+
+    lead_udwf().call(vec![arg, shift_offset_lit, default_lit])
+}
 
 #[derive(Debug)]
 enum WindowShiftKind {
