@@ -17,7 +17,6 @@ use arrow::array::{Array, ArrayRef, AsArray, BinaryBuilder, BinaryViewBuilder, B
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 use std::sync::Arc;
-use crate::aggregate::groups_accumulator::accumulate::accumulate_indices;
 
 pub struct StringGroupsAccumulator<F, const VIEW: bool> {
     states: Vec<String>,
@@ -53,10 +52,10 @@ where
 
         let input_array = &values[0];
 
-        accumulate_indices(group_indices, input_array.logical_nulls().as_ref(), opt_filter, |group_index| {
-            invoke_accumulator::<F, VIEW>(self, input_array, group_index)
-        });
-
+        for (i, &group_index) in group_indices.iter().enumerate() {
+            invoke_accumulator::<F, VIEW>(self, input_array, opt_filter, group_index, i)
+        }
+        
         Ok(())
     }
 
@@ -137,9 +136,9 @@ where
 
         let input_array = &values[0];
 
-        accumulate_indices(group_indices, input_array.logical_nulls().as_ref(), opt_filter, |group_index| {
-            invoke_accumulator::<F, VIEW>(self, input_array, group_index)
-        });
+        for (i, &group_index) in group_indices.iter().enumerate() {
+            invoke_accumulator::<F, VIEW>(self, input_array, opt_filter, group_index, i)
+        }
 
         Ok(())
     }
@@ -209,14 +208,23 @@ where
     }
 }
 
-fn invoke_accumulator<F, const VIEW: bool>(accumulator: &mut StringGroupsAccumulator<F, VIEW>, input_array: &ArrayRef, group_index: usize) 
+fn invoke_accumulator<F, const VIEW: bool>(accumulator: &mut StringGroupsAccumulator<F, VIEW>, input_array: &ArrayRef, opt_filter: Option<&BooleanArray>, group_index: usize, i: usize) 
 where
     F: Fn(&[u8], &[u8]) -> bool + Send + Sync
 {
+    if let Some(filter) = opt_filter {
+        if !filter.value(i) {
+            return
+        }
+    }
+    if input_array.is_null(i) {
+        return
+    }
+    
     let value: &[u8] = if VIEW {
-        input_array.as_binary_view().value(group_index)
+        input_array.as_binary_view().value(i)
     } else {
-        input_array.as_binary::<i32>().value(group_index)
+        input_array.as_binary::<i32>().value(i)
     };
 
     let value_str = std::str::from_utf8(value).map_err(|e| {
