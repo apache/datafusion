@@ -147,7 +147,7 @@ impl DocumentationBuilder {
     ///
     /// This is a common argument for scalar UDFs that operate on an expression and is rendered like
     ///
-    /// ```no-run
+    /// ```text
     /// <arg_name>:
     ///   <expression_type> expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
     /// ```
