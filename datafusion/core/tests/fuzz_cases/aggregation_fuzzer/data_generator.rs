@@ -60,14 +60,14 @@ pub struct DatasetsGeneratorBuilder {
 }
 
 impl DatasetsGeneratorBuilder {
-    pub fn build(self) -> DataSetsGenerator {
+    pub fn build(self) -> DatasetsGenerator {
         let columns = self.columns.expect("columns is required");
         let rows_num_range = self.rows_num_range.expect("rows_num_range is required");
 
         let batch_generator =
             RecordBatchGenerator::new(rows_num_range.0, rows_num_range.1, columns);
 
-        DataSetsGenerator {
+        DatasetsGenerator {
             sort_keys_set: self.sort_keys_set,
             batch_generator,
         }
@@ -105,12 +105,12 @@ impl DatasetsGeneratorBuilder {
 ///   - Split each batch to multiple batches which each sub-batch in has the randomly `rows num`,
 ///     and this multiple batches will be used to create the `Dataset`.
 ///
-struct DataSetsGenerator {
+pub struct DatasetsGenerator {
     sort_keys_set: Vec<Vec<String>>,
     batch_generator: RecordBatchGenerator,
 }
 
-impl DataSetsGenerator {
+impl DatasetsGenerator {
     fn generate(&self) -> Vec<Dataset> {
         let mut datasets = Vec::with_capacity(self.sort_keys_set.len() + 1);
 
