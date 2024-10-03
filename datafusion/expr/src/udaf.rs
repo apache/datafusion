@@ -36,8 +36,8 @@ use crate::function::{
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
-use crate::Signature;
 use crate::{Accumulator, Expr};
+use crate::{Documentation, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
 ///
@@ -275,6 +275,14 @@ impl AggregateUDF {
     pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         self.inner.default_value(data_type)
     }
+
+    /// Returns the documentation for this Aggregate UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    pub fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
+    }
 }
 
 impl<F> From<F> for AggregateUDF
@@ -299,25 +307,42 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
+/// # use std::sync::OnceLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr};
+/// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr, Documentation};
 /// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::{AccumulatorArgs, StateFieldsArgs}};
+/// # use datafusion_expr::window_doc_sections::DOC_SECTION_AGGREGATE;
 /// # use arrow::datatypes::Schema;
 /// # use arrow::datatypes::Field;
+///
 /// #[derive(Debug, Clone)]
 /// struct GeoMeanUdf {
-///   signature: Signature
+///   signature: Signature,
 /// }
 ///
 /// impl GeoMeanUdf {
 ///   fn new() -> Self {
 ///     Self {
-///       signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable)
+///       signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
 ///      }
 ///   }
 /// }
 ///
+/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+///
+/// fn get_doc() -> &'static Documentation {
+///     DOCUMENTATION.get_or_init(|| {
+///         Documentation::builder()
+///             .with_doc_section(DOC_SECTION_AGGREGATE)
+///             .with_description("calculates a geometric mean")
+///             .with_syntax_example("geo_mean(2.0)")
+///             .with_argument("arg1", "The Float64 number for the geometric mean")
+///             .build()
+///             .unwrap()
+///     })
+/// }
+///    
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf
 /// impl AggregateUDFImpl for GeoMeanUdf {
 ///    fn as_any(&self) -> &dyn Any { self }
@@ -325,7 +350,7 @@ where
 ///    fn signature(&self) -> &Signature { &self.signature }
 ///    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
 ///      if !matches!(args.get(0), Some(&DataType::Float64)) {
-///        return plan_err!("add_one only accepts Float64 arguments");
+///        return plan_err!("geo_mean only accepts Float64 arguments");
 ///      }
 ///      Ok(DataType::Float64)
 ///    }
@@ -336,6 +361,9 @@ where
 ///             Field::new("value", args.return_type.clone(), true),
 ///             Field::new("ordering", DataType::UInt32, true)
 ///        ])
+///    }
+///    fn documentation(&self) -> Option<&Documentation> {
+///        Some(get_doc())  
 ///    }
 /// }
 ///
@@ -603,6 +631,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         ScalarValue::try_from(data_type)
     }
+
+    /// Returns the documentation for this Aggregate UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    fn documentation(&self) -> Option<&Documentation> {
+        None
+    }
 }
 
 impl PartialEq for dyn AggregateUDFImpl {
@@ -749,6 +785,41 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
     fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
+    }
+}
+
+// Aggregate UDF doc sections for use in public documentation
+pub mod aggregate_doc_sections {
+    use crate::DocSection;
+
+    pub fn doc_sections() -> Vec<DocSection> {
+        vec![
+            DOC_SECTION_GENERAL,
+            DOC_SECTION_STATISTICAL,
+            DOC_SECTION_APPROXIMATE,
+        ]
+    }
+
+    pub const DOC_SECTION_GENERAL: DocSection = DocSection {
+        include: true,
+        label: "General Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_STATISTICAL: DocSection = DocSection {
+        include: true,
+        label: "Statistical Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_APPROXIMATE: DocSection = DocSection {
+        include: true,
+        label: "Approximate Functions",
+        description: None,
+    };
 }
 
 #[cfg(test)]
