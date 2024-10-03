@@ -20,10 +20,29 @@ use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_ascii_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Returns the ASCII value of the first character in a string.")
+            .with_syntax_example("ascii(str)")
+            .with_argument(
+                "str",
+                "String expression to operate on. Can be a constant, column, or function that evaluates to or can be coerced to a Utf8, LargeUtf8 or a Utf8View.",
+            )
+            .with_related_udf("chr")
+            .build()
+            .unwrap()
+    })
+}
 
 #[derive(Debug)]
 pub struct AsciiFunc {
@@ -70,6 +89,10 @@ impl ScalarUDFImpl for AsciiFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(ascii, vec![])(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_ascii_doc())
     }
 }
 
