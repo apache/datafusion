@@ -18,11 +18,14 @@
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TreeNode},
-    Column, Result,
+    Column, Result, ScalarValue,
 };
 use datafusion_expr::{
     utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan, Window,
 };
+use sqlparser::ast;
+
+use super::{dialect::DateFieldExtractStyle, Unparser};
 
 /// Recursively searches children of [LogicalPlan] to find an Aggregate node if exists
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
@@ -185,4 +188,81 @@ fn find_window_expr<'a>(
         .iter()
         .flat_map(|w| w.window_expr.iter())
         .find(|expr| expr.schema_name().to_string() == column_name)
+}
+
+/// Converts a date_part function to SQL, tailoring it to the supported date field extraction style.
+pub(crate) fn date_part_to_sql(
+    unparser: &Unparser,
+    style: DateFieldExtractStyle,
+    date_part_args: &[Expr],
+) -> Result<Option<ast::Expr>> {
+    match (style, date_part_args.len()) {
+        (DateFieldExtractStyle::Extract, 2) => {
+            let date_expr = unparser.expr_to_sql(&date_part_args[1])?;
+            if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &date_part_args[0] {
+                let field = match field.to_lowercase().as_str() {
+                    "year" => ast::DateTimeField::Year,
+                    "month" => ast::DateTimeField::Month,
+                    "day" => ast::DateTimeField::Day,
+                    "hour" => ast::DateTimeField::Hour,
+                    "minute" => ast::DateTimeField::Minute,
+                    "second" => ast::DateTimeField::Second,
+                    _ => return Ok(None),
+                };
+
+                return Ok(Some(ast::Expr::Extract {
+                    field,
+                    expr: Box::new(date_expr),
+                    syntax: ast::ExtractSyntax::From,
+                }));
+            }
+        }
+        (DateFieldExtractStyle::Strftime, 2) => {
+            let column = unparser.expr_to_sql(&date_part_args[1])?;
+
+            if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &date_part_args[0] {
+                let field = match field.to_lowercase().as_str() {
+                    "year" => "%Y",
+                    "month" => "%m",
+                    "day" => "%d",
+                    "hour" => "%H",
+                    "minute" => "%M",
+                    "second" => "%S",
+                    _ => return Ok(None),
+                };
+
+                return Ok(Some(ast::Expr::Function(ast::Function {
+                    name: ast::ObjectName(vec![ast::Ident {
+                        value: "strftime".to_string(),
+                        quote_style: None,
+                    }]),
+                    args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                        duplicate_treatment: None,
+                        args: vec![
+                            ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
+                                ast::Expr::Value(ast::Value::SingleQuotedString(
+                                    field.to_string(),
+                                )),
+                            )),
+                            ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(column)),
+                        ],
+                        clauses: vec![],
+                    }),
+                    filter: None,
+                    null_treatment: None,
+                    over: None,
+                    within_group: vec![],
+                    parameters: ast::FunctionArguments::None,
+                })));
+            }
+        }
+        (DateFieldExtractStyle::DatePart, _) => {
+            return Ok(Some(
+                unparser.scalar_function_to_sql("date_part", date_part_args)?,
+            ));
+        }
+        _ => {}
+    };
+
+    Ok(None)
 }
