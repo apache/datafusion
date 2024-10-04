@@ -697,7 +697,11 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// # use datafusion_expr::test::function_stub::count;
 /// # use sqlparser::ast::NullTreatment;
 /// # use datafusion_expr::{ExprFunctionExt, lit, Expr, col};
-/// # use datafusion_expr::window_function::percent_rank;
+/// # use datafusion_expr::window_function::cume_dist;
+/// TODO
+/// how to handle import of percent_rank function from
+/// datafusion+functions_window
+/// as using this is causing the circular depency issue
 /// # // first_value is an aggregate function in another crate
 /// # fn first_value(_arg: Expr) -> Expr {
 /// unimplemented!() }
