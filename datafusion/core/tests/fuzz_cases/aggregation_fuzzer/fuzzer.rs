@@ -246,6 +246,7 @@ impl AggregationFuzzTestTask {
                  - expected_row:{}\n\
                  ### Task total result:\n{}\n\
                  ### Expected total result:\n{}\n\
+                 ### Input:\n{}\n\
                  ",
                 self.sql,
                 self.dataset_ref.batches[0].schema_ref(),
@@ -255,6 +256,7 @@ impl AggregationFuzzTestTask {
                 e.rhs_row,
                 pretty_format_batches(task_result).unwrap(),
                 pretty_format_batches(expected_result).unwrap(),
+                pretty_format_batches(&self.dataset_ref.batches).unwrap(),
             );
 
             // Then we just panic

@@ -101,6 +101,7 @@ impl SessionContextGenerator {
             batch_size,
             target_partitions,
             skip_partial_params,
+            sort_hint: false,
             table_name: self.table_name.clone(),
             table_provider: Arc::new(provider),
         };
@@ -130,22 +131,24 @@ impl SessionContextGenerator {
         let skip_partial_params =
             self.candidate_skip_partial_params[skip_partial_params_idx];
 
-        let provider = if rng.gen_bool(0.5) && !self.dataset.sort_keys.is_empty() {
-            // Sort keys exist and random to push down
-            let sort_exprs = self
-                .dataset
-                .sort_keys
-                .iter()
-                .map(|key| col(key).sort(true, true))
-                .collect::<Vec<_>>();
-            provider.with_sort_order(vec![sort_exprs])
-        } else {
-            provider
-        };
+        let (provider, sort_hint) =
+            if rng.gen_bool(0.5) && !self.dataset.sort_keys.is_empty() {
+                // Sort keys exist and random to push down
+                let sort_exprs = self
+                    .dataset
+                    .sort_keys
+                    .iter()
+                    .map(|key| col(key).sort(true, true))
+                    .collect::<Vec<_>>();
+                (provider.with_sort_order(vec![sort_exprs]), true)
+            } else {
+                (provider, false)
+            };
 
         let builder = GeneratedSessionContextBuilder {
             batch_size,
             target_partitions,
+            sort_hint,
             skip_partial_params,
             table_name: self.table_name.clone(),
             table_provider: Arc::new(provider),
@@ -168,6 +171,7 @@ pub struct SessionContextWithParams {
 struct GeneratedSessionContextBuilder {
     batch_size: usize,
     target_partitions: usize,
+    sort_hint: bool,
     skip_partial_params: SkipPartialParams,
     table_name: String,
     table_provider: Arc<dyn TableProvider>,
@@ -200,6 +204,7 @@ impl GeneratedSessionContextBuilder {
         let params = SessionContextParams {
             batch_size: self.batch_size,
             target_partitions: self.target_partitions,
+            sort_hint: self.sort_hint,
             skip_partial_params: self.skip_partial_params,
         };
 
@@ -212,6 +217,7 @@ impl GeneratedSessionContextBuilder {
 pub struct SessionContextParams {
     pub batch_size: usize,
     pub target_partitions: usize,
+    pub sort_hint: bool,
     pub skip_partial_params: SkipPartialParams,
 }
 
