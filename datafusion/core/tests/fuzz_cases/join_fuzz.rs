@@ -491,11 +491,6 @@ impl JoinFuzzTestCase {
                 nlj_formatted.trim().lines().collect();
             nlj_formatted_sorted.sort_unstable();
 
-            println!("=============== HashJoinExec ==================");
-            hj_formatted_sorted.iter().for_each(|s| println!("{}", s));
-            println!("=============== SortMergeJoinExec ==================");
-            smj_formatted_sorted.iter().for_each(|s| println!("{}", s));
-
             if debug
                 && ((join_tests.contains(&JoinTestType::NljHj) && nlj_rows != hj_rows)
                     || (join_tests.contains(&JoinTestType::HjSmj) && smj_rows != hj_rows))
