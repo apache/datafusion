@@ -54,7 +54,7 @@ physical_plan
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TI
-select * from (select trace_id, MAX(timestamp) max_ts from traces t group by trace_id) where trace_id != 'a' order by max_ts desc limit 3;
+select * from (select trace_id, MAX(timestamp) max_ts from traces t group by trace_id) where trace_id != 'b' order by max_ts desc limit 3;
 ----
 c 4
 a 1
