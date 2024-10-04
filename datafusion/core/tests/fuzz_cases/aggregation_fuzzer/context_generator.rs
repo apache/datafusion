@@ -86,7 +86,7 @@ impl SessionContextGenerator {
 
 impl SessionContextGenerator {
     /// Generate the `SessionContext` for the baseline run
-    pub fn generate_baseline(&self) -> Result<SessionContext> {
+    pub fn generate_baseline(&self) -> Result<SessionContextWithParams> {
         let schema = self.dataset.batches[0].schema();
         let batches = self.dataset.batches.clone();
         let provider = MemTable::try_new(schema, vec![batches])?;
@@ -109,7 +109,7 @@ impl SessionContextGenerator {
     }
 
     /// Randomly generate session context
-    pub fn generate(&self) -> Result<SessionContext> {
+    pub fn generate(&self) -> Result<SessionContextWithParams> {
         let mut rng = thread_rng();
         let schema = self.dataset.batches[0].schema();
         let batches = self.dataset.batches.clone();
@@ -155,6 +155,15 @@ impl SessionContextGenerator {
     }
 }
 
+/// The generated [`SessionContext`] with its params
+///
+/// Storing the generated `params` is necessary for
+/// reporting the broken test case.
+pub struct SessionContextWithParams {
+    pub ctx: SessionContext,
+    pub params: SessionContextParams,
+}
+
 /// Collect the generated params, and build the [`SessionContext`]
 struct GeneratedSessionContextBuilder {
     batch_size: usize,
@@ -165,7 +174,7 @@ struct GeneratedSessionContextBuilder {
 }
 
 impl GeneratedSessionContextBuilder {
-    fn build(self) -> Result<SessionContext> {
+    fn build(self) -> Result<SessionContextWithParams> {
         // Build session context
         let mut session_config = SessionConfig::default();
         session_config = session_config.set(
@@ -188,13 +197,27 @@ impl GeneratedSessionContextBuilder {
         let ctx = SessionContext::new_with_config(session_config);
         ctx.register_table(self.table_name, self.table_provider)?;
 
-        Ok(ctx)
+        let params = SessionContextParams {
+            batch_size: self.batch_size,
+            target_partitions: self.target_partitions,
+            skip_partial_params: self.skip_partial_params,
+        };
+
+        Ok(SessionContextWithParams { ctx, params })
     }
+}
+
+/// The generated params for [`SessionContext`]
+#[derive(Debug, Clone, Copy)]
+pub struct SessionContextParams {
+    batch_size: usize,
+    target_partitions: usize,
+    skip_partial_params: SkipPartialParams,
 }
 
 /// Partial skipping parameters
 #[derive(Debug, Clone, Copy)]
-struct SkipPartialParams {
+pub struct SkipPartialParams {
     /// Related to `skip_partial_aggregation_probe_ratio_threshold` in `ExecutionOptions`
     pub ratio_threshold: f64,
 
@@ -281,14 +304,15 @@ mod test {
         let ctx_generator = SessionContextGenerator::new(Arc::new(dataset), "fuzz_table");
 
         let query = "select b, count(a) from fuzz_table group by b";
-        let baseline_ctx = ctx_generator.generate_baseline().unwrap();
-        let mut random_ctxs = Vec::with_capacity(8);
+        let baseline_wrapped_ctx = ctx_generator.generate_baseline().unwrap();
+        let mut random_wrapped_ctxs = Vec::with_capacity(8);
         for _ in 0..8 {
             let ctx = ctx_generator.generate().unwrap();
-            random_ctxs.push(ctx);
+            random_wrapped_ctxs.push(ctx);
         }
 
-        let base_result = baseline_ctx
+        let base_result = baseline_wrapped_ctx
+            .ctx
             .sql(query)
             .await
             .unwrap()
@@ -296,9 +320,16 @@ mod test {
             .await
             .unwrap();
 
-        for ctx in random_ctxs {
-            let random_result = ctx.sql(query).await.unwrap().collect().await.unwrap();
-            check_equality_of_batches(&base_result, &random_result);
+        for wrapped_ctx in random_wrapped_ctxs {
+            let random_result = wrapped_ctx
+                .ctx
+                .sql(query)
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap();
+            check_equality_of_batches(&base_result, &random_result).unwrap();
         }
     }
 }

@@ -19,12 +19,11 @@ use std::sync::Arc;
 
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::RecordBatch;
-use datafusion::prelude::SessionContext;
 use tokio::task::JoinSet;
 
 use crate::fuzz_cases::aggregation_fuzzer::{
     check_equality_of_batches,
-    context_generator::SessionContextGenerator,
+    context_generator::{SessionContextGenerator, SessionContextWithParams},
     data_generator::{Dataset, DatasetGenerator, DatasetGeneratorConfig},
     run_sql,
 };
@@ -166,23 +165,23 @@ impl AggregationFuzzer {
                 SessionContextGenerator::new(dataset_ref.clone(), &self.table_name);
 
             // Generate the baseline context, and get the baseline result firstly
-            let baseline_ctx = ctx_generator
+            let baseline_ctx_with_params = ctx_generator
                 .generate_baseline()
                 .expect("should success to generate baseline session context");
-            let baseline_result = run_sql(&self.sql, &baseline_ctx)
+            let baseline_result = run_sql(&self.sql, &baseline_ctx_with_params.ctx)
                 .await
                 .expect("should success to run baseline sql");
             let baseline_result = Arc::new(baseline_result);
             // Generate test tasks
             for _ in 0..self.ctx_gen_rounds {
-                let ctx = ctx_generator
+                let ctx_with_params = ctx_generator
                     .generate()
                     .expect("should success to generate session context");
                 let task = AggregationFuzzTestTask {
                     dataset_ref: dataset_ref.clone(),
                     expected_result: baseline_result.clone(),
                     sql: self.sql.clone(),
-                    ctx,
+                    ctx_with_params,
                 };
 
                 tasks.push(task);
@@ -208,7 +207,7 @@ impl AggregationFuzzer {
 ///
 struct AggregationFuzzTestTask {
     /// Generated session context in current test case
-    ctx: SessionContext,
+    ctx_with_params: SessionContextWithParams,
 
     /// Expected result in current test case
     /// It is generate from `query` + `baseline session context`
@@ -224,7 +223,7 @@ struct AggregationFuzzTestTask {
 
 impl AggregationFuzzTestTask {
     async fn run(&self) {
-        let task_result = run_sql(&self.sql, &self.ctx)
+        let task_result = run_sql(&self.sql, &self.ctx_with_params.ctx)
             .await
             .expect("should success to run sql");
         self.check_result(&task_result, &self.expected_result);
@@ -238,7 +237,7 @@ impl AggregationFuzzTestTask {
                 "##### AggregationFuzzer error report #####
                  ### Sql:\n{}\n\
                  ### Schema:\n{}\n\
-                 ### Session context params:\n\
+                 ### Session context params:\n{:?}\n\
                  ### Inconsistent row:\n\
                  - row_idx:{}\n\
                  - task_row:{}\n\
@@ -248,6 +247,7 @@ impl AggregationFuzzTestTask {
                  ",
                 self.sql,
                 self.dataset_ref.batches[0].schema_ref(),
+                self.ctx_with_params.params,
                 e.row_idx,
                 e.lhs_row,
                 e.rhs_row,

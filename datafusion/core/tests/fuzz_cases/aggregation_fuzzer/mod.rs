@@ -28,7 +28,7 @@ pub use data_generator::{ColumnDescr, DatasetGeneratorConfig};
 pub use fuzzer::*;
 
 #[derive(Debug)]
-struct InconsistentResult {
+pub(crate) struct InconsistentResult {
     pub row_idx: usize,
     pub lhs_row: String,
     pub rhs_row: String,
