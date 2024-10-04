@@ -91,15 +91,28 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     for PrimitiveGroupValueBuilder<T, NULLABLE>
 {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
-        // Perf: skip null check (by short circuit) if input is not ullable
-        let null_match = if NULLABLE {
-            self.nulls.is_null(lhs_row) == array.is_null(rhs_row)
-        } else {
-            true
-        };
+        // Perf: skip null check (by short circuit) if input is not nullable
+        if NULLABLE {
+            // In nullable path, we should check if both `exist row` and `input row`
+            // are null/not null
+            let is_exist_null = self.nulls.is_null(lhs_row);
+            let null_match = self.nulls.is_null(lhs_row) == array.is_null(rhs_row);
+            if !null_match {
+                // If `is_null`s in `exist row` and `input row` don't match, return not equal to
+                return false;
+            } else if is_exist_null {
+                // If `is_null`s in `exist row` and `input row` matches, and they are `null`s,
+                // return equal to
+                //
+                // NOTICE: we should not check their values when they are `null`s, because they are
+                // meaningless actually, and not ensured to be same
+                //
+                return true;
+            }
+            // Otherwise, we need to check their values
+        }
 
-        null_match
-            && self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
+        self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
