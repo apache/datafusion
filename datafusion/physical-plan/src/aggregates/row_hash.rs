@@ -29,7 +29,7 @@ use crate::aggregates::{
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
-use crate::sorts::streaming_merge::{streaming_merge, StreamingMergeConfig};
+use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::{read_spill_as_stream, spill_record_batch_by_size};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
@@ -1001,15 +1001,14 @@ impl GroupedHashAggregateStream {
             streams.push(stream);
         }
         self.spill_state.is_stream_merging = true;
-        self.input = streaming_merge(StreamingMergeConfig {
-            streams,
-            schema,
-            expressions: &self.spill_state.spill_expr,
-            metrics: self.baseline_metrics.clone(),
-            batch_size: self.batch_size,
-            fetch: None,
-            reservation: self.reservation.new_empty(),
-        })?;
+        self.input = StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_schema(schema)
+            .with_expressions(&self.spill_state.spill_expr)
+            .with_metrics(self.baseline_metrics.clone())
+            .with_batch_size(self.batch_size)
+            .with_reservation(self.reservation.new_empty())
+            .build()?;
         self.input_done = false;
         self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
         Ok(())
