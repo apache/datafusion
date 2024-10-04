@@ -1514,26 +1514,26 @@ impl SMJStream {
                     // I.e., if all rows joined from a streamed row are failed with the join filter,
                     // we need to join it with nulls as buffered side.
                     if matches!(self.join_type, JoinType::Right | JoinType::Full) {
-                        // The reverse of the selection mask. For the rows not pass join filter above,
-                        // we need to join them (left or right) with null rows for outer joins.
-                        let not_mask = if pre_mask.null_count() > 0 {
-                            // If the mask contains nulls, we need to use `prep_null_mask_filter` to
-                            // handle the nulls in the mask as false to produce rows where the mask
-                            // was null itself.
-                            compute::not(&compute::prep_null_mask_filter(pre_mask))?
-                        } else {
-                            compute::not(pre_mask)?
-                        };
-
-                        let not_mask = compute::not(&not_mask)?;
-
-                        //dbg!(&not_mask);
-                        //dbg!(&self.streamed_batch.join_filter_matched_idxs);
+                        // We need to get the mask for row indices that the joined rows are failed
+                        // on the join filter. I.e., for a row in streamed side, if all joined rows
+                        // between it and all buffered rows are failed on the join filter, we need to
+                        // output it with null columns from buffered side. For the mask here, it
+                        // behaves like LeftAnti join.
+                        let null_mask: BooleanArray = get_filtered_join_mask(
+                            // Set a mask slot as true only if all joined rows of same streamed index
+                            // are failed on the join filter.
+                            // The masking behavior is like LeftAnti join.
+                            JoinType::LeftAnti,
+                            &streamed_indices,
+                            mask,
+                            &self.streamed_batch.join_filter_matched_idxs,
+                            &self.buffered_data.scanning_offset,
+                        )
+                        .unwrap()
+                        .0;
 
                         let null_joined_batch =
-                            compute::filter_record_batch(&output_batch, &not_mask)?;
-
-                        //dbg!(&null_joined_batch);
+                            compute::filter_record_batch(&output_batch, &null_mask)?;
 
                         let mut buffered_columns = self
                             .buffered_schema
