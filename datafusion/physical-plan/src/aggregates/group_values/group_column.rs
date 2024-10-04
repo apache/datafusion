@@ -386,8 +386,12 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{ArrayRef, StringArray};
+    use arrow::datatypes::Int64Type;
+    use arrow_array::{ArrayRef, Int64Array, StringArray};
+    use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
     use datafusion_physical_expr::binary_map::OutputType;
+
+    use crate::aggregates::group_values::group_column::PrimitiveGroupValueBuilder;
 
     use super::{ByteGroupValueBuilder, GroupColumn};
 
@@ -434,5 +438,77 @@ mod tests {
             None,
         ])) as ArrayRef;
         assert_eq!(&output, &array);
+    }
+
+    #[test]
+    fn test_nullable_primitive_equal_to() {
+        // Will cover such cases:
+        //   - exist null, input not null
+        //   - exist null, input null; values not equal
+        //   - exist null, input null; values equal
+        //   - exist not null, input null
+        //   - exist not null, input not null; values not equal
+        //   - exist not null, input not null; values equal
+
+        // Define PrimitiveGroupValueBuilder
+        let mut builder = PrimitiveGroupValueBuilder::<Int64Type, true>::new();
+        let builder_array = Arc::new(Int64Array::from(vec![
+            None,
+            None,
+            None,
+            Some(1),
+            Some(2),
+            Some(3),
+        ])) as ArrayRef;
+        builder.append_val(&builder_array, 0);
+        builder.append_val(&builder_array, 1);
+        builder.append_val(&builder_array, 2);
+        builder.append_val(&builder_array, 3);
+        builder.append_val(&builder_array, 4);
+        builder.append_val(&builder_array, 5);
+
+        // Define input array
+        let (_, values, _) =
+            Int64Array::from(vec![Some(1), Some(2), None, None, Some(1), Some(3)])
+                .into_parts();
+
+        let mut boolean_buffer_builder = BooleanBufferBuilder::new(6);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(false);
+        boolean_buffer_builder.append(false);
+        boolean_buffer_builder.append(false);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(true);
+        let nulls = NullBuffer::new(boolean_buffer_builder.finish());
+        let input_array = Arc::new(Int64Array::new(values, Some(nulls))) as ArrayRef;
+
+        // Check
+        assert!(!builder.equal_to(0, &input_array, 0));
+        assert!(builder.equal_to(1, &input_array, 1));
+        assert!(builder.equal_to(2, &input_array, 2));
+        assert!(!builder.equal_to(3, &input_array, 3));
+        assert!(!builder.equal_to(4, &input_array, 4));
+        assert!(builder.equal_to(5, &input_array, 5));
+    }
+
+    #[test]
+    fn test_not_nullable_primitive_equal_to() {
+        // Will cover such cases:
+        //   - values equal
+        //   - values not equal
+
+        // Define PrimitiveGroupValueBuilder
+        let mut builder = PrimitiveGroupValueBuilder::<Int64Type, false>::new();
+        let builder_array =
+            Arc::new(Int64Array::from(vec![Some(0), Some(1)])) as ArrayRef;
+        builder.append_val(&builder_array, 0);
+        builder.append_val(&builder_array, 1);
+
+        // Define input array
+        let input_array = Arc::new(Int64Array::from(vec![Some(0), Some(2)])) as ArrayRef;
+
+        // Check
+        assert!(builder.equal_to(0, &input_array, 0));
+        assert!(!builder.equal_to(1, &input_array, 1));
     }
 }
