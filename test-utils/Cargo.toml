@@ -29,5 +29,5 @@ workspace = true
 arrow = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 env_logger = { workspace = true }
-rand = { workspace = true }
 paste = "1.0.15"
+rand = { workspace = true }

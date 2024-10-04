@@ -253,8 +253,8 @@ impl AggregationFuzzTestTask {
                 e.row_idx,
                 e.lhs_row,
                 e.rhs_row,
-                pretty_format_batches(&task_result).unwrap(),
-                pretty_format_batches(&expected_result).unwrap(),
+                pretty_format_batches(task_result).unwrap(),
+                pretty_format_batches(expected_result).unwrap(),
             );
 
             // Then we just panic

@@ -108,7 +108,7 @@ impl DatasetGenerator {
             let sort_exprs = sort_keys
                 .iter()
                 .map(|key| {
-                    let col_expr = col(&key, &schema)?;
+                    let col_expr = col(key, schema)?;
                     Ok(PhysicalSortExpr::new_default(col_expr))
                 })
                 .collect::<Result<Vec<_>>>()?;

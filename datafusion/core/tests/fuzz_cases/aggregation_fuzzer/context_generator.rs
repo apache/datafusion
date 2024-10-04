@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{cmp, sync::Arc, usize};
+use std::{cmp, sync::Arc};
 
 use datafusion::{
     datasource::MemTable,
@@ -210,9 +210,9 @@ impl GeneratedSessionContextBuilder {
 /// The generated params for [`SessionContext`]
 #[derive(Debug, Clone, Copy)]
 pub struct SessionContextParams {
-    batch_size: usize,
-    target_partitions: usize,
-    skip_partial_params: SkipPartialParams,
+    pub batch_size: usize,
+    pub target_partitions: usize,
+    pub skip_partial_params: SkipPartialParams,
 }
 
 /// Partial skipping parameters
