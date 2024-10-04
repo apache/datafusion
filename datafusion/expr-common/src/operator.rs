@@ -142,7 +142,8 @@ impl Operator {
         )
     }
 
-    /// Return true if the operator is a comparison operator.
+    /// Return true if the operator is a comparison operator
+    /// Those are used in intervals propagation, see [`datafusion_physical_expr::intervals`].
     ///
     /// For example, 'Binary(a, >, b)' would be a comparison expression.
     pub fn is_comparison_operator(&self) -> bool {
@@ -154,8 +155,6 @@ impl Operator {
                 | Operator::LtEq
                 | Operator::Gt
                 | Operator::GtEq
-                | Operator::IsDistinctFrom
-                | Operator::IsNotDistinctFrom
         )
     }
 
