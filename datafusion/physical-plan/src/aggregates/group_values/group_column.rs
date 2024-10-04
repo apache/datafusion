@@ -101,7 +101,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                 // If `is_null`s in `exist row` and `input row` don't match, return not equal to
                 return false;
             } else if is_exist_null {
-                // If `is_null`s in `exist row` and `input row` matches, and they are `null`s,
+                // If `is_null`s in `exist row` and `input row` match, and they are `null`s,
                 // return equal to
                 //
                 // NOTICE: we should not check their values when they are `null`s, because they are
