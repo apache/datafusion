@@ -23,6 +23,7 @@ use std::iter;
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::define_udwf_and_expr;
 use crate::rank::RankState;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::UInt64Array;
@@ -31,31 +32,15 @@ use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::expr::WindowFunction;
-use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 use datafusion_functions_window_common::field;
 use field::WindowUDFFieldArgs;
 
-/// Create a [`WindowFunction`](Expr::WindowFunction) expression for
-/// `dense_rank` user-defined window function.
-pub fn dense_rank() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(dense_rank_udwf(), vec![]))
-}
-
-/// Singleton instance of `dense_rank`, ensures the UDWF is only created once.
-#[allow(non_upper_case_globals)]
-static STATIC_DenseRank: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
-    std::sync::OnceLock::new();
-
-/// Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for `dense_rank`
-/// user-defined window function.
-pub fn dense_rank_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-    STATIC_DenseRank
-        .get_or_init(|| {
-            std::sync::Arc::new(datafusion_expr::WindowUDF::from(DenseRank::default()))
-        })
-        .clone()
-}
+define_udwf_and_expr!(
+    DenseRank,
+    dense_rank,
+    "Returns the rank of each row within a window partition without gaps."
+);
 
 /// dense_rank expression
 #[derive(Debug)]

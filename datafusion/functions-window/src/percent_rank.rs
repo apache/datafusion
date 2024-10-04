@@ -23,38 +23,22 @@ use std::iter;
 use std::ops::Range;
 use std::sync::Arc;
 
+use crate::define_udwf_and_expr;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::Float64Array;
 use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::expr::WindowFunction;
-use datafusion_expr::{Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 use datafusion_functions_window_common::field;
 use field::WindowUDFFieldArgs;
 
-/// Create a [`WindowFunction`](Expr::WindowFunction) expression for
-/// `percent_rank` user-defined window function.
-pub fn percent_rank() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(percent_rank_udwf(), vec![]))
-}
-
-/// Singleton instance of `percent_rank`, ensures the UDWF is only created once.
-#[allow(non_upper_case_globals)]
-static STATIC_PercentRank: std::sync::OnceLock<
-    std::sync::Arc<datafusion_expr::WindowUDF>,
-> = std::sync::OnceLock::new();
-
-/// Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for `percent_rank`
-/// user-defined window function.
-pub fn percent_rank_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-    STATIC_PercentRank
-        .get_or_init(|| {
-            std::sync::Arc::new(datafusion_expr::WindowUDF::from(PercentRank::default()))
-        })
-        .clone()
-}
+define_udwf_and_expr!(
+    PercentRank,
+    percent_rank,
+    "Returns the relative rank of the current row within a window partition."
+);
 
 /// percent_rank expression
 #[derive(Debug)]
