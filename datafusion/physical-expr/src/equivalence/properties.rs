@@ -34,7 +34,7 @@ use crate::{
 
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_err, JoinSide, JoinType, Result};
+use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
@@ -1677,14 +1677,22 @@ pub fn calculate_union(
 ) -> Result<EquivalenceProperties> {
     // TODO: In some cases, we should be able to preserve some equivalence
     //       classes. Add support for such cases.
-    let mut init = eqps[0].clone();
+    let mut iter = eqps.into_iter();
+    let Some(mut acc) = iter.next() else {
+        return internal_err!(
+            "Cannot calculate EquivalenceProperties for a union with no inputs"
+        );
+    };
+
     // Harmonize the schema of the init with the schema of the union:
-    if !init.schema.eq(&schema) {
-        init = init.with_new_schema(schema)?;
+    if !acc.schema.eq(&schema) {
+        acc = acc.with_new_schema(schema)?;
     }
-    eqps.into_iter()
-        .skip(1)
-        .try_fold(init, calculate_union_binary)
+    // Fold in the rest of the EquivalenceProperties:
+    for props in iter {
+        acc = calculate_union_binary(acc, props)?;
+    }
+    Ok(acc)
 }
 
 #[cfg(test)]
