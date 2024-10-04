@@ -394,6 +394,25 @@ pub fn is_loose_inequality_operator(op: &Operator) -> bool {
     matches!(op, Operator::LtEq | Operator::GtEq)
 }
 
+/// Swaps the left and right expressions of a binary expression, like `a < b` to `b > a`.
+/// If this is not a binary expression or the operator can't be swapped, the expression is returned as is.
+pub fn swap_binary_expr(expr: &PhysicalExprRef) -> PhysicalExprRef {
+    match expr.as_any().downcast_ref::<BinaryExpr>() {
+        Some(binary) => {
+            if let Some(swapped_op) = binary.op().swap() {
+                Arc::new(BinaryExpr::new(
+                    Arc::clone(&binary.right()),
+                    swapped_op,
+                    Arc::clone(&binary.left()),
+                ))
+            } else {
+                Arc::clone(expr)
+            }
+        }
+        None => Arc::clone(expr),
+    }
+}
+
 /// Checks whether the inequality condition is valid.
 /// The inequality condition is valid if the expressions are not null and the expressions are not equal, and left expression is from left schema and right expression is from right schema.
 /// TODO: Maybe we can reorder the expressions to make it statisfy this condition later, like (right.b < left.a) -> (left.a > right.b).

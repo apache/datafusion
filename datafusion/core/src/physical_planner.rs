@@ -1687,7 +1687,7 @@ pub fn try_iejoin(
     if let Some(filter) = filter {
         // split filter into multiple conditions
         let mut conditions = split_conjunction(filter.expression());
-        // take first two inequality conditions
+        // take first two inequality conditions, swap the binary expression if necessary
         let inequality_conditions = conditions
             .iter()
             .enumerate()
@@ -1699,11 +1699,40 @@ pub fn try_iejoin(
                         filter.column_indices().to_vec(),
                         filter.schema().clone(),
                     ),
+                    JoinFilter::new(
+                        join_utils::swap_binary_expr(&Arc::clone(condition)),
+                        filter.column_indices().to_vec(),
+                        filter.schema().clone(),
+                    ),
                 )
             })
-            .filter(|(_, condition)| {
-                join_utils::check_inequality_condition(condition).is_ok()
+            .map(|(index, condition, condition_swap)| {
+                (
+                    index,
+                    condition.clone(),
+                    join_utils::check_inequality_condition(&condition).is_ok(),
+                    condition_swap.clone(),
+                    join_utils::check_inequality_condition(&condition_swap).is_ok(),
+                )
             })
+            .map(
+                |(
+                    index,
+                    condition,
+                    condition_valid,
+                    condition_swap,
+                    condition_swap_valid,
+                )| {
+                    if condition_valid {
+                        (index, condition, true)
+                    } else if condition_swap_valid {
+                        (index, condition_swap, true)
+                    } else {
+                        (index, condition, false)
+                    }
+                },
+            )
+            .filter(|(_, _, condition_valid)| *condition_valid)
             .take(2)
             .collect::<Vec<_>>();
         // if inequality_conditions has less than 2 elements, return None
@@ -1711,14 +1740,15 @@ pub fn try_iejoin(
             return Ok(None);
         }
         // remove the taken inequality conditions from conditions
-        for (index, _condition) in inequality_conditions.iter() {
+        // remove from back to front to keep the index correct
+        for (index, _condition, _condition_valid) in inequality_conditions.iter().rev() {
             conditions.remove(*index);
         }
         // create a new filter with the remaining conditions
         let new_filter = conjunction(conditions);
         let inequality_conditions = inequality_conditions
             .iter()
-            .map(|(_, condition)| condition.clone())
+            .map(|(_, condition, _)| condition.clone())
             .collect::<Vec<_>>();
         Ok(Some(Arc::new(IEJoinExec::try_new(
             left,

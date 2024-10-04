@@ -503,6 +503,7 @@ impl IEJoinStream {
             self.finished = true;
             return Poll::Ready(None);
         }
+        println!("pair = {}, n = {}, m = {}", pair, n, m);
         // get the index of left and right block
         let (left_block_idx, right_block_idx) =
             ((pair / m as u64) as usize, (pair % m as u64) as usize);
@@ -517,10 +518,17 @@ impl IEJoinStream {
             right_block,
             &self.sort_options[0],
         ) {
+            println!("skip pair: ({}, {})", left_block_idx, right_block_idx);
             return Poll::Ready(Some(Ok(RecordBatch::new_empty(Arc::clone(
                 &self.schema,
             )))));
         }
+
+        println!(
+            "left block count = {}, right block count = {}",
+            left_block.arrays()[0].len(),
+            right_block.arrays()[0].len()
+        );
 
         // compute the join result
         let batch = IEJoinStream::compute(
