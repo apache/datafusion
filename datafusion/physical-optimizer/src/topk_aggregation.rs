@@ -31,9 +31,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::PhysicalSortExpr;
 
 use crate::PhysicalOptimizerRule;
+use datafusion_physical_plan::projection::ProjectionExec;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
@@ -48,12 +48,13 @@ impl TopKAggregation {
 
     fn transform_agg(
         aggr: &AggregateExec,
-        order: &PhysicalSortExpr,
+        order_by: &str,
+        order_desc: bool,
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         // ensure the sort direction matches aggregate function
         let (field, desc) = aggr.get_minmax_desc()?;
-        if desc != order.options.descending {
+        if desc != order_desc {
             return None;
         }
         let group_key = aggr.group_expr().expr().iter().exactly_one().ok()?;
@@ -66,8 +67,8 @@ impl TopKAggregation {
         }
 
         // ensure the sort is on the same field as the aggregate output
-        let col = order.expr.as_any().downcast_ref::<Column>()?;
-        if col.name() != field.name() {
+        println!("col={} field={}", order_by, field.name());
+        if order_by != field.name() {
             return None;
         }
 
@@ -92,6 +93,9 @@ impl TopKAggregation {
         let child = children.into_iter().exactly_one().ok()?;
         let order = sort.properties().output_ordering()?;
         let order = order.iter().exactly_one().ok()?;
+        let order_desc = order.options.descending;
+        let order = order.expr.as_any().downcast_ref::<Column>()?;
+        let mut cur_col_name = order.name().to_string();
         let limit = sort.fetch()?;
 
         let is_cardinality_preserving = |plan: Arc<dyn ExecutionPlan>| {
@@ -100,6 +104,7 @@ impl TopKAggregation {
                 .is_some()
                 || plan.as_any().downcast_ref::<RepartitionExec>().is_some()
                 || plan.as_any().downcast_ref::<FilterExec>().is_some()
+                || plan.as_any().downcast_ref::<ProjectionExec>().is_some()
         };
 
         let mut cardinality_preserved = true;
@@ -109,9 +114,19 @@ impl TopKAggregation {
             }
             if let Some(aggr) = plan.as_any().downcast_ref::<AggregateExec>() {
                 // either we run into an Aggregate and transform it
-                match Self::transform_agg(aggr, order, limit) {
+                match Self::transform_agg(aggr, &cur_col_name, order_desc, limit) {
                     None => cardinality_preserved = false,
                     Some(plan) => return Ok(Transformed::yes(plan)),
+                }
+            } else if let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() {
+                // track renames due to successive projections
+                for (src_expr, proj_name) in proj.expr() {
+                    let Some(src_col) = src_expr.as_any().downcast_ref::<Column>() else {
+                        continue;
+                    };
+                    if *proj_name == cur_col_name {
+                        cur_col_name = src_col.name().to_string();
+                    }
                 }
             } else {
                 // or we continue down whitelisted nodes of other types
