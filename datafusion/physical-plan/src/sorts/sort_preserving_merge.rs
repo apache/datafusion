@@ -24,7 +24,7 @@ use crate::common::spawn_buffered;
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::sorts::streaming_merge;
+use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -273,15 +273,15 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
                 debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 
-                let result = streaming_merge(
-                    receivers,
-                    schema,
-                    &self.expr,
-                    BaselineMetrics::new(&self.metrics, partition),
-                    context.session_config().batch_size(),
-                    self.fetch,
-                    reservation,
-                )?;
+                let result = StreamingMergeBuilder::new()
+                    .with_streams(receivers)
+                    .with_schema(schema)
+                    .with_expressions(&self.expr)
+                    .with_metrics(BaselineMetrics::new(&self.metrics, partition))
+                    .with_batch_size(context.session_config().batch_size())
+                    .with_fetch(self.fetch)
+                    .with_reservation(reservation)
+                    .build()?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
 
@@ -960,16 +960,15 @@ mod tests {
             MemoryConsumer::new("test").register(&task_ctx.runtime_env().memory_pool);
 
         let fetch = None;
-        let merge_stream = streaming_merge(
-            streams,
-            batches.schema(),
-            sort.as_slice(),
-            BaselineMetrics::new(&metrics, 0),
-            task_ctx.session_config().batch_size(),
-            fetch,
-            reservation,
-        )
-        .unwrap();
+        let merge_stream = StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_schema(batches.schema())
+            .with_expressions(sort.as_slice())
+            .with_metrics(BaselineMetrics::new(&metrics, 0))
+            .with_batch_size(task_ctx.session_config().batch_size())
+            .with_fetch(fetch)
+            .with_reservation(reservation)
+            .build()?;
 
         let mut merged = common::collect(merge_stream).await.unwrap();
 

@@ -1907,8 +1907,10 @@ select position('' in '')
 1
 
 
-query error POSITION function can only accept strings
+query I
 select position(1 in 1)
+----
+1
 
 
 query I

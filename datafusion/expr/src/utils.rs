@@ -38,6 +38,7 @@ use datafusion_common::{
     DataFusionError, Result, TableReference,
 };
 
+use indexmap::IndexSet;
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
 
 pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
@@ -59,16 +60,7 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
 /// Count the number of distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
-    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
-        if group_expr.len() > 1 {
-            return plan_err!(
-                "Invalid group by expressions, GroupingSet must be the only expression"
-            );
-        }
-        Ok(grouping_set.distinct_expr().len())
-    } else {
-        Ok(group_expr.len())
-    }
+    grouping_set_to_exprlist(group_expr).map(|exprs| exprs.len())
 }
 
 /// The [power set] (or powerset) of a set S is the set of all subsets of S, \
@@ -260,7 +252,11 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<&Expr>> {
         }
         Ok(grouping_set.distinct_expr())
     } else {
-        Ok(group_expr.iter().collect())
+        Ok(group_expr
+            .iter()
+            .collect::<IndexSet<_>>()
+            .into_iter()
+            .collect())
     }
 }
 
