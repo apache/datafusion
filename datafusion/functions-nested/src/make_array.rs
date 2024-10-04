@@ -17,6 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for `make_array` function.
 
+use std::vec;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::{ArrayData, Capacities, MutableArrayData};
@@ -82,19 +83,12 @@ impl ScalarUDFImpl for MakeArray {
         match arg_types.len() {
             0 => Ok(empty_array_type()),
             _ => {
-                let mut expr_type = DataType::Null;
-                for arg_type in arg_types {
-                    if !arg_type.equals_datatype(&DataType::Null) {
-                        expr_type = arg_type.clone();
-                        break;
-                    }
-                }
-
-                if expr_type.is_null() {
-                    expr_type = DataType::Int64;
-                }
-
-                Ok(List(Arc::new(Field::new("item", expr_type, true))))
+                // At this point, all the type in array should be coerced to the same one
+                Ok(List(Arc::new(Field::new(
+                    "item",
+                    arg_types[0].to_owned(),
+                    true,
+                ))))
             }
         }
     }
@@ -127,7 +121,14 @@ impl ScalarUDFImpl for MakeArray {
                 }
             },
         )?;
-        Ok(vec![new_type; arg_types.len()])
+
+        if let DataType::FixedSizeList(field, _) = new_type {
+            Ok(vec![DataType::List(field); arg_types.len()])
+        } else if new_type.is_null() {
+            Ok(vec![DataType::Int64; arg_types.len()])
+        } else {
+            Ok(vec![new_type; arg_types.len()])
+        }
     }
 }
 
