@@ -51,7 +51,10 @@ impl PowerFunc {
         use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::Exact(vec![Int64, Int64]), TypeSignature::Exact(vec![Float64, Float64])],
+                vec![
+                    TypeSignature::Exact(vec![Int64, Int64]),
+                    TypeSignature::Exact(vec![Float64, Float64]),
+                ],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("pow")],
