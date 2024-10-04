@@ -97,7 +97,7 @@ struct PercentRankEvaluator {}
 impl PartitionEvaluator for PercentRankEvaluator {
     fn is_causal(&self) -> bool {
         // The percent_rank function doesn't need "future" values to emit results:
-        true
+        false
     }
 
     fn evaluate(
@@ -134,6 +134,10 @@ impl PartitionEvaluator for PercentRankEvaluator {
 
     fn supports_bounded_execution(&self) -> bool {
         false
+    }
+
+    fn include_rank(&self) -> bool {
+        true
     }
 }
 

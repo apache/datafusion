@@ -156,6 +156,10 @@ impl PartitionEvaluator for DenseRankEvaluator {
     fn supports_bounded_execution(&self) -> bool {
         true
     }
+
+    fn include_rank(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
