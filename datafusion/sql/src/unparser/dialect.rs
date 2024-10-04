@@ -114,6 +114,9 @@ pub trait Dialect: Send + Sync {
         true
     }
 
+    /// Allows the dialect to override scalar function unparsing if the dialect has specific rules.
+    /// Returns None if the default unparsing should be used, or Some(ast::Expr) if there is
+    /// a custom implementation for the function.
     fn scalar_function_to_sql_overrides(
         &self,
         _unparser: &Unparser,
