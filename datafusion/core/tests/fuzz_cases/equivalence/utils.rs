@@ -16,6 +16,8 @@
 // under the License.
 //
 // use datafusion_physical_expr::expressions::{col, Column};
+use datafusion::physical_plan::expressions::col;
+use datafusion::physical_plan::expressions::Column;
 use datafusion_physical_expr::{ConstExpr, EquivalenceProperties, PhysicalSortExpr};
 use std::any::Any;
 use std::sync::Arc;
