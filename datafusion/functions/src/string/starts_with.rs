@@ -23,7 +23,6 @@ use arrow::datatypes::DataType;
 
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::TypeSignature;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
 use crate::utils::make_scalar_function;
@@ -49,17 +48,7 @@ impl Default for StartsWithFunc {
 impl StartsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    // Planner attempts coercion to the target type starting with the most preferred candidate.
-                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
-                    // If that fails, it proceeds to `(Utf8, Utf8)`.
-                    TypeSignature::Exact(vec![DataType::Utf8View, DataType::Utf8View]),
-                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
-                    TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
         }
     }
 }

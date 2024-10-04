@@ -48,18 +48,9 @@ impl Default for BTrimFunc {
 
 impl BTrimFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![
-                    // Planner attempts coercion to the target type starting with the most preferred candidate.
-                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
-                    // If that fails, it proceeds to `(Utf8, Utf8)`.
-                    TypeSignature::Exact(vec![Utf8View, Utf8View]),
-                    TypeSignature::Exact(vec![Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8View]),
-                    TypeSignature::Exact(vec![Utf8]),
-                ],
+                vec![TypeSignature::String(2), TypeSignature::String(1)],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("trim")],

@@ -25,7 +25,6 @@ use datafusion_common::exec_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_expr::ScalarUDFImpl;
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ColumnarValue, Signature, Volatility};
 
 use std::any::Any;
@@ -44,22 +43,8 @@ impl Default for ContainsFunc {
 
 impl ContainsFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8View, Utf8View]),
-                    Exact(vec![Utf8View, Utf8]),
-                    Exact(vec![Utf8View, LargeUtf8]),
-                    Exact(vec![Utf8, Utf8View]),
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8, LargeUtf8]),
-                    Exact(vec![LargeUtf8, Utf8View]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
         }
     }
 }

@@ -410,7 +410,7 @@ fn get_valid_types(
                             Ok(coerced_type)
                         } else {
                             plan_err!(
-                                "{} and {} are not coercible to a common numeric type",
+                                "{} and {} are not coercible to a common string type",
                                 lhs_type,
                                 rhs_type
                             )
@@ -419,8 +419,8 @@ fn get_valid_types(
                 }
             }
 
-            let mut valid_type = current_types.first().unwrap().clone();
-            for t in current_types.iter().skip(1) {
+            let mut valid_type = DataType::Utf8;
+            for t in current_types.iter() {
                 valid_type = coercion_rule(&valid_type, t)?;
             }
 

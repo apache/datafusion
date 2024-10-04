@@ -23,7 +23,7 @@ use arrow::datatypes::DataType;
 
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, TypeSignature, Volatility};
+use datafusion_expr::{ColumnarValue, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
@@ -41,16 +41,8 @@ impl Default for ReplaceFunc {
 
 impl ReplaceFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![Utf8View, Utf8View, Utf8View]),
-                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(3, Volatility::Immutable),
         }
     }
 }

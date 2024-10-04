@@ -23,8 +23,7 @@ use arrow::datatypes::DataType;
 
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 
@@ -41,13 +40,8 @@ impl Default for InitcapFunc {
 
 impl InitcapFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8, Utf8View],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(1, Volatility::Immutable),
         }
     }
 }
