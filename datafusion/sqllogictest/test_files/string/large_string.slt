@@ -72,23 +72,6 @@ false false
 false true
 NULL NULL
 
-# TODO: move it back to `string_query.slt.part` after fixing the issue
-# see detail: https://github.com/apache/datafusion/issues/12670
-query IIIIII
-SELECT
-  STRPOS(ascii_1, 'e'),
-  STRPOS(ascii_1, 'ang'),
-  STRPOS(ascii_1, NULL),
-  STRPOS(unicode_1, 'и'),
-  STRPOS(unicode_1, 'ион'),
-  STRPOS(unicode_1, NULL)
-FROM test_basic_operator;
-----
-5 0 NULL 0 0 NULL
-7 3 NULL 0 0 NULL
-6 0 NULL 18 18 NULL
-NULL NULL NULL NULL NULL NULL
-
 #
 # common test for string-like functions and operators
 #
