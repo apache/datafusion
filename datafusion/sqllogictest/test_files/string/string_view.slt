@@ -38,19 +38,6 @@ statement ok
 drop table test_source
 
 # TODO: move it back to `string_query.slt.part` after fixing the issue
-# https://github.com/apache/datafusion/issues/12618
-query BB
-SELECT
-  ascii_1 ~* '^a.{3}e',
-  unicode_1 ~* '^d.*Фу'
-FROM test_basic_operator;
-----
-true false
-false false
-false true
-NULL NULL
-
-# TODO: move it back to `string_query.slt.part` after fixing the issue
 # see detail: https://github.com/apache/datafusion/issues/12670
 query IIIIII
 SELECT
