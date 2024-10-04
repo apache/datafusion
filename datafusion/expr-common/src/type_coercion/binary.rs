@@ -969,7 +969,7 @@ fn string_concat_internal_coercion(
 /// based on the observation that StringArray to StringViewArray is cheap but not vice versa.
 ///
 /// Between Utf8 and LargeUtf8, we coerce to LargeUtf8.
-fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         // If Utf8View is in any side, we coerce to Utf8View.

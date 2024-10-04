@@ -26,9 +26,9 @@ use datafusion_common::{
     utils::{coerced_fixed_size_list_to_list, list_ndims},
     Result,
 };
-use datafusion_expr_common::signature::{
+use datafusion_expr_common::{signature::{
     ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
-};
+}, type_coercion::binary::string_coercion};
 use std::sync::Arc;
 
 /// Performs type coercion for scalar function arguments.
@@ -180,6 +180,7 @@ fn try_coerce_types(
             type_signature,
             TypeSignature::UserDefined
                 | TypeSignature::Numeric(_)
+                | TypeSignature::String(_)
                 | TypeSignature::Coercible(_)
         )
     {
@@ -374,6 +375,48 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
+        TypeSignature::String(number) => {
+            if *number < 1 {
+                return plan_err!(
+                    "The signature expected at least one argument but received {}",
+                    current_types.len()
+                );
+            }
+            if *number != current_types.len() {
+                return plan_err!(
+                    "The signature expected {} arguments but received {}",
+                    number,
+                    current_types.len()
+                );
+            }
+
+            fn coercion_rule(lhs_type: &DataType, rhs_type: &DataType) -> Result<DataType> {
+                match (lhs_type, rhs_type) {
+                    (DataType::Null, DataType::Null) => Ok(DataType::Utf8),
+                    (DataType::Null, data_type) | (data_type, DataType::Null) => coercion_rule(data_type, &DataType::Utf8),
+                    (DataType::Dictionary(_, lhs), DataType::Dictionary(_, rhs)) => coercion_rule(lhs, rhs),
+                    (DataType::Dictionary(_, v), other) | (other, DataType::Dictionary(_, v)) => coercion_rule(v, other),
+                    _ => {
+                        if let Some(coerced_type) = string_coercion(lhs_type, rhs_type) {
+                            return Ok(coerced_type)
+                        } else {
+                            return plan_err!(
+                                "{} and {} are not coercible to a common numeric type",
+                                lhs_type,
+                                rhs_type
+                            )
+                        }
+                    }
+                }
+            }
+
+            let mut valid_type = current_types.first().unwrap().clone();
+            for t in current_types.iter().skip(1) {
+                valid_type = coercion_rule(&valid_type, t)?;
+            }
+
+            vec![vec![valid_type; *number]]
+        }
         TypeSignature::Numeric(number) => {
             if *number < 1 {
                 return plan_err!(
