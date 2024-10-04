@@ -134,8 +134,103 @@ async fn test_left_join_1k_filtered() {
         JoinType::Left,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::NljHj], false)
+    .run_test(&[JoinTestType::HjSmj], false)
     .await
+}
+
+#[tokio::test]
+async fn test1() {
+    let left: Vec<RecordBatch> = JoinFuzzTestCase::load_partitioned_batches_from_parquet(
+        "fuzz_test_debug/batch_size_1/input1",
+    )
+    .await
+    .unwrap();
+
+    let right: Vec<RecordBatch> =
+        JoinFuzzTestCase::load_partitioned_batches_from_parquet(
+            "fuzz_test_debug/batch_size_1/input2",
+        )
+        .await
+        .unwrap();
+
+    JoinFuzzTestCase::new(
+        left,
+        right,
+        JoinType::Left,
+        Some(Box::new(col_lt_col_filter)),
+    )
+    .run_test(&[JoinTestType::HjSmj], false)
+    .await;
+}
+
+#[tokio::test]
+async fn test_left_outer1() {
+    let schema = make_staggered_batches(1)[0].schema();
+
+    let left = vec![
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 1])),
+                Arc::new(Int32Array::from(vec![10, 11])),
+                Arc::new(Int32Array::from(vec![10, 10])),
+                Arc::new(Int32Array::from(vec![0, 0])),
+            ],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(Int32Array::from(vec![12])),
+                Arc::new(Int32Array::from(vec![10])),
+                Arc::new(Int32Array::from(vec![0])),
+            ],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(Int32Array::from(vec![13])),
+                Arc::new(Int32Array::from(vec![10])),
+                Arc::new(Int32Array::from(vec![0])),
+            ],
+        )
+        .unwrap(),
+    ];
+
+    let right = vec![
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 1])),
+                Arc::new(Int32Array::from(vec![10, 10])),
+                Arc::new(Int32Array::from(vec![9, 11])),
+                Arc::new(Int32Array::from(vec![0, 0])),
+            ],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 1, 1, 1])),
+                Arc::new(Int32Array::from(vec![11, 12, 12, 13])),
+                Arc::new(Int32Array::from(vec![9, 11, 9, 11])),
+                Arc::new(Int32Array::from(vec![0, 0, 0, 0])),
+            ],
+        )
+        .unwrap(),
+    ];
+
+    JoinFuzzTestCase::new(
+        left,
+        right,
+        JoinType::Left,
+        Some(Box::new(col_lt_col_filter)),
+    )
+    .run_test(&[JoinTestType::HjSmj], false)
+    .await;
 }
 
 #[tokio::test]
@@ -258,6 +353,7 @@ impl JoinFuzzTestCase {
         join_filter_builder: Option<JoinFilterBuilder>,
     ) -> Self {
         Self {
+            //batch_sizes: &[1, 2, 7, 49, 50, 51, 100],
             batch_sizes: &[1, 2, 7, 49, 50, 51, 100],
             input1,
             input2,
@@ -492,6 +588,11 @@ impl JoinFuzzTestCase {
             let mut nlj_formatted_sorted: Vec<&str> =
                 nlj_formatted.trim().lines().collect();
             nlj_formatted_sorted.sort_unstable();
+
+            // println!("=============== HashJoinExec ==================");
+            // hj_formatted_sorted.iter().for_each(|s| println!("{}", s));
+            // println!("=============== SortMergeJoinExec ==================");
+            // smj_formatted_sorted.iter().for_each(|s| println!("{}", s));
 
             if debug
                 && ((join_tests.contains(&JoinTestType::NljHj) && nlj_rows != hj_rows)
