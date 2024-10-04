@@ -1525,8 +1525,7 @@ impl SMJStream {
                             compute::not(pre_mask)?
                         };
 
-                        let not_mask =
-                            compute::not(&not_mask)?;
+                        let not_mask = compute::not(&not_mask)?;
 
                         //dbg!(&not_mask);
                         //dbg!(&self.streamed_batch.join_filter_matched_idxs);
