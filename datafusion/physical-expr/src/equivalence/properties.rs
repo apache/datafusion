@@ -1443,7 +1443,7 @@ type Dependencies = IndexSet<PhysicalSortExpr>;
 
 /// Contains a mapping of all dependencies we have processed for each sort expr
 struct DependencyEnumerator<'a> {
-    /// expr --> [exprs]
+    /// Maps `expr` --> `[exprs]` that have previously been processed
     seen: IndexMap<&'a PhysicalSortExpr, IndexSet<&'a PhysicalSortExpr>>,
 }
 
