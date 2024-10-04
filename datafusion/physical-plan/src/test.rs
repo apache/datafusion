@@ -95,9 +95,9 @@ pub fn build_table_i32_with_nulls(
     c: (&str, &Vec<Option<i32>>),
 ) -> RecordBatch {
     let schema = Schema::new(vec![
-        Field::new(a.0, DataType::Int32, false),
-        Field::new(b.0, DataType::Int32, false),
-        Field::new(c.0, DataType::Int32, false),
+        Field::new(a.0, DataType::Int32, true),
+        Field::new(b.0, DataType::Int32, true),
+        Field::new(c.0, DataType::Int32, true),
     ]);
 
     RecordBatch::try_new(

@@ -341,6 +341,7 @@ impl ExecutionPlan for IEJoinExec {
 
 #[derive(Debug, Clone)]
 /// SortedBlock contains arrays that are sorted by specified columns
+// TODO: use struct support spill?
 pub struct SortedBlock {
     pub array: Vec<ArrayRef>,
     pub sort_options: Vec<(usize, SortOptions)>,
@@ -364,7 +365,7 @@ impl SortedBlock {
                 options: Some(*opt),
             })
             .collect::<Vec<_>>();
-        // TODO: handle list type
+        // TODO: should handle list type?
         let indices = lexsort_to_indices(&sort_columns, None)?;
         self.array = self
             .array
@@ -816,19 +817,13 @@ impl RecordBatchStream for IEJoinStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{memory::MemoryExec, test::build_table_i32_with_nulls};
+    use crate::{common, memory::MemoryExec, test::build_table_i32_with_nulls};
 
-    // use arrow::datatypes::{DataType, Field};
-    // use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
-    // use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    // use datafusion_expr::Operator;
-    // use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
-    // use datafusion_physical_expr::{Partitioning, PhysicalExpr};
-    use std::cmp::Ordering;
-
-    use arrow::array::make_comparator;
-    use arrow_array::Int32Array;
-    use arrow_schema::SortOptions;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{assert_batches_sorted_eq, ScalarValue};
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+    use datafusion_physical_expr::PhysicalExpr;
 
     fn build_table(
         a: (&str, &Vec<Option<i32>>),
@@ -840,23 +835,168 @@ mod tests {
         Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
     }
 
-    #[test]
-    fn test_compactor() {
-        let array1 = Int32Array::from(vec![Some(1), None]);
-        let array2 = Int32Array::from(vec![None, Some(2)]);
-        let cmp = make_comparator(&array1, &array2, SortOptions::default()).unwrap();
-
-        assert_eq!(cmp(0, 1), Ordering::Less); // Some(1) vs Some(2)
-        assert_eq!(cmp(1, 1), Ordering::Less); // None vs Some(2)
-        assert_eq!(cmp(1, 0), Ordering::Equal); // None vs None
-        assert_eq!(cmp(0, 0), Ordering::Greater); // Some(1) vs None
+    /// Returns the column names on the schema
+    fn columns(schema: &Schema) -> Vec<String> {
+        schema.fields().iter().map(|f| f.name().clone()).collect()
     }
 
-    #[test]
-    fn test_successor() {
-        let iter =
-            std::iter::successors(Some(-1), |&x| if x > -4 { Some(x - 1) } else { None });
-        let vec = iter.collect::<Vec<_>>();
-        assert_eq!(vec, vec![-1, -2, -3, -4]);
+    async fn multi_partitioned_join_collect(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        join_type: &JoinType,
+        ie_join_filter: Vec<JoinFilter>,
+        join_filter: Option<JoinFilter>,
+        context: Arc<TaskContext>,
+    ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+        let partition_count = 4;
+
+        let ie_join = IEJoinExec::try_new(
+            left,
+            right,
+            ie_join_filter,
+            join_filter,
+            &join_type,
+            partition_count,
+        )?;
+        let columns = columns(&ie_join.schema());
+        let mut batches = vec![];
+        for i in 0..partition_count {
+            let stream = ie_join.execute(i, Arc::clone(&context))?;
+            let more_batches = common::collect(stream).await?;
+            batches.extend(
+                more_batches
+                    .into_iter()
+                    .filter(|b| b.num_rows() > 0)
+                    .collect::<Vec<_>>(),
+            );
+        }
+        Ok((columns, batches))
+    }
+
+    #[tokio::test]
+    async fn test_ie_join() -> Result<()> {
+        let column_indices = vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new("x", DataType::Int32, true),
+            Field::new("y", DataType::Int32, true),
+            Field::new("x", DataType::Int32, true),
+            Field::new("y", DataType::Int32, true),
+            Field::new("z", DataType::Int32, true),
+        ]);
+        // test left.x < right.x and left.y >= right.y
+        let filter1 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Lt,
+            Arc::new(Column::new("x", 2)),
+        )) as Arc<dyn PhysicalExpr>;
+        let filter2 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("y", 1)),
+            Operator::GtEq,
+            Arc::new(Column::new("y", 3)),
+        )) as Arc<dyn PhysicalExpr>;
+        let ie_filter = vec![
+            JoinFilter::new(filter1, column_indices.clone(), intermediate_schema.clone()),
+            JoinFilter::new(filter2, column_indices.clone(), intermediate_schema.clone()),
+        ];
+        let join_filter = Some(JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("z", 4)),
+                Operator::NotEq,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
+            )),
+            column_indices.clone(),
+            intermediate_schema.clone(),
+        ));
+        //
+        let left = build_table(
+            ("x", &vec![Some(5), Some(9), None]),
+            ("y", &vec![Some(6), Some(10), Some(10)]),
+            ("z", &vec![Some(3), Some(5), Some(10)]),
+        );
+        let right = build_table(
+            (
+                "x",
+                &vec![
+                    Some(10),
+                    Some(6),
+                    Some(5),
+                    Some(6),
+                    Some(6),
+                    Some(6),
+                    Some(6),
+                    Some(6),
+                ],
+            ),
+            (
+                "y",
+                &vec![
+                    Some(9),
+                    Some(6),
+                    Some(5),
+                    Some(5),
+                    Some(6),
+                    Some(7),
+                    Some(6),
+                    None,
+                ],
+            ),
+            (
+                "z",
+                &vec![
+                    Some(7),
+                    Some(3),
+                    Some(5),
+                    Some(5),
+                    Some(7),
+                    Some(7),
+                    Some(8),
+                    Some(9),
+                ],
+            ),
+        );
+        let task_ctx = Arc::new(TaskContext::default());
+        let (columns, batches) = multi_partitioned_join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            &JoinType::Inner,
+            ie_filter,
+            join_filter,
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["x", "y", "z", "x", "y", "z"]);
+        let expected = [
+            "+---+----+---+----+---+---+",
+            "| x | y  | z | x  | y | z |",
+            "+---+----+---+----+---+---+",
+            "| 5 | 6  | 3 | 6  | 5 | 5 |",
+            "| 5 | 6  | 3 | 6  | 6 | 3 |",
+            "| 5 | 6  | 3 | 6  | 6 | 7 |",
+            "| 9 | 10 | 5 | 10 | 9 | 7 |",
+            "+---+----+---+----+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+        Ok(())
     }
 }
