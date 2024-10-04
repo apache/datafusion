@@ -131,7 +131,9 @@ impl DocumentationBuilder {
         self
     }
 
-    /// Adds an argument to the documentation,
+    /// Adds documentation for a specific argument to the documentation.
+    ///
+    /// Arguments are displayed in the order they are added.
     pub fn with_argument(
         mut self,
         arg_name: impl Into<String>,
@@ -145,7 +147,11 @@ impl DocumentationBuilder {
 
     /// Add a standard "expression" argument to the documentation
     ///
-    /// This is a common argument for scalar UDFs that operate on an expression and is rendered like
+    /// This is similar to  [`Self::with_argument`] except that  a standard
+    /// description is appended to the end: `"Can be a constant, column, or
+    /// function, and any combination of arithmetic operators."`
+    ///
+    /// The argument is rendered like
     ///
     /// ```text
     /// <arg_name>:
