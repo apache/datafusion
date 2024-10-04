@@ -339,13 +339,44 @@ impl Unparser<'_> {
                 if select.already_projected() {
                     return self.derive(plan, relation);
                 }
-                if let Some(query_ref) = query {
-                    query_ref.order_by(self.sorts_to_sql(sort.expr.clone())?);
-                } else {
+                let Some(query_ref) = query else {
                     return internal_err!(
                         "Sort operator only valid in a statement context."
                     );
-                }
+                };
+
+                let sort_exprs: &Vec<SortExpr> =
+                    // In case of aggregation there could be columns containing aggregation functions we need to unproject
+                    match find_agg_node_within_select(plan, select.already_projected()) {
+                        Some(agg) => &sort
+                            .expr
+                            .iter()
+                            .map(|sort_expr| {
+                                let mut sort_expr = sort_expr.clone();
+
+                                // ORDER BY can't have aliases, this indicates that the column was not properly unparsed, update it
+                                if let Expr::Alias(alias) = &sort_expr.expr {
+                                    sort_expr.expr = *alias.expr.clone();
+                                }
+
+                                // Unproject the sort expression if it is a column from the aggregation
+                                if let Expr::Column(c) = &sort_expr.expr {
+                                    if c.relation.is_none() && agg.schema.is_column_from_schema(&c) {
+                                        sort_expr.expr = unproject_agg_exprs(
+                                            &sort_expr.expr,
+                                            agg,
+                                            None,
+                                        )?;
+                                    }
+                                }
+
+                                Ok::<_, DataFusionError>(sort_expr)
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                        None => &sort.expr,
+                    };
+
+                query_ref.order_by(self.sorts_to_sql(sort_exprs)?);
 
                 self.select_to_sql_recursively(
                     sort.input.as_ref(),
@@ -383,7 +414,7 @@ impl Unparser<'_> {
                             .collect::<Result<Vec<_>>>()?;
                         if let Some(sort_expr) = &on.sort_expr {
                             if let Some(query_ref) = query {
-                                query_ref.order_by(self.sorts_to_sql(sort_expr.clone())?);
+                                query_ref.order_by(self.sorts_to_sql(sort_expr)?);
                             } else {
                                 return internal_err!(
                                     "Sort operator only valid in a statement context."
@@ -644,7 +675,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn sorts_to_sql(&self, sort_exprs: Vec<SortExpr>) -> Result<Vec<ast::OrderByExpr>> {
+    fn sorts_to_sql(&self, sort_exprs: &Vec<SortExpr>) -> Result<Vec<ast::OrderByExpr>> {
         sort_exprs
             .iter()
             .map(|sort_expr| self.sort_to_sql(sort_expr))
