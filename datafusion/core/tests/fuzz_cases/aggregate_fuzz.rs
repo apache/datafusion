@@ -44,6 +44,118 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::task::JoinSet;
 
+use crate::fuzz_cases::aggregation_fuzzer::{
+    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig,
+};
+
+// ========================================================================
+//  The new aggregation fuzz tests based on [`AggregationFuzzer`]
+// ========================================================================
+
+// TODO: write more test case to cover more `group by`s and `aggregation function`s
+// TODO: maybe we can use macro to simply the case creating
+
+/// Fuzz test for group by `single int64`
+#[tokio::test(flavor = "multi_thread")]
+async fn test_group_by_single_int64() {
+    let builder = AggregationFuzzerBuilder::default();
+
+    // Define data generator config
+    let columns = vec![
+        ColumnDescr::new("a", DataType::Int64),
+        ColumnDescr::new("b", DataType::Int64),
+        ColumnDescr::new("c", DataType::Int64),
+    ];
+    let sort_keys_set = vec![
+        vec!["b".to_string()],
+        vec!["c".to_string(), "b".to_string()],
+    ];
+    let data_gen_config = DatasetGeneratorConfig {
+        columns,
+        rows_num_range: (512, 1024),
+        sort_keys_set,
+    };
+
+    // Build fuzzer
+    let fuzzer = builder
+        .data_gen_config(data_gen_config)
+        .data_gen_rounds(20)
+        .sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b")
+        .table_name("fuzz_table")
+        .build();
+
+    fuzzer.run().await;
+}
+
+/// Fuzz test for group by `single string`
+#[tokio::test(flavor = "multi_thread")]
+async fn test_group_by_single_string() {
+    let builder = AggregationFuzzerBuilder::default();
+
+    // Define data generator config
+    let columns = vec![
+        ColumnDescr::new("a", DataType::Int64),
+        ColumnDescr::new("b", DataType::Utf8),
+        ColumnDescr::new("c", DataType::Int64),
+    ];
+    let sort_keys_set = vec![
+        vec!["b".to_string()],
+        vec!["c".to_string(), "b".to_string()],
+    ];
+    let data_gen_config = DatasetGeneratorConfig {
+        columns,
+        rows_num_range: (512, 1024),
+        sort_keys_set,
+    };
+
+    // Build fuzzer
+    let fuzzer = builder
+        .data_gen_config(data_gen_config)
+        .data_gen_rounds(20)
+        .sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b")
+        .table_name("fuzz_table")
+        .build();
+
+    fuzzer.run().await;
+}
+
+/// Fuzz test for group by `sting + int64`
+#[tokio::test(flavor = "multi_thread")]
+async fn test_group_by_mixed_string_int64() {
+    let builder = AggregationFuzzerBuilder::default();
+
+    // Define data generator config
+    let columns = vec![
+        ColumnDescr::new("a", DataType::Int64),
+        ColumnDescr::new("b", DataType::Utf8),
+        ColumnDescr::new("c", DataType::Int64),
+        ColumnDescr::new("d", DataType::Int32),
+    ];
+    let sort_keys_set = vec![
+        vec!["b".to_string(), "c".to_string()],
+        vec!["d".to_string(), "b".to_string(), "c".to_string()],
+    ];
+    let data_gen_config = DatasetGeneratorConfig {
+        columns,
+        rows_num_range: (512, 1024),
+        sort_keys_set,
+    };
+
+    // Build fuzzer
+    let fuzzer = builder
+        .data_gen_config(data_gen_config)
+        .data_gen_rounds(20)
+        .sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b,c")
+        .table_name("fuzz_table")
+        .build();
+
+    fuzzer.run().await;
+}
+
+// ========================================================================
+//  The old aggregation fuzz tests
+// ========================================================================
+/// Tracks if this stream is generating input or output
 /// Tests that streaming aggregate and batch (non streaming) aggregate produce
 /// same results
 #[tokio::test(flavor = "multi_thread")]
