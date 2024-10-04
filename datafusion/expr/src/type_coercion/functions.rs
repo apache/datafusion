@@ -419,7 +419,8 @@ fn get_valid_types(
                 }
             }
 
-            let mut coerced_type = current_types.get(0).unwrap().to_owned();
+            // Length checked above, safe to unwrap
+            let mut coerced_type = current_types.first().unwrap().to_owned();
             for t in current_types.iter().skip(1) {
                 coerced_type = coercion_rule(&coerced_type, t)?;
             }
