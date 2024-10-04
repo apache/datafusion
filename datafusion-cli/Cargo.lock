@@ -1531,6 +1531,7 @@ dependencies = [
  "arrow-schema",
  "async-trait",
  "chrono",
+ "dashmap",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-execution",
