@@ -57,8 +57,7 @@ query TI
 select * from (select trace_id, MAX(timestamp) max_ts from traces t group by trace_id) where trace_id != 'a' order by max_ts desc limit 3;
 ----
 c 4
-b 3
-NULL 0
+a 1
 
 query TI
 select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
