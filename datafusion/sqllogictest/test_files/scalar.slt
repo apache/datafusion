@@ -1907,14 +1907,8 @@ select position('' in '')
 1
 
 
-query error
+query error DataFusion error: Error during planning: Error during planning: Int64 and Int64 are not coercible to a common numeric type 
 select position(1 in 1)
-----
-DataFusion error: Error during planning: Error during planning: Int64 and Int64 are not coercible to a common numeric type No function matches the given name and argument types 'strpos(Int64, Int64)'. You might need to add explicit type casts.
-	Candidate functions:
-	strpos(String(2))
-
-
 
 query I
 select strpos('abc', 'c');
