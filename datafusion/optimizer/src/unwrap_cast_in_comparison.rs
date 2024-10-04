@@ -33,7 +33,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan, Operator};
+use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan};
 
 /// [`UnwrapCastInComparison`] attempts to remove casts from
 /// comparisons to literals ([`ScalarValue`]s) by applying the casts
@@ -146,7 +146,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                     };
                     is_supported_type(&left_type)
                         && is_supported_type(&right_type)
-                        && is_supported_operator(op)
+                        && op.is_comparison_operator()
                 } =>
             {
                 match (left.as_mut(), right.as_mut()) {
@@ -279,18 +279,6 @@ fn is_supported_type(data_type: &DataType) -> bool {
     is_supported_numeric_type(data_type)
         || is_supported_string_type(data_type)
         || is_supported_dictionary_type(data_type)
-}
-
-/// Returns true if [UnwrapCastExprRewriter] supports this operator
-fn is_supported_operator(op: &Operator) -> bool {
-    op.is_comparison_operator()
-        && !matches!(
-            op,
-            Operator::RegexMatch
-                | Operator::RegexIMatch
-                | Operator::RegexNotMatch
-                | Operator::RegexNotIMatch
-        )
 }
 
 /// Returns true if [[UnwrapCastExprRewriter]] suppors this numeric type

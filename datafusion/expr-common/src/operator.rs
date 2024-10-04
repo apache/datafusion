@@ -156,10 +156,6 @@ impl Operator {
                 | Operator::GtEq
                 | Operator::IsDistinctFrom
                 | Operator::IsNotDistinctFrom
-                | Operator::RegexMatch
-                | Operator::RegexIMatch
-                | Operator::RegexNotMatch
-                | Operator::RegexNotIMatch
         )
     }
 
