@@ -96,7 +96,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             // In nullable path, we should check if both `exist row` and `input row`
             // are null/not null
             let is_exist_null = self.nulls.is_null(lhs_row);
-            let null_match = self.nulls.is_null(lhs_row) == array.is_null(rhs_row);
+            let null_match = is_exist_null == array.is_null(rhs_row);
             if !null_match {
                 // If `is_null`s in `exist row` and `input row` don't match, return not equal to
                 return false;
