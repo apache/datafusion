@@ -419,12 +419,22 @@ fn get_valid_types(
                 }
             }
 
-            let mut valid_type = DataType::Utf8;
-            for t in current_types.iter() {
-                valid_type = coercion_rule(&valid_type, t)?;
+            let mut coerced_type = current_types.get(0).unwrap().to_owned();
+            for t in current_types.iter().skip(1) {
+                coerced_type = coercion_rule(&coerced_type, t)?;
             }
 
-            vec![vec![valid_type; *number]]
+            fn base_type_or_default_type(data_type: &DataType) -> DataType {
+                if data_type.is_null() {
+                    DataType::Utf8
+                } else if let DataType::Dictionary(_, v) = data_type {
+                    base_type_or_default_type(v)
+                } else {
+                    data_type.to_owned()
+                }
+            }
+
+            vec![vec![base_type_or_default_type(&coerced_type); *number]]
         }
         TypeSignature::Numeric(number) => {
             if *number < 1 {
