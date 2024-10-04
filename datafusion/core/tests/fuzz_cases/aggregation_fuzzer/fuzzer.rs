@@ -229,6 +229,8 @@ impl AggregationFuzzTestTask {
         self.check_result(&task_result, &self.expected_result);
     }
 
+    // TODO: maybe we should persist the `expected_result` and `task_result`,
+    // because the readability is not so good if we just print it.
     fn check_result(&self, task_result: &[RecordBatch], expected_result: &[RecordBatch]) {
         let result = check_equality_of_batches(task_result, expected_result);
         if let Err(e) = result {
