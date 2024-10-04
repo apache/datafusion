@@ -226,8 +226,8 @@ impl ContextProvider for MockContextProvider {
         unimplemented!()
     }
 
-    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
-        None
+    fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
+        self.state.window_functions.get(name).cloned()
     }
 
     fn options(&self) -> &ConfigOptions {
