@@ -53,6 +53,12 @@ physical_plan
 07)------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
+query TI
+select * from (select tid, MAX(timestamp) mts from traces t group by tid) where tid != 'a' order by mts desc limit 3;
+----
+c 4
+b 3
+NULL 0
 
 query TI
 select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
