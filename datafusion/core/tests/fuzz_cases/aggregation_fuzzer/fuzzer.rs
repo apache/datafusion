@@ -198,7 +198,7 @@ impl AggregationFuzzer {
 ///     (disable all possible optimizations for ensuring correctness).
 ///    
 ///   - `ctx`, a randomly generated [`SessionContext`], `sql` will be run
-///    on it after, and check if the result is equal to expected.
+///     on it after, and check if the result is equal to expected.
 ///   
 ///   - `sql`, test query represented by sql
 ///

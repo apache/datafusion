@@ -213,12 +213,13 @@ impl GeneratedSessionContextBuilder {
 }
 
 /// The generated params for [`SessionContext`]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
+#[allow(dead_code)]
 pub struct SessionContextParams {
-    pub batch_size: usize,
-    pub target_partitions: usize,
-    pub sort_hint: bool,
-    pub skip_partial_params: SkipPartialParams,
+    batch_size: usize,
+    target_partitions: usize,
+    sort_hint: bool,
+    skip_partial_params: SkipPartialParams,
 }
 
 /// Partial skipping parameters
