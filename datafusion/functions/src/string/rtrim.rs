@@ -22,8 +22,7 @@ use arrow::datatypes::DataType;
 
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::function::Hint;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::{ColumnarValue, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
 use crate::string::common::*;
@@ -56,10 +55,10 @@ impl RtrimFunc {
                     // Planner attempts coercion to the target type starting with the most preferred candidate.
                     // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
                     // If that fails, it proceeds to `(Utf8, Utf8)`.
-                    Exact(vec![Utf8View, Utf8View]),
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8View]),
-                    Exact(vec![Utf8]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8View]),
+                    TypeSignature::Exact(vec![Utf8, Utf8]),
+                    TypeSignature::Exact(vec![Utf8View]),
+                    TypeSignature::Exact(vec![Utf8]),
                 ],
                 Volatility::Immutable,
             ),

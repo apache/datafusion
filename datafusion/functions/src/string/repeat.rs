@@ -27,8 +27,7 @@ use arrow::datatypes::DataType::{Int64, LargeUtf8, Utf8, Utf8View};
 
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::{ColumnarValue, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
 use crate::string::common::StringArrayType;
@@ -53,9 +52,9 @@ impl RepeatFunc {
                     // Planner attempts coercion to the target type starting with the most preferred candidate.
                     // For example, given input `(Utf8View, Int64)`, it first tries coercing to `(Utf8View, Int64)`.
                     // If that fails, it proceeds to `(Utf8, Int64)`.
-                    Exact(vec![Utf8View, Int64]),
-                    Exact(vec![Utf8, Int64]),
-                    Exact(vec![LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, Int64]),
                 ],
                 Volatility::Immutable,
             ),
