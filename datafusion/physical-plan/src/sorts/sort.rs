@@ -30,7 +30,7 @@ use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use crate::sorts::streaming_merge::streaming_merge;
+use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::{read_spill_as_stream, spill_record_batches};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
@@ -342,15 +342,15 @@ impl ExternalSorter {
                 streams.push(stream);
             }
 
-            streaming_merge(
-                streams,
-                Arc::clone(&self.schema),
-                &self.expr,
-                self.metrics.baseline.clone(),
-                self.batch_size,
-                self.fetch,
-                self.reservation.new_empty(),
-            )
+            StreamingMergeBuilder::new()
+                .with_streams(streams)
+                .with_schema(Arc::clone(&self.schema))
+                .with_expressions(&self.expr)
+                .with_metrics(self.metrics.baseline.clone())
+                .with_batch_size(self.batch_size)
+                .with_fetch(self.fetch)
+                .with_reservation(self.reservation.new_empty())
+                .build()
         } else {
             self.in_mem_sort_stream(self.metrics.baseline.clone())
         }
@@ -534,15 +534,15 @@ impl ExternalSorter {
             })
             .collect::<Result<_>>()?;
 
-        streaming_merge(
-            streams,
-            Arc::clone(&self.schema),
-            &self.expr,
-            metrics,
-            self.batch_size,
-            self.fetch,
-            self.merge_reservation.new_empty(),
-        )
+        StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_schema(Arc::clone(&self.schema))
+            .with_expressions(&self.expr)
+            .with_metrics(metrics)
+            .with_batch_size(self.batch_size)
+            .with_fetch(self.fetch)
+            .with_reservation(self.merge_reservation.new_empty())
+            .build()
     }
 
     /// Sorts a single `RecordBatch` into a single stream.
