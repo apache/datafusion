@@ -35,7 +35,6 @@ use crate::logical_plan::{
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
-use crate::type_coercion::binary::values_coercion;
 use crate::utils::{
     can_hash, columnize_expr, compare_sort_expr, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
@@ -53,6 +52,7 @@ use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
     TableReference, ToDFSchema, UnnestOptions,
 };
+use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
 use super::dml::InsertOp;
 use super::plan::{ColumnUnnestList, ColumnUnnestType};
@@ -209,7 +209,9 @@ impl LogicalPlanBuilder {
                 }
                 if let Some(prev_type) = common_type {
                     // get common type of each column values.
-                    let Some(new_type) = values_coercion(&data_type, &prev_type) else {
+                    let data_tyeps = vec![prev_type.clone(), data_type.clone()];
+                    let Some(new_type) = type_union_resolution(&data_tyeps) else {
+                        println!("data_tyeps: {:?}", data_tyeps);
                         return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}");
                     };
                     common_type = Some(new_type);
