@@ -25,11 +25,14 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::DataFusionError;
 use datafusion_common::{exec_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
 use std::fmt::Write;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use unicode_segmentation::UnicodeSegmentation;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 
@@ -42,6 +45,27 @@ impl Default for RPadFunc {
     fn default() -> Self {
         Self::new()
     }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_rpad_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Pads the right side of a string with another string to a specified string length.")
+            .with_syntax_example("rpad(str, n[, padding_str])")
+            .with_argument(
+                "str",
+                "String expression to operate on. Can be a constant, column, or function, and any combination of string operators.",
+            )
+            .with_argument("n", "String length to pad to.")
+            .with_argument("padding_str",
+                           "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._")
+            .with_related_udf("lpad")
+            .build()
+            .unwrap()
+    })
 }
 
 impl RPadFunc {
@@ -112,6 +136,10 @@ impl ScalarUDFImpl for RPadFunc {
                 exec_err!("Unsupported combination of data types for function rpad")
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_rpad_doc())
     }
 }
 

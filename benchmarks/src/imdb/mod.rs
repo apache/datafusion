@@ -17,9 +17,17 @@
 
 //! Benchmark derived from IMDB dataset.
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::{
+    arrow::datatypes::{DataType, Field, Schema},
+    common::plan_err,
+    error::Result,
+};
 mod convert;
 pub use convert::ConvertOpt;
+
+use std::fs;
+mod run;
+pub use run::RunOpt;
 
 // we have 21 tables in the IMDB dataset
 pub const IMDB_TABLES: &[&str] = &[
@@ -51,7 +59,7 @@ pub const IMDB_TABLES: &[&str] = &[
 pub fn get_imdb_table_schema(table: &str) -> Schema {
     match table {
         "aka_name" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("person_id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, true),
             Field::new("imdb_index", DataType::Utf8, true),
@@ -61,7 +69,7 @@ pub fn get_imdb_table_schema(table: &str) -> Schema {
             Field::new("md5sum", DataType::Utf8, true),
         ]),
         "aka_title" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("movie_id", DataType::Int32, false),
             Field::new("title", DataType::Utf8, true),
             Field::new("imdb_index", DataType::Utf8, true),
@@ -75,7 +83,7 @@ pub fn get_imdb_table_schema(table: &str) -> Schema {
             Field::new("md5sum", DataType::Utf8, true),
         ]),
         "cast_info" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("person_id", DataType::Int32, false),
             Field::new("movie_id", DataType::Int32, false),
             Field::new("person_role_id", DataType::Int32, true),
@@ -84,7 +92,7 @@ pub fn get_imdb_table_schema(table: &str) -> Schema {
             Field::new("role_id", DataType::Int32, false),
         ]),
         "char_name" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("name", DataType::Utf8, false),
             Field::new("imdb_index", DataType::Utf8, true),
             Field::new("imdb_id", DataType::Int32, true),
@@ -93,11 +101,11 @@ pub fn get_imdb_table_schema(table: &str) -> Schema {
             Field::new("md5sum", DataType::Utf8, true),
         ]),
         "comp_cast_type" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("kind", DataType::Utf8, false),
         ]),
         "company_name" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("name", DataType::Utf8, false),
             Field::new("country_code", DataType::Utf8, true),
             Field::new("imdb_id", DataType::Int32, true),
@@ -106,59 +114,59 @@ pub fn get_imdb_table_schema(table: &str) -> Schema {
             Field::new("md5sum", DataType::Utf8, true),
         ]),
         "company_type" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("kind", DataType::Utf8, true),
         ]),
         "complete_cast" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("movie_id", DataType::Int32, true),
             Field::new("subject_id", DataType::Int32, false),
             Field::new("status_id", DataType::Int32, false),
         ]),
         "info_type" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("info", DataType::Utf8, false),
         ]),
         "keyword" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("keyword", DataType::Utf8, false),
             Field::new("phonetic_code", DataType::Utf8, true),
         ]),
         "kind_type" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("kind", DataType::Utf8, true),
         ]),
         "link_type" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("link", DataType::Utf8, false),
         ]),
         "movie_companies" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("movie_id", DataType::Int32, false),
             Field::new("company_id", DataType::Int32, false),
             Field::new("company_type_id", DataType::Int32, false),
             Field::new("note", DataType::Utf8, true),
         ]),
         "movie_info_idx" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("movie_id", DataType::Int32, false),
             Field::new("info_type_id", DataType::Int32, false),
             Field::new("info", DataType::Utf8, false),
             Field::new("note", DataType::Utf8, true),
         ]),
         "movie_keyword" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("movie_id", DataType::Int32, false),
             Field::new("keyword_id", DataType::Int32, false),
         ]),
         "movie_link" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("movie_id", DataType::Int32, false),
             Field::new("linked_movie_id", DataType::Int32, false),
             Field::new("link_type_id", DataType::Int32, false),
         ]),
         "name" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("name", DataType::Utf8, false),
             Field::new("imdb_index", DataType::Utf8, true),
             Field::new("imdb_id", DataType::Int32, true),
@@ -169,11 +177,11 @@ pub fn get_imdb_table_schema(table: &str) -> Schema {
             Field::new("md5sum", DataType::Utf8, true),
         ]),
         "role_type" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("role", DataType::Utf8, false),
         ]),
         "title" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("title", DataType::Utf8, false),
             Field::new("imdb_index", DataType::Utf8, true),
             Field::new("kind_id", DataType::Int32, false),
@@ -187,14 +195,14 @@ pub fn get_imdb_table_schema(table: &str) -> Schema {
             Field::new("md5sum", DataType::Utf8, true),
         ]),
         "movie_info" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("movie_id", DataType::Int32, false),
             Field::new("info_type_id", DataType::Int32, false),
             Field::new("info", DataType::Utf8, false),
             Field::new("note", DataType::Utf8, true),
         ]),
         "person_info" => Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::UInt32, false),
             Field::new("person_id", DataType::Int32, false),
             Field::new("info_type_id", DataType::Int32, false),
             Field::new("info", DataType::Utf8, false),
@@ -202,4 +210,27 @@ pub fn get_imdb_table_schema(table: &str) -> Schema {
         ]),
         _ => unimplemented!("Schema for table {} is not implemented", table),
     }
+}
+
+/// Get the SQL statements from the specified query file
+pub fn get_query_sql(query: &str) -> Result<Vec<String>> {
+    let possibilities = vec![
+        format!("queries/imdb/{query}.sql"),
+        format!("benchmarks/queries/imdb/{query}.sql"),
+    ];
+    let mut errors = vec![];
+    for filename in possibilities {
+        match fs::read_to_string(&filename) {
+            Ok(contents) => {
+                return Ok(contents
+                    .split(';')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect());
+            }
+            Err(e) => errors.push(format!("{filename}: {e}")),
+        };
+    }
+    plan_err!("invalid query. Could not find query: {:?}", errors)
 }

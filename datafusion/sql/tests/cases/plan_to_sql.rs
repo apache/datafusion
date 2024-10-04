@@ -149,6 +149,26 @@ fn roundtrip_statement() -> Result<()> {
             "WITH w1 AS (SELECT 'a' as col), w2 AS (SELECT 'b' as col), w3 as (SELECT 'c' as col) SELECT * FROM w1 UNION ALL SELECT * FROM w2 UNION ALL SELECT * FROM w3",
             "WITH w1 AS (SELECT 'a' as col), w2 AS (SELECT 'b' as col), w3 as (SELECT 'c' as col), w4 as (SELECT 'd' as col) SELECT * FROM w1 UNION ALL SELECT * FROM w2 UNION ALL SELECT * FROM w3 UNION ALL SELECT * FROM w4",
             "WITH w1 AS (SELECT 'a' as col), w2 AS (SELECT 'b' as col) SELECT * FROM w1 JOIN w2 ON w1.col = w2.col UNION ALL SELECT * FROM w1 JOIN w2 ON w1.col = w2.col UNION ALL SELECT * FROM w1 JOIN w2 ON w1.col = w2.col",
+            r#"SELECT id, first_name,
+            SUM(id) AS total_sum,
+            SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
+            MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total
+            FROM person JOIN orders ON person.id = orders.customer_id GROUP BY id, first_name"#,
+            r#"SELECT id, first_name,
+            SUM(id) AS total_sum,
+            SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
+            MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total
+            FROM (SELECT id, first_name from person) person JOIN (SELECT customer_id FROM orders) orders ON person.id = orders.customer_id GROUP BY id, first_name"#,
+            r#"SELECT id, first_name, last_name, customer_id, SUM(id) AS total_sum
+            FROM person
+            JOIN orders ON person.id = orders.customer_id
+            GROUP BY ROLLUP(id, first_name, last_name, customer_id)"#,
+            r#"SELECT id, first_name, last_name,
+            SUM(id) AS total_sum,
+            COUNT(*) AS total_count,
+            SUM(id) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+            FROM person
+            GROUP BY GROUPING SETS ((id, first_name, last_name), (first_name, last_name), (last_name))"#,
     ];
 
     // For each test sql string, we transform as follows:
@@ -164,6 +184,7 @@ fn roundtrip_statement() -> Result<()> {
         let state = MockSessionState::default()
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
+            .with_aggregate_function(max_udaf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);

@@ -553,6 +553,16 @@ SELECT strpos(arrow_cast('helloworld', 'Dictionary(Int32, Utf8)'), 'world')
 ----
 6
 
+query I
+SELECT strpos('helloworld', NULL)
+----
+NULL
+
+query I
+SELECT strpos(arrow_cast('helloworld', 'Dictionary(Int32, Utf8)'), NULL)
+----
+NULL
+
 statement ok
 CREATE TABLE products (
 product_id INT PRIMARY KEY,
