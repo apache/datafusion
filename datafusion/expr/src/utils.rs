@@ -19,6 +19,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction};
@@ -758,6 +759,13 @@ pub fn find_base_plan(input: &LogicalPlan) -> &LogicalPlan {
     match input {
         LogicalPlan::Window(window) => find_base_plan(&window.input),
         LogicalPlan::Aggregate(agg) => find_base_plan(&agg.input),
+        LogicalPlan::Unnest(unnest) => {
+            if let LogicalPlan::Projection(projection) = unnest.input.deref() {
+                find_base_plan(&projection.input)
+            } else {
+                input
+            }
+        }
         LogicalPlan::Filter(filter) => {
             if filter.having {
                 // If a filter is used for a having clause, its input plan is an aggregation.
