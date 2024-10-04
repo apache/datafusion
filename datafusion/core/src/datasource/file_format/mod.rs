@@ -213,16 +213,14 @@ pub fn transform_schema_to_view(schema: &Schema) -> Schema {
         .fields
         .iter()
         .map(|field| match field.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 => Arc::new(Field::new(
-                field.name(),
-                DataType::Utf8View,
-                field.is_nullable(),
-            )),
-            DataType::Binary | DataType::LargeBinary => Arc::new(Field::new(
-                field.name(),
-                DataType::BinaryView,
-                field.is_nullable(),
-            )),
+            DataType::Utf8 | DataType::LargeUtf8 => Arc::new(
+                Field::new(field.name(), DataType::Utf8View, field.is_nullable())
+                    .with_metadata(field.metadata().to_owned()),
+            ),
+            DataType::Binary | DataType::LargeBinary => Arc::new(
+                Field::new(field.name(), DataType::BinaryView, field.is_nullable())
+                    .with_metadata(field.metadata().to_owned()),
+            ),
             _ => field.clone(),
         })
         .collect();
