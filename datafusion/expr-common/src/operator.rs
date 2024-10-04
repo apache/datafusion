@@ -142,11 +142,12 @@ impl Operator {
         )
     }
 
-    /// Return true if the operator is a comparison operator
-    /// Those are used in intervals propagation, see [`datafusion_physical_expr::intervals`].
+    /// Return true if the comparison operator can be used in propagation.
+    /// See [`datafusion_physical_expr::intervals`] for more details
     ///
-    /// For example, 'Binary(a, >, b)' would be a comparison expression.
-    pub fn is_comparison_operator(&self) -> bool {
+    /// For example, 'Binary(a, >, b)' can be used for propagation as explained by
+    /// [`datafusion_physical_expr::intervals::cp_solver::propagate_comparison`]
+    pub fn supports_propagation(&self) -> bool {
         matches!(
             self,
             Operator::Eq

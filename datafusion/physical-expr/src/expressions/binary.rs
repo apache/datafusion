@@ -431,7 +431,7 @@ impl PhysicalExpr for BinaryExpr {
                 // end-points of its children.
                 Ok(Some(vec![]))
             }
-        } else if self.op.is_comparison_operator() {
+        } else if self.op.supports_propagation() {
             Ok(
                 propagate_comparison(&self.op, interval, left_interval, right_interval)?
                     .map(|(left, right)| vec![left, right]),
