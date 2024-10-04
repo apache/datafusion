@@ -32,17 +32,22 @@ use std::cmp::min;
 use std::collections::VecDeque;
 use std::ops::{Neg, Range};
 use std::sync::Arc;
-#[allow(non_upper_case_globals)]
-static STATIC_Lag: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
-    std::sync::OnceLock::new();
 
-pub fn lag_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-    STATIC_Lag
-        .get_or_init(|| {
-            std::sync::Arc::new(datafusion_expr::WindowUDF::from(WindowShift::lag()))
-        })
-        .clone()
-}
+get_or_init_udwf!(Lag, lag, "lag udwf", WindowShift::lag);
+get_or_init_udwf!(Lead, lead, "lead udwf", WindowShift::lead);
+
+// This workaround necessary to avoid multiple definitions of
+// `STATIC_WindowShift` being created during macro expansion for lazily
+// initializing the `WindowUDF` (exactly once).
+//
+// This happens when `WindowShift` is passed as the `$UDWF` parameter
+// twice to create `lag_udwf()` and `lead_udwf()` respectively. Now,
+// it will expand into `STATIC_Lag` and `STATIC_lead` which are unique,
+// avoiding the issue.
+#[allow(dead_code)]
+struct Lag {}
+#[allow(dead_code)]
+struct Lead {}
 
 /// Create an expression to represent the `lag` window function
 pub fn lag(
@@ -56,18 +61,6 @@ pub fn lag(
     let default_lit = default_value.unwrap_or(ScalarValue::Null).lit();
 
     lag_udwf().call(vec![arg, shift_offset_lit, default_lit])
-}
-
-#[allow(non_upper_case_globals)]
-static STATIC_Lead: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
-    std::sync::OnceLock::new();
-
-pub fn lead_udwf() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-    STATIC_Lead
-        .get_or_init(|| {
-            std::sync::Arc::new(datafusion_expr::WindowUDF::from(WindowShift::lead()))
-        })
-        .clone()
 }
 
 /// Create an expression to represent the `lead` window function
