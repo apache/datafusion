@@ -562,7 +562,7 @@ mod tests {
         // explicitly build a boolean buffer where one of the null values also happens to match
         let mut boolean_buffer_builder = BooleanBufferBuilder::new(6);
         boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(false); // this sets Some(2) to null above
+        boolean_buffer_builder.append(false); // this sets Some("bar") to null above
         boolean_buffer_builder.append(false);
         boolean_buffer_builder.append(false);
         boolean_buffer_builder.append(true);
