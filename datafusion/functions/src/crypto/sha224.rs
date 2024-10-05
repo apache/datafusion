@@ -58,8 +58,7 @@ fn get_sha224_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_HASHING)
             .with_description("Computes the SHA-224 hash of a binary string.")
             .with_syntax_example("sha224(expression)")
-            .with_argument("expression",
-                           "String expression to operate on. Can be a constant, column, or function, and any combination of string operators.")
+            .with_standard_argument("expression", "String")
             .build()
             .unwrap()
     })
