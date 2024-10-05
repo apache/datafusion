@@ -3371,7 +3371,7 @@ pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// Columns to run unnest on, can be a list of (List/Struct) columns
-    pub exec_columns: Vec<(Column, ColumnUnnestType)>,
+    pub exec_columns: Vec<Column>,
     /// refer to the indices(in the input schema) of columns
     /// that have type list to run unnest on
     pub list_type_columns: Vec<(usize, ColumnUnnestList)>,
@@ -3395,7 +3395,7 @@ impl PartialOrd for Unnest {
             /// The incoming logical plan
             pub input: &'a Arc<LogicalPlan>,
             /// Columns to run unnest on, can be a list of (List/Struct) columns
-            pub exec_columns: &'a Vec<(Column, ColumnUnnestType)>,
+            pub exec_columns: &'a Vec<Column>,
             /// refer to the indices(in the input schema) of columns
             /// that have type list to run unnest on
             pub list_type_columns: &'a Vec<(usize, ColumnUnnestList)>,

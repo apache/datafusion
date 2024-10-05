@@ -17,6 +17,10 @@
 
 //! [`UnnestOptions`] for unnesting structured types
 
+use hashbrown::HashMap;
+
+use crate::Column;
+
 /// Options for unnesting a column that contains a list type,
 /// replicating values in the other, non nested rows.
 ///
@@ -64,6 +68,16 @@
 pub struct UnnestOptions {
     /// Should nulls in the input be preserved? Defaults to true
     pub preserve_nulls: bool,
+    /// Without explicit recursions, all
+    /// Datafusion will infer the unesting type with depth = 1
+    pub recursions: Option<Vec<RecursionUnnestOption>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+pub struct RecursionUnnestOption {
+    pub input_column: Column,
+    pub output_column: Column,
+    pub depth: usize,
 }
 
 impl Default for UnnestOptions {
@@ -71,6 +85,7 @@ impl Default for UnnestOptions {
         Self {
             // default to true to maintain backwards compatible behavior
             preserve_nulls: true,
+            recursions: None,
         }
     }
 }
@@ -85,6 +100,14 @@ impl UnnestOptions {
     /// [`Self`]
     pub fn with_preserve_nulls(mut self, preserve_nulls: bool) -> Self {
         self.preserve_nulls = preserve_nulls;
+        self
+    }
+
+    /// Set the recursions for the unnest operation
+    pub fn with_recursions(mut self, recursions: Vec<RecursionUnnestOption>) -> Self {
+        if !recursions.is_empty() {
+            self.recursions = Some(recursions);
+        }
         self
     }
 }

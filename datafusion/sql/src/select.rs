@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -25,8 +25,8 @@ use crate::utils::{
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::UnnestOptions;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
@@ -306,7 +306,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // The transformation happen bottom up, one at a time for each iteration
         // Only exaust the loop if no more unnest transformation is found
         for i in 0.. {
-            let mut unnest_columns = vec![];
+            let mut unnest_columns = HashMap::new();
             // from which column used for projection, before the unnest happen
             // including non unnest column and unnest column
             let mut inner_projection_exprs = vec![];
@@ -336,11 +336,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
                 let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
 
+                let mut list_recursions = vec![];
+                let unnest_col_vec = unnest_columns
+                    .into_iter()
+                    .map(|(col, maybe_list_unnest)| {
+                        match maybe_list_unnest {
+                            None => {}
+                            Some(list_unnest) => {
+                                list_recursions.extend(list_unnest.into_iter().map(
+                                    |unnest_list| RecursionUnnestOption {
+                                        input_column: col.clone(),
+                                        output_column: unnest_list.output_column,
+                                        depth: unnest_list.depth,
+                                    },
+                                ));
+                            }
+                        }
+                        col
+                    })
+                    .collect::<Vec<_>>();
+
                 let plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(inner_projection_exprs)?
                     .unnest_columns_recursive_with_options(
-                        unnest_columns,
-                        unnest_options,
+                        unnest_col_vec,
+                        unnest_options.with_recursions(list_recursions),
                     )?
                     .build()?;
                 intermediate_plan = plan;
@@ -410,7 +430,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut intermediate_select_exprs = group_expr;
 
         loop {
-            let mut unnest_columns = vec![];
+            let mut unnest_columns = HashMap::new();
             let mut inner_projection_exprs = vec![];
 
             let outer_projection_exprs = rewrite_recursive_unnests_bottom_up(
@@ -445,11 +465,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
                 projection_exprs.extend(inner_projection_exprs);
 
+                let mut list_recursions = vec![];
+                let unnest_col_vec = unnest_columns
+                    .into_iter()
+                    .map(|(col, maybe_list_unnest)| {
+                        match maybe_list_unnest {
+                            None => {}
+                            Some(list_unnest) => {
+                                list_recursions.extend(list_unnest.into_iter().map(
+                                    |unnest_list| RecursionUnnestOption {
+                                        input_column: col.clone(),
+                                        output_column: unnest_list.output_column,
+                                        depth: unnest_list.depth,
+                                    },
+                                ));
+                            }
+                        }
+                        col
+                    })
+                    .collect::<Vec<_>>();
+
                 intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(projection_exprs)?
                     .unnest_columns_recursive_with_options(
-                        unnest_columns,
-                        unnest_options,
+                        unnest_col_vec,
+                        unnest_options.with_recursions(list_recursions),
                     )?
                     .build()?;
 

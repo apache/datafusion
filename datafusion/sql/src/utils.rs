@@ -18,6 +18,7 @@
 //! SQL Utility Functions
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::vec;
 
 use arrow_schema::{
@@ -295,7 +296,7 @@ pub(crate) fn value_to_string(value: &Value) -> Option<String> {
 
 pub(crate) fn rewrite_recursive_unnests_bottom_up(
     input: &LogicalPlan,
-    unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
+    unnest_placeholder_columns: &mut HashMap<Column, Option<Vec<ColumnUnnestList>>>,
     inner_projection_exprs: &mut Vec<Expr>,
     original_exprs: &[Expr],
 ) -> Result<Vec<Expr>> {
@@ -326,7 +327,7 @@ struct RecursiveUnnestRewriter<'a> {
     top_most_unnest: Option<Unnest>,
     consecutive_unnest: Vec<Option<Unnest>>,
     inner_projection_exprs: &'a mut Vec<Expr>,
-    columns_unnestings: &'a mut Vec<(Column, ColumnUnnestType)>,
+    columns_unnestings: &'a mut HashMap<Column, Option<Vec<ColumnUnnestList>>>,
     transformed_root_exprs: Option<Vec<Expr>>,
 }
 impl<'a> RecursiveUnnestRewriter<'a> {
@@ -380,10 +381,8 @@ impl<'a> RecursiveUnnestRewriter<'a> {
                     self.inner_projection_exprs,
                     expr_in_unnest.clone().alias(placeholder_name.clone()),
                 );
-                self.columns_unnestings.push((
-                    Column::from_name(placeholder_name.clone()),
-                    ColumnUnnestType::Struct,
-                ));
+                self.columns_unnestings
+                    .insert(Column::from_name(placeholder_name.clone()), None);
                 Ok(
                     get_struct_unnested_columns(&placeholder_name, &inner_fields)
                         .into_iter()
@@ -401,37 +400,17 @@ impl<'a> RecursiveUnnestRewriter<'a> {
 
                 // let post_unnest_column = Column::from_name(post_unnest_name);
                 let post_unnest_expr = col(post_unnest_name.clone()).alias(alias_name);
-                match self
+                let list_unnesting = self
                     .columns_unnestings
-                    .iter_mut()
-                    .find(|(inner_col, _)| inner_col == &placeholder_column)
-                {
-                    // there is not unnesting done on this column yet
-                    None => {
-                        self.columns_unnestings.push((
-                            Column::from_name(placeholder_name.clone()),
-                            ColumnUnnestType::List(vec![ColumnUnnestList {
-                                output_column: Column::from_name(post_unnest_name),
-                                depth: level,
-                            }]),
-                        ));
-                    }
-                    // some unnesting(at some level) has been done on this column
-                    // e.g select unnest(column3), unnest(unnest(column3))
-                    Some((_, unnesting)) => match unnesting {
-                        ColumnUnnestType::List(list) => {
-                            let unnesting = ColumnUnnestList {
-                                output_column: Column::from_name(post_unnest_name),
-                                depth: level,
-                            };
-                            if !list.contains(&unnesting) {
-                                list.push(unnesting);
-                            }
-                        }
-                        _ => {
-                            return internal_err!("not reached");
-                        }
-                    },
+                    .entry(placeholder_column)
+                    .or_insert(Some(vec![]));
+                let unnesting = ColumnUnnestList {
+                    output_column: Column::from_name(post_unnest_name),
+                    depth: level,
+                };
+                let list_unnestings = list_unnesting.as_mut().unwrap();
+                if !list_unnestings.contains(&unnesting) {
+                    list_unnestings.push(unnesting);
                 }
                 Ok(vec![post_unnest_expr])
             }
@@ -478,8 +457,7 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
     }
 
     /// The rewriting only happens when the traversal has reached the top-most unnest expr
-    /// within a sequence of consecutive unnest exprs.
-    /// node, for example given a stack of expr
+    /// within a sequence of consecutive unnest exprs node
     ///
     /// For example an expr of **unnest(unnest(column1)) + unnest(unnest(unnest(column2)))**
     /// ```text
@@ -589,7 +567,7 @@ fn push_projection_dedupl(projection: &mut Vec<Expr>, expr: Expr) {
 /// is done only for the bottom expression
 pub(crate) fn rewrite_recursive_unnest_bottom_up(
     input: &LogicalPlan,
-    unnest_placeholder_columns: &mut Vec<(Column, ColumnUnnestType)>,
+    unnest_placeholder_columns: &mut HashMap<Column, Option<Vec<ColumnUnnestList>>>,
     inner_projection_exprs: &mut Vec<Expr>,
     original_expr: &Expr,
 ) -> Result<Vec<Expr>> {

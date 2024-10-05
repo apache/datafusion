@@ -497,7 +497,7 @@ impl LogicalPlan {
 
                 let exprs = columns
                     .iter()
-                    .map(|(c, _)| Expr::Column(c.clone()))
+                    .map(|c| Expr::Column(c.clone()))
                     .collect::<Vec<_>>();
                 exprs.iter().apply_until_stop(f)
             }
