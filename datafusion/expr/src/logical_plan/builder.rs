@@ -209,9 +209,8 @@ impl LogicalPlanBuilder {
                 }
                 if let Some(prev_type) = common_type {
                     // get common type of each column values.
-                    let data_tyeps = vec![prev_type.clone(), data_type.clone()];
-                    let Some(new_type) = type_union_resolution(&data_tyeps) else {
-                        println!("data_tyeps: {:?}", data_tyeps);
+                    let data_types = vec![prev_type.clone(), data_type.clone()];
+                    let Some(new_type) = type_union_resolution(&data_types) else {
                         return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}");
                     };
                     common_type = Some(new_type);
