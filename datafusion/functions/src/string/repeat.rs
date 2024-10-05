@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
@@ -25,14 +25,14 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int64, LargeUtf8, Utf8, Utf8View};
 
-use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
-
 use crate::string::common::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use datafusion_common::cast::as_int64_array;
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{ColumnarValue, Documentation, Volatility};
+use datafusion_expr::{ScalarUDFImpl, Signature};
 
 #[derive(Debug)]
 pub struct RepeatFunc {
@@ -83,6 +83,35 @@ impl ScalarUDFImpl for RepeatFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(repeat, vec![])(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_repeat_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_repeat_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description(
+                "Returns a string with an input string repeated a specified number.",
+            )
+            .with_syntax_example("repeat(str, n)")
+            .with_sql_example(r#"```sql
+> select repeat('data', 3);
++-------------------------------+
+| repeat(Utf8("data"),Int64(3)) |
++-------------------------------+
+| datadatadata                  |
++-------------------------------+
+```"#)
+            .with_standard_argument("str", "String")
+            .with_argument("n", "Number of times to repeat the input string.")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Repeats string the specified number of times.
