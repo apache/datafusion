@@ -142,11 +142,10 @@ impl Operator {
         )
     }
 
-    /// Return true if the comparison operator can be used in propagation.
-    /// See [`datafusion_physical_expr::intervals`] for more details
+    /// Return true if the comparison operator can be used in interval arithmetic and constraint
+    /// propagation
     ///
-    /// For example, 'Binary(a, >, b)' can be used for propagation as explained by
-    /// [`datafusion_physical_expr::intervals::cp_solver::propagate_comparison`]
+    /// For example, 'Binary(a, >, b)' expression supports propagation.
     pub fn supports_propagation(&self) -> bool {
         matches!(
             self,
