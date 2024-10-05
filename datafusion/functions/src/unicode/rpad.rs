@@ -55,9 +55,9 @@ fn get_rpad_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_STRING)
             .with_description("Pads the right side of a string with another string to a specified string length.")
             .with_syntax_example("rpad(str, n[, padding_str])")
-            .with_argument(
+            .with_standard_argument(
                 "str",
-                "String expression to operate on. Can be a constant, column, or function, and any combination of string operators.",
+                "String",
             )
             .with_argument("n", "String length to pad to.")
             .with_argument("padding_str",
