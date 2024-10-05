@@ -697,11 +697,6 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// # use datafusion_expr::test::function_stub::count;
 /// # use sqlparser::ast::NullTreatment;
 /// # use datafusion_expr::{ExprFunctionExt, lit, Expr, col};
-/// # use datafusion_expr::window_function::cume_dist;
-/// TODO
-/// how to handle import of percent_rank function from
-/// datafusion+functions_window
-/// as using this is causing the circular depency issue
 /// # // first_value is an aggregate function in another crate
 /// # fn first_value(_arg: Expr) -> Expr {
 /// unimplemented!() }
@@ -721,6 +716,9 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// // Create a window expression for percent rank partitioned on column a
 /// // equivalent to:
 /// // `PERCENT_RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS LAST IGNORE NULLS)`
+/// // percent_rank is an udwf function in another crate
+/// # fn percent_rank() -> Expr {
+/// unimplemented!() }
 /// let window = percent_rank()
 ///     .partition_by(vec![col("a")])
 ///     .order_by(vec![col("b").sort(true, true)])
