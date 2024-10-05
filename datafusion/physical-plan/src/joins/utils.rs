@@ -2717,7 +2717,7 @@ mod tests {
         let actual = format!("{:?}", check_inequality_condition(&join_filter));
         assert_eq!(
             actual,
-            r#"Err(Plan("Inequality conditions must be an inequality binary expression, but got !="))"#
+            "Err(Plan(\"Inequality conditions must be an inequality binary expression, but got !=\"))"
         );
         // test left.x>8, it will fail because of the constant expression
         let filter = Arc::new(BinaryExpr::new(
@@ -2730,7 +2730,7 @@ mod tests {
         let actual = format!("{:?}", check_inequality_condition(&join_filter));
         assert_eq!(
             actual,
-            r#"Err(Plan("Inequality condition shouldn't be constant expression, but got x@0 > 8"))"#
+            "Err(Plan(\"Inequality condition shouldn't be constant expression, but got x@0 > 8\"))"
         );
         // test rigth.x * left.y >= left.x, it will fail because of the left side expression contains column from right table
         let filter = Arc::new(BinaryExpr::new(
@@ -2747,7 +2747,7 @@ mod tests {
         let actual = format!("{:?}", check_inequality_condition(&join_filter));
         assert_eq!(
             actual,
-            r#"Err(Plan("Left/right side expression of inequality condition should be from left/right side of join, but got x@2 * y@1 and x@0"))"#
+            "Err(Plan(\"Left/right side expression of inequality condition should be from left/right side of join, but got x@2 * y@1 and x@0\"))"
         );
         // test left.x + left.y >= left.x, this will be ok
         let filter = Arc::new(BinaryExpr::new(

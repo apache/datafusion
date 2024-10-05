@@ -510,6 +510,7 @@ impl IEJoinStream {
         }
 
         // compute the join result
+        // TODO: return one batch if the result size larger than the batch size in config
         let batch = IEJoinStream::compute(
             left_block,
             right_block,
