@@ -38,7 +38,7 @@ path = "src/lib.rs"
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true, features = ["test_utils"] }
-criterion = "0.5"
+criterion = { version = "0.5.1", default-features = false }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr-common = { workspace = true }
 hashbrown = { workspace = true }
