@@ -125,10 +125,10 @@ pub enum TypeSignature {
     /// Fixed number of arguments of numeric types.
     /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
     Numeric(usize),
-    /// Fixed number of arguments of string types.
+    /// Fixed number of arguments of all the same string types.
     /// The precedence of type from high to low is Utf8View, LargeUtf8 and Utf8.
     /// Null is considerd as Utf8 by default
-    /// Dictionay with string value type is also handled.
+    /// Dictionary with string value type is also handled.
     String(usize),
 }
 
