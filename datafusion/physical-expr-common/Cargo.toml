@@ -37,8 +37,17 @@ path = "src/lib.rs"
 
 [dependencies]
 ahash = { workspace = true }
-arrow = { workspace = true }
+arrow = { workspace = true, features = ["test_utils"] }
+criterion = "0.5"
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr-common = { workspace = true }
 hashbrown = { workspace = true }
 rand = { workspace = true }
+
+[[bench]]
+harness = false
+name = "binary_map"
+
+[[bench]]
+harness = false
+name = "binary_view_map"

@@ -360,25 +360,15 @@ where
     {
         // Step 1: Compute hashes
         let mut batch_hashes = vec![0u64; values.len()];
-        create_hashes(&[values.clone()], &self.random_state, &mut batch_hashes).unwrap(); // Compute the hashes for the values
+        create_hashes(&[values.clone()], &self.random_state, &mut batch_hashes).unwrap();
 
         // Step 2: Get payloads for each value
         let values = values.as_byte_view::<B>();
-        assert_eq!(values.len(), batch_hashes.len()); // Ensure hash count matches value count
+        assert_eq!(values.len(), batch_hashes.len());
 
         let mut payloads = Vec::with_capacity(values.len());
 
-        for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
-            // Handle null value
-            let Some(value) = value else {
-                if let Some(&(payload, _)) = self.null.as_ref() {
-                    payloads.push(Some(payload));
-                } else {
-                    payloads.push(None);
-                }
-                continue;
-            };
-
+        let process_value = |value: &B::Native, hash: u64| -> Option<V> {
             let value: &[u8] = value.as_ref();
 
             let entry = self.map.get(hash, |header| {
@@ -386,8 +376,30 @@ where
                 v.len() == value.len() && v == value
             });
 
-            let payload = entry.map(|e| e.payload);
-            payloads.push(payload);
+            entry.map(|e| e.payload)
+        };
+
+        if let Some(validity_bitmap) = values.nulls() {
+            let null_payload = self.null.as_ref().map(|&(payload, _)| payload);
+            let validity_iter = validity_bitmap.iter();
+
+            for ((value_opt, &hash), is_valid) in
+                values.iter().zip(batch_hashes.iter()).zip(validity_iter)
+            {
+                if is_valid {
+                    let value = value_opt.unwrap(); // Safe to unwrap since is_valid is true
+                    let payload = process_value(value, hash);
+                    payloads.push(payload);
+                } else {
+                    payloads.push(null_payload);
+                }
+            }
+        } else {
+            for (value_opt, &hash) in values.iter().zip(batch_hashes.iter()) {
+                let value = value_opt.unwrap(); // Safe to unwrap because there are no nulls
+                let payload = process_value(value, hash);
+                payloads.push(payload);
+            }
         }
 
         payloads

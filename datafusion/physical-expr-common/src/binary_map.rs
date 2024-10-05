@@ -539,33 +539,21 @@ where
         let mut batch_hashes = vec![0u64; values.len()];
         batch_hashes.clear();
         batch_hashes.resize(values.len(), 0);
-        create_hashes(&[values.clone()], &self.random_state, &mut batch_hashes).unwrap(); // Compute the hashes for the values
+        create_hashes(&[values.clone()], &self.random_state, &mut batch_hashes).unwrap();
 
         // Step 2: Get payloads for each value
         let values = values.as_bytes::<B>();
-        assert_eq!(values.len(), batch_hashes.len()); // Ensure hash count matches value count
+        assert_eq!(values.len(), batch_hashes.len());
 
         let mut payloads = Vec::with_capacity(values.len());
 
-        for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
-            // Handle null value
-            let Some(value) = value else {
-                if let Some(&(payload, _)) = self.null.as_ref() {
-                    payloads.push(Some(payload));
-                } else {
-                    payloads.push(None);
-                }
-                continue;
-            };
-
+        let process_value = |value: &B::Native, hash: u64| -> Option<V> {
             let value: &[u8] = value.as_ref();
             let value_len = O::usize_as(value.len());
 
-            // Small value optimization
-            let payload = if value.len() <= SHORT_VALUE_LEN {
-                let inline = value.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
+            if value.len() <= SHORT_VALUE_LEN {
+                let inline = value.iter().fold(0usize, |acc, &x| (acc << 8) | x as usize);
 
-                // Check if the value is already present in the set
                 let entry = self.map.get(hash, |header| {
                     if header.len != value_len {
                         return false;
@@ -575,7 +563,6 @@ where
 
                 entry.map(|entry| entry.payload)
             } else {
-                // Handle larger values
                 let entry = self.map.get(hash, |header| {
                     if header.len != value_len {
                         return false;
@@ -586,9 +573,30 @@ where
                 });
 
                 entry.map(|entry| entry.payload)
-            };
+            }
+        };
 
-            payloads.push(payload);
+        if let Some(validity_bitmap) = values.nulls() {
+            let null_payload = self.null.as_ref().map(|&(payload, _)| payload);
+            let validity_iter = validity_bitmap.iter();
+
+            for ((value_opt, &hash), is_valid) in
+                values.iter().zip(batch_hashes.iter()).zip(validity_iter)
+            {
+                if is_valid {
+                    let value = value_opt.unwrap(); // Safe to unwrap since is_valid is true
+                    let payload = process_value(value, hash);
+                    payloads.push(payload);
+                } else {
+                    payloads.push(null_payload);
+                }
+            }
+        } else {
+            for (value_opt, &hash) in values.iter().zip(batch_hashes.iter()) {
+                let value = value_opt.unwrap(); // Safe to unwrap because there are no nulls
+                let payload = process_value(value, hash);
+                payloads.push(payload);
+            }
         }
 
         payloads
