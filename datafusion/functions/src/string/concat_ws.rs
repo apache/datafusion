@@ -281,14 +281,16 @@ fn get_concat_ws_doc() -> &'static Documentation {
                 "Concatenates multiple strings together with a specified separator.",
             )
             .with_syntax_example("concat_ws(separator, str[, ..., str_n])")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > select concat_ws('_', 'data', 'fusion');
 +--------------------------------------------------+
 | concat_ws(Utf8("_"),Utf8("data"),Utf8("fusion")) |
 +--------------------------------------------------+
 | data_fusion                                      |
 +--------------------------------------------------+
-```"#)
+```"#,
+            )
             .with_argument(
                 "separator",
                 "Separator to insert between concatenated strings.",

@@ -115,14 +115,16 @@ fn get_chr_doc() -> &'static Documentation {
                 "Returns the character with the specified ASCII or Unicode code value.",
             )
             .with_syntax_example("chr(expression)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > select chr(128640);
 +--------------------+
 | chr(Int64(128640)) |
 +--------------------+
 | 🚀                 |
 +--------------------+ 
-```"#)
+```"#,
+            )
             .with_standard_argument("expression", "String")
             .with_related_udf("ascii")
             .build()

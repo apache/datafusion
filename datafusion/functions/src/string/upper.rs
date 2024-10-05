@@ -83,14 +83,16 @@ fn get_upper_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_STRING)
             .with_description("Converts a string to upper-case.")
             .with_syntax_example("upper(str)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > select upper('dataFusion');
 +---------------------------+
 | upper(Utf8("dataFusion")) |
 +---------------------------+
 | DATAFUSION                |
 +---------------------------+
-```"#)
+```"#,
+            )
             .with_standard_argument("str", "String")
             .with_related_udf("initcap")
             .with_related_udf("lower")

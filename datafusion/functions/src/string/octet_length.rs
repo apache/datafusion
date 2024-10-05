@@ -105,14 +105,16 @@ fn get_octet_length_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_STRING)
             .with_description("Returns the length of a string in bytes.")
             .with_syntax_example("octet_length(str)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > select octet_length('Ångström');
 +--------------------------------+
 | octet_length(Utf8("Ångström")) |
 +--------------------------------+
 | 10                             |
 +--------------------------------+
-```"#)
+```"#,
+            )
             .with_standard_argument("str", "String")
             .with_related_udf("bit_length")
             .with_related_udf("length")

@@ -102,14 +102,16 @@ fn get_bit_length_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_STRING)
             .with_description("Returns the bit length of a string.")
             .with_syntax_example("bit_length(str)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > select bit_length('datafusion');
 +--------------------------------+
 | bit_length(Utf8("datafusion")) |
 +--------------------------------+
 | 80                             |
 +--------------------------------+
-```"#)
+```"#,
+            )
             .with_standard_argument("str", "String")
             .with_related_udf("length")
             .with_related_udf("octet_length")

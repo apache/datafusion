@@ -98,7 +98,8 @@ fn get_ends_with_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_STRING)
             .with_description("Tests if a string ends with a substring.")
             .with_syntax_example("ends_with(str, substr)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 >  select ends_with('datafusion', 'soin');
 +--------------------------------------------+
 | ends_with(Utf8("datafusion"),Utf8("soin")) |
@@ -111,7 +112,8 @@ fn get_ends_with_doc() -> &'static Documentation {
 +--------------------------------------------+
 | true                                       |
 +--------------------------------------------+
-```"#)
+```"#,
+            )
             .with_standard_argument("str", "String")
             .with_argument("substr", "Substring to test for.")
             .build()

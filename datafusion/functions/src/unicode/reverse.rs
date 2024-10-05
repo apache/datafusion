@@ -95,14 +95,16 @@ fn get_reverse_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_STRING)
             .with_description("Reverses the character order of a string.")
             .with_syntax_example("reverse(str)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > select reverse('datafusion');
 +-----------------------------+
 | reverse(Utf8("datafusion")) |
 +-----------------------------+
 | noisufatad                  |
 +-----------------------------+
-```"#)
+```"#,
+            )
             .with_standard_argument("str", "String")
             .build()
             .unwrap()

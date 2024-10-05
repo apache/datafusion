@@ -103,14 +103,16 @@ fn get_starts_with_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_STRING)
             .with_description("Tests if a string starts with a substring.")
             .with_syntax_example("starts_with(str, substr)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > select starts_with('datafusion','data');
 +----------------------------------------------+
 | starts_with(Utf8("datafusion"),Utf8("data")) |
 +----------------------------------------------+
 | true                                         |
 +----------------------------------------------+
-```"#)
+```"#,
+            )
             .with_standard_argument("str", "String")
             .with_argument("substr", "Substring to test for.")
             .build()

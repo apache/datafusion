@@ -93,14 +93,16 @@ fn get_character_length_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_STRING)
             .with_description("Returns the number of characters in a string.")
             .with_syntax_example("character_length(str)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > select character_length('Ångström');
 +------------------------------------+
 | character_length(Utf8("Ångström")) |
 +------------------------------------+
 | 8                                  |
 +------------------------------------+
-```"#)
+```"#,
+            )
             .with_standard_argument("str", "String")
             .with_related_udf("bit_length")
             .with_related_udf("octet_length")

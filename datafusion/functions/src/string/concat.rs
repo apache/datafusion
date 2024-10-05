@@ -258,14 +258,16 @@ fn get_concat_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_STRING)
             .with_description("Concatenates multiple strings together.")
             .with_syntax_example("concat(str[, ..., str_n])")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > select concat('data', 'f', 'us', 'ion');
 +-------------------------------------------------------+
 | concat(Utf8("data"),Utf8("f"),Utf8("us"),Utf8("ion")) |
 +-------------------------------------------------------+
 | datafusion                                            |
 +-------------------------------------------------------+
-```"#)
+```"#,
+            )
             .with_standard_argument("str", "String")
             .with_argument("str_n", "Subsequent string expressions to concatenate.")
             .with_related_udf("concat_ws")

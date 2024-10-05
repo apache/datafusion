@@ -84,14 +84,16 @@ fn get_lower_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_STRING)
             .with_description("Converts a string to lower-case.")
             .with_syntax_example("lower(str)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > select lower('Ångström');
 +-------------------------+
 | lower(Utf8("Ångström")) |
 +-------------------------+
 | ångström                |
 +-------------------------+
-```"#)
+```"#,
+            )
             .with_standard_argument("str", "String")
             .with_related_udf("initcap")
             .with_related_udf("upper")

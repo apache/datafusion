@@ -99,14 +99,16 @@ fn get_repeat_doc() -> &'static Documentation {
                 "Returns a string with an input string repeated a specified number.",
             )
             .with_syntax_example("repeat(str, n)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > select repeat('data', 3);
 +-------------------------------+
 | repeat(Utf8("data"),Int64(3)) |
 +-------------------------------+
 | datadatadata                  |
 +-------------------------------+
-```"#)
+```"#,
+            )
             .with_standard_argument("str", "String")
             .with_argument("n", "Number of times to repeat the input string.")
             .build()
