@@ -777,8 +777,8 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="arguments">
 <h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>base</strong>: Base numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
-<li><p><strong>numeric_expression</strong>: Numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
+<li><p><strong>base</strong>: Base numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
+<li><p><strong>numeric_expression</strong>: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
 </ul>
 </section>
 </section>
@@ -834,7 +834,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="id3">
 <h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of string operators.</p></li>
+<li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
 <li><p><strong>n</strong>: String length to pad to.</p></li>
 <li><p><strong>padding_str</strong>: String expression to pad with. Can be a constant, column, or function, and any combination of string operators. <em>Default is a space.</em></p></li>
 </ul>
@@ -906,8 +906,8 @@ The following regular expression functions are supported:</p>
 <section id="id6">
 <h4>Arguments<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of string operators.</p></li>
-<li><p><strong>regexp</strong>: Regular expression to test against the string expression. Can be a constant, column, or function.</p></li>
+<li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
+<li><p><strong>regexp</strong>: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
 <li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:</p>
 <ul>
 <li><p><strong>i</strong>: case-insensitive: letters match both upper and lower case</p></li>
@@ -958,7 +958,7 @@ Returns the corresponding date.</p>
 <section id="id7">
 <h4>Arguments<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>expression</strong>: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
+<li><p><strong>expression</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
 <li><p><strong>format_n</strong>: Optional <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a> strings to use to parse the expression. Formats will be tried in the order
 they appear with the first successful one being returned. If none of the formats successfully parse the expression
 an error will be returned.</p></li>
@@ -998,7 +998,7 @@ an error will be returned.</p></li>
 <section id="id9">
 <h4>Arguments<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>expression</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of string operators.</p></li>
+<li><p><strong>expression</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
 </ul>
 </section>
 </section>
