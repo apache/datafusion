@@ -47,7 +47,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
-use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
+use datafusion_physical_expr::{Partitioning, PhysicalSortExpr, PhysicalSortRequirement};
 use futures::{ready, Stream};
 use parking_lot::Mutex;
 
@@ -278,6 +278,20 @@ impl ExecutionPlan for IEJoinExec {
         vec![
             Distribution::UnspecifiedDistribution,
             Distribution::UnspecifiedDistribution,
+        ]
+    }
+
+    fn required_input_ordering(
+        &self,
+    ) -> Vec<Option<datafusion_physical_expr::LexRequirement>> {
+        // sort left and right data by condition 1 to prune not intersected RecordBatch pairs
+        vec![
+            Some(PhysicalSortRequirement::from_sort_exprs(vec![
+                &self.left_conditions[0],
+            ])),
+            Some(PhysicalSortRequirement::from_sort_exprs(vec![
+                &self.right_conditions[0],
+            ])),
         ]
     }
 
