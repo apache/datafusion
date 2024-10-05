@@ -1750,9 +1750,20 @@ pub fn try_iejoin(
             .iter()
             .map(|(_, condition, _)| condition.clone())
             .collect::<Vec<_>>();
+        let sort_exprs =
+            join_utils::inequality_conditions_to_sort_exprs(&inequality_conditions)?;
+        // sort left and right by the condition 1
+        let sorted_left = Arc::new(SortExec::new(
+            vec![sort_exprs[0].0.clone()],
+            Arc::clone(&left),
+        ));
+        let sorted_right = Arc::new(SortExec::new(
+            vec![sort_exprs[0].1.clone()],
+            Arc::clone(&right),
+        ));
         Ok(Some(Arc::new(IEJoinExec::try_new(
-            left,
-            right,
+            sorted_left,
+            sorted_right,
             inequality_conditions,
             new_filter.map(|expr| {
                 join_utils::JoinFilter::new(

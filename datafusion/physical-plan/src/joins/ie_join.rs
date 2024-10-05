@@ -29,7 +29,6 @@ use crate::joins::utils::{
     JoinFilter, OnceAsync, OnceFut,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::sorts::sort::SortExec;
 use crate::{
     collect, execution_mode_from_children, DisplayAs, DisplayFormatType, Distribution,
     ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -401,16 +400,6 @@ pub struct IEJoinData {
     pub right_blocks: Vec<SortedBlock>,
 }
 
-async fn collect_by_condition(
-    input: Arc<dyn ExecutionPlan>,
-    sort_expr: PhysicalSortExpr,
-    context: Arc<TaskContext>,
-) -> Result<Vec<RecordBatch>> {
-    let sort_plan = Arc::new(SortExec::new(vec![sort_expr], input));
-    let record_batches = collect(sort_plan, context).await?;
-    Ok(record_batches)
-}
-
 async fn collect_iejoin_data(
     left: Arc<dyn ExecutionPlan>,
     right: Arc<dyn ExecutionPlan>,
@@ -418,11 +407,9 @@ async fn collect_iejoin_data(
     right_conditions: Arc<[PhysicalSortExpr; 2]>,
     context: Arc<TaskContext>,
 ) -> Result<IEJoinData> {
-    // sort left and right data by condition 1
-    let left_data =
-        collect_by_condition(left, left_conditions[0].clone(), context.clone()).await?;
-    let right_data =
-        collect_by_condition(right, right_conditions[0].clone(), context.clone()).await?;
+    // the left and right data are sort by condition 1 already (the `try_iejoin` rewrite rule has done this), collect it directly
+    let left_data = collect(left, context.clone()).await?;
+    let right_data = collect(right, context.clone()).await?;
     let left_blocks = left_data
         .iter()
         .map(|batch| {
@@ -482,7 +469,7 @@ impl IEJoinStream {
             return Poll::Ready(None);
         }
 
-        let iejoin_data = match ready!(self.iejoin_data.get(cx)) {
+        let iejoin_data = match ready!(self.iejoin_data.get_shared(cx)) {
             Ok(data) => data,
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
@@ -503,7 +490,6 @@ impl IEJoinStream {
             self.finished = true;
             return Poll::Ready(None);
         }
-        println!("pair = {}, n = {}, m = {}", pair, n, m);
         // get the index of left and right block
         let (left_block_idx, right_block_idx) =
             ((pair / m as u64) as usize, (pair % m as u64) as usize);
@@ -518,17 +504,10 @@ impl IEJoinStream {
             right_block,
             &self.sort_options[0],
         ) {
-            println!("skip pair: ({}, {})", left_block_idx, right_block_idx);
             return Poll::Ready(Some(Ok(RecordBatch::new_empty(Arc::clone(
                 &self.schema,
             )))));
         }
-
-        println!(
-            "left block count = {}, right block count = {}",
-            left_block.arrays()[0].len(),
-            right_block.arrays()[0].len()
-        );
 
         // compute the join result
         let batch = IEJoinStream::compute(
