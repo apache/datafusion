@@ -401,9 +401,9 @@ pub fn swap_binary_expr(expr: &PhysicalExprRef) -> PhysicalExprRef {
         Some(binary) => {
             if let Some(swapped_op) = binary.op().swap() {
                 Arc::new(BinaryExpr::new(
-                    Arc::clone(&binary.right()),
+                    Arc::clone(binary.right()),
                     swapped_op,
-                    Arc::clone(&binary.left()),
+                    Arc::clone(binary.left()),
                 ))
             } else {
                 Arc::clone(expr)
@@ -415,14 +415,13 @@ pub fn swap_binary_expr(expr: &PhysicalExprRef) -> PhysicalExprRef {
 
 /// Checks whether the inequality condition is valid.
 /// The inequality condition is valid if the expressions are not null and the expressions are not equal, and left expression is from left schema and right expression is from right schema.
-/// TODO: Maybe we can reorder the expressions to make it statisfy this condition later, like (right.b < left.a) -> (left.a > right.b).
 pub fn check_inequality_condition(inequality_condition: &JoinFilter) -> Result<()> {
     if let Some(binary) = inequality_condition
         .expression()
         .as_any()
         .downcast_ref::<BinaryExpr>()
     {
-        if !(is_ineuqality_operator(&binary.op()) && *binary.op() != Operator::NotEq) {
+        if !(is_ineuqality_operator(binary.op()) && *binary.op() != Operator::NotEq) {
             return plan_err!(
                     "Inequality conditions must be an inequality binary expression, but got {}",
                     binary.op()
@@ -430,12 +429,12 @@ pub fn check_inequality_condition(inequality_condition: &JoinFilter) -> Result<(
         }
         let column_indices = &inequality_condition.column_indices;
         // check if left expression is from left table
-        let left_expr_columns = collect_columns(&binary.left());
+        let left_expr_columns = collect_columns(binary.left());
         let left_expr_in_left = left_expr_columns
             .iter()
             .all(|c| column_indices[c.index()].side == JoinSide::Left);
         // check if right expression is from right table
-        let right_expr_columns = collect_columns(&binary.right());
+        let right_expr_columns = collect_columns(binary.right());
         let right_expr_in_right = right_expr_columns
             .iter()
             .all(|c| column_indices[c.index()].side == JoinSide::Right);
@@ -482,7 +481,7 @@ pub fn inequality_conditions_to_sort_exprs(
             // remap the column in join schema to origin table, because we need to use the original column index to sort left and right table independently
             let (left_map, right_map): (Vec<_>, Vec<_>) = filter
                 .column_indices()
-                .into_iter()
+                .iter()
                 .enumerate()
                 .partition(|(_, index)| index.side == JoinSide::Left);
             let left_map = HashMap::from_iter(
@@ -493,14 +492,14 @@ pub fn inequality_conditions_to_sort_exprs(
             );
             Ok((
                 PhysicalSortExpr::new(
-                    map_columns(Arc::clone(&binary.left()), &left_map)?,
+                    map_columns(Arc::clone(binary.left()), &left_map)?,
                     sort_option,
                 ),
                 PhysicalSortExpr::new(
-                    map_columns(Arc::clone(&binary.right()), &right_map)?,
+                    map_columns(Arc::clone(binary.right()), &right_map)?,
                     sort_option,
                 ),
-                binary.op().clone(),
+                *binary.op(),
             ))
         })
         .collect()
@@ -1775,7 +1774,9 @@ mod tests {
     use arrow_schema::SortOptions;
 
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
-    use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
+    use datafusion_common::{
+        arrow_datafusion_err, arrow_err, assert_contains, ScalarValue,
+    };
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
 
     fn check(
@@ -2715,7 +2716,7 @@ mod tests {
         let join_filter =
             JoinFilter::new(filter, column_indices.clone(), intermediate_schema.clone());
         let actual = format!("{:?}", check_inequality_condition(&join_filter));
-        assert_eq!(
+        assert_contains!(
             actual,
             "Err(Plan(\"Inequality conditions must be an inequality binary expression, but got !=\"))"
         );
@@ -2728,7 +2729,7 @@ mod tests {
         let join_filter =
             JoinFilter::new(filter, column_indices.clone(), intermediate_schema.clone());
         let actual = format!("{:?}", check_inequality_condition(&join_filter));
-        assert_eq!(
+        assert_contains!(
             actual,
             "Err(Plan(\"Inequality condition shouldn't be constant expression, but got x@0 > 8\"))"
         );
@@ -2745,7 +2746,7 @@ mod tests {
         let join_filter =
             JoinFilter::new(filter, column_indices.clone(), intermediate_schema.clone());
         let actual = format!("{:?}", check_inequality_condition(&join_filter));
-        assert_eq!(
+        assert_contains!(
             actual,
             "Err(Plan(\"Left/right side expression of inequality condition should be from left/right side of join, but got x@2 * y@1 and x@0\"))"
         );
@@ -2763,8 +2764,8 @@ mod tests {
             JoinFilter::new(filter, column_indices.clone(), intermediate_schema.clone());
         let actual = format!("{:?}", check_inequality_condition(&join_filter));
         assert_eq!(actual, "Ok(())");
-        let res = inequality_conditions_to_sort_exprs(&vec![join_filter])?;
-        let (left_expr, right_expr, operator) = res.get(0).unwrap();
+        let res = inequality_conditions_to_sort_exprs(&[join_filter])?;
+        let (left_expr, right_expr, operator) = res.first().unwrap();
         assert_eq!(left_expr.to_string(), "x@1 + y@2 DESC NULLS LAST");
         assert_eq!(right_expr.to_string(), "x@1 DESC NULLS LAST");
         assert_eq!(*operator, Operator::GtEq);
@@ -2778,8 +2779,8 @@ mod tests {
             JoinFilter::new(filter, column_indices.clone(), intermediate_schema.clone());
         let actual = format!("{:?}", check_inequality_condition(&join_filter));
         assert_eq!(actual, "Ok(())");
-        let res = inequality_conditions_to_sort_exprs(&vec![join_filter])?;
-        let (left_expr, right_expr, operator) = res.get(0).unwrap();
+        let res = inequality_conditions_to_sort_exprs(&[join_filter])?;
+        let (left_expr, right_expr, operator) = res.first().unwrap();
         assert_eq!(left_expr.to_string(), "x@1 ASC NULLS LAST");
         assert_eq!(right_expr.to_string(), "x@1 ASC NULLS LAST");
         assert_eq!(*operator, Operator::Lt);

@@ -156,8 +156,7 @@ impl IEJoinExec {
             Arc::new([condition_parts[0].0.clone(), condition_parts[1].0.clone()]);
         let right_conditions =
             Arc::new([condition_parts[0].1.clone(), condition_parts[1].1.clone()]);
-        let operators =
-            Arc::new([condition_parts[0].2.clone(), condition_parts[1].2.clone()]);
+        let operators = Arc::new([condition_parts[0].2, condition_parts[1].2]);
         let sort_options = Arc::new([
             operator_to_sort_option(operators[0]),
             operator_to_sort_option(operators[1]),
@@ -305,17 +304,17 @@ impl ExecutionPlan for IEJoinExec {
             collect_iejoin_data(
                 Arc::clone(&self.left),
                 Arc::clone(&self.right),
-                self.left_conditions.clone(),
-                self.right_conditions.clone(),
-                context.clone(),
+                Arc::clone(&self.left_conditions),
+                Arc::clone(&self.right_conditions),
+                Arc::clone(&context),
             )
         });
         Ok(Box::pin(IEJoinStream {
             schema: Arc::clone(&self.schema),
             filter: self.filter.clone(),
             _join_type: self.join_type,
-            operators: self.operators.clone(),
-            sort_options: self.sort_options.clone(),
+            operators: Arc::clone(&self.operators),
+            sort_options: Arc::clone(&self.sort_options),
             iejoin_data,
             column_indices: self.column_indices.clone(),
             pairs: Arc::clone(&self.pairs),
@@ -360,7 +359,7 @@ impl SortedBlock {
             .sort_options
             .iter()
             .map(|(i, opt)| SortColumn {
-                values: self.array[*i].clone(),
+                values: Arc::clone(&self.array[*i]),
                 options: Some(*opt),
             })
             .collect::<Vec<_>>();
@@ -408,8 +407,8 @@ async fn collect_iejoin_data(
     context: Arc<TaskContext>,
 ) -> Result<IEJoinData> {
     // the left and right data are sort by condition 1 already (the `try_iejoin` rewrite rule has done this), collect it directly
-    let left_data = collect(left, context.clone()).await?;
-    let right_data = collect(right, context.clone()).await?;
+    let left_data = collect(left, Arc::clone(&context)).await?;
+    let right_data = collect(right, Arc::clone(&context)).await?;
     let left_blocks = left_data
         .iter()
         .map(|batch| {
@@ -525,6 +524,7 @@ impl IEJoinStream {
         Poll::Ready(Some(Ok(batch)))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compute(
         left_block: &SortedBlock,
         right_block: &SortedBlock,
@@ -625,10 +625,14 @@ impl IEJoinStream {
         let n = left_block.array[0].len() as i64;
         let m = right_block.array[0].len() as i64;
         // concat the left block and right block
-        let cond1 =
-            concat(&[&left_block.array[0].clone(), &right_block.array[0].clone()])?;
-        let cond2 =
-            concat(&[&left_block.array[1].clone(), &right_block.array[1].clone()])?;
+        let cond1 = concat(&[
+            &Arc::clone(&left_block.array[0]),
+            &Arc::clone(&right_block.array[0]),
+        ])?;
+        let cond2 = concat(&[
+            &Arc::clone(&left_block.array[1]),
+            &Arc::clone(&right_block.array[1]),
+        ])?;
         // store index of left table and right table
         // -i in (-n..-1) means it is index i in left table, j in (1..m) means it is index j in right table
         let indexes = concat(&[
@@ -677,11 +681,13 @@ impl IEJoinStream {
         let l1 = l1.slice(0..valid as usize);
 
         // l1_indexes[i] = j means the ith element of l1 is the jth element of original recordbatch
-        let l1_indexes = l1.arrays()[1].clone().as_primitive::<Int64Type>().clone();
+        let l1_indexes = Arc::clone(&l1.arrays()[1])
+            .as_primitive::<Int64Type>()
+            .clone();
 
         // mark the order of l1, the index i means this element is the ith element of l1(sorted by condition 1)
         let permutation = UInt64Array::from(
-            std::iter::successors(Some(0 as u64), |&x| {
+            std::iter::successors(Some(0_u64), |&x| {
                 if x < (valid as u64) {
                     Some(x + 1)
                 } else {
@@ -694,9 +700,9 @@ impl IEJoinStream {
         let mut l2 = SortedBlock::new(
             vec![
                 // condition 2
-                l1.arrays()[2].clone(),
+                Arc::clone(&l1.arrays()[2]),
                 // index of original recordbatch
-                l1.arrays()[1].clone(),
+                Arc::clone(&l1.arrays()[1]),
                 // index of l1
                 Arc::new(permutation),
             ],
@@ -719,7 +725,9 @@ impl IEJoinStream {
 
         Ok((
             l1_indexes,
-            l2.arrays()[2].clone().as_primitive::<UInt64Type>().clone(),
+            Arc::clone(&l2.arrays()[2])
+                .as_primitive::<UInt64Type>()
+                .clone(),
         ))
     }
 
@@ -738,14 +746,14 @@ impl IEJoinStream {
             if l1_index < 0 {
                 // index from left table
                 // insert p in to range_map
-                IEJoinStream::insert_range_map(&mut range_map, *p as u64);
+                IEJoinStream::insert_range_map(&mut range_map, *p);
                 continue;
             }
             // index from right table, remap to 0..m
             let right_index = (l1_index - 1) as u64;
-            for range in range_map.range(0..(*p as u64)) {
+            for range in range_map.range(0..{ *p }) {
                 let (start, end) = range;
-                let (start, end) = (*start, std::cmp::min(*end, *p as u64));
+                let (start, end) = (*start, std::cmp::min(*end, *p));
                 for left_l1_index in start..end {
                     // get all p[i] in range(start, end) and remap it to original recordbatch index in left table
                     left_builder.append_value(
@@ -843,7 +851,7 @@ mod tests {
             right,
             ie_join_filter,
             join_filter,
-            &join_type,
+            join_type,
             partition_count,
         )?;
         let columns = columns(&ie_join.schema());
