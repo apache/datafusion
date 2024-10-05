@@ -168,6 +168,21 @@ pub fn data_types(
     try_coerce_types(valid_types, current_types, &signature.type_signature)
 }
 
+fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
+    if let TypeSignature::OneOf(signatures) = type_signature {
+        return signatures.iter().all(is_well_supported_signature);
+    }
+
+    matches!(
+        type_signature,
+        TypeSignature::UserDefined
+            | TypeSignature::Numeric(_)
+            | TypeSignature::String(_)
+            | TypeSignature::Coercible(_)
+            | TypeSignature::Any(_)
+    )
+}
+
 fn try_coerce_types(
     valid_types: Vec<Vec<DataType>>,
     current_types: &[DataType],
@@ -176,15 +191,7 @@ fn try_coerce_types(
     let mut valid_types = valid_types;
 
     // Well-supported signature that returns exact valid types.
-    if !valid_types.is_empty()
-        && matches!(
-            type_signature,
-            TypeSignature::UserDefined
-                | TypeSignature::Numeric(_)
-                | TypeSignature::String(_)
-                | TypeSignature::Coercible(_)
-        )
-    {
+    if !valid_types.is_empty() && is_well_supported_signature(type_signature) {
         // exact valid types
         assert_eq!(valid_types.len(), 1);
         let valid_types = valid_types.swap_remove(0);
