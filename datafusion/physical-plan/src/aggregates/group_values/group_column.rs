@@ -93,14 +93,10 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         // Perf: skip null check (by short circuit) if input is not nullable
         if NULLABLE {
-            // In nullable path, we should check if both `exist row` and `input row`
-            // are null/not null
             let exist_null = self.nulls.is_null(lhs_row);
             let input_null = array.is_null(rhs_row);
-            match (exist_null, input_null) {
-                (true, true) => return true,
-                (false, true) | (true, false) => return false,
-                _ => {}
+            if let Some(result) = nulls_equal_to(exist_null, input_null) {
+                return result;
             }
             // Otherwise, we need to check their values
         }
@@ -218,15 +214,10 @@ where
         B: ByteArrayType,
     {
         let array = array.as_bytes::<B>();
-
-        // In nullable path, we should check if both `exist row` and `input row`
-        // are null/not null
         let exist_null = self.nulls.is_null(lhs_row);
         let input_null = array.is_null(rhs_row);
-        match (exist_null, input_null) {
-            (true, true) => return true,
-            (false, true) | (true, false) => return false,
-            _ => {}
+        if let Some(result) = nulls_equal_to(exist_null, input_null) {
+            return result;
         }
         // Otherwise, we need to check their values
         self.value(lhs_row) == (array.value(rhs_row).as_ref() as &[u8])
@@ -382,6 +373,20 @@ where
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
+    }
+}
+
+/// Determines if the nullability of the existing and new input array can be used
+/// to short-circuit the comparison of the two values.
+///
+/// Returns `Some(result)` if the result of the comparison can be determined
+/// from the nullness of the two values, and `None` if the comparison must be
+/// done on the values themselves.
+fn nulls_equal_to(lhs_null: bool, rhs_null: bool) -> Option<bool> {
+    match (lhs_null, rhs_null) {
+        (true, true) => Some(true),
+        (false, true) | (true, false) => Some(false),
+        _ => None,
     }
 }
 
