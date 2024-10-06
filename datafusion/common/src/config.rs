@@ -372,8 +372,9 @@ config_namespace! {
         pub metadata_size_hint: Option<usize>, default = None
 
         /// (reading) If true, filter expressions are be applied during the parquet decoding operation to
-        /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
-        pub pushdown_filters: bool, default = false
+        /// reduce the number of rows decoded. This optimization is sometimes called "late materialization"
+        /// as it defers decoding (materialization) of some columns until after filters are applied.
+        pub pushdown_filters: bool, default = true
 
         /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
