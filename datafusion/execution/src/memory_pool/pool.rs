@@ -468,6 +468,26 @@ mod tests {
     }
 
     #[test]
+    fn test_fair_with_split_reservation() {
+        let pool = Arc::new(FairSpillPool::new(100)) as _;
+        let mut r1 = MemoryConsumer::new("spillable")
+            .with_can_spill(true)
+            .register(&pool);
+
+        // Allocate all available memory.
+        r1.try_grow(100).unwrap();
+
+        // Split the reservation in half.
+        let _ = r1.split(50);
+
+        // Try to grow the reservation beyond the pool size.
+        let err = r1.try_grow(1).unwrap_err().strip_backtrace();
+
+        // note: "100 bytes available" refers to pool size minus unspillable reservations
+        assert_eq!(err, "Resources exhausted: Failed to allocate additional 1 bytes for spillable with 100 bytes already allocated for this reservation - 100 bytes remain available for the total pool");
+    }
+
+    #[test]
     fn test_tracked_consumers_pool() {
         let pool: Arc<dyn MemoryPool> = Arc::new(TrackConsumersPool::new(
             GreedyMemoryPool::new(100),
