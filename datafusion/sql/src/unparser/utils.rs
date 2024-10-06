@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
+
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TreeNode},
@@ -166,10 +168,17 @@ fn find_agg_expr<'a>(agg: &'a Aggregate, column: &Column) -> Result<Option<&'a E
         if matches!(agg.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
             // For grouping set expr, we must operate by expression list from the grouping set
             let grouping_expr = grouping_set_to_exprlist(agg.group_expr.as_slice())?;
-            Ok(grouping_expr
-                .into_iter()
-                .chain(agg.aggr_expr.iter())
-                .nth(index))
+            match index.cmp(&grouping_expr.len()) {
+                Ordering::Less => Ok(grouping_expr.into_iter().nth(index)),
+                Ordering::Equal => {
+                    internal_err!(
+                        "Tried to unproject column refereing to internal grouping id"
+                    )
+                }
+                Ordering::Greater => {
+                    Ok(agg.aggr_expr.get(index - grouping_expr.len() - 1))
+                }
+            }
         } else {
             Ok(agg.group_expr.iter().chain(agg.aggr_expr.iter()).nth(index))
         }
