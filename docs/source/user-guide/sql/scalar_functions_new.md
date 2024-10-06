@@ -331,7 +331,7 @@ contains(str, search_str)
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **search_str**: The string to search for in str. expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **search_str**: The string to search for in str.
 
 #### Example
 

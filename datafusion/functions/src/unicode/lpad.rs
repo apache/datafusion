@@ -111,7 +111,6 @@ fn get_lpad_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_STRING)
             .with_description("Pads the left side of a string with another string to a specified string length.")
             .with_syntax_example("lpad(str, n[, padding_str])")
-            .with_standard_argument("str", "String")
             .with_sql_example(r#"```sql
 > select lpad('Dolly', 10, 'hello');
 +---------------------------------------------+
@@ -120,6 +119,7 @@ fn get_lpad_doc() -> &'static Documentation {
 | helloDolly                                  |
 +---------------------------------------------+
 ```"#)
+            .with_standard_argument("str", "String")
             .with_argument("n", "String length to pad to.")
             .with_argument("padding_str", "Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._")
             .with_related_udf("rpad")

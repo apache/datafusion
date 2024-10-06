@@ -112,7 +112,7 @@ fn get_contains_doc() -> &'static Documentation {
 ```"#,
             )
             .with_standard_argument("str", "String")
-            .with_standard_argument("search_str", "The string to search for in str.")
+            .with_argument("search_str", "The string to search for in str.")
             .build()
             .unwrap()
     })

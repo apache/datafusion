@@ -85,13 +85,13 @@ impl ScalarUDFImpl for ReplaceFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_repeat_doc())
+        Some(get_replace_doc())
     }
 }
 
 static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
-fn get_repeat_doc() -> &'static Documentation {
+fn get_replace_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_STRING)

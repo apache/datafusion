@@ -87,13 +87,13 @@ impl ScalarUDFImpl for SubstrIndexFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_substrindex_doc())
+        Some(get_substr_index_doc())
     }
 }
 
 static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
-fn get_substrindex_doc() -> &'static Documentation {
+fn get_substr_index_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_STRING)
