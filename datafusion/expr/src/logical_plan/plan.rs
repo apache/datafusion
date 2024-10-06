@@ -2556,10 +2556,24 @@ impl TableScan {
             return plan_err!("table_name cannot be empty");
         }
         let schema = table_source.schema();
+        // println!("schema: {:?}", schema);
         let func_dependencies = FunctionalDependencies::new_from_constraints(
             table_source.constraints(),
             schema.fields.len(),
         );
+        // println!("projection: {:?}", projection);
+        let mut fields = vec![];
+        for field in schema.fields() {
+            let f = if field.data_type().equals_datatype(&DataType::Binary) {
+                Field::new(field.name(), DataType::Utf8, field.is_nullable()).into()
+            } else {
+                field.clone()
+            };
+
+            fields.push(f);
+        }
+        let schema = Schema::new_with_metadata(fields, schema.metadata().clone());
+
         let projected_schema = projection
             .as_ref()
             .map(|p| {
@@ -2569,7 +2583,14 @@ impl TableScan {
                 let df_schema = DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
-                            (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
+                            let s = schema.field(*i).clone();
+                            // let s = if s.data_type().equals_datatype(&DataType::Binary) {
+                            //     Field::new(s.name(), DataType::Utf8, s.is_nullable())
+                            // } else {
+                            //     s.clone()
+                            // };
+                            // println!("s({}): {:?}", *i, s);
+                            (Some(table_name.clone()), Arc::new(s))
                         })
                         .collect(),
                     schema.metadata.clone(),
@@ -2581,7 +2602,11 @@ impl TableScan {
                     DFSchema::try_from_qualified_schema(table_name.clone(), &schema)?;
                 df_schema.with_functional_dependencies(func_dependencies)
             })?;
+
+        
+
         let projected_schema = Arc::new(projected_schema);
+        // println!("projected_schema: {:?}", projected_schema);
 
         Ok(Self {
             table_name,

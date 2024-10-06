@@ -40,6 +40,7 @@ use crate::{
 };
 
 use arrow::datatypes::SchemaRef;
+use arrow_schema::DataType;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 
 use itertools::Itertools;
@@ -713,6 +714,21 @@ impl ExecutionPlan for ParquetExec {
             .clone()
             .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
 
+
+        let file_schema = self.base_config.file_schema.clone();
+        let mut fields = vec![];
+        for field in file_schema.fields() {
+            let f = if field.data_type().equals_datatype(&DataType::Binary) {
+                Arc::new(arrow_schema::Field::new(field.name(), DataType::Utf8, field.is_nullable()))
+            } else {
+                field.clone()
+            };
+            fields.push(f);
+        }
+        let table_schema = Arc::new(arrow_schema::Schema::new(fields));
+
+        // let table_schema = self.base_config().file_schema.clone();
+
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
@@ -721,7 +737,7 @@ impl ExecutionPlan for ParquetExec {
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             page_pruning_predicate: self.page_pruning_predicate.clone(),
-            table_schema: self.base_config.file_schema.clone(),
+            table_schema,
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory,
