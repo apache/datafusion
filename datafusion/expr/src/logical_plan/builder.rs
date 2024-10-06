@@ -54,7 +54,7 @@ use datafusion_common::{
     TableReference, ToDFSchema, UnnestOptions,
 };
 
-use super::plan::{ColumnUnnestList, ColumnUnnestType};
+use super::plan::ColumnUnnestList;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -1611,27 +1611,6 @@ fn get_unnested_list_datatype_recursive(
     internal_err!("trying to unnest on invalid data type {:?}", data_type)
 }
 
-/// Infer the unnest type based on the data type:
-/// - list type: infer to unnest(list(col, depth=1))
-/// - struct type: infer to unnest(struct)
-fn infer_unnest_type(
-    col_name: &String,
-    data_type: &DataType,
-) -> Result<ColumnUnnestType> {
-    match data_type {
-        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
-            Ok(ColumnUnnestType::List(vec![ColumnUnnestList {
-                output_column: Column::from_name(col_name),
-                depth: 1,
-            }]))
-        }
-        DataType::Struct(_) => Ok(ColumnUnnestType::Struct),
-        _ => {
-            internal_err!("trying to unnest on invalid data type {:?}", data_type)
-        }
-    }
-}
-
 pub fn get_struct_unnested_columns(
     col_name: &String,
     inner_fields: &Fields,
@@ -1764,7 +1743,7 @@ pub fn unnest_with_options(
                                     &p.input_column == *column_to_unnest
                                 })
                                 .collect::<Vec<_>>();
-                            if list_recursions_on_column.len() == 0 {
+                            if list_recursions_on_column.is_empty() {
                                 None
                             } else {
                                 Some(list_recursions_on_column)
@@ -1870,7 +1849,7 @@ mod tests {
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
-    use datafusion_common::SchemaError;
+    use datafusion_common::{RecursionUnnestOption, SchemaError};
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -2278,24 +2257,20 @@ mod tests {
 
         // Simultaneously unnesting a list (with different depth) and a struct column
         let plan = nested_table_scan("test_table")?
-            .unnest_columns_recursive_with_options(
-                vec![
-                    (
-                        "stringss".into(),
-                        ColumnUnnestType::List(vec![
-                            ColumnUnnestList {
-                                output_column: Column::from_name("stringss_depth_1"),
-                                depth: 1,
-                            },
-                            ColumnUnnestList {
-                                output_column: Column::from_name("stringss_depth_2"),
-                                depth: 2,
-                            },
-                        ]),
-                    ),
-                    ("struct_singular".into(), ColumnUnnestType::Inferred),
-                ],
-                UnnestOptions::default(),
+            .unnest_columns_with_options(
+                vec!["stringss".into(), "struct_singular".into()],
+                UnnestOptions::default().with_recursions(vec![
+                    RecursionUnnestOption {
+                        input_column: "stringss".into(),
+                        output_column: "stringss_depth_1".into(),
+                        depth: 1,
+                    },
+                    RecursionUnnestOption {
+                        input_column: "stringss".into(),
+                        output_column: "stringss_depth_2".into(),
+                        depth: 2,
+                    },
+                ]),
             )?
             .build()?;
 

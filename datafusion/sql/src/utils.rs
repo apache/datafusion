@@ -18,7 +18,6 @@
 //! SQL Utility Functions
 
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::vec;
 
 use arrow_schema::{
@@ -35,8 +34,7 @@ use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
-    col, expr_vec_fmt, ColumnUnnestList, ColumnUnnestType, Expr, ExprSchemable,
-    LogicalPlan,
+    col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
 };
 use sqlparser::ast::{Ident, Value};
 
@@ -361,13 +359,11 @@ impl<'a> RecursiveUnnestRewriter<'a> {
         // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
         // inside unnest execution, each column inside the inner projection
         // will be transformed into new columns. Thus we need to keep track of these placeholding column names
-        // let placeholder_name = unnest_expr.display_name()?;
         let placeholder_name = format!("unnest_placeholder({})", inner_expr_name);
         let post_unnest_name =
             format!("unnest_placeholder({},depth={})", inner_expr_name, level);
         // This is due to the fact that unnest transformation should keep the original
         // column name as is, to comply with group by and order by
-        // let post_unnest_alias = print_unnest(&inner_expr_name, level);
         let placeholder_column = Column::from_name(placeholder_name.clone());
 
         let (data_type, _) = expr_in_unnest.data_type_and_nullable(self.input_schema)?;
@@ -398,7 +394,6 @@ impl<'a> RecursiveUnnestRewriter<'a> {
                     expr_in_unnest.clone().alias(placeholder_name.clone()),
                 );
 
-                // let post_unnest_column = Column::from_name(post_unnest_name);
                 let post_unnest_expr = col(post_unnest_name.clone()).alias(alias_name);
                 let list_unnesting = self
                     .columns_unnestings
@@ -538,7 +533,7 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
         // For column exprs that are not descendants of any unnest node
         // retain their projection
         // e.g given expr tree unnest(col_a) + col_b, we have to retain projection of col_b
-        // this condition can be checked by maintaining an Option<current ancestor unnest>
+        // this condition can be checked by maintaining an Option<top most unnest>
         if matches!(&expr, Expr::Column(_)) && self.top_most_unnest.is_none() {
             push_projection_dedupl(self.inner_projection_exprs, expr.clone());
         }
@@ -588,8 +583,8 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
     // TODO: This can be resolved after this issue is resolved: https://github.com/apache/datafusion/issues/10102
     //
     // The transformation looks like:
-    // - unnest(array_col) will be transformed into unnest(array_col)
-    // - unnest(array_col) + 1 will be transformed into unnest(array_col) + 1
+    // - unnest(array_col) will be transformed into Column("unnest_place_holder(array_col)")
+    // - unnest(array_col) + 1 will be transformed into Column("unnest_place_holder(array_col) + 1")
     let Transformed {
         data: transformed_expr,
         transformed,
@@ -617,23 +612,37 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
 
 #[cfg(test)]
 mod tests {
-    use std::{ops::Add, sync::Arc};
+    use std::{collections::HashMap, ops::Add, sync::Arc};
 
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;
     use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{
-        col, lit, unnest, ColumnUnnestType, EmptyRelation, LogicalPlan,
+        col, lit, unnest, ColumnUnnestList, EmptyRelation, LogicalPlan,
     };
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
 
     use crate::utils::{resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up};
-    fn column_unnests_eq(l: Vec<(&str, &str)>, r: &[(Column, ColumnUnnestType)]) {
-        let r_formatted: Vec<String> =
-            r.iter().map(|i| format!("{}|{}", i.0, i.1)).collect();
-        let l_formatted: Vec<String> =
-            l.iter().map(|i| format!("{}|{}", i.0, i.1)).collect();
+    fn column_unnests_eq(
+        l: Vec<&str>,
+        r: &HashMap<Column, Option<Vec<ColumnUnnestList>>>,
+    ) {
+        let r_formatted: Vec<String> = r
+            .iter()
+            .map(|i| match i.1 {
+                None => format!("{}", i.0),
+                Some(vec) => format!(
+                    "{}=>[{}]",
+                    i.0,
+                    vec.iter()
+                        .map(|i| format!("{}", i))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                ),
+            })
+            .collect();
+        let l_formatted: Vec<String> = l.iter().map(|i| i.to_string()).collect();
         assert_eq!(l_formatted, r_formatted);
     }
 
@@ -663,7 +672,7 @@ mod tests {
             schema: Arc::new(dfschema),
         });
 
-        let mut unnest_placeholder_columns = vec![];
+        let mut unnest_placeholder_columns = HashMap::new();
         let mut inner_projection_exprs = vec![];
 
         // unnest(unnest(3d_col)) + unnest(unnest(3d_col))
@@ -688,10 +697,9 @@ mod tests {
                 .add(col("i64_col"))]
         );
         column_unnests_eq(
-            vec![(
-                "unnest_placeholder(3d_col)",
-                "List([unnest_placeholder(3d_col,depth=2)|depth=2])",
-            )],
+            vec![
+                "unnest_placeholder(3d_col)=>[unnest_placeholder(3d_col,depth=2)|depth=2]",
+            ],
             &unnest_placeholder_columns,
         );
 
@@ -722,9 +730,7 @@ mod tests {
             ]
         );
         column_unnests_eq(
-            vec![("unnest_placeholder(3d_col)",
-             "List([unnest_placeholder(3d_col,depth=2)|depth=2, unnest_placeholder(3d_col,depth=1)|depth=1])"),
-             ],
+            vec!["unnest_placeholder(3d_col)=>[unnest_placeholder(3d_col,depth=2)|depth=2, unnest_placeholder(3d_col,depth=1)|depth=1]"],
             &unnest_placeholder_columns,
         );
         // still reference struct_col in original schema but with alias,
@@ -770,7 +776,7 @@ mod tests {
             schema: Arc::new(dfschema),
         });
 
-        let mut unnest_placeholder_columns = vec![];
+        let mut unnest_placeholder_columns = HashMap::new();
         let mut inner_projection_exprs = vec![];
 
         // unnest(struct_col)
@@ -789,7 +795,7 @@ mod tests {
             ]
         );
         column_unnests_eq(
-            vec![("unnest_placeholder(struct_col)", "Struct")],
+            vec!["unnest_placeholder(struct_col)"],
             &unnest_placeholder_columns,
         );
         // still reference struct_col in original schema but with alias,
@@ -809,11 +815,8 @@ mod tests {
         )?;
         column_unnests_eq(
             vec![
-                ("unnest_placeholder(struct_col)", "Struct"),
-                (
-                    "unnest_placeholder(array_col)",
-                    "List([unnest_placeholder(array_col,depth=1)|depth=1])",
-                ),
+                "unnest_placeholder(struct_col)",
+                "unnest_placeholder(array_col)=>[unnest_placeholder(array_col,depth=1)|depth=1]",
             ],
             &unnest_placeholder_columns,
         );
@@ -865,7 +868,7 @@ mod tests {
             schema: Arc::new(dfschema),
         });
 
-        let mut unnest_placeholder_columns = vec![];
+        let mut unnest_placeholder_columns = HashMap::new();
         let mut inner_projection_exprs = vec![];
 
         // An expr with multiple unnest
@@ -886,10 +889,9 @@ mod tests {
         // unnest -> field access -> unnest
 
         column_unnests_eq(
-            vec![(
-                "unnest_placeholder(struct_col[matrix])",
-                "List([unnest_placeholder(struct_col[matrix],depth=2)|depth=2])",
-            )],
+            vec![
+                "unnest_placeholder(struct_col[matrix])=>[unnest_placeholder(struct_col[matrix],depth=2)|depth=2]",
+            ],
             &unnest_placeholder_columns,
         );
 
