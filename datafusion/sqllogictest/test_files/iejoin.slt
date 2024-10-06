@@ -1,0 +1,181 @@
+# create tables
+statement ok
+CREATE TABLE east AS SELECT * FROM (VALUES
+    ('r1', 100, 140, 12, 2),
+    ('r2', 101, 100, 12, 8),
+    ('r3', 103,  90,  5, 4)
+) east(rid, id, dur, rev, cores)
+
+statement ok
+CREATE TABLE west AS SELECT * FROM (VALUES
+    ('s1', 404, 100,  6, 4),
+    ('s2', 498, 140, 11, 2),
+    ('s3', 676,  80, 10, 1),
+    ('s4', 742,  90,  5, 4)
+) west(rid, t_id, time, cost, cores)
+
+# Qs
+query TT
+SELECT s1.rid, s2.rid
+FROM west s1, west s2
+WHERE s1.time > s2.time
+ORDER BY 1, 2
+----
+s1	s3
+s1	s4
+s2	s1
+s2	s3
+s2	s4
+s4	s3
+
+# Qp
+query TT
+SELECT s1.rid, s2.rid
+FROM west s1, west s2
+WHERE s1.time > s2.time AND s1.cost < s2.cost
+ORDER BY 1, 2
+----
+s1	s3
+s4	s3
+
+# Qt
+query TT
+SELECT east.rid, west.rid
+FROM east, west
+WHERE east.dur < west.time AND east.rev > west.cost
+ORDER BY 1, 2
+----
+r2	s2
+
+# Test string comparisons
+query TT
+WITH weststr AS (
+	SELECT rid, time::VARCHAR AS time, cost::VARCHAR as cost
+	FROM west
+)
+SELECT s1.rid, s2.rid
+FROM weststr s1, weststr s2
+WHERE s1.time > s2.time AND s1.cost < s2.cost
+ORDER BY 1, 2
+----
+s2	s1
+s3	s1
+s3	s2
+s4	s1
+
+
+statement ok
+create table tt (x int, y int, z int);
+
+statement ok
+insert into tt select nullif(r % 3, 0), nullif (r % 5, 0), r from unnest(generate_series(10)) AS tbl(r);
+
+query IIIIII
+select * 
+from tt t1 join tt t2 
+on t1.x < t2.x and t1.y < t2.y 
+order by t1.x nulls first, t1.y nulls first, t1.z, t2.x, t2.y, t2.z;
+----
+1 1 1 2 2 2
+1 1 1 2 3 8
+1 2 7 2 3 8
+
+statement ok
+create table tt2 (x int);
+
+statement ok
+insert into tt2 select * from unnest(generate_series(9));
+
+query II
+select t1.x, t1.y
+from (
+    select (case when x < 100 then null else 99 end) x, (case when x < 100 then 99 else 99 end) y
+    from tt2
+) t1 left join tt2 t2
+on t1.x < t2.x and t1.y < t2.x
+order by t1.x nulls first, t1.y nulls first;
+----
+NULL 99
+NULL 99
+NULL 99
+NULL 99
+NULL 99
+NULL 99
+NULL 99
+NULL 99
+NULL 99
+NULL 99
+
+# Test all nulls table
+statement ok
+CREATE TABLE test(x INT);
+
+statement ok
+INSERT INTO test(x) VALUES (NULL), (NULL), (NULL);
+
+statement ok
+CREATE TABLE all_null AS SELECT * FROM test;
+
+query II
+SELECT * 
+FROM all_null AS a, all_null AS b 
+WHERE (a.x BETWEEN b.x AND b.x);
+----
+
+query II
+SELECT * 
+FROM test AS a, all_null AS b 
+WHERE (a.x BETWEEN b.x AND b.x);
+----
+
+query II
+SELECT * 
+FROM all_null AS a, test AS b 
+WHERE (a.x BETWEEN b.x AND b.x);
+----
+
+# TODO: use metric to check no overlap blocks pair be pruned
+
+statement ok
+DROP TABLE IF EXISTS lhs;
+
+statement ok
+DROP TABLE IF EXISTS rhs;
+
+statement ok
+CREATE TABLE lhs (
+    id INT,
+    begin INT,
+    end INT
+);
+
+statement ok
+INSERT INTO lhs (id, begin, end)
+SELECT
+    i AS id,
+    i AS begin,
+    i + 1 AS end
+FROM unnest(generate_series(1, 1000001)) tbl(i);
+
+statement ok
+CREATE TABLE rhs (
+    id INT,
+    begin INT,
+    end INT
+);
+
+statement ok
+INSERT INTO rhs (id, begin, end)
+SELECT
+    i - 1000000 AS id,
+    i AS begin,
+    i + 1 AS end
+FROM unnest(generate_series(1000001, 2000001)) tbl(i);
+
+query II
+SELECT lhs.begin, rhs.begin
+FROM lhs, rhs
+WHERE lhs.begin < rhs.end AND rhs.begin < lhs.end;
+----
+1000001 1000001
+
