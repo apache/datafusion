@@ -358,7 +358,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(inner_projection_exprs)?
-                    .unnest_columns_recursive_with_options(
+                    .unnest_columns_with_options(
                         unnest_col_vec,
                         unnest_options.with_recursions(list_recursions),
                     )?
@@ -487,7 +487,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(projection_exprs)?
-                    .unnest_columns_recursive_with_options(
+                    .unnest_columns_with_options(
                         unnest_col_vec,
                         unnest_options.with_recursions(list_recursions),
                     )?

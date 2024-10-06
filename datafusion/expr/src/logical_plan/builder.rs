@@ -1200,19 +1200,6 @@ impl LogicalPlanBuilder {
         unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
             .map(Self::new)
     }
-
-    /// Unnest the given columns with the given [`UnnestOptions`]
-    /// if one column is a list type, it can be recursively and simultaneously
-    /// unnested into the desired recursion levels
-    /// e.g select unnest(list_col,depth=1), unnest(list_col,depth=2)
-    pub fn unnest_columns_recursive_with_options(
-        self,
-        columns: Vec<Column>,
-        options: UnnestOptions,
-    ) -> Result<Self> {
-        unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
-            .map(Self::new)
-    }
 }
 
 impl From<LogicalPlan> for LogicalPlanBuilder {

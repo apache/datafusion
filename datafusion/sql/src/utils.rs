@@ -839,24 +839,44 @@ mod tests {
             ]
         );
 
-        // a nested structure struct[[]]
+        Ok(())
+    }
+
+    // unnest -> field access -> unnest
+    #[test]
+    fn test_transform_non_consecutive_unnests() -> Result<()> {
+        // list of struct
+        // [struct{'subfield1':list(i64), 'subfield2':list(utf8)}]
         let schema = Schema::new(vec![
             Field::new(
-                "struct_col", // {array_col: [1,2,3]}
-                ArrowDataType::Struct(Fields::from(vec![Field::new(
-                    "matrix",
-                    ArrowDataType::List(Arc::new(Field::new(
-                        "matrix_row",
-                        ArrowDataType::List(Arc::new(Field::new(
-                            "item",
-                            ArrowDataType::Int64,
+                "struct_list",
+                ArrowDataType::List(Arc::new(Field::new(
+                    "element",
+                    ArrowDataType::Struct(Fields::from(vec![
+                        Field::new(
+                            // list of i64
+                            "subfield1",
+                            ArrowDataType::List(Arc::new(Field::new(
+                                "i64_element",
+                                ArrowDataType::Int64,
+                                true,
+                            ))),
                             true,
-                        ))),
-                        true,
-                    ))),
+                        ),
+                        Field::new(
+                            // list of utf8
+                            "subfield2",
+                            ArrowDataType::List(Arc::new(Field::new(
+                                "utf8_element",
+                                ArrowDataType::Utf8,
+                                true,
+                            ))),
+                            true,
+                        ),
+                    ])),
                     true,
-                )])),
-                false,
+                ))),
+                true,
             ),
             Field::new("int_col", ArrowDataType::Int32, false),
         ]);
@@ -872,34 +892,65 @@ mod tests {
         let mut inner_projection_exprs = vec![];
 
         // An expr with multiple unnest
-        let original_expr = unnest(unnest(col("struct_col").field("matrix")));
+        let select_expr1 = unnest(unnest(col("struct_list")).field("subfield1"));
         let transformed_exprs = rewrite_recursive_unnest_bottom_up(
             &input,
             &mut unnest_placeholder_columns,
             &mut inner_projection_exprs,
-            &original_expr,
+            &select_expr1,
         )?;
         // Only the inner most/ bottom most unnest is transformed
         assert_eq!(
             transformed_exprs,
-            vec![col("unnest_placeholder(struct_col[matrix],depth=2)")
-                .alias("UNNEST(UNNEST(struct_col[matrix]))")]
+            vec![unnest(
+                col("unnest_placeholder(struct_list,depth=1)")
+                    .alias("UNNEST(struct_list)")
+                    .field("subfield1")
+            )]
         );
-        // TODO: add a test case where
-        // unnest -> field access -> unnest
 
         column_unnests_eq(
             vec![
-                "unnest_placeholder(struct_col[matrix])=>[unnest_placeholder(struct_col[matrix],depth=2)|depth=2]",
+                "unnest_placeholder(struct_list)=>[unnest_placeholder(struct_list,depth=1)|depth=1]",
             ],
             &unnest_placeholder_columns,
         );
 
         assert_eq!(
             inner_projection_exprs,
-            vec![col("struct_col")
-                .field("matrix")
-                .alias("unnest_placeholder(struct_col[matrix])"),]
+            vec![col("struct_list").alias("unnest_placeholder(struct_list)")]
+        );
+
+        // continue rewrite another expr in select
+        let select_expr2 = unnest(unnest(col("struct_list")).field("subfield2"));
+        let transformed_exprs = rewrite_recursive_unnest_bottom_up(
+            &input,
+            &mut unnest_placeholder_columns,
+            &mut inner_projection_exprs,
+            &select_expr2,
+        )?;
+        // Only the inner most/ bottom most unnest is transformed
+        assert_eq!(
+            transformed_exprs,
+            vec![unnest(
+                col("unnest_placeholder(struct_list,depth=1)")
+                    .alias("UNNEST(struct_list)")
+                    .field("subfield2")
+            )]
+        );
+
+        // unnest place holder columns remain the same
+        // because expr1 and expr2 derive from the same unnest result
+        column_unnests_eq(
+            vec![
+                "unnest_placeholder(struct_list)=>[unnest_placeholder(struct_list,depth=1)|depth=1]",
+            ],
+            &unnest_placeholder_columns,
+        );
+
+        assert_eq!(
+            inner_projection_exprs,
+            vec![col("struct_list").alias("unnest_placeholder(struct_list)")]
         );
 
         Ok(())
