@@ -91,8 +91,7 @@ mod tests {
             assert_eq!(
                 format!("{}", plan),
                 "Projection: DATA.a, DATA.b\
-                \n  Projection: DATA.a, DATA.b\
-                \n    TableScan: DATA projection=[b, a]"
+                \n  TableScan: DATA projection=[a, b]"
             );
             Ok(())
         }
@@ -115,9 +114,7 @@ mod tests {
             assert_eq!(
                 format!("{}", plan),
                 "Projection: DATA.a, DATA.b\
-                \n  Projection: DATA.a, DATA.b\
-                \n    Projection: DATA.a, DATA.b, DATA.c\
-                \n      TableScan: DATA projection=[b, a, c]"
+                \n  TableScan: DATA projection=[b, a]"
             );
             Ok(())
         }

@@ -783,7 +783,6 @@ pub async fn from_substrait_rel(
 
                 let t = ctx.table(table_reference.clone()).await?;
                 let t = ensure_schema_compatability(t, substrait_schema)?;
-                let t = t.into_optimized_plan()?;
                 extract_projection(t, &read.projection)
             }
             Some(ReadType::VirtualTable(vt)) => {
@@ -866,7 +865,7 @@ pub async fn from_substrait_rel(
                 // directly use unwrap here since we could determine it is a valid one
                 let table_reference = TableReference::Bare { table: name.into() };
                 let t = ctx.table(table_reference).await?;
-                let t = t.into_optimized_plan()?;
+                let t = t.into_unoptimized_plan();
                 extract_projection(t, &read.projection)
             }
             _ => not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type),
@@ -990,24 +989,46 @@ pub async fn from_substrait_rel(
 fn ensure_schema_compatability(
     table: DataFrame,
     substrait_schema: DFSchema,
-) -> Result<DataFrame> {
+) -> Result<LogicalPlan> {
     let df_schema = table.schema().to_owned().strip_qualifiers();
     if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
-        return Ok(table);
+        return Ok(table.into_unoptimized_plan());
     }
-    let selected_columns = substrait_schema
-        .strip_qualifiers()
-        .fields()
-        .iter()
-        .map(|substrait_field| {
-            let df_field =
-                df_schema.field_with_unqualified_name(substrait_field.name())?;
-            ensure_field_compatability(df_field, substrait_field)?;
-            Ok(col(format!("\"{}\"", df_field.name())))
-        })
-        .collect::<Result<_>>()?;
 
-    table.select(selected_columns)
+    let qualified_schema = table.schema().to_owned();
+
+    let t = table.into_unoptimized_plan();
+
+    match t {
+        LogicalPlan::TableScan(mut scan) => {
+            let column_indices: Vec<usize> = substrait_schema
+                .strip_qualifiers()
+                .fields()
+                .iter()
+                .map(|substrait_field| {
+                    let df_field =
+                        df_schema.field_with_unqualified_name(substrait_field.name())?;
+                    ensure_field_compatability(df_field, substrait_field)?;
+
+                    Ok(df_schema
+                        .index_of_column_by_name(None, substrait_field.name().as_str())
+                        .unwrap())
+                })
+                .collect::<Result<_>>()?;
+
+            let fields = column_indices
+                .iter()
+                .map(|i| qualified_schema.qualified_field(*i))
+                .map(|(qualifier, field)| (qualifier.cloned(), Arc::new(field.clone())))
+                .collect();
+
+            scan.projected_schema =
+                DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
+            scan.projection = Some(column_indices);
+            Ok(LogicalPlan::TableScan(scan))
+        }
+        _ => Ok(t),
+    }
 }
 
 /// Ensures that the given Substrait field is compatible with the given DataFusion field
