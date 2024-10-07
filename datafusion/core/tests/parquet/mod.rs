@@ -86,6 +86,7 @@ enum Scenario {
     PeriodsInColumnNames,
     WithNullValues,
     WithNullValuesPageLevel,
+    #[allow(dead_code)]
     UTF8,
 }
 
