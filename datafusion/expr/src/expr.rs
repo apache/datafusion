@@ -2609,8 +2609,6 @@ mod test {
             "percent_rank",
             "cume_dist",
             "ntile",
-            // "lag",
-            // "lead",
             "first_value",
             "last_value",
             "nth_value",
