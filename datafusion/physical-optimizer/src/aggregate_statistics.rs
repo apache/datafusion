@@ -260,8 +260,6 @@ mod tests {
         plan: AggregateExec,
         agg: TestAggregate,
     ) -> Result<()> {
-        // let session_ctx = SessionContext::new();
-        // let state = session_ctx.state();
         let task_ctx = Arc::new(TaskContext::default());
         let plan: Arc<dyn ExecutionPlan> = Arc::new(plan);
 
