@@ -66,11 +66,48 @@ coalesce(expression1[, ..., expression_n])
 ## String Functions
 
 - [ascii](#ascii)
+- [bit_length](#bit_length)
+- [btrim](#btrim)
+- [char_length](#char_length)
+- [character_length](#character_length)
+- [chr](#chr)
+- [concat](#concat)
+- [concat_ws](#concat_ws)
+- [contains](#contains)
+- [ends_with](#ends_with)
+- [find_in_set](#find_in_set)
+- [initcap](#initcap)
+- [instr](#instr)
+- [left](#left)
+- [length](#length)
+- [levenshtein](#levenshtein)
+- [lower](#lower)
+- [lpad](#lpad)
+- [ltrim](#ltrim)
+- [octet_length](#octet_length)
+- [position](#position)
+- [repeat](#repeat)
+- [replace](#replace)
+- [reverse](#reverse)
+- [right](#right)
 - [rpad](#rpad)
+- [rtrim](#rtrim)
+- [split_part](#split_part)
+- [starts_with](#starts_with)
+- [strpos](#strpos)
+- [substr](#substr)
+- [substr_index](#substr_index)
+- [substring](#substring)
+- [substring_index](#substring_index)
+- [to_hex](#to_hex)
+- [translate](#translate)
+- [trim](#trim)
+- [upper](#upper)
+- [uuid](#uuid)
 
 ### `ascii`
 
-Returns the ASCII value of the first character in a string.
+Returns the Unicode character code of the first character in a string.
 
 ```
 ascii(str)
@@ -78,11 +115,600 @@ ascii(str)
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function that evaluates to or can be coerced to a Utf8, LargeUtf8 or a Utf8View.
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select ascii('abc');
++--------------------+
+| ascii(Utf8("abc")) |
++--------------------+
+| 97                 |
++--------------------+
+> select ascii('🚀');
++-------------------+
+| ascii(Utf8("🚀")) |
++-------------------+
+| 128640            |
++-------------------+
+```
 
 **Related functions**:
 
 - [chr](#chr)
+
+### `bit_length`
+
+Returns the bit length of a string.
+
+```
+bit_length(str)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select bit_length('datafusion');
++--------------------------------+
+| bit_length(Utf8("datafusion")) |
++--------------------------------+
+| 80                             |
++--------------------------------+
+```
+
+**Related functions**:
+
+- [length](#length)
+- [octet_length](#octet_length)
+
+### `btrim`
+
+Trims the specified trim string from the start and end of a string. If no trim string is provided, all whitespace is removed from the start and end of the input string.
+
+```
+btrim(str[, trim_str])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **trim_str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is whitespace characters._
+
+#### Example
+
+```sql
+> select btrim('__datafusion____', '_');
++-------------------------------------------+
+| btrim(Utf8("__datafusion____"),Utf8("_")) |
++-------------------------------------------+
+| datafusion                                |
++-------------------------------------------+
+```
+
+#### Aliases
+
+- trim
+
+**Related functions**:
+
+- [ltrim](#ltrim)
+- [rtrim](#rtrim)
+
+### `char_length`
+
+_Alias of [character_length](#character_length)._
+
+### `character_length`
+
+Returns the number of characters in a string.
+
+```
+character_length(str)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select character_length('Ångström');
++------------------------------------+
+| character_length(Utf8("Ångström")) |
++------------------------------------+
+| 8                                  |
++------------------------------------+
+```
+
+#### Aliases
+
+- length
+- char_length
+
+**Related functions**:
+
+- [bit_length](#bit_length)
+- [octet_length](#octet_length)
+
+### `chr`
+
+Returns the character with the specified ASCII or Unicode code value.
+
+```
+chr(expression)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select chr(128640);
++--------------------+
+| chr(Int64(128640)) |
++--------------------+
+| 🚀                 |
++--------------------+
+```
+
+**Related functions**:
+
+- [ascii](#ascii)
+
+### `concat`
+
+Concatenates multiple strings together.
+
+```
+concat(str[, ..., str_n])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **str_n**: Subsequent string expressions to concatenate.
+
+#### Example
+
+```sql
+> select concat('data', 'f', 'us', 'ion');
++-------------------------------------------------------+
+| concat(Utf8("data"),Utf8("f"),Utf8("us"),Utf8("ion")) |
++-------------------------------------------------------+
+| datafusion                                            |
++-------------------------------------------------------+
+```
+
+**Related functions**:
+
+- [concat_ws](#concat_ws)
+
+### `concat_ws`
+
+Concatenates multiple strings together with a specified separator.
+
+```
+concat_ws(separator, str[, ..., str_n])
+```
+
+#### Arguments
+
+- **separator**: Separator to insert between concatenated strings.
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **str_n**: Subsequent string expressions to concatenate. expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select concat_ws('_', 'data', 'fusion');
++--------------------------------------------------+
+| concat_ws(Utf8("_"),Utf8("data"),Utf8("fusion")) |
++--------------------------------------------------+
+| data_fusion                                      |
++--------------------------------------------------+
+```
+
+**Related functions**:
+
+- [concat](#concat)
+
+### `contains`
+
+Return true if search_str is found within string (case-sensitive).
+
+```
+contains(str, search_str)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **search_str**: The string to search for in str.
+
+#### Example
+
+```sql
+> select contains('the quick brown fox', 'row');
++---------------------------------------------------+
+| contains(Utf8("the quick brown fox"),Utf8("row")) |
++---------------------------------------------------+
+| true                                              |
++---------------------------------------------------+
+```
+
+### `ends_with`
+
+Tests if a string ends with a substring.
+
+```
+ends_with(str, substr)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **substr**: Substring to test for.
+
+#### Example
+
+```sql
+>  select ends_with('datafusion', 'soin');
++--------------------------------------------+
+| ends_with(Utf8("datafusion"),Utf8("soin")) |
++--------------------------------------------+
+| false                                      |
++--------------------------------------------+
+> select ends_with('datafusion', 'sion');
++--------------------------------------------+
+| ends_with(Utf8("datafusion"),Utf8("sion")) |
++--------------------------------------------+
+| true                                       |
++--------------------------------------------+
+```
+
+### `find_in_set`
+
+Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.
+
+```
+find_in_set(str, strlist)
+```
+
+#### Arguments
+
+- **str**: String expression to find in strlist.
+- **strlist**: A string list is a string composed of substrings separated by , characters.
+
+#### Example
+
+```sql
+> select find_in_set('b', 'a,b,c,d');
++----------------------------------------+
+| find_in_set(Utf8("b"),Utf8("a,b,c,d")) |
++----------------------------------------+
+| 2                                      |
++----------------------------------------+
+```
+
+### `initcap`
+
+Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.
+
+```
+initcap(str)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select initcap('apache datafusion');
++------------------------------------+
+| initcap(Utf8("apache datafusion")) |
++------------------------------------+
+| Apache Datafusion                  |
++------------------------------------+
+```
+
+**Related functions**:
+
+- [lower](#lower)
+- [upper](#upper)
+
+### `instr`
+
+_Alias of [strpos](#strpos)._
+
+### `left`
+
+Returns a specified number of characters from the left side of a string.
+
+```
+left(str, n)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **n**: Number of characters to return.
+
+#### Example
+
+```sql
+> select left('datafusion', 4);
++-----------------------------------+
+| left(Utf8("datafusion"),Int64(4)) |
++-----------------------------------+
+| data                              |
++-----------------------------------+
+```
+
+**Related functions**:
+
+- [right](#right)
+
+### `length`
+
+_Alias of [character_length](#character_length)._
+
+### `levenshtein`
+
+Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_distance) between the two given strings.
+
+```
+levenshtein(str1, str2)
+```
+
+#### Arguments
+
+- **str1**: String expression to compute Levenshtein distance with str2.
+- **str2**: String expression to compute Levenshtein distance with str1.
+
+#### Example
+
+```sql
+> select levenshtein('kitten', 'sitting');
++---------------------------------------------+
+| levenshtein(Utf8("kitten"),Utf8("sitting")) |
++---------------------------------------------+
+| 3                                           |
++---------------------------------------------+
+```
+
+### `lower`
+
+Converts a string to lower-case.
+
+```
+lower(str)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select lower('Ångström');
++-------------------------+
+| lower(Utf8("Ångström")) |
++-------------------------+
+| ångström                |
++-------------------------+
+```
+
+**Related functions**:
+
+- [initcap](#initcap)
+- [upper](#upper)
+
+### `lpad`
+
+Pads the left side of a string with another string to a specified string length.
+
+```
+lpad(str, n[, padding_str])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **n**: String length to pad to.
+- **padding_str**: Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
+
+#### Example
+
+```sql
+> select lpad('Dolly', 10, 'hello');
++---------------------------------------------+
+| lpad(Utf8("Dolly"),Int64(10),Utf8("hello")) |
++---------------------------------------------+
+| helloDolly                                  |
++---------------------------------------------+
+```
+
+**Related functions**:
+
+- [rpad](#rpad)
+
+### `ltrim`
+
+Trims the specified trim string from the beginning of a string. If no trim string is provided, all whitespace is removed from the start of the input string.
+
+```
+ltrim(str[, trim_str])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **trim_str**: String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._
+
+#### Example
+
+```sql
+> select ltrim('  datafusion  ');
++-------------------------------+
+| ltrim(Utf8("  datafusion  ")) |
++-------------------------------+
+| datafusion                    |
++-------------------------------+
+> select ltrim('___datafusion___', '_');
++-------------------------------------------+
+| ltrim(Utf8("___datafusion___"),Utf8("_")) |
++-------------------------------------------+
+| datafusion___                             |
++-------------------------------------------+
+```
+
+**Related functions**:
+
+- [btrim](#btrim)
+- [rtrim](#rtrim)
+
+### `octet_length`
+
+Returns the length of a string in bytes.
+
+```
+octet_length(str)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select octet_length('Ångström');
++--------------------------------+
+| octet_length(Utf8("Ångström")) |
++--------------------------------+
+| 10                             |
++--------------------------------+
+```
+
+**Related functions**:
+
+- [bit_length](#bit_length)
+- [length](#length)
+
+### `position`
+
+_Alias of [strpos](#strpos)._
+
+### `repeat`
+
+Returns a string with an input string repeated a specified number.
+
+```
+repeat(str, n)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **n**: Number of times to repeat the input string.
+
+#### Example
+
+```sql
+> select repeat('data', 3);
++-------------------------------+
+| repeat(Utf8("data"),Int64(3)) |
++-------------------------------+
+| datadatadata                  |
++-------------------------------+
+```
+
+### `replace`
+
+Replaces all occurrences of a specified substring in a string with a new substring.
+
+```
+replace(str, substr, replacement)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **substr**: Substring expression to replace in the input string. Substring expression expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **replacement**: Replacement substring expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select replace('ABabbaBA', 'ab', 'cd');
++-------------------------------------------------+
+| replace(Utf8("ABabbaBA"),Utf8("ab"),Utf8("cd")) |
++-------------------------------------------------+
+| ABcdbaBA                                        |
++-------------------------------------------------+
+```
+
+### `reverse`
+
+Reverses the character order of a string.
+
+```
+reverse(str)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select reverse('datafusion');
++-----------------------------+
+| reverse(Utf8("datafusion")) |
++-----------------------------+
+| noisufatad                  |
++-----------------------------+
+```
+
+### `right`
+
+Returns a specified number of characters from the right side of a string.
+
+```
+right(str, n)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **n**: Number of characters to return
+
+#### Example
+
+```sql
+> select right('datafusion', 6);
++------------------------------------+
+| right(Utf8("datafusion"),Int64(6)) |
++------------------------------------+
+| fusion                             |
++------------------------------------+
+```
+
+**Related functions**:
+
+- [left](#left)
 
 ### `rpad`
 
@@ -98,9 +724,306 @@ rpad(str, n[, padding_str])
 - **n**: String length to pad to.
 - **padding_str**: String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._
 
+#### Example
+
+```sql
+>  select rpad('datafusion', 20, '_-');
++-----------------------------------------------+
+| rpad(Utf8("datafusion"),Int64(20),Utf8("_-")) |
++-----------------------------------------------+
+| datafusion_-_-_-_-_-                          |
++-----------------------------------------------+
+```
+
 **Related functions**:
 
 - [lpad](#lpad)
+
+### `rtrim`
+
+Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.
+
+```
+rtrim(str[, trim_str])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **trim_str**: String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._
+
+#### Example
+
+```sql
+> select rtrim('  datafusion  ');
++-------------------------------+
+| rtrim(Utf8("  datafusion  ")) |
++-------------------------------+
+|   datafusion                  |
++-------------------------------+
+> select rtrim('___datafusion___', '_');
++-------------------------------------------+
+| rtrim(Utf8("___datafusion___"),Utf8("_")) |
++-------------------------------------------+
+| ___datafusion                             |
++-------------------------------------------+
+```
+
+**Related functions**:
+
+- [btrim](#btrim)
+- [ltrim](#ltrim)
+
+### `split_part`
+
+Splits a string based on a specified delimiter and returns the substring in the specified position.
+
+```
+split_part(str, delimiter, pos)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **delimiter**: String or character to split on.
+- **pos**: Position of the part to return.
+
+#### Example
+
+```sql
+> select split_part('1.2.3.4.5', '.', 3);
++--------------------------------------------------+
+| split_part(Utf8("1.2.3.4.5"),Utf8("."),Int64(3)) |
++--------------------------------------------------+
+| 3                                                |
++--------------------------------------------------+
+```
+
+### `starts_with`
+
+Tests if a string starts with a substring.
+
+```
+starts_with(str, substr)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **substr**: Substring to test for.
+
+#### Example
+
+```sql
+> select starts_with('datafusion','data');
++----------------------------------------------+
+| starts_with(Utf8("datafusion"),Utf8("data")) |
++----------------------------------------------+
+| true                                         |
++----------------------------------------------+
+```
+
+### `strpos`
+
+Returns the starting position of a specified substring in a string. Positions begin at 1. If the substring does not exist in the string, the function returns 0.
+
+```
+strpos(str, substr)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **substr**: Substring expression to search for.
+
+#### Example
+
+```sql
+> select strpos('datafusion', 'fus');
++----------------------------------------+
+| strpos(Utf8("datafusion"),Utf8("fus")) |
++----------------------------------------+
+| 5                                      |
++----------------------------------------+
+```
+
+#### Aliases
+
+- instr
+- position
+
+### `substr`
+
+Extracts a substring of a specified number of characters from a specific starting position in a string.
+
+```
+substr(str, start_pos[, length])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **start_pos**: Character position to start the substring at. The first character in the string has a position of 1.
+- **length**: Number of characters to extract. If not specified, returns the rest of the string after the start position.
+
+#### Example
+
+```sql
+> select substr('datafusion', 5, 3);
++----------------------------------------------+
+| substr(Utf8("datafusion"),Int64(5),Int64(3)) |
++----------------------------------------------+
+| fus                                          |
++----------------------------------------------+
+```
+
+#### Aliases
+
+- substring
+
+### `substr_index`
+
+Returns the substring from str before count occurrences of the delimiter delim.
+If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
+If count is negative, everything to the right of the final delimiter (counting from the right) is returned.
+
+```
+substr_index(str, delim, count)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **delim**: The string to find in str to split str.
+- **count**: The number of times to search for the delimiter. Can be either a positive or negative number.
+
+#### Example
+
+```sql
+> select substr_index('www.apache.org', '.', 1);
++---------------------------------------------------------+
+| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(1)) |
++---------------------------------------------------------+
+| www                                                     |
++---------------------------------------------------------+
+> select substr_index('www.apache.org', '.', -1);
++----------------------------------------------------------+
+| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(-1)) |
++----------------------------------------------------------+
+| org                                                      |
++----------------------------------------------------------+
+```
+
+#### Aliases
+
+- substring_index
+
+### `substring`
+
+_Alias of [substr](#substr)._
+
+### `substring_index`
+
+_Alias of [substr_index](#substr_index)._
+
+### `to_hex`
+
+Converts an integer to a hexadecimal string.
+
+```
+to_hex(int)
+```
+
+#### Arguments
+
+- **int**: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select to_hex(12345689);
++-------------------------+
+| to_hex(Int64(12345689)) |
++-------------------------+
+| bc6159                  |
++-------------------------+
+```
+
+### `translate`
+
+Translates characters in a string to specified translation characters.
+
+```
+translate(str, chars, translation)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **chars**: Characters to translate.
+- **translation**: Translation characters. Translation characters replace only characters at the same position in the **chars** string.
+
+#### Example
+
+```sql
+> select translate('twice', 'wic', 'her');
++--------------------------------------------------+
+| translate(Utf8("twice"),Utf8("wic"),Utf8("her")) |
++--------------------------------------------------+
+| there                                            |
++--------------------------------------------------+
+```
+
+### `trim`
+
+_Alias of [btrim](#btrim)._
+
+### `upper`
+
+Converts a string to upper-case.
+
+```
+upper(str)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select upper('dataFusion');
++---------------------------+
+| upper(Utf8("dataFusion")) |
++---------------------------+
+| DATAFUSION                |
++---------------------------+
+```
+
+**Related functions**:
+
+- [initcap](#initcap)
+- [lower](#lower)
+
+### `uuid`
+
+Returns [`UUID v4`](<https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)>) string value which is unique per row.
+
+```
+uuid()
+```
+
+#### Example
+
+```sql
+> select uuid();
++--------------------------------------+
+| uuid()                               |
++--------------------------------------+
+| 6ec17ef8-1934-41cc-8d59-d0c8f9eea1f0 |
++--------------------------------------+
+```
 
 ## Binary String Functions
 
