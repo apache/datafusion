@@ -48,8 +48,6 @@ pub enum BuiltInWindowFunction {
     PercentRank,
     /// relative rank of the current row: (number of rows preceding or peer with current row) / (total rows)
     CumeDist,
-    /// integer ranging from 1 to the argument value, dividing the partition as equally as possible
-    Ntile,
     /// returns value evaluated at the row that is offset rows before the current row within the partition;
     /// if there is no such row, instead return default (which must be of the same type as value).
     /// Both offset and default are evaluated with respect to the current row.
@@ -76,7 +74,6 @@ impl BuiltInWindowFunction {
             DenseRank => "DENSE_RANK",
             PercentRank => "PERCENT_RANK",
             CumeDist => "CUME_DIST",
-            Ntile => "NTILE",
             Lag => "LAG",
             Lead => "LEAD",
             FirstValue => "first_value",
@@ -94,7 +91,6 @@ impl FromStr for BuiltInWindowFunction {
             "DENSE_RANK" => BuiltInWindowFunction::DenseRank,
             "PERCENT_RANK" => BuiltInWindowFunction::PercentRank,
             "CUME_DIST" => BuiltInWindowFunction::CumeDist,
-            "NTILE" => BuiltInWindowFunction::Ntile,
             "LAG" => BuiltInWindowFunction::Lag,
             "LEAD" => BuiltInWindowFunction::Lead,
             "FIRST_VALUE" => BuiltInWindowFunction::FirstValue,
@@ -128,8 +124,7 @@ impl BuiltInWindowFunction {
 
         match self {
             BuiltInWindowFunction::Rank
-            | BuiltInWindowFunction::DenseRank
-            | BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
+            | BuiltInWindowFunction::DenseRank => Ok(DataType::UInt64),
             BuiltInWindowFunction::PercentRank | BuiltInWindowFunction::CumeDist => {
                 Ok(DataType::Float64)
             }
@@ -161,21 +156,7 @@ impl BuiltInWindowFunction {
             }
             BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
                 Signature::any(1, Volatility::Immutable)
-            }
-            BuiltInWindowFunction::Ntile => Signature::uniform(
-                1,
-                vec![
-                    DataType::UInt64,
-                    DataType::UInt32,
-                    DataType::UInt16,
-                    DataType::UInt8,
-                    DataType::Int64,
-                    DataType::Int32,
-                    DataType::Int16,
-                    DataType::Int8,
-                ],
-                Volatility::Immutable,
-            ),
+            },
             BuiltInWindowFunction::NthValue => Signature::any(2, Volatility::Immutable),
         }
     }
