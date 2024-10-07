@@ -2646,19 +2646,6 @@ mod test {
                 built_in_window_function::BuiltInWindowFunction::LastValue
             ))
         );
-        /*        assert_eq!(
-                    find_df_window_func("LAG"),
-                    Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                        built_in_window_function::BuiltInWindowFunction::Lag
-                    ))
-                );
-                assert_eq!(
-                    find_df_window_func("LEAD"),
-                    Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                        built_in_window_function::BuiltInWindowFunction::Lead
-                    ))
-                );
-        */
         assert_eq!(find_df_window_func("not_exist"), None)
     }
 
