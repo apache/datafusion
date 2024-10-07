@@ -556,6 +556,111 @@
      </li>
     </ul>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#var">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       var
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id3">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#aliases-var-sample">
+       Aliases- var_sample
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#var-pop">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       var_pop
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id4">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#aliases-var-population">
+       Aliases- var_population
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id5">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       var_pop
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id6">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id7">
+       Aliases- var_population
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id8">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       var
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id9">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id10">
+       Aliases- var_sample
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id11">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       var
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id12">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id13">
+       Aliases- var_sample
+      </a>
+     </li>
+    </ul>
+   </li>
   </ul>
  </li>
 </ul>
@@ -621,6 +726,11 @@ dev/update_function_docs.sh file for updating surrounding text.
 <li><p><a class="reference internal" href="#bit-and">bit_and</a></p></li>
 <li><p><a class="reference internal" href="#bit-or">bit_or</a></p></li>
 <li><p><a class="reference internal" href="#bit-xor">bit_xor</a></p></li>
+<li><p><a class="reference internal" href="#var">var</a></p></li>
+<li><p><a class="reference internal" href="#var-pop">var_pop</a></p></li>
+<li><p><a class="reference internal" href="#var_population"><span class="xref myst">var_population</span></a></p></li>
+<li><p><a class="reference internal" href="#var_samp"><span class="xref myst">var_samp</span></a></p></li>
+<li><p><a class="reference internal" href="#var_sample"><span class="xref myst">var_sample</span></a></p></li>
 </ul>
 <section id="bit-and">
 <h3><code class="docutils literal notranslate"><span class="pre">bit_and</span></code><a class="headerlink" href="#bit-and" title="Link to this heading">¶</a></h3>
@@ -658,6 +768,95 @@ dev/update_function_docs.sh file for updating surrounding text.
 <h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
+</ul>
+</section>
+</section>
+<section id="var">
+<h3><code class="docutils literal notranslate"><span class="pre">var</span></code><a class="headerlink" href="#var" title="Link to this heading">¶</a></h3>
+<p>Returns the statistical sample variance of a set of numbers.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">var</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id3">
+<h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
+</ul>
+</section>
+<section id="aliases-var-sample">
+<h4>Aliases- var_sample<a class="headerlink" href="#aliases-var-sample" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p>var_samp</p></li>
+</ul>
+</section>
+</section>
+<section id="var-pop">
+<h3><code class="docutils literal notranslate"><span class="pre">var_pop</span></code><a class="headerlink" href="#var-pop" title="Link to this heading">¶</a></h3>
+<p>Returns the statistical population variance of a set of numbers.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">var_pop</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id4">
+<h4>Arguments<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
+</ul>
+</section>
+<section id="aliases-var-population">
+<h4>Aliases- var_population<a class="headerlink" href="#aliases-var-population" title="Link to this heading">¶</a></h4>
+</section>
+</section>
+<section id="id5">
+<h3><code class="docutils literal notranslate"><span class="pre">var_pop</span></code><a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<p>Returns the statistical population variance of a set of numbers.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">var_pop</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id6">
+<h4>Arguments<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
+</ul>
+</section>
+<section id="id7">
+<h4>Aliases- var_population<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h4>
+</section>
+</section>
+<section id="id8">
+<h3><code class="docutils literal notranslate"><span class="pre">var</span></code><a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<p>Returns the statistical sample variance of a set of numbers.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">var</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id9">
+<h4>Arguments<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
+</ul>
+</section>
+<section id="id10">
+<h4>Aliases- var_sample<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p>var_samp</p></li>
+</ul>
+</section>
+</section>
+<section id="id11">
+<h3><code class="docutils literal notranslate"><span class="pre">var</span></code><a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<p>Returns the statistical sample variance of a set of numbers.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">var</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id12">
+<h4>Arguments<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
+</ul>
+</section>
+<section id="id13">
+<h4>Aliases- var_sample<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p>var_samp</p></li>
 </ul>
 </section>
 </section>
