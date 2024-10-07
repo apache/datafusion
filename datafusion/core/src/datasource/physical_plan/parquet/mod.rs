@@ -662,8 +662,19 @@ impl ParquetExec {
         )
     }
 
-    fn with_file_groups(self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
-        self.into_builder().with_file_groups(file_groups).build()
+    /// Updates the file groups to read and recalculates the output partitioning
+    ///
+    /// Note this function does not update statistics or other properties
+    /// that depend on the file groups.
+    fn with_file_groups_and_update_partitioning(
+        mut self,
+        file_groups: Vec<Vec<PartitionedFile>>,
+    ) -> Self {
+        self.base_config.file_groups = file_groups;
+        // Changing file groups may invalidate output partitioning. Update it also
+        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
+        self.cache = self.cache.with_partitioning(output_partitioning);
+        self
     }
 }
 
@@ -751,7 +762,8 @@ impl ExecutionPlan for ParquetExec {
 
         let mut new_plan = self.clone();
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
+            new_plan = new_plan
+                .with_file_groups_and_update_partitioning(repartitioned_file_groups);
         }
         Ok(Some(Arc::new(new_plan)))
     }
