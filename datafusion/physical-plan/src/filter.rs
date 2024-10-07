@@ -375,7 +375,7 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::DecreaseOrNoEffect
+        CardinalityEffect::LowerEqual
     }
 }
 

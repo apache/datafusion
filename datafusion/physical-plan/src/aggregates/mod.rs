@@ -788,7 +788,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::DecreaseOrNoEffect
+        CardinalityEffect::LowerEqual
     }
 }
 

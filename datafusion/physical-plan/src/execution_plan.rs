@@ -905,9 +905,9 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 
 pub enum CardinalityEffect {
     Unknown,
-    NoEffect,
-    DecreaseOrNoEffect,
-    IncreaseOrNoEffect,
+    Equal,
+    LowerEqual,
+    GreaterEqual,
 }
 
 #[cfg(test)]

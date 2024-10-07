@@ -975,7 +975,7 @@ impl ExecutionPlan for SortExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::NoEffect
+        CardinalityEffect::Equal
     }
 }
 

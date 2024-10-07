@@ -181,7 +181,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::NoEffect
+        CardinalityEffect::Equal
     }
 }
 

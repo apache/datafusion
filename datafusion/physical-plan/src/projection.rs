@@ -236,7 +236,7 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::NoEffect
+        CardinalityEffect::Equal
     }
 }
 

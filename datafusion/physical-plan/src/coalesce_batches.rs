@@ -202,7 +202,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::NoEffect
+        CardinalityEffect::Equal
     }
 }
 
