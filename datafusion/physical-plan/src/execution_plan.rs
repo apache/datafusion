@@ -903,10 +903,17 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     actual.iter().map(|elem| elem.to_string()).collect()
 }
 
+/// Indicates the effect an execution plan operator will have on the cardinality
+/// of its input stream
 pub enum CardinalityEffect {
+    /// Unknown effect. This is the default
     Unknown,
+    /// The operator is guaranteed to produce exactly one row for 
+    /// each input row
     Equal,
+    /// The operator may produce fewer output rows than it receives input rows
     LowerEqual,
+    /// The operator may produce more output rows than it receives input rows
     GreaterEqual,
 }
 
