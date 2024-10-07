@@ -55,6 +55,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
 
+use crate::execution_plan::CardinalityEffect;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -971,6 +972,10 @@ impl ExecutionPlan for SortExec {
 
     fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::NoEffect
     }
 }
 

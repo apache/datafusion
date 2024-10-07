@@ -48,6 +48,7 @@ use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 
+use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -371,6 +372,10 @@ impl ExecutionPlan for FilterExec {
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Result<Statistics> {
         Self::statistics_helper(&self.input, self.predicate(), self.default_selectivity)
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::DecreaseOrNoEffect
     }
 }
 

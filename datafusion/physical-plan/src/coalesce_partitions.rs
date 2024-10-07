@@ -30,6 +30,7 @@ use super::{
 
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
+use crate::execution_plan::CardinalityEffect;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
@@ -177,6 +178,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::NoEffect
     }
 }
 

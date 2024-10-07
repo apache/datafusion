@@ -20,9 +20,6 @@
 use std::sync::Arc;
 
 use datafusion_physical_plan::aggregates::AggregateExec;
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::ExecutionPlan;
 
@@ -33,6 +30,7 @@ use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 
 use crate::PhysicalOptimizerRule;
+use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use itertools::Itertools;
 
@@ -67,7 +65,6 @@ impl TopKAggregation {
         }
 
         // ensure the sort is on the same field as the aggregate output
-        println!("col={} field={}", order_by, field.name());
         if order_by != field.name() {
             return None;
         }
@@ -98,15 +95,6 @@ impl TopKAggregation {
         let mut cur_col_name = order.name().to_string();
         let limit = sort.fetch()?;
 
-        let is_cardinality_preserving = |plan: Arc<dyn ExecutionPlan>| {
-            plan.as_any()
-                .downcast_ref::<CoalesceBatchesExec>()
-                .is_some()
-                || plan.as_any().downcast_ref::<RepartitionExec>().is_some()
-                || plan.as_any().downcast_ref::<FilterExec>().is_some()
-                || plan.as_any().downcast_ref::<ProjectionExec>().is_some()
-        };
-
         let mut cardinality_preserved = true;
         let closure = |plan: Arc<dyn ExecutionPlan>| {
             if !cardinality_preserved {
@@ -129,9 +117,14 @@ impl TopKAggregation {
                     }
                 }
             } else {
-                // or we continue down whitelisted nodes of other types
-                if !is_cardinality_preserving(Arc::clone(&plan)) {
-                    cardinality_preserved = false;
+                // or we continue down through types that don't reduce cardinality
+                match plan.cardinality_effect() {
+                    CardinalityEffect::NoEffect
+                    | CardinalityEffect::IncreaseOrNoEffect => {}
+                    CardinalityEffect::Unknown
+                    | CardinalityEffect::DecreaseOrNoEffect => {
+                        cardinality_preserved = false;
+                    }
                 }
             }
             Ok(Transformed::no(plan))
