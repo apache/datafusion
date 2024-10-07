@@ -28,6 +28,7 @@ use datafusion_expr::{
     Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
@@ -89,7 +90,10 @@ impl WindowUDFImpl for RowNumber {
         &self.signature
     }
 
-    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+    fn partition_evaluator(
+        &self,
+        _partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::<NumRowsEvaluator>::default())
     }
 

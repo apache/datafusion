@@ -75,6 +75,7 @@ use datafusion_functions_aggregate::expr_fn::{
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -2459,7 +2460,10 @@ fn roundtrip_window() {
             &self.signature
         }
 
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn partition_evaluator(
+            &self,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
             make_partition_evaluator()
         }
 
