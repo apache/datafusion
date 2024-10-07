@@ -19,6 +19,7 @@ use datafusion_common::arrow::datatypes::DataType;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 
+#[derive(Debug, Default)]
 pub struct PartitionEvaluatorArgs<'a> {
     input_exprs: &'a [Arc<dyn PhysicalExpr>],
     input_types: &'a [DataType],

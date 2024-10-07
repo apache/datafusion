@@ -166,7 +166,7 @@ mod tests {
         let num_rows = values.len();
 
         let actual = RowNumber::default()
-            .partition_evaluator()?
+            .partition_evaluator(PartitionEvaluatorArgs::default())?
             .evaluate_all(&[values], num_rows)?;
         let actual = as_uint64_array(&actual)?;
 
@@ -182,7 +182,7 @@ mod tests {
         let num_rows = values.len();
 
         let actual = RowNumber::default()
-            .partition_evaluator()?
+            .partition_evaluator(PartitionEvaluatorArgs::default())?
             .evaluate_all(&[values], num_rows)?;
         let actual = as_uint64_array(&actual)?;
 
