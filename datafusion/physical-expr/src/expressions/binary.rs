@@ -186,8 +186,24 @@ macro_rules! compute_utf8_flag_op {
 }
 
 macro_rules! binary_string_array_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
-        let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
+    ($LEFT:ident, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+        // This macro is slightly different from binary_string_array_flag_op because, when comparing
+        // with a scalar value, the query can be optimized in such a way that operands will be dicts
+
+        let result: Result<Arc<dyn Array>> = downcast_dictionary_array! {
+            $LEFT => {
+                match $LEFT.values().data_type() {
+                    DataType::Utf8View | DataType::Utf8 => compute_utf8_flag_op_scalar!($LEFT.values(), $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::LargeUtf8 => compute_utf8_flag_op_scalar!($LEFT.values(), $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
+                    other => internal_err!(
+                        "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
+                        other, stringify!($OP)
+                    ),
+                }.map(|new| {
+                    let result = $LEFT.keys().iter().map(|f| f.map(|k| new.value(k as usize))).collect::<BooleanArray>();
+                    Arc::new(result) as _
+                })
+            },
             DataType::Utf8View | DataType::Utf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
             },
@@ -211,20 +227,34 @@ macro_rules! compute_utf8_flag_op_scalar {
             .downcast_ref::<$ARRAYTYPE>()
             .expect("compute_utf8_flag_op_scalar failed to downcast array");
 
-        if let ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT {
-            let flag = $FLAG.then_some("i");
+        let string_value = match $RIGHT {
+            ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) => string_value,
+            ScalarValue::Dictionary(_, value) => {
+                match *value {
+                    ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) => string_value,
+                    other => return internal_err!(
+                            "compute_utf8_flag_op_scalar failed to cast dictionary value {} for operation '{}'",
+                            other, stringify!($OP)
+                        )
+                }
+            },
+            _ => return internal_err!(
+                "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
+                $RIGHT, stringify!($OP)
+            )
+
+        };
+
+        let flag = $FLAG.then_some("i");
             let mut array =
                 paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
             if $NOT {
                 array = not(&array).unwrap();
             }
-            Ok(Arc::new(array))
-        } else {
-            internal_err!(
-                "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
-                $RIGHT, stringify!($OP)
-            )
-        }
+
+        Ok(Arc::new(array))
+
+
     }};
 }
 
