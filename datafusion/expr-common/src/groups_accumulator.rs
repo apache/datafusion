@@ -90,6 +90,11 @@ impl EmitTo {
 /// faster for queries with many group values.  See the [Aggregating Millions of
 /// Groups Fast blog] for more background.
 ///
+/// [`NullState`] can help keep the state for groups that have not seen any
+/// values and produce the correct output for those groups.
+///
+/// [`NullState`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.NullState.html
+///
 /// # Details
 /// Each group is assigned a `group_index` by the hash table and each
 /// accumulator manages the specific state, one per `group_index`.
@@ -117,6 +122,11 @@ pub trait GroupsAccumulator: Send {
     ///
     /// Note that subsequent calls to update_batch may have larger
     /// total_num_groups as new groups are seen.
+    ///
+    /// See [`NullState`] tp help keep the state for groups that have not seen any
+    /// values and produce the correct output for those groups.
+    ///
+    /// [`NullState`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.NullState.html
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
