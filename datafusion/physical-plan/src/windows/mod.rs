@@ -246,39 +246,6 @@ fn create_built_in_window_expr(
                 Arc::new(Ntile::new(name, n as u64, out_data_type))
             }
         }
-        /*        BuiltInWindowFunction::Lag => {
-                    let arg = Arc::clone(&args[0]);
-                    let shift_offset = get_scalar_value_from_args(args, 1)?
-                        .map(get_signed_integer)
-                        .map_or(Ok(None), |v| v.map(Some))?;
-                    let default_value =
-                        get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
-                    Arc::new(lag(
-                        name,
-                        out_data_type.clone(),
-                        arg,
-                        shift_offset,
-                        default_value,
-                        ignore_nulls,
-                    ))
-                }
-                BuiltInWindowFunction::Lead => {
-                    let arg = Arc::clone(&args[0]);
-                    let shift_offset = get_scalar_value_from_args(args, 1)?
-                        .map(get_signed_integer)
-                        .map_or(Ok(None), |v| v.map(Some))?;
-                    let default_value =
-                        get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
-                    Arc::new(lead(
-                        name,
-                        out_data_type.clone(),
-                        arg,
-                        shift_offset,
-                        default_value,
-                        ignore_nulls,
-                    ))
-                }
-        */
         BuiltInWindowFunction::NthValue => {
             let arg = Arc::clone(&args[0]);
             let n = get_signed_integer(
