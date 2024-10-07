@@ -15,19 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
-
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::function::Hint;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use std::any::Any;
+use std::sync::OnceLock;
 
 use crate::string::common::*;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::function::Hint;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{ColumnarValue, Documentation, Volatility};
+use datafusion_expr::{ScalarUDFImpl, Signature};
 
 /// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
 /// ltrim('zzzytest', 'xyz') = 'test'
@@ -104,6 +104,41 @@ impl ScalarUDFImpl for LtrimFunc {
             ),
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_ltrim_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_ltrim_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Trims the specified trim string from the beginning of a string. If no trim string is provided, all whitespace is removed from the start of the input string.")
+            .with_syntax_example("ltrim(str[, trim_str])")
+            .with_sql_example(r#"```sql
+> select ltrim('  datafusion  ');
++-------------------------------+
+| ltrim(Utf8("  datafusion  ")) |
++-------------------------------+
+| datafusion                    |
++-------------------------------+
+> select ltrim('___datafusion___', '_');
++-------------------------------------------+
+| ltrim(Utf8("___datafusion___"),Utf8("_")) |
++-------------------------------------------+
+| datafusion___                             |
++-------------------------------------------+
+```"#)
+            .with_standard_argument("str", "String")
+            .with_argument("trim_str", "String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._")
+            .with_related_udf("btrim")
+            .with_related_udf("rtrim")
+            .build()
+            .unwrap()
+    })
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@
 // under the License.
 
 //! Regx expressions
-use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use datafusion_common::exec_err;
@@ -67,10 +67,8 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 ```
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 "#)
-            .with_argument("str",
-                           "String expression to operate on. Can be a constant, column, or function, and any combination of string operators.")
-            .with_argument("regexp",
-                           "Regular expression to test against the string expression. Can be a constant, column, or function.")
+            .with_standard_argument("str", "String")
+            .with_standard_argument("regexp","Regular")
             .with_argument("flags",
                            r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
   - **i**: case-insensitive: letters match both upper and lower case
@@ -208,7 +206,8 @@ pub fn regexp_like<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         2 => {
             let values = as_generic_string_array::<T>(&args[0])?;
             let regex = as_generic_string_array::<T>(&args[1])?;
-            let array = regexp::regexp_is_match_utf8(values, regex, None)
+            let flags: Option<&GenericStringArray<T>> = None;
+            let array = regexp::regexp_is_match(values, regex, flags)
                 .map_err(|e| arrow_datafusion_err!(e))?;
 
             Ok(Arc::new(array) as ArrayRef)
@@ -222,7 +221,7 @@ pub fn regexp_like<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 return plan_err!("regexp_like() does not support the \"global\" option");
             }
 
-            let array = regexp::regexp_is_match_utf8(values, regex, Some(flags))
+            let array = regexp::regexp_is_match(values, regex, Some(flags))
                 .map_err(|e| arrow_datafusion_err!(e))?;
 
             Ok(Arc::new(array) as ArrayRef)
