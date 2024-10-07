@@ -50,17 +50,6 @@ pub enum BuiltInWindowFunction {
     CumeDist,
     /// integer ranging from 1 to the argument value, dividing the partition as equally as possible
     Ntile,
-    // TODO: Preserve comments when converting to udwf
-    /// returns value evaluated at the row that is offset rows before the current row within the partition;
-    /// if there is no such row, instead return default (which must be of the same type as value).
-    /// Both offset and default are evaluated with respect to the current row.
-    /// If omitted, offset defaults to 1 and default to null
-    // Lag,
-    /// returns value evaluated at the row that is offset rows after the current row within the partition;
-    /// if there is no such row, instead return default (which must be of the same type as value).
-    /// Both offset and default are evaluated with respect to the current row.
-    /// If omitted, offset defaults to 1 and default to null
-    // Lead,
     /// returns value evaluated at the row that is the first row of the window frame
     FirstValue,
     /// returns value evaluated at the row that is the last row of the window frame
