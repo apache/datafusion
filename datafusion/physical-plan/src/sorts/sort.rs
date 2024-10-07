@@ -975,7 +975,11 @@ impl ExecutionPlan for SortExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::Equal
+        if self.fetch.is_none() {
+            CardinalityEffect::Equal
+        } else {
+            CardinalityEffect::LowerEqual
+        }
     }
 }
 

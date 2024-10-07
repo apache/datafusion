@@ -908,7 +908,7 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 pub enum CardinalityEffect {
     /// Unknown effect. This is the default
     Unknown,
-    /// The operator is guaranteed to produce exactly one row for 
+    /// The operator is guaranteed to produce exactly one row for
     /// each input row
     Equal,
     /// The operator may produce fewer output rows than it receives input rows
