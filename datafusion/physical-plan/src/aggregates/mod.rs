@@ -36,10 +36,11 @@ use crate::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_array::{UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_expr::Accumulator;
+use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::{
     equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::Column,
@@ -211,13 +212,99 @@ impl PhysicalGroupBy {
             .collect()
     }
 
+    /// The number of expressions in the output schema.
+    fn num_output_exprs(&self) -> usize {
+        let mut num_exprs = self.expr.len();
+        if !self.is_single() {
+            num_exprs += 1
+        }
+        num_exprs
+    }
+
     /// Return grouping expressions as they occur in the output schema.
     pub fn output_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.expr
-            .iter()
-            .enumerate()
-            .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _)
-            .collect()
+        let num_output_exprs = self.num_output_exprs();
+        let mut output_exprs = Vec::with_capacity(num_output_exprs);
+        output_exprs.extend(
+            self.expr
+                .iter()
+                .enumerate()
+                .take(num_output_exprs)
+                .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _),
+        );
+        if !self.is_single() {
+            output_exprs.push(Arc::new(Column::new(
+                Aggregate::INTERNAL_GROUPING_ID,
+                self.expr.len(),
+            )) as _);
+        }
+        output_exprs
+    }
+
+    /// Returns the number expression as grouping keys.
+    fn num_group_exprs(&self) -> usize {
+        if self.is_single() {
+            self.expr.len()
+        } else {
+            self.expr.len() + 1
+        }
+    }
+
+    /// Returns the fields that are used as the grouping keys.
+    fn group_fields(&self, input_schema: &Schema) -> Result<Vec<Field>> {
+        let mut fields = Vec::with_capacity(self.num_group_exprs());
+        for ((expr, name), group_expr_nullable) in
+            self.expr.iter().zip(self.exprs_nullable().into_iter())
+        {
+            fields.push(
+                Field::new(
+                    name,
+                    expr.data_type(input_schema)?,
+                    group_expr_nullable || expr.nullable(input_schema)?,
+                )
+                .with_metadata(
+                    get_field_metadata(expr, input_schema).unwrap_or_default(),
+                ),
+            );
+        }
+        if !self.is_single() {
+            fields.push(Field::new(
+                Aggregate::INTERNAL_GROUPING_ID,
+                Aggregate::grouping_id_type(self.expr.len()),
+                false,
+            ));
+        }
+        Ok(fields)
+    }
+
+    /// Returns the output fields of the group by.
+    ///
+    /// This might be different from the `group_fields` that might contain internal expressions that
+    /// should not be part of the output schema.
+    fn output_fields(&self, input_schema: &Schema) -> Result<Vec<Field>> {
+        let mut fields = self.group_fields(input_schema)?;
+        fields.truncate(self.num_output_exprs());
+        Ok(fields)
+    }
+
+    /// Returns the `PhysicalGroupBy` for a final aggregation if `self` is used for a partial
+    /// aggregation.
+    pub fn as_final(&self) -> PhysicalGroupBy {
+        let expr: Vec<_> =
+            self.output_exprs()
+                .into_iter()
+                .zip(
+                    self.expr.iter().map(|t| t.1.clone()).chain(std::iter::once(
+                        Aggregate::INTERNAL_GROUPING_ID.to_owned(),
+                    )),
+                )
+                .collect();
+        let num_exprs = expr.len();
+        Self {
+            expr,
+            null_expr: vec![],
+            groups: vec![vec![false; num_exprs]],
+        }
     }
 }
 
@@ -321,13 +408,7 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        let schema = create_schema(
-            &input.schema(),
-            &group_by.expr,
-            &aggr_expr,
-            group_by.exprs_nullable(),
-            mode,
-        )?;
+        let schema = create_schema(&input.schema(), &group_by, &aggr_expr, mode)?;
 
         let schema = Arc::new(schema);
         AggregateExec::try_new_with_schema(
@@ -789,25 +870,12 @@ impl ExecutionPlan for AggregateExec {
 
 fn create_schema(
     input_schema: &Schema,
-    group_expr: &[(Arc<dyn PhysicalExpr>, String)],
+    group_by: &PhysicalGroupBy,
     aggr_expr: &[AggregateFunctionExpr],
-    group_expr_nullable: Vec<bool>,
     mode: AggregateMode,
 ) -> Result<Schema> {
-    let mut fields = Vec::with_capacity(group_expr.len() + aggr_expr.len());
-    for (index, (expr, name)) in group_expr.iter().enumerate() {
-        fields.push(
-            Field::new(
-                name,
-                expr.data_type(input_schema)?,
-                // In cases where we have multiple grouping sets, we will use NULL expressions in
-                // order to align the grouping sets. So the field must be nullable even if the underlying
-                // schema field is not.
-                group_expr_nullable[index] || expr.nullable(input_schema)?,
-            )
-            .with_metadata(get_field_metadata(expr, input_schema).unwrap_or_default()),
-        )
-    }
+    let mut fields = Vec::with_capacity(group_by.num_output_exprs() + aggr_expr.len());
+    fields.extend(group_by.output_fields(input_schema)?);
 
     match mode {
         AggregateMode::Partial => {
@@ -833,9 +901,8 @@ fn create_schema(
     ))
 }
 
-fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
-    let group_fields = schema.fields()[0..group_count].to_vec();
-    Arc::new(Schema::new(group_fields))
+fn group_schema(input_schema: &Schema, group_by: &PhysicalGroupBy) -> Result<SchemaRef> {
+    Ok(Arc::new(Schema::new(group_by.group_fields(input_schema)?)))
 }
 
 /// Determines the lexical ordering requirement for an aggregate expression.
@@ -1142,6 +1209,27 @@ fn evaluate_optional(
         .collect()
 }
 
+fn group_id_array(group: &[bool], batch: &RecordBatch) -> Result<ArrayRef> {
+    if group.len() > 64 {
+        return not_impl_err!(
+            "Grouping sets with more than 64 columns are not supported"
+        );
+    }
+    let group_id = group.iter().fold(0u64, |acc, &is_null| {
+        (acc << 1) | if is_null { 1 } else { 0 }
+    });
+    let num_rows = batch.num_rows();
+    if group.len() <= 8 {
+        Ok(Arc::new(UInt8Array::from(vec![group_id as u8; num_rows])))
+    } else if group.len() <= 16 {
+        Ok(Arc::new(UInt16Array::from(vec![group_id as u16; num_rows])))
+    } else if group.len() <= 32 {
+        Ok(Arc::new(UInt32Array::from(vec![group_id as u32; num_rows])))
+    } else {
+        Ok(Arc::new(UInt64Array::from(vec![group_id; num_rows])))
+    }
+}
+
 /// Evaluate a group by expression against a `RecordBatch`
 ///
 /// Arguments:
@@ -1174,23 +1262,24 @@ pub(crate) fn evaluate_group_by(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(group_by
+    group_by
         .groups
         .iter()
         .map(|group| {
-            group
-                .iter()
-                .enumerate()
-                .map(|(idx, is_null)| {
-                    if *is_null {
-                        Arc::clone(&null_exprs[idx])
-                    } else {
-                        Arc::clone(&exprs[idx])
-                    }
-                })
-                .collect()
+            let mut group_values = Vec::with_capacity(group_by.num_group_exprs());
+            group_values.extend(group.iter().enumerate().map(|(idx, is_null)| {
+                if *is_null {
+                    Arc::clone(&null_exprs[idx])
+                } else {
+                    Arc::clone(&exprs[idx])
+                }
+            }));
+            if !group_by.is_single() {
+                group_values.push(group_id_array(group, batch)?);
+            }
+            Ok(group_values)
         })
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -1348,21 +1437,21 @@ mod tests {
     ) -> Result<()> {
         let input_schema = input.schema();
 
-        let grouping_set = PhysicalGroupBy {
-            expr: vec![
+        let grouping_set = PhysicalGroupBy::new(
+            vec![
                 (col("a", &input_schema)?, "a".to_string()),
                 (col("b", &input_schema)?, "b".to_string()),
             ],
-            null_expr: vec![
+            vec![
                 (lit(ScalarValue::UInt32(None)), "a".to_string()),
                 (lit(ScalarValue::Float64(None)), "b".to_string()),
             ],
-            groups: vec![
+            vec![
                 vec![false, true],  // (a, NULL)
                 vec![true, false],  // (NULL, b)
                 vec![false, false], // (a,b)
             ],
-        };
+        );
 
         let aggregates = vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1i8)])
             .schema(Arc::clone(&input_schema))
@@ -1392,63 +1481,56 @@ mod tests {
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
             // we trigger the early emit rule, which turns out the partial aggregate result.
             vec![
-                "+---+-----+-----------------+",
-                "| a | b   | COUNT(1)[count] |",
-                "+---+-----+-----------------+",
-                "|   | 1.0 | 1               |",
-                "|   | 1.0 | 1               |",
-                "|   | 2.0 | 1               |",
-                "|   | 2.0 | 1               |",
-                "|   | 3.0 | 1               |",
-                "|   | 3.0 | 1               |",
-                "|   | 4.0 | 1               |",
-                "|   | 4.0 | 1               |",
-                "| 2 |     | 1               |",
-                "| 2 |     | 1               |",
-                "| 2 | 1.0 | 1               |",
-                "| 2 | 1.0 | 1               |",
-                "| 3 |     | 1               |",
-                "| 3 |     | 2               |",
-                "| 3 | 2.0 | 2               |",
-                "| 3 | 3.0 | 1               |",
-                "| 4 |     | 1               |",
-                "| 4 |     | 2               |",
-                "| 4 | 3.0 | 1               |",
-                "| 4 | 4.0 | 2               |",
-                "+---+-----+-----------------+",
+                "+---+-----+---------------+-----------------+",
+                "| a | b   | __grouping_id | COUNT(1)[count] |",
+                "+---+-----+---------------+-----------------+",
+                "|   | 1.0 | 2             | 1               |",
+                "|   | 1.0 | 2             | 1               |",
+                "|   | 2.0 | 2             | 1               |",
+                "|   | 2.0 | 2             | 1               |",
+                "|   | 3.0 | 2             | 1               |",
+                "|   | 3.0 | 2             | 1               |",
+                "|   | 4.0 | 2             | 1               |",
+                "|   | 4.0 | 2             | 1               |",
+                "| 2 |     | 1             | 1               |",
+                "| 2 |     | 1             | 1               |",
+                "| 2 | 1.0 | 0             | 1               |",
+                "| 2 | 1.0 | 0             | 1               |",
+                "| 3 |     | 1             | 1               |",
+                "| 3 |     | 1             | 2               |",
+                "| 3 | 2.0 | 0             | 2               |",
+                "| 3 | 3.0 | 0             | 1               |",
+                "| 4 |     | 1             | 1               |",
+                "| 4 |     | 1             | 2               |",
+                "| 4 | 3.0 | 0             | 1               |",
+                "| 4 | 4.0 | 0             | 2               |",
+                "+---+-----+---------------+-----------------+",
             ]
         } else {
             vec![
-                "+---+-----+-----------------+",
-                "| a | b   | COUNT(1)[count] |",
-                "+---+-----+-----------------+",
-                "|   | 1.0 | 2               |",
-                "|   | 2.0 | 2               |",
-                "|   | 3.0 | 2               |",
-                "|   | 4.0 | 2               |",
-                "| 2 |     | 2               |",
-                "| 2 | 1.0 | 2               |",
-                "| 3 |     | 3               |",
-                "| 3 | 2.0 | 2               |",
-                "| 3 | 3.0 | 1               |",
-                "| 4 |     | 3               |",
-                "| 4 | 3.0 | 1               |",
-                "| 4 | 4.0 | 2               |",
-                "+---+-----+-----------------+",
+                "+---+-----+---------------+-----------------+",
+                "| a | b   | __grouping_id | COUNT(1)[count] |",
+                "+---+-----+---------------+-----------------+",
+                "|   | 1.0 | 2             | 2               |",
+                "|   | 2.0 | 2             | 2               |",
+                "|   | 3.0 | 2             | 2               |",
+                "|   | 4.0 | 2             | 2               |",
+                "| 2 |     | 1             | 2               |",
+                "| 2 | 1.0 | 0             | 2               |",
+                "| 3 |     | 1             | 3               |",
+                "| 3 | 2.0 | 0             | 2               |",
+                "| 3 | 3.0 | 0             | 1               |",
+                "| 4 |     | 1             | 3               |",
+                "| 4 | 3.0 | 0             | 1               |",
+                "| 4 | 4.0 | 0             | 2               |",
+                "+---+-----+---------------+-----------------+",
             ]
         };
         assert_batches_sorted_eq!(expected, &result);
 
-        let groups = partial_aggregate.group_expr().expr().to_vec();
-
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
-        let final_group: Vec<(Arc<dyn PhysicalExpr>, String)> = groups
-            .iter()
-            .map(|(_expr, name)| Ok((col(name, &input_schema)?, name.clone())))
-            .collect::<Result<_>>()?;
-
-        let final_grouping_set = PhysicalGroupBy::new_single(final_group);
+        let final_grouping_set = grouping_set.as_final();
 
         let task_ctx = if spill {
             new_spill_ctx(4, 3160)
@@ -1468,26 +1550,26 @@ mod tests {
         let result =
             common::collect(merged_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
-        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.num_columns(), 4);
         assert_eq!(batch.num_rows(), 12);
 
         let expected = vec![
-            "+---+-----+----------+",
-            "| a | b   | COUNT(1) |",
-            "+---+-----+----------+",
-            "|   | 1.0 | 2        |",
-            "|   | 2.0 | 2        |",
-            "|   | 3.0 | 2        |",
-            "|   | 4.0 | 2        |",
-            "| 2 |     | 2        |",
-            "| 2 | 1.0 | 2        |",
-            "| 3 |     | 3        |",
-            "| 3 | 2.0 | 2        |",
-            "| 3 | 3.0 | 1        |",
-            "| 4 |     | 3        |",
-            "| 4 | 3.0 | 1        |",
-            "| 4 | 4.0 | 2        |",
-            "+---+-----+----------+",
+            "+---+-----+---------------+----------+",
+            "| a | b   | __grouping_id | COUNT(1) |",
+            "+---+-----+---------------+----------+",
+            "|   | 1.0 | 2             | 2        |",
+            "|   | 2.0 | 2             | 2        |",
+            "|   | 3.0 | 2             | 2        |",
+            "|   | 4.0 | 2             | 2        |",
+            "| 2 |     | 1             | 2        |",
+            "| 2 | 1.0 | 0             | 2        |",
+            "| 3 |     | 1             | 3        |",
+            "| 3 | 2.0 | 0             | 2        |",
+            "| 3 | 3.0 | 0             | 1        |",
+            "| 4 |     | 1             | 3        |",
+            "| 4 | 3.0 | 0             | 1        |",
+            "| 4 | 4.0 | 0             | 2        |",
+            "+---+-----+---------------+----------+",
         ];
 
         assert_batches_sorted_eq!(&expected, &result);
@@ -1503,11 +1585,11 @@ mod tests {
     async fn check_aggregates(input: Arc<dyn ExecutionPlan>, spill: bool) -> Result<()> {
         let input_schema = input.schema();
 
-        let grouping_set = PhysicalGroupBy {
-            expr: vec![(col("a", &input_schema)?, "a".to_string())],
-            null_expr: vec![],
-            groups: vec![vec![false]],
-        };
+        let grouping_set = PhysicalGroupBy::new(
+            vec![(col("a", &input_schema)?, "a".to_string())],
+            vec![],
+            vec![vec![false]],
+        );
 
         let aggregates: Vec<AggregateFunctionExpr> =
             vec![
@@ -1563,13 +1645,7 @@ mod tests {
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
 
-        let final_group: Vec<(Arc<dyn PhysicalExpr>, String)> = grouping_set
-            .expr
-            .iter()
-            .map(|(_expr, name)| Ok((col(name, &input_schema)?, name.clone())))
-            .collect::<Result<_>>()?;
-
-        let final_grouping_set = PhysicalGroupBy::new_single(final_group);
+        let final_grouping_set = grouping_set.as_final();
 
         let merged_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
@@ -1825,11 +1901,11 @@ mod tests {
         let task_ctx = Arc::new(task_ctx);
 
         let groups_none = PhysicalGroupBy::default();
-        let groups_some = PhysicalGroupBy {
-            expr: vec![(col("a", &input_schema)?, "a".to_string())],
-            null_expr: vec![],
-            groups: vec![vec![false]],
-        };
+        let groups_some = PhysicalGroupBy::new(
+            vec![(col("a", &input_schema)?, "a".to_string())],
+            vec![],
+            vec![vec![false]],
+        );
 
         // something that allocates within the aggregator
         let aggregates_v0: Vec<AggregateFunctionExpr> =
@@ -2306,7 +2382,7 @@ mod tests {
         )?);
 
         let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
+            AggregateMode::Single,
             groups,
             aggregates.clone(),
             vec![None],
@@ -2318,13 +2394,13 @@ mod tests {
             collect(aggregate_exec.execute(0, Arc::new(TaskContext::default()))?).await?;
 
         let expected = [
-            "+-----+-----+-------+----------+",
-            "| a   | b   | const | 1[count] |",
-            "+-----+-----+-------+----------+",
-            "|     | 0.0 |       | 32768    |",
-            "| 0.0 |     |       | 32768    |",
-            "|     |     | 1     | 32768    |",
-            "+-----+-----+-------+----------+",
+            "+-----+-----+-------+---------------+-------+",
+            "| a   | b   | const | __grouping_id | 1     |",
+            "+-----+-----+-------+---------------+-------+",
+            "|     |     | 1     | 6             | 32768 |",
+            "|     | 0.0 |       | 5             | 32768 |",
+            "| 0.0 |     |       | 3             | 32768 |",
+            "+-----+-----+-------+---------------+-------+",
         ];
         assert_batches_sorted_eq!(expected, &output);
 
@@ -2638,30 +2714,30 @@ mod tests {
                     .build()?,
             ];
 
-        let grouping_set = PhysicalGroupBy {
-            expr: vec![
+        let grouping_set = PhysicalGroupBy::new(
+            vec![
                 (col("a", &input_schema)?, "a".to_string()),
                 (col("b", &input_schema)?, "b".to_string()),
             ],
-            null_expr: vec![
+            vec![
                 (lit(ScalarValue::Float32(None)), "a".to_string()),
                 (lit(ScalarValue::Float32(None)), "b".to_string()),
             ],
-            groups: vec![
+            vec![
                 vec![false, true],  // (a, NULL)
                 vec![false, false], // (a,b)
             ],
-        };
+        );
         let aggr_schema = create_schema(
             &input_schema,
-            &grouping_set.expr,
+            &grouping_set,
             &aggr_expr,
-            grouping_set.exprs_nullable(),
             AggregateMode::Final,
         )?;
         let expected_schema = Schema::new(vec![
             Field::new("a", DataType::Float32, false),
             Field::new("b", DataType::Float32, true),
+            Field::new("__grouping_id", DataType::UInt8, false),
             Field::new("COUNT(a)", DataType::Int64, false),
         ]);
         assert_eq!(aggr_schema, expected_schema);
