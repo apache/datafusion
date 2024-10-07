@@ -197,7 +197,7 @@ macro_rules! binary_string_array_flag_op_scalar {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             },
             DataType::Dictionary(_, _) => {
-                let values = $LEFT.as_any_dictionary_opt().expect("Failed to downcast array to a dictionary").values();
+                let values = $LEFT.as_any_dictionary().values();
 
                 match values.data_type() {
                     DataType::Utf8View | DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
