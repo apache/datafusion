@@ -48,38 +48,6 @@ pub fn ntile(arg: Expr) -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::Ntile, vec![arg]))
 }
 
-/*/// Create an expression to represent the `lag` window function
-pub fn lag(
-    arg: Expr,
-    shift_offset: Option<i64>,
-    default_value: Option<ScalarValue>,
-) -> Expr {
-    let shift_offset_lit = shift_offset
-        .map(|v| v.lit())
-        .unwrap_or(ScalarValue::Null.lit());
-    let default_lit = default_value.unwrap_or(ScalarValue::Null).lit();
-    Expr::WindowFunction(WindowFunction::new(
-        BuiltInWindowFunction::Lag,
-        vec![arg, shift_offset_lit, default_lit],
-    ))
-}
-
-/// Create an expression to represent the `lead` window function
-pub fn lead(
-    arg: Expr,
-    shift_offset: Option<i64>,
-    default_value: Option<ScalarValue>,
-) -> Expr {
-    let shift_offset_lit = shift_offset
-        .map(|v| v.lit())
-        .unwrap_or(ScalarValue::Null.lit());
-    let default_lit = default_value.unwrap_or(ScalarValue::Null).lit();
-    Expr::WindowFunction(WindowFunction::new(
-        BuiltInWindowFunction::Lead,
-        vec![arg, shift_offset_lit, default_lit],
-    ))
-}
-*/
 /// Create an expression to represent the `nth_value` window function
 pub fn nth_value(arg: Expr, n: i64) -> Expr {
     Expr::WindowFunction(WindowFunction::new(
