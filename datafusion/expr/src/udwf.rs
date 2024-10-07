@@ -355,6 +355,10 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     }
 
     /// The [`Field`] of the final result of evaluating this window function.
+    ///
+    /// Call `field_args.name()` to get the fully qualified name for defining
+    /// the [`Field`]. For a complete example see the implementation in the
+    /// [Basic Example](WindowUDFImpl#basic-example) section.
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field>;
 
     /// Allows the window UDF to define a custom result ordering.

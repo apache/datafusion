@@ -17,6 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for `make_array` function.
 
+use std::vec;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::{ArrayData, Capacities, MutableArrayData};
@@ -26,9 +27,8 @@ use arrow_array::{
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{LargeList, List, Null};
 use arrow_schema::{DataType, Field};
-use datafusion_common::internal_err;
 use datafusion_common::{plan_err, utils::array_into_list_array_nullable, Result};
-use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_expr::binary::type_union_resolution;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
@@ -82,19 +82,12 @@ impl ScalarUDFImpl for MakeArray {
         match arg_types.len() {
             0 => Ok(empty_array_type()),
             _ => {
-                let mut expr_type = DataType::Null;
-                for arg_type in arg_types {
-                    if !arg_type.equals_datatype(&DataType::Null) {
-                        expr_type = arg_type.clone();
-                        break;
-                    }
-                }
-
-                if expr_type.is_null() {
-                    expr_type = DataType::Int64;
-                }
-
-                Ok(List(Arc::new(Field::new("item", expr_type, true))))
+                // At this point, all the type in array should be coerced to the same one
+                Ok(List(Arc::new(Field::new(
+                    "item",
+                    arg_types[0].to_owned(),
+                    true,
+                ))))
             }
         }
     }
@@ -112,22 +105,21 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let new_type = arg_types.iter().skip(1).try_fold(
-            arg_types.first().unwrap().clone(),
-            |acc, x| {
-                // The coerced types found by `comparison_coercion` are not guaranteed to be
-                // coercible for the arguments. `comparison_coercion` returns more loose
-                // types that can be coerced to both `acc` and `x` for comparison purpose.
-                // See `maybe_data_types` for the actual coercion.
-                let coerced_type = comparison_coercion(&acc, x);
-                if let Some(coerced_type) = coerced_type {
-                    Ok(coerced_type)
-                } else {
-                    internal_err!("Coercion from {acc:?} to {x:?} failed.")
-                }
-            },
-        )?;
-        Ok(vec![new_type; arg_types.len()])
+        if let Some(new_type) = type_union_resolution(arg_types) {
+            if let DataType::FixedSizeList(field, _) = new_type {
+                Ok(vec![DataType::List(field); arg_types.len()])
+            } else if new_type.is_null() {
+                Ok(vec![DataType::Int64; arg_types.len()])
+            } else {
+                Ok(vec![new_type; arg_types.len()])
+            }
+        } else {
+            plan_err!(
+                "Fail to find the valid type between {:?} for {}",
+                arg_types,
+                self.name()
+            )
+        }
     }
 }
 
