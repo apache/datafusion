@@ -318,7 +318,7 @@ fn try_cast_literal_to_type(
     target_type: &DataType,
 ) -> Option<ScalarValue> {
     let lit_data_type = lit_value.data_type();
-    if !is_supported_type(&lit_data_type) || !is_supported_type(target_type) {
+    if !is_supported_type(lit_data_type) || !is_supported_type(target_type) {
         return None;
     }
     if lit_value.value().is_null() {
@@ -336,7 +336,7 @@ fn try_cast_numeric_literal(
     target_type: &DataType,
 ) -> Option<ScalarValue> {
     let lit_data_type = lit_value.data_type();
-    if !is_supported_numeric_type(&lit_data_type)
+    if !is_supported_numeric_type(lit_data_type)
         || !is_supported_numeric_type(target_type)
     {
         return None;
@@ -426,7 +426,7 @@ fn try_cast_numeric_literal(
                     DataType::UInt64 => ScalarValue::UInt64(Some(value as u64)),
                     DataType::Timestamp(TimeUnit::Second, tz) => {
                         let value = cast_between_timestamp(
-                            &lit_data_type,
+                            lit_data_type,
                             &DataType::Timestamp(TimeUnit::Second, tz.clone()),
                             value,
                         );
@@ -434,7 +434,7 @@ fn try_cast_numeric_literal(
                     }
                     DataType::Timestamp(TimeUnit::Millisecond, tz) => {
                         let value = cast_between_timestamp(
-                            &lit_data_type,
+                            lit_data_type,
                             &DataType::Timestamp(TimeUnit::Millisecond, tz.clone()),
                             value,
                         );
@@ -442,7 +442,7 @@ fn try_cast_numeric_literal(
                     }
                     DataType::Timestamp(TimeUnit::Microsecond, tz) => {
                         let value = cast_between_timestamp(
-                            &lit_data_type,
+                            lit_data_type,
                             &DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
                             value,
                         );
@@ -450,7 +450,7 @@ fn try_cast_numeric_literal(
                     }
                     DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
                         let value = cast_between_timestamp(
-                            &lit_data_type,
+                            lit_data_type,
                             &DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
                             value,
                         );

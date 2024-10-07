@@ -293,7 +293,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
             // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
             // Concatenate it with the `contiguous_scalar`.
                 ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) | ScalarValue::Utf8View(Some(v))
-             => contiguous_scalar += &v,
+             => contiguous_scalar += v,
             x => {
                 return internal_err!(
                     "The scalar {x} should be casted to string type during the type coercion."

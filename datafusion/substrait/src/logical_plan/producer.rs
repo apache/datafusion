@@ -1832,7 +1832,7 @@ fn to_substrait_literal(scalar: &Scalar, extensions: &mut Extensions) -> Result<
             nullable: true,
             type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
             literal_type: Some(LiteralType::Null(to_substrait_type(
-                &scalar.data_type(),
+                scalar.data_type(),
                 true,
                 extensions,
             )?)),
