@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, vec};
 
-use super::utils::asymmetric_join_output_partitioning;
+use super::utils::{asymmetric_join_output_partitioning, PhysicalDynamicFiltersInfo};
 use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
@@ -65,6 +65,7 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_expr::utils::DynamicJoinFilterPushdownInfo;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
@@ -326,6 +327,8 @@ pub struct HashJoinExec {
     pub null_equals_null: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// The dynamic filter which should be pushed to probe side
+    pub dynamic_filters_pushdown: Option<PhysicalDynamicFiltersInfo>,
 }
 
 impl HashJoinExec {
@@ -387,6 +390,7 @@ impl HashJoinExec {
             column_indices,
             null_equals_null,
             cache,
+            dynamic_filters_pushdown: None,
         })
     }
 
@@ -472,7 +476,14 @@ impl HashJoinExec {
             self.null_equals_null,
         )
     }
-
+    /// adding dynamic filter info
+    pub fn with_dynamic_filter_info(
+        mut self,
+        dynamic_filter_info: Option<PhysicalDynamicFiltersInfo>,
+    ) -> Self {
+        self.dynamic_filters_pushdown = dynamic_filter_info;
+        self
+    }
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
@@ -761,6 +772,8 @@ impl ExecutionPlan for HashJoinExec {
             batch_size,
             hashes_buffer: vec![],
             right_side_ordered: self.right.output_ordering().is_some(),
+            // todo: remove this clone
+            dynamic_filter_info: self.dynamic_filters_pushdown.clone(),
         }))
     }
 
@@ -1091,6 +1104,8 @@ struct HashJoinStream {
     hashes_buffer: Vec<u64>,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
+    /// dynamic filters after calculating the build sides
+    dynamic_filter_info: Option<PhysicalDynamicFiltersInfo>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -1288,7 +1303,6 @@ impl HashJoinStream {
     }
 
     /// Collects build-side data by polling `OnceFut` future from initialized build-side
-    ///
     /// Updates build-side to `Ready`, and state to `FetchProbeSide`
     fn collect_build_side(
         &mut self,
@@ -1321,7 +1335,11 @@ impl HashJoinStream {
             None => {
                 self.state = HashJoinStreamState::ExhaustedProbeSide;
             }
-            Some(Ok(batch)) => {
+            Some(Ok(mut batch)) => {
+                if let Some(dynamic_filters) = &mut self.dynamic_filter_info {
+                    batch = dynamic_filters.filter_batch(&batch)?;
+                }
+
                 // Precalculate hash values for fetched batch
                 let keys_values = self
                     .on_right
@@ -1375,6 +1393,7 @@ impl HashJoinStream {
 
         // apply join filter if exists
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {
+            println!("the filter we have is {:?}", filter);
             apply_join_filter_to_indices(
                 build_side.left_data.batch(),
                 &state.batch,
