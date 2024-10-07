@@ -187,28 +187,35 @@ macro_rules! compute_utf8_flag_op {
 
 macro_rules! binary_string_array_flag_op_scalar {
     ($LEFT:ident, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
-        // This macro is slightly different from binary_string_array_flag_op because, when comparing
-        // with a scalar value, the query can be optimized in such a way that operands will be dicts
-
-        let result: Result<Arc<dyn Array>> = downcast_dictionary_array! {
-            $LEFT => {
-                match $LEFT.values().data_type() {
-                    DataType::Utf8View | DataType::Utf8 => compute_utf8_flag_op_scalar!($LEFT.values(), $RIGHT, $OP, StringArray, $NOT, $FLAG),
-                    DataType::LargeUtf8 => compute_utf8_flag_op_scalar!($LEFT.values(), $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
-                    other => internal_err!(
-                        "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
-                        other, stringify!($OP)
-                    ),
-                }.map(|new| {
-                    let result = $LEFT.keys().iter().map(|f| f.map(|k| new.value(k as usize))).collect::<BooleanArray>();
-                    Arc::new(result) as _
-                })
-            },
+        // This macro is slightly different from binary_string_array_flag_op because, when comparing with a scalar value,
+        // the query can be optimized in such a way that operands will be dicts, so we need to support it here
+        let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
             DataType::Utf8View | DataType::Utf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
             },
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
+            },
+            DataType::Dictionary(_, _) => {
+                let values = $LEFT.as_any_dictionary_opt().expect("Failed to downcast array to a dictionary").values();
+
+                match values.data_type() {
+                    DataType::Utf8View | DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
+                    other => internal_err!(
+                        "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
+                        other, stringify!($OP)
+                    ),
+                }.map(
+                    // downcast_dictionary_array duplicates code per possible key type, so we aim to do all prep work before
+                    |evaluated_values| downcast_dictionary_array! {
+                        $LEFT => {
+                            let unpacked_dict = $LEFT.keys().iter().map(|f| f.map(|k| evaluated_values.value(k as usize))).collect::<BooleanArray>();
+                            Arc::new(unpacked_dict) as _
+                        },
+                        _ => unreachable!(),
+                    }
+                )
             },
             other => internal_err!(
                 "Data type {:?} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
@@ -253,8 +260,6 @@ macro_rules! compute_utf8_flag_op_scalar {
         }
 
         Ok(Arc::new(array))
-
-
     }};
 }
 
