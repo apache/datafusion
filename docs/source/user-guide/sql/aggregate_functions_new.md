@@ -36,6 +36,11 @@ Aggregate functions operate on a set of values to compute a single result.
 - [bit_and](#bit_and)
 - [bit_or](#bit_or)
 - [bit_xor](#bit_xor)
+- [var](#var)
+- [var_pop](#var_pop)
+- [var_population](#var_population)
+- [var_samp](#var_samp)
+- [var_sample](#var_sample)
 
 ### `bit_and`
 
@@ -47,7 +52,7 @@ bit_and(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 ### `bit_or`
 
@@ -59,7 +64,7 @@ bit_or(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 ### `bit_xor`
 
@@ -71,4 +76,80 @@ bit_xor(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `var`
+
+Returns the statistical sample variance of a set of numbers.
+
+```
+var(expression)
+```
+
+#### Arguments
+
+- **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Aliases- var_sample
+
+- var_samp
+
+### `var_pop`
+
+Returns the statistical population variance of a set of numbers.
+
+```
+var_pop(expression)
+```
+
+#### Arguments
+
+- **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Aliases- var_population
+
+### `var_pop`
+
+Returns the statistical population variance of a set of numbers.
+
+```
+var_pop(expression)
+```
+
+#### Arguments
+
+- **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Aliases- var_population
+
+### `var`
+
+Returns the statistical sample variance of a set of numbers.
+
+```
+var(expression)
+```
+
+#### Arguments
+
+- **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Aliases- var_sample
+
+- var_samp
+
+### `var`
+
+Returns the statistical sample variance of a set of numbers.
+
+```
+var(expression)
+```
+
+#### Arguments
+
+- **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Aliases- var_sample
+
+- var_samp
