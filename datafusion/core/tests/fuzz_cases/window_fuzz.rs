@@ -45,6 +45,7 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
 use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
 use hashbrown::HashMap;
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
@@ -194,34 +195,34 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // LAG(x) OVER (
         //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
         // )
-        /*        (
-                    // Window function
-                    WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Lag),
-                    // its name
-                    "LAG",
-                    // no argument
-                    vec![col("x", &schema)?],
-                    // Expected causality, for None cases causality will be determined from window frame boundaries
-                    Some(true),
-                ),
-        */        // Simulate cases of the following form:
-                // LEAD(x) OVER (
-                //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
-                // )
-        /*        (
-                    // Window function
-                    WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
-                    // its name
-                    "LEAD",
-                    // no argument
-                    vec![col("x", &schema)?],
-                    // Expected causality, for None cases causality will be determined from window frame boundaries
-                    Some(false),
-                ),
-        */        // Simulate cases of the following form:
-                // RANK() OVER (
-                //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
-                // )
+        (
+            // Window function
+            WindowFunctionDefinition::WindowUDF(lag_udwf()),
+            // its name
+            "LAG",
+            // no argument
+            vec![col("x", &schema)?],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(true),
+        ),
+        // Simulate cases of the following form:
+        // LEAD(x) OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
+        (
+            // Window function
+            WindowFunctionDefinition::WindowUDF(lead_udwf()),
+            // its name
+            "LEAD",
+            // no argument
+            vec![col("x", &schema)?],
+            // Expected causality, for None cases causality will be determined from window frame boundaries
+            Some(false),
+        ),
+        // Simulate cases of the following form:
+        // RANK() OVER (
+        //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
+        // )
         (
             // Window function
             WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Rank),
@@ -398,33 +399,28 @@ fn get_random_function(
                 vec![],
             ),
         );
-        /*        window_fn_map.insert(
-                    "lead",
-                    (
-                        WindowFunctionDefinition::BuiltInWindowFunction(
-                            BuiltInWindowFunction::Lead,
-                        ),
-                        vec![
-                            arg.clone(),
-                            lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
-                            lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
-                        ],
-                    ),
-                );
-                window_fn_map.insert(
-                    "lag",
-                    (
-                        WindowFunctionDefinition::BuiltInWindowFunction(
-                            BuiltInWindowFunction::Lag,
-                        ),
-                        vec![
-                            arg.clone(),
-                            lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
-                            lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
-                        ],
-                    ),
-                );
-        */
+        window_fn_map.insert(
+            "lead",
+            (
+                WindowFunctionDefinition::WindowUDF(lead_udwf()),
+                vec![
+                    arg.clone(),
+                    lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+                    lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
+                ],
+            ),
+        );
+        window_fn_map.insert(
+            "lag",
+            (
+                WindowFunctionDefinition::WindowUDF(lag_udwf()),
+                vec![
+                    arg.clone(),
+                    lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+                    lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
+                ],
+            ),
+        );
     }
     window_fn_map.insert(
         "first_value",
