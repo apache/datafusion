@@ -246,11 +246,11 @@ macro_rules! compute_utf8_flag_op_scalar {
         };
 
         let flag = $FLAG.then_some("i");
-            let mut array =
-                paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
-            if $NOT {
-                array = not(&array).unwrap();
-            }
+        let mut array =
+            paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
+        if $NOT {
+            array = not(&array).unwrap();
+        }
 
         Ok(Arc::new(array))
 
