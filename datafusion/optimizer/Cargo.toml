@@ -35,10 +35,6 @@ workspace = true
 name = "datafusion_optimizer"
 path = "src/lib.rs"
 
-[features]
-default = ["regex_expressions"]
-regex_expressions = ["datafusion-physical-expr/regex_expressions"]
-
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }

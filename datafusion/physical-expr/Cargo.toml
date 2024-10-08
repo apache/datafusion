@@ -35,14 +35,6 @@ workspace = true
 name = "datafusion_physical_expr"
 path = "src/lib.rs"
 
-[features]
-default = [
-    "regex_expressions",
-    "encoding_expressions",
-]
-encoding_expressions = ["base64", "hex"]
-regex_expressions = ["regex"]
-
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
@@ -54,14 +46,12 @@ arrow-string = { workspace = true }
 base64 = { version = "0.22", optional = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
-datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
-hex = { version = "0.4", optional = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
