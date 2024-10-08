@@ -33,7 +33,7 @@ use datafusion_common::{
 };
 use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::TypeSignature::*;
+use datafusion_expr::TypeSignature;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use regex::Regex;
 use std::any::Any;
@@ -56,10 +56,10 @@ impl RegexpReplaceFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![Utf8View, Utf8, Utf8]),
-                    Exact(vec![Utf8, Utf8, Utf8, Utf8]),
-                    Exact(vec![Utf8View, Utf8, Utf8, Utf8]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8, Utf8]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8, Utf8]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8, Utf8, Utf8]),
                 ],
                 Volatility::Immutable,
             ),
