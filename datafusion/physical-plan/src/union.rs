@@ -264,6 +264,16 @@ impl ExecutionPlan for UnionExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = UnionExec::new(self.inputs.clone());
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 /// Combines multiple input streams by interleaving them.

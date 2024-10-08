@@ -199,6 +199,17 @@ impl ExecutionPlan for CoalesceBatchesExec {
     fn fetch(&self) -> Option<usize> {
         self.fetch
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan =
+            CoalesceBatchesExec::new(self.input.clone(), self.target_batch_size);
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 /// Stream for [`CoalesceBatchesExec`]. See [`CoalesceBatchesExec`] for more details.

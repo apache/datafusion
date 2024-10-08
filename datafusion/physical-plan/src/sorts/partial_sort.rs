@@ -309,6 +309,20 @@ impl ExecutionPlan for PartialSortExec {
     fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
     }
+
+    fn with_node_id(
+        self: Arc<Self>,
+        _node_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut new_plan = PartialSortExec::new(
+            self.expr.clone(),
+            self.input.clone(),
+            self.common_prefix_length,
+        );
+        let new_props = new_plan.cache.clone().with_node_id(_node_id);
+        new_plan.cache = new_props;
+        Ok(Some(Arc::new(new_plan)))
+    }
 }
 
 struct PartialSortStream {
