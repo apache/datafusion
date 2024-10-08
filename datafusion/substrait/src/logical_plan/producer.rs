@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use itertools::Itertools;
 use std::sync::Arc;
+use substrait::proto::expression_reference::ExprType;
 
 use arrow_buffer::ToByteSlice;
-use datafusion::arrow::datatypes::IntervalUnit;
+use datafusion::arrow::datatypes::{Field, IntervalUnit};
 use datafusion::logical_expr::{
     CrossJoin, Distinct, Like, Partitioning, WindowFrameUnits,
 };
@@ -63,7 +63,9 @@ use substrait::proto::expression::window_function::BoundsType;
 use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::rel_common::EmitKind::Emit;
-use substrait::proto::{rel_common, CrossRel, ExchangeRel, RelCommon};
+use substrait::proto::{
+    rel_common, CrossRel, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
+};
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -116,6 +118,56 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
         relations: plan_rels,
         advanced_extensions: None,
         expected_type_urls: vec![],
+    }))
+}
+
+/// Serializes a collection of expressions to a Substrait ExtendedExpression message
+///
+/// The ExtendedExpression message is a top-level message that can be used to send
+/// expressions (not plans) between systems.
+///
+/// Each expression is also given names for the output type.  These are provided as a
+/// field and not a String (since the names may be nested, e.g. a struct).  The data
+/// type and nullability of this field is redundant (those can be determined by the
+/// Expr) and will be ignored.
+///
+/// Substrait also requires the input schema of the expressions to be included in the
+/// message.  The field names of the input schema will be serialized.
+pub fn to_substrait_extended_expr(
+    exprs: &[(&Expr, &Field)],
+    schema: &DFSchemaRef,
+    ctx: &SessionContext,
+) -> Result<Box<ExtendedExpression>> {
+    let mut extensions = Extensions::default();
+
+    let substrait_exprs = exprs
+        .iter()
+        .map(|(expr, field)| {
+            let substrait_expr = to_substrait_rex(
+                ctx,
+                expr,
+                schema,
+                /*col_ref_offset=*/ 0,
+                &mut extensions,
+            )?;
+            let mut output_names = Vec::new();
+            flatten_names(field, false, &mut output_names)?;
+            Ok(ExpressionReference {
+                output_names,
+                expr_type: Some(ExprType::Expression(substrait_expr)),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let substrait_schema = to_substrait_named_struct(schema, &mut extensions)?;
+
+    Ok(Box::new(ExtendedExpression {
+        advanced_extensions: None,
+        expected_type_urls: vec![],
+        extension_uris: vec![],
+        extensions: extensions.into(),
+        version: Some(version::version_with_producer("datafusion")),
+        referred_expr: substrait_exprs,
+        base_schema: Some(substrait_schema),
     }))
 }
 
@@ -580,49 +632,42 @@ fn create_project_remapping(expr_count: usize, input_field_count: usize) -> Emit
     Emit(rel_common::Emit { output_mapping })
 }
 
+// Substrait wants a list of all field names, including nested fields from structs,
+// also from within e.g. lists and maps. However, it does not want the list and map field names
+// themselves - only proper structs fields are considered to have useful names.
+fn flatten_names(field: &Field, skip_self: bool, names: &mut Vec<String>) -> Result<()> {
+    if !skip_self {
+        names.push(field.name().to_string());
+    }
+    match field.data_type() {
+        DataType::Struct(fields) => {
+            for field in fields {
+                flatten_names(field, false, names)?;
+            }
+            Ok(())
+        }
+        DataType::List(l) => flatten_names(l, true, names),
+        DataType::LargeList(l) => flatten_names(l, true, names),
+        DataType::Map(m, _) => match m.data_type() {
+            DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
+                flatten_names(&key_and_value[0], true, names)?;
+                flatten_names(&key_and_value[1], true, names)
+            }
+            _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
+        },
+        _ => Ok(()),
+    }?;
+    Ok(())
+}
+
 fn to_substrait_named_struct(
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
 ) -> Result<NamedStruct> {
-    // Substrait wants a list of all field names, including nested fields from structs,
-    // also from within e.g. lists and maps. However, it does not want the list and map field names
-    // themselves - only proper structs fields are considered to have useful names.
-    fn names_dfs(dtype: &DataType) -> Result<Vec<String>> {
-        match dtype {
-            DataType::Struct(fields) => {
-                let mut names = Vec::new();
-                for field in fields {
-                    names.push(field.name().to_string());
-                    names.extend(names_dfs(field.data_type())?);
-                }
-                Ok(names)
-            }
-            DataType::List(l) => names_dfs(l.data_type()),
-            DataType::LargeList(l) => names_dfs(l.data_type()),
-            DataType::Map(m, _) => match m.data_type() {
-                DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
-                    let key_names =
-                        names_dfs(key_and_value.first().unwrap().data_type())?;
-                    let value_names =
-                        names_dfs(key_and_value.last().unwrap().data_type())?;
-                    Ok([key_names, value_names].concat())
-                }
-                _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
-            },
-            _ => Ok(Vec::new()),
-        }
+    let mut names = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        flatten_names(field, false, &mut names)?;
     }
-
-    let names = schema
-        .fields()
-        .iter()
-        .map(|f| {
-            let mut names = vec![f.name().to_string()];
-            names.extend(names_dfs(f.data_type())?);
-            Ok(names)
-        })
-        .flatten_ok()
-        .collect::<Result<_>>()?;
 
     let field_types = r#type::Struct {
         types: schema
@@ -2178,14 +2223,16 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
 mod test {
     use super::*;
     use crate::logical_plan::consumer::{
-        from_substrait_literal_without_names, from_substrait_type_without_names,
+        from_substrait_extended_expr, from_substrait_literal_without_names,
+        from_substrait_named_struct, from_substrait_type_without_names,
     };
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion::arrow::array::{
         GenericListArray, Int64Builder, MapBuilder, StringBuilder,
     };
-    use datafusion::arrow::datatypes::Field;
+    use datafusion::arrow::datatypes::{Field, Fields, Schema};
     use datafusion::common::scalar::ScalarStructBuilder;
+    use datafusion::common::DFSchema;
     use std::collections::HashMap;
 
     #[test]
@@ -2460,5 +2507,102 @@ mod test {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn named_struct_names() -> Result<()> {
+        let mut extensions = Extensions::default();
+        let schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![
+            Field::new("int", DataType::Int32, true),
+            Field::new(
+                "struct",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "inner",
+                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    true,
+                )])),
+                true,
+            ),
+            Field::new("trailer", DataType::Float64, true),
+        ]))?);
+
+        let named_struct = to_substrait_named_struct(&schema, &mut extensions)?;
+
+        // Struct field names should be flattened DFS style
+        // List field names should be omitted
+        assert_eq!(
+            named_struct.names,
+            vec!["int", "struct", "inner", "trailer"]
+        );
+
+        let roundtrip_schema = from_substrait_named_struct(&named_struct, &extensions)?;
+        assert_eq!(schema.as_ref(), &roundtrip_schema);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn extended_expressions() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        // One expression, empty input schema
+        let expr = Expr::Literal(ScalarValue::Int32(Some(42)));
+        let field = Field::new("out", DataType::Int32, false);
+        let empty_schema = DFSchemaRef::new(DFSchema::empty());
+        let substrait =
+            to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &ctx)?;
+        let roundtrip_expr = from_substrait_extended_expr(&ctx, &substrait).await?;
+
+        assert_eq!(roundtrip_expr.input_schema, empty_schema);
+        assert_eq!(roundtrip_expr.exprs.len(), 1);
+
+        let (rt_expr, rt_field) = roundtrip_expr.exprs.first().unwrap();
+        assert_eq!(rt_field, &field);
+        assert_eq!(rt_expr, &expr);
+
+        // Multiple expressions, with column references
+        let expr1 = Expr::Column("c0".into());
+        let expr2 = Expr::Column("c1".into());
+        let out1 = Field::new("out1", DataType::Int32, true);
+        let out2 = Field::new("out2", DataType::Utf8, true);
+        let input_schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![
+            Field::new("c0", DataType::Int32, true),
+            Field::new("c1", DataType::Utf8, true),
+        ]))?);
+
+        let substrait = to_substrait_extended_expr(
+            &[(&expr1, &out1), (&expr2, &out2)],
+            &input_schema,
+            &ctx,
+        )?;
+        let roundtrip_expr = from_substrait_extended_expr(&ctx, &substrait).await?;
+
+        assert_eq!(roundtrip_expr.input_schema, input_schema);
+        assert_eq!(roundtrip_expr.exprs.len(), 2);
+
+        let mut exprs = roundtrip_expr.exprs.into_iter();
+
+        let (rt_expr, rt_field) = exprs.next().unwrap();
+        assert_eq!(rt_field, out1);
+        assert_eq!(rt_expr, expr1);
+
+        let (rt_expr, rt_field) = exprs.next().unwrap();
+        assert_eq!(rt_field, out2);
+        assert_eq!(rt_expr, expr2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_extended_expression() {
+        let ctx = SessionContext::new();
+
+        // Not ok if input schema is missing field referenced by expr
+        let expr = Expr::Column("missing".into());
+        let field = Field::new("out", DataType::Int32, false);
+        let empty_schema = DFSchemaRef::new(DFSchema::empty());
+
+        let err = to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &ctx);
+
+        assert!(matches!(err, Err(DataFusionError::SchemaError(_, _))));
     }
 }
