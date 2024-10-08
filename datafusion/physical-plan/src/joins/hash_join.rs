@@ -306,7 +306,7 @@ pub struct HashJoinExec {
     pub join_type: JoinType,
     /// The schema after join. Please be careful when using this schema,
     /// if there is a projection, the schema isn't the same as the output schema.
-    join_schema: SchemaRef,
+    pub join_schema: SchemaRef,
     /// Future that consumes left input and builds the hash table
     left_fut: OnceAsync<JoinLeftData>,
     /// Shared the `RandomState` for the hashing algorithm
