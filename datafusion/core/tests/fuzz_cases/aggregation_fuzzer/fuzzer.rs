@@ -28,7 +28,14 @@ use crate::fuzz_cases::aggregation_fuzzer::{
     run_sql,
 };
 
+/// Rounds to call `generate` of [`DatasetGenerator`]
+/// in [`AggregationFuzzer`] `len(sort_keys_set) + 1` datasets
+/// will be generated for testing.
 const DATA_GEN_ROUNDS: usize = 16;
+
+/// Rounds to call `generate` of [`SessionContextGenerator`]
+/// in [`AggregationFuzzer`], `ctx_gen_rounds` random [`SessionContext`]
+/// will generated for each dataset for testing.
 const CTX_GEN_ROUNDS: usize = 16;
 
 /// Aggregation fuzzer's builder
