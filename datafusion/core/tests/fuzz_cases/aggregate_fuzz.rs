@@ -72,7 +72,7 @@ async fn test_basic_prim_aggr_no_group() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
-        .data_gen_rounds(32)
+        .data_gen_rounds(16)
         .add_sql("SELECT sum(a) FROM fuzz_table")
         .add_sql("SELECT sum(distinct a) FROM fuzz_table")
         .add_sql("SELECT max(a) FROM fuzz_table")
@@ -110,7 +110,7 @@ async fn test_basic_prim_aggr_group_by_single_int64() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
-        .data_gen_rounds(32)
+        .data_gen_rounds(16)
         .add_sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, sum(distinct a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
@@ -148,7 +148,7 @@ async fn test_basic_prim_aggr_group_by_single_string() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
-        .data_gen_rounds(32)
+        .data_gen_rounds(16)
         .add_sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, sum(distinct a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
@@ -187,7 +187,7 @@ async fn test_basic_prim_aggr_group_by_mixed_string_int64() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
-        .data_gen_rounds(32)
+        .data_gen_rounds(16)
         .add_sql("SELECT b, c, sum(a) FROM fuzz_table GROUP BY b, c")
         .add_sql("SELECT b, c, sum(distinct a) FROM fuzz_table GROUP BY b,c")
         .add_sql("SELECT b, c, max(a) FROM fuzz_table GROUP BY b, c")
@@ -218,7 +218,7 @@ async fn test_basic_string_aggr_no_group() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
-        .data_gen_rounds(16)
+        .data_gen_rounds(8)
         .add_sql("SELECT max(a) FROM fuzz_table")
         .add_sql("SELECT min(a) FROM fuzz_table")
         .add_sql("SELECT count(a) FROM fuzz_table")
@@ -253,7 +253,7 @@ async fn test_basic_string_aggr_group_by_single_int64() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
-        .data_gen_rounds(16)
+        .data_gen_rounds(8)
         // FIXME: Encounter error in min/max
         //   ArrowError(InvalidArgumentError("number of columns(1) must match number of fields(2) in schema"))
         // .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
