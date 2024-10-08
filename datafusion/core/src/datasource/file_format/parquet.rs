@@ -20,6 +20,7 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
+use std::ops::Range;
 use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
@@ -47,7 +48,7 @@ use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
+    internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
     DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
@@ -60,7 +61,7 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
-use bytes::{BufMut, BytesMut};
+use bytes::Bytes;
 use hashbrown::HashMap;
 use log::debug;
 use object_store::buffered::BufWriter;
@@ -71,8 +72,7 @@ use parquet::arrow::arrow_writer::{
 use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
 };
-use parquet::file::footer::{decode_footer, decode_metadata};
-use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
@@ -84,10 +84,13 @@ use crate::datasource::physical_plan::parquet::{
     can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
 };
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use futures::{StreamExt, TryStreamExt};
+use futures::future::BoxFuture;
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+use parquet::arrow::async_reader::MetadataFetch;
+use parquet::errors::ParquetError;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -441,6 +444,33 @@ impl FileFormat for ParquetFormat {
     }
 }
 
+/// [`MetadataFetch`] adapter for reading bytes from an [`ObjectStore`]
+struct ObjectStoreFetch<'a> {
+    store: &'a dyn ObjectStore,
+    meta: &'a ObjectMeta,
+}
+
+impl<'a> ObjectStoreFetch<'a> {
+    fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
+        Self { store, meta }
+    }
+}
+
+impl<'a> MetadataFetch for ObjectStoreFetch<'a> {
+    fn fetch(
+        &mut self,
+        range: Range<usize>,
+    ) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+        async {
+            self.store
+                .get_range(&self.meta.location, range)
+                .await
+                .map_err(ParquetError::from)
+        }
+        .boxed()
+    }
+}
+
 /// Fetches parquet metadata from ObjectStore for given object
 ///
 /// This component is a subject to **change** in near future and is exposed for low level integrations
@@ -452,57 +482,14 @@ pub async fn fetch_parquet_metadata(
     meta: &ObjectMeta,
     size_hint: Option<usize>,
 ) -> Result<ParquetMetaData> {
-    if meta.size < 8 {
-        return exec_err!("file size of {} is less than footer", meta.size);
-    }
+    let file_size = meta.size;
+    let fetch = ObjectStoreFetch::new(store, meta);
 
-    // If a size hint is provided, read more than the minimum size
-    // to try and avoid a second fetch.
-    let footer_start = if let Some(size_hint) = size_hint {
-        meta.size.saturating_sub(size_hint)
-    } else {
-        meta.size - 8
-    };
-
-    let suffix = store
-        .get_range(&meta.location, footer_start..meta.size)
-        .await?;
-
-    let suffix_len = suffix.len();
-
-    let mut footer = [0; 8];
-    footer.copy_from_slice(&suffix[suffix_len - 8..suffix_len]);
-
-    let length = decode_footer(&footer)?;
-
-    if meta.size < length + 8 {
-        return exec_err!(
-            "file size of {} is less than footer + metadata {}",
-            meta.size,
-            length + 8
-        );
-    }
-
-    // Did not fetch the entire file metadata in the initial read, need to make a second request
-    if length > suffix_len - 8 {
-        let metadata_start = meta.size - length - 8;
-        let remaining_metadata = store
-            .get_range(&meta.location, metadata_start..footer_start)
-            .await?;
-
-        let mut metadata = BytesMut::with_capacity(length);
-
-        metadata.put(remaining_metadata.as_ref());
-        metadata.put(&suffix[..suffix_len - 8]);
-
-        Ok(decode_metadata(metadata.as_ref())?)
-    } else {
-        let metadata_start = meta.size - length - 8;
-
-        Ok(decode_metadata(
-            &suffix[metadata_start - footer_start..suffix_len - 8],
-        )?)
-    }
+    ParquetMetaDataReader::new()
+        .with_prefetch_hint(size_hint)
+        .load_and_finish(fetch, file_size)
+        .await
+        .map_err(DataFusionError::from)
 }
 
 /// Read and parse the schema of the Parquet file at location `path`

@@ -19,6 +19,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction};
@@ -60,7 +61,17 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
 /// Count the number of distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
-    grouping_set_to_exprlist(group_expr).map(|exprs| exprs.len())
+    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
+        if group_expr.len() > 1 {
+            return plan_err!(
+                "Invalid group by expressions, GroupingSet must be the only expression"
+            );
+        }
+        // Groupings sets have an additional interal column for the grouping id
+        Ok(grouping_set.distinct_expr().len() + 1)
+    } else {
+        grouping_set_to_exprlist(group_expr).map(|exprs| exprs.len())
+    }
 }
 
 /// The [power set] (or powerset) of a set S is the set of all subsets of S, \
@@ -754,6 +765,15 @@ pub fn find_base_plan(input: &LogicalPlan) -> &LogicalPlan {
     match input {
         LogicalPlan::Window(window) => find_base_plan(&window.input),
         LogicalPlan::Aggregate(agg) => find_base_plan(&agg.input),
+        // [SqlToRel::try_process_unnest] will convert Expr(Unnest(Expr)) to Projection/Unnest/Projection
+        // We should expand the wildcard expression based on the input plan of the inner Projection.
+        LogicalPlan::Unnest(unnest) => {
+            if let LogicalPlan::Projection(projection) = unnest.input.deref() {
+                find_base_plan(&projection.input)
+            } else {
+                input
+            }
+        }
         LogicalPlan::Filter(filter) => {
             if filter.having {
                 // If a filter is used for a having clause, its input plan is an aggregation.

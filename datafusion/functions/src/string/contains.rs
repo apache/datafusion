@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::regexp_common::regexp_is_match_utf8;
 use crate::utils::make_scalar_function;
 
 use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, StringViewArray};
@@ -26,9 +25,12 @@ use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_expr::ScalarUDFImpl;
 use datafusion_expr::{ColumnarValue, Signature, Volatility};
+use datafusion_expr::{Documentation, ScalarUDFImpl};
 
+use arrow::compute::regexp_is_match;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug)]
 pub struct ContainsFunc {
@@ -69,6 +71,37 @@ impl ScalarUDFImpl for ContainsFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(contains, vec![])(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_contains_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_contains_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description(
+                "Return true if search_str is found within string (case-sensitive).",
+            )
+            .with_syntax_example("contains(str, search_str)")
+            .with_sql_example(
+                r#"```sql
+> select contains('the quick brown fox', 'row');
++---------------------------------------------------+
+| contains(Utf8("the quick brown fox"),Utf8("row")) |
++---------------------------------------------------+
+| true                                              |
++---------------------------------------------------+
+```"#,
+            )
+            .with_standard_argument("str", "String")
+            .with_argument("search_str", "The string to search for in str.")
+            .build()
+            .unwrap()
+    })
 }
 
 /// use regexp_is_match_utf8_scalar to do the calculation for contains
@@ -77,7 +110,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (Utf8View, Utf8View) => {
             let mod_str = args[0].as_string_view();
             let match_str = args[1].as_string_view();
-            let res = regexp_is_match_utf8::<
+            let res = regexp_is_match::<
                 StringViewArray,
                 StringViewArray,
                 GenericStringArray<i32>,
@@ -88,7 +121,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (Utf8, Utf8) => {
             let mod_str = args[0].as_string::<i32>();
             let match_str = args[1].as_string::<i32>();
-            let res = regexp_is_match_utf8::<
+            let res = regexp_is_match::<
                 GenericStringArray<i32>,
                 GenericStringArray<i32>,
                 GenericStringArray<i32>,
@@ -99,7 +132,7 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         (LargeUtf8, LargeUtf8) => {
             let mod_str = args[0].as_string::<i64>();
             let match_str = args[1].as_string::<i64>();
-            let res = regexp_is_match_utf8::<
+            let res = regexp_is_match::<
                 GenericStringArray<i64>,
                 GenericStringArray<i64>,
                 GenericStringArray<i32>,

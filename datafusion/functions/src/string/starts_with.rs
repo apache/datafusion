@@ -16,16 +16,17 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-
 use crate::utils::make_scalar_function;
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
@@ -78,6 +79,35 @@ impl ScalarUDFImpl for StartsWithFunc {
             _ => internal_err!("Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View")?,
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_starts_with_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_starts_with_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Tests if a string starts with a substring.")
+            .with_syntax_example("starts_with(str, substr)")
+            .with_sql_example(
+                r#"```sql
+> select starts_with('datafusion','data');
++----------------------------------------------+
+| starts_with(Utf8("datafusion"),Utf8("data")) |
++----------------------------------------------+
+| true                                         |
++----------------------------------------------+
+```"#,
+            )
+            .with_standard_argument("str", "String")
+            .with_argument("substr", "Substring to test for.")
+            .build()
+            .unwrap()
+    })
 }
 
 #[cfg(test)]
