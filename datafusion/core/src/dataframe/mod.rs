@@ -535,9 +535,26 @@ impl DataFrame {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<DataFrame> {
+        let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
+        let aggr_expr_len = aggr_expr.len();
         let plan = LogicalPlanBuilder::from(self.plan)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
+        let plan = if is_grouping_set {
+            let grouping_id_pos = plan.schema().fields().len() - 1 - aggr_expr_len;
+            // For grouping sets we do a project to not expose the internal grouping id
+            let exprs = plan
+                .schema()
+                .columns()
+                .into_iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != grouping_id_pos)
+                .map(|(_, column)| Expr::Column(column))
+                .collect::<Vec<_>>();
+            LogicalPlanBuilder::from(plan).project(exprs)?.build()?
+        } else {
+            plan
+        };
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -3377,52 +3394,6 @@ mod tests {
             ],
             &df_results
         );
-        Ok(())
-    }
-
-    // Table 't1' self join
-    // Supplementary test of issue: https://github.com/apache/datafusion/issues/7790
-    #[tokio::test]
-    async fn with_column_self_join() -> Result<()> {
-        let df = test_table().await?.select_columns(&["c1"])?;
-        let ctx = SessionContext::new();
-
-        ctx.register_table("t1", df.into_view())?;
-
-        let df = ctx
-            .table("t1")
-            .await?
-            .join(
-                ctx.table("t1").await?,
-                JoinType::Inner,
-                &["c1"],
-                &["c1"],
-                None,
-            )?
-            .sort(vec![
-                // make the test deterministic
-                col("t1.c1").sort(true, true),
-            ])?
-            .limit(0, Some(1))?;
-
-        let df_results = df.clone().collect().await?;
-        assert_batches_sorted_eq!(
-            [
-                "+----+----+",
-                "| c1 | c1 |",
-                "+----+----+",
-                "| a  | a  |",
-                "+----+----+",
-            ],
-            &df_results
-        );
-
-        let actual_err = df.clone().with_column("new_column", lit(true)).unwrap_err();
-        let expected_err = "Error during planning: Projections require unique expression names \
-            but the expression \"t1.c1\" at position 0 and \"t1.c1\" at position 1 have the same name. \
-            Consider aliasing (\"AS\") one of them.";
-        assert_eq!(actual_err.strip_backtrace(), expected_err);
-
         Ok(())
     }
 

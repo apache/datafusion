@@ -149,6 +149,10 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
     fn dyn_ord(&self, _: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
         unimplemented!()
     }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
+    }
 }
 
 impl MockUserDefinedLogicalPlan {
@@ -290,8 +294,9 @@ async fn aggregate_grouping_sets() -> Result<()> {
 async fn aggregate_grouping_rollup() -> Result<()> {
     assert_expected_plan(
         "SELECT a, c, e, avg(b) FROM data GROUP BY ROLLUP (a, c, e)",
-        "Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
-        \n  TableScan: data projection=[a, b, c, e]",
+        "Projection: data.a, data.c, data.e, avg(data.b)\
+        \n  Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
+        \n    TableScan: data projection=[a, b, c, e]",
         true
     ).await
 }

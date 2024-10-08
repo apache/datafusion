@@ -1906,10 +1906,8 @@ select position('' in '')
 ----
 1
 
-
-query error POSITION function can only accept strings
+query error DataFusion error: Error during planning: Error during planning: Int64 and Int64 are not coercible to a common string
 select position(1 in 1)
-
 
 query I
 select strpos('abc', 'c');

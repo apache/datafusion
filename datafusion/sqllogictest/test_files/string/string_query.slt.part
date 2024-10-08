@@ -856,39 +856,47 @@ NULL NULL
 # Test REGEXP_LIKE
 # --------------------------------------
 
-# TODO: LargeString does not support REGEXP_LIKE. Enable this after fixing the issue
-# see issue: https://github.com/apache/datafusion/issues/12664
-#query BBBB
-#SELECT
-#  REGEXP_LIKE(ascii_1, 'an'),
-#  REGEXP_LIKE(unicode_1, 'таФ'),
-#  REGEXP_LIKE(ascii_1, NULL),
-#  REGEXP_LIKE(unicode_1, NULL)
-#FROM test_basic_operator;
-#----
-#false false NULL NULL
-#true false NULL NULL
-#false true NULL NULL
-#NULL NULL NULL NULL
+query BBBBBBBB
+SELECT
+  -- without flags
+  REGEXP_LIKE(ascii_1, 'an'),
+  REGEXP_LIKE(unicode_1, 'таФ'),
+  REGEXP_LIKE(ascii_1, NULL),
+  REGEXP_LIKE(unicode_1, NULL),
+  -- with flags
+  REGEXP_LIKE(ascii_1, 'AN', 'i'),
+  REGEXP_LIKE(unicode_1, 'ТаФ', 'i'),
+  REGEXP_LIKE(ascii_1, NULL, 'i'),
+  REGEXP_LIKE(unicode_1, NULL, 'i')
+  FROM test_basic_operator;
+----
+false false NULL NULL true false NULL NULL
+true false NULL NULL true false NULL NULL
+false true NULL NULL false true NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
 # Test REGEXP_MATCH
 # --------------------------------------
 
-# TODO: LargeString does not support REGEXP_MATCH. Enable this after fixing the issue
-# see issue: https://github.com/apache/datafusion/issues/12664
-#query ????
-#SELECT
-#  REGEXP_MATCH(ascii_1, 'an'),
-#  REGEXP_MATCH(unicode_1, 'таФ'),
-#  REGEXP_MATCH(ascii_1, NULL),
-#  REGEXP_MATCH(unicode_1, NULL)
-#FROM test_basic_operator;
-#----
-#NULL NULL NULL NULL
-#[an] NULL NULL NULL
-#NULL [таФ] NULL NULL
-#NULL NULL NULL NULL
+query ????????
+SELECT
+  -- without flags
+  REGEXP_MATCH(ascii_1, 'an'),
+  REGEXP_MATCH(unicode_1, 'ТаФ'),
+  REGEXP_MATCH(ascii_1, NULL),
+  REGEXP_MATCH(unicode_1, NULL),
+  -- with flags
+  REGEXP_MATCH(ascii_1, 'AN', 'i'),
+  REGEXP_MATCH(unicode_1, 'таФ', 'i'),
+  REGEXP_MATCH(ascii_1, NULL, 'i'),
+  REGEXP_MATCH(unicode_1, NULL, 'i')
+FROM test_basic_operator;
+----
+NULL NULL NULL NULL [An] NULL NULL NULL
+[an] NULL NULL NULL [an] NULL NULL NULL
+NULL NULL NULL NULL NULL [таФ] NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
 # Test REPEAT
@@ -943,22 +951,20 @@ NULL NULL
 # Test STRPOS
 # --------------------------------------
 
-# TODO: DictionaryString does not support STRPOS. Enable this after fixing the issue
-# see issue: https://github.com/apache/datafusion/issues/12670
-#query IIIIII
-#SELECT
-#  STRPOS(ascii_1, 'e'),
-#  STRPOS(ascii_1, 'ang'),
-#  STRPOS(ascii_1, NULL),
-#  STRPOS(unicode_1, 'и'),
-#  STRPOS(unicode_1, 'ион'),
-#  STRPOS(unicode_1, NULL)
-#FROM test_basic_operator;
-#----
-#5 0 NULL 0 0 NULL
-#7 3 NULL 0 0 NULL
-#6 0 NULL 18 18 NULL
-#NULL NULL NULL NULL NULL NULL
+query IIIIII
+SELECT
+  STRPOS(ascii_1, 'e'),
+  STRPOS(ascii_1, 'ang'),
+  STRPOS(ascii_1, NULL),
+  STRPOS(unicode_1, 'и'),
+  STRPOS(unicode_1, 'ион'),
+  STRPOS(unicode_1, NULL)
+FROM test_basic_operator;
+----
+5 0 NULL 0 0 NULL
+7 3 NULL 0 0 NULL
+6 0 NULL 18 18 NULL
+NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
 # Test SUBSTR_INDEX

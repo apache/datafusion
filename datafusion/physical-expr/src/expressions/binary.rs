@@ -27,9 +27,7 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
-use arrow::compute::kernels::comparison::{
-    regexp_is_match_utf8, regexp_is_match_utf8_scalar,
-};
+use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
@@ -179,7 +177,7 @@ macro_rules! compute_utf8_flag_op {
         } else {
             None
         };
-        let mut array = paste::expr! {[<$OP _utf8>]}(&ll, &rr, flag.as_ref())?;
+        let mut array = $OP(ll, rr, flag.as_ref())?;
         if $NOT {
             array = not(&array).unwrap();
         }
@@ -216,7 +214,7 @@ macro_rules! compute_utf8_flag_op_scalar {
         if let ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT {
             let flag = $FLAG.then_some("i");
             let mut array =
-                paste::expr! {[<$OP _utf8_scalar>]}(&ll, &string_value, flag)?;
+                paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
             if $NOT {
                 array = not(&array).unwrap();
             }

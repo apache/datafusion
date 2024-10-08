@@ -619,7 +619,9 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
     } = original_expr.clone().rewrite(&mut rewriter)?;
 
     if !transformed {
-        if matches!(&transformed_expr, Expr::Column(_)) {
+        if matches!(&transformed_expr, Expr::Column(_))
+            || matches!(&transformed_expr, Expr::Wildcard { .. })
+        {
             push_projection_dedupl(inner_projection_exprs, transformed_expr.clone());
             Ok(vec![transformed_expr])
         } else {

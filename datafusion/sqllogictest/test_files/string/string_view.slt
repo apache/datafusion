@@ -50,53 +50,6 @@ false false
 false true
 NULL NULL
 
-# TODO: move it back to `string_query.slt.part` after fixing the issue
-# see detail: https://github.com/apache/datafusion/issues/12664
-query BBBB
-SELECT
-  REGEXP_LIKE(ascii_1, 'an'),
-  REGEXP_LIKE(unicode_1, 'таФ'),
-  REGEXP_LIKE(ascii_1, NULL),
-  REGEXP_LIKE(unicode_1, NULL)
-FROM test_basic_operator;
-----
-false false NULL NULL
-true false NULL NULL
-false true NULL NULL
-NULL NULL NULL NULL
-
-# TODO: move it back to `string_query.slt.part` after fixing the issue
-# see detail: https://github.com/apache/datafusion/issues/12664
-query ????
-SELECT
-  REGEXP_MATCH(ascii_1, 'an'),
-  REGEXP_MATCH(unicode_1, 'таФ'),
-  REGEXP_MATCH(ascii_1, NULL),
-  REGEXP_MATCH(unicode_1, NULL)
-FROM test_basic_operator;
-----
-NULL NULL NULL NULL
-[an] NULL NULL NULL
-NULL [таФ] NULL NULL
-NULL NULL NULL NULL
-
-# TODO: move it back to `string_query.slt.part` after fixing the issue
-# see detail: https://github.com/apache/datafusion/issues/12670
-query IIIIII
-SELECT
-  STRPOS(ascii_1, 'e'),
-  STRPOS(ascii_1, 'ang'),
-  STRPOS(ascii_1, NULL),
-  STRPOS(unicode_1, 'и'),
-  STRPOS(unicode_1, 'ион'),
-  STRPOS(unicode_1, NULL)
-FROM test_basic_operator;
-----
-5 0 NULL 0 0 NULL
-7 3 NULL 0 0 NULL
-6 0 NULL 18 18 NULL
-NULL NULL NULL NULL NULL NULL
-
 #
 # common test for string-like functions and operators
 #
@@ -138,6 +91,21 @@ FROM test_source;
 
 statement ok
 drop table test_source
+
+########
+## StringView Function test
+########
+
+query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
+select bit_length(column1_utf8view) from test;
+
+query T
+select btrim(column1_large_utf8) from test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
 
 ########
 ## StringView to Other Types column
@@ -346,9 +314,8 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(__common_expr_1, test.column2_utf8view) AS c1, starts_with(test.column1_utf8, test.column2_utf8) AS c3, starts_with(__common_expr_1, CAST(test.column2_large_utf8 AS Utf8View)) AS c4
-02)--Projection: CAST(test.column1_utf8 AS Utf8View) AS __common_expr_1, test.column1_utf8, test.column2_utf8, test.column2_large_utf8, test.column2_utf8view
-03)----TableScan: test projection=[column1_utf8, column2_utf8, column2_large_utf8, column2_utf8view]
+01)Projection: starts_with(CAST(test.column1_utf8 AS Utf8View), test.column2_utf8view) AS c1, starts_with(test.column1_utf8, test.column2_utf8) AS c3, starts_with(CAST(test.column1_utf8 AS LargeUtf8), test.column2_large_utf8) AS c4
+02)--TableScan: test projection=[column1_utf8, column2_utf8, column2_large_utf8, column2_utf8view]
 
 query BBB
  SELECT
@@ -638,7 +605,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: contains(test.column1_utf8view, Utf8("foo")) AS c1, contains(test.column1_utf8view, test.column2_utf8view) AS c2, contains(test.column1_utf8view, test.column2_large_utf8) AS c3, contains(test.column1_utf8, test.column2_utf8view) AS c4, contains(test.column1_utf8, test.column2_utf8) AS c5, contains(test.column1_utf8, test.column2_large_utf8) AS c6, contains(test.column1_large_utf8, test.column1_utf8view) AS c7, contains(test.column1_large_utf8, test.column2_utf8) AS c8, contains(test.column1_large_utf8, test.column2_large_utf8) AS c9
+01)Projection: contains(test.column1_utf8view, Utf8View("foo")) AS c1, contains(test.column1_utf8view, test.column2_utf8view) AS c2, contains(test.column1_utf8view, CAST(test.column2_large_utf8 AS Utf8View)) AS c3, contains(CAST(test.column1_utf8 AS Utf8View), test.column2_utf8view) AS c4, contains(test.column1_utf8, test.column2_utf8) AS c5, contains(CAST(test.column1_utf8 AS LargeUtf8), test.column2_large_utf8) AS c6, contains(CAST(test.column1_large_utf8 AS Utf8View), test.column1_utf8view) AS c7, contains(test.column1_large_utf8, CAST(test.column2_utf8 AS LargeUtf8)) AS c8, contains(test.column1_large_utf8, test.column2_large_utf8) AS c9
 02)--TableScan: test projection=[column1_utf8, column2_utf8, column1_large_utf8, column2_large_utf8, column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for ENDS_WITH
@@ -882,7 +849,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: strpos(test.column1_utf8view, Utf8("f")) AS c, strpos(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: strpos(test.column1_utf8view, Utf8View("f")) AS c, strpos(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for SUBSTR

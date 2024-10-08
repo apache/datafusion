@@ -104,6 +104,11 @@ required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
+name = "encoding"
+required-features = ["encoding_expressions"]
+
+[[bench]]
+harness = false
 name = "regx"
 required-features = ["regex_expressions"]
 
