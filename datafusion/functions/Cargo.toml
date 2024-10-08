@@ -74,6 +74,7 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true }
 hashbrown = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }

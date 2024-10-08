@@ -27,7 +27,7 @@ use datafusion_common::{
     Result,
 };
 use datafusion_expr_common::{
-    logical_type::LogicalType,
+    logical_type::{logical_string, LogicalType},
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
     type_coercion::binary::string_coercion,
 };
@@ -385,34 +385,23 @@ fn get_valid_types(
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
         TypeSignature::String(number) => {
-            if *number < 1 {
-                return plan_err!(
-                    "The signature expected at least one argument but received {}",
-                    current_types.len()
-                );
-            }
-            if *number != current_types.len() {
-                return plan_err!(
-                    "The signature expected {} arguments but received {}",
-                    number,
-                    current_types.len()
-                );
-            }
+            let data_types = get_valid_types(
+                &TypeSignature::Coercible(vec![logical_string(); *number]),
+                current_types,
+            )?
+            .swap_remove(0);
 
-            fn coercion_rule(
+            // Find the common string type for the given types
+            fn find_common_type(
                 lhs_type: &DataType,
                 rhs_type: &DataType,
             ) -> Result<DataType> {
                 match (lhs_type, rhs_type) {
-                    (DataType::Null, DataType::Null) => Ok(DataType::Utf8),
-                    (DataType::Null, data_type) | (data_type, DataType::Null) => {
-                        coercion_rule(data_type, &DataType::Utf8)
-                    }
                     (DataType::Dictionary(_, lhs), DataType::Dictionary(_, rhs)) => {
-                        coercion_rule(lhs, rhs)
+                        find_common_type(lhs, rhs)
                     }
                     (DataType::Dictionary(_, v), other)
-                    | (other, DataType::Dictionary(_, v)) => coercion_rule(v, other),
+                    | (other, DataType::Dictionary(_, v)) => find_common_type(v, other),
                     _ => {
                         if let Some(coerced_type) = string_coercion(lhs_type, rhs_type) {
                             Ok(coerced_type)
@@ -428,15 +417,13 @@ fn get_valid_types(
             }
 
             // Length checked above, safe to unwrap
-            let mut coerced_type = current_types.first().unwrap().to_owned();
-            for t in current_types.iter().skip(1) {
-                coerced_type = coercion_rule(&coerced_type, t)?;
+            let mut coerced_type = data_types.first().unwrap().to_owned();
+            for t in data_types.iter().skip(1) {
+                coerced_type = find_common_type(&coerced_type, t)?;
             }
 
             fn base_type_or_default_type(data_type: &DataType) -> DataType {
-                if data_type.is_null() {
-                    DataType::Utf8
-                } else if let DataType::Dictionary(_, v) = data_type {
+                if let DataType::Dictionary(_, v) = data_type {
                     base_type_or_default_type(v)
                 } else {
                     data_type.to_owned()

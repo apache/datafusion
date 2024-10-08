@@ -17,7 +17,7 @@
 
 use std::{
     hash::Hash,
-    sync::{Arc, LazyLock},
+    sync::{Arc, OnceLock},
 };
 
 use arrow::datatypes::DataType;
@@ -61,10 +61,13 @@ impl LogicalType for String {
     }
 
     fn can_decode_to(&self, data_type: &DataType) -> bool {
-        matches!(
-            data_type,
-            DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8
-        )
+        match data_type {
+            DataType::Dictionary(_, v) => self.can_decode_to(v),
+            _ => matches!(
+                data_type,
+                DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8
+            ),
+        }
     }
 
     fn decode_types(&self) -> Vec<DataType> {
@@ -106,27 +109,25 @@ impl_logical_type!(Float32, "f32");
 impl_logical_type!(Float16, "f16");
 
 // Singleton instances
-pub static LOGICAL_STRING: LazyLock<LogicalTypeRef> = LazyLock::new(|| Arc::new(String));
-pub static LOGICAL_FLOAT16: LazyLock<LogicalTypeRef> =
-    LazyLock::new(|| Arc::new(Float16));
-pub static LOGICAL_FLOAT32: LazyLock<LogicalTypeRef> =
-    LazyLock::new(|| Arc::new(Float32));
-pub static LOGICAL_FLOAT64: LazyLock<LogicalTypeRef> =
-    LazyLock::new(|| Arc::new(Float64));
+// TODO: Replace with LazyLock
+pub static LOGICAL_STRING: OnceLock<LogicalTypeRef> = OnceLock::new();
+pub static LOGICAL_FLOAT16: OnceLock<LogicalTypeRef> = OnceLock::new();
+pub static LOGICAL_FLOAT32: OnceLock<LogicalTypeRef> = OnceLock::new();
+pub static LOGICAL_FLOAT64: OnceLock<LogicalTypeRef> = OnceLock::new();
 
 // Usage functions
 pub fn logical_string() -> LogicalTypeRef {
-    Arc::clone(&LOGICAL_STRING)
+    Arc::clone(LOGICAL_STRING.get_or_init(|| Arc::new(String)))
 }
 
 pub fn logical_float16() -> LogicalTypeRef {
-    Arc::clone(&LOGICAL_FLOAT16)
+    Arc::clone(LOGICAL_FLOAT16.get_or_init(|| Arc::new(Float16)))
 }
 
 pub fn logical_float32() -> LogicalTypeRef {
-    Arc::clone(&LOGICAL_FLOAT32)
+    Arc::clone(LOGICAL_FLOAT32.get_or_init(|| Arc::new(Float32)))
 }
 
 pub fn logical_float64() -> LogicalTypeRef {
-    Arc::clone(&LOGICAL_FLOAT64)
+    Arc::clone(LOGICAL_FLOAT64.get_or_init(|| Arc::new(Float64)))
 }
