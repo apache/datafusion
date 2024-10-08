@@ -86,7 +86,7 @@ async fn test_basic_prim_aggr_no_group() {
     fuzzer.run().await;
 }
 
-/// Fuzz test for `prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single int64`
+/// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single int64`
 #[tokio::test(flavor = "multi_thread")]
 async fn test_basic_prim_aggr_group_by_single_int64() {
     let builder = AggregationFuzzerBuilder::default();
@@ -124,7 +124,7 @@ async fn test_basic_prim_aggr_group_by_single_int64() {
     fuzzer.run().await;
 }
 
-/// Fuzz test for `prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single string`
+/// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single string`
 #[tokio::test(flavor = "multi_thread")]
 async fn test_basic_prim_aggr_group_by_single_string() {
     let builder = AggregationFuzzerBuilder::default();
@@ -162,7 +162,7 @@ async fn test_basic_prim_aggr_group_by_single_string() {
     fuzzer.run().await;
 }
 
-/// Fuzz test for `prim aggr(sum/sum distinct/max/min/count/avg)` + `group by string + int64`
+/// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `group by string + int64`
 #[tokio::test(flavor = "multi_thread")]
 async fn test_basic_prim_aggr_group_by_mixed_string_int64() {
     let builder = AggregationFuzzerBuilder::default();
@@ -229,7 +229,7 @@ async fn test_basic_string_aggr_no_group() {
     fuzzer.run().await;
 }
 
-/// Fuzz test for `simple string aggr(count/count distinct/min/max)` + `group by single int64`
+/// Fuzz test for `basic string aggr(count/count distinct/min/max)` + `group by single int64`
 #[tokio::test(flavor = "multi_thread")]
 async fn test_basic_string_aggr_group_by_single_int64() {
     let builder = AggregationFuzzerBuilder::default();
@@ -266,7 +266,7 @@ async fn test_basic_string_aggr_group_by_single_int64() {
     fuzzer.run().await;
 }
 
-/// Fuzz test for `simple string aggr(count/count distinct/min/max)` + `group by single string`
+/// Fuzz test for `basic string aggr(count/count distinct/min/max)` + `group by single string`
 #[tokio::test(flavor = "multi_thread")]
 async fn test_basic_string_aggr_group_by_single_string() {
     let builder = AggregationFuzzerBuilder::default();
@@ -303,7 +303,7 @@ async fn test_basic_string_aggr_group_by_single_string() {
     fuzzer.run().await;
 }
 
-/// Fuzz test for `simple string aggr(count/count distinct/min/max)` + `group by string + int64`
+/// Fuzz test for `basic string aggr(count/count distinct/min/max)` + `group by string + int64`
 #[tokio::test(flavor = "multi_thread")]
 async fn test_basic_string_aggr_group_by_mixed_string_int64() {
     let builder = AggregationFuzzerBuilder::default();
