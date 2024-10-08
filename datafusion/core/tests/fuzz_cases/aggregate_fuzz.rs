@@ -55,7 +55,40 @@ use crate::fuzz_cases::aggregation_fuzzer::{
 // TODO: write more test case to cover more `group by`s and `aggregation function`s
 // TODO: maybe we can use macro to simply the case creating
 
-/// Fuzz test for group by `single int64`
+/// Fuzz test for `prim aggr(sum/sum distinct/max/min/count/avg)` + `no group by`
+#[tokio::test(flavor = "multi_thread")]
+async fn test_prim_aggr_no_group() {
+    let builder = AggregationFuzzerBuilder::default();
+
+    // Define data generator config
+    let columns = vec![
+        ColumnDescr::new("a", DataType::Int32),
+    ];
+
+    let data_gen_config = DatasetGeneratorConfig {
+        columns,
+        rows_num_range: (512, 1024),
+        sort_keys_set: Vec::new(),
+    };
+
+    // Build fuzzer
+    let fuzzer = builder
+        .data_gen_config(data_gen_config)
+        .data_gen_rounds(32)
+        .add_sql("SELECT sum(a) FROM fuzz_table")
+        .add_sql("SELECT sum(distinct a) FROM fuzz_table")
+        .add_sql("SELECT max(a) FROM fuzz_table")
+        .add_sql("SELECT min(a) FROM fuzz_table")
+        .add_sql("SELECT count(a) FROM fuzz_table")
+        .add_sql("SELECT count(distinct a) FROM fuzz_table")
+        .add_sql("SELECT avg(a) FROM fuzz_table")
+        .table_name("fuzz_table")
+        .build();
+
+    fuzzer.run().await;
+}
+
+/// Fuzz test for `prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single int64`
 #[tokio::test(flavor = "multi_thread")]
 async fn test_group_by_single_int64() {
     let builder = AggregationFuzzerBuilder::default();
@@ -93,7 +126,7 @@ async fn test_group_by_single_int64() {
     fuzzer.run().await;
 }
 
-/// Fuzz test for group by `single string`
+/// Fuzz test for `prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single string`
 #[tokio::test(flavor = "multi_thread")]
 async fn test_group_by_single_string() {
     let builder = AggregationFuzzerBuilder::default();
@@ -131,7 +164,7 @@ async fn test_group_by_single_string() {
     fuzzer.run().await;
 }
 
-/// Fuzz test for group by `string + int64`
+/// Fuzz test for `prim aggr(sum/sum distinct/max/min/count/avg)` + `group by string + int64`
 #[tokio::test(flavor = "multi_thread")]
 async fn test_group_by_mixed_string_int64() {
     let builder = AggregationFuzzerBuilder::default();
