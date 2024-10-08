@@ -19,15 +19,36 @@ use datafusion_common::arrow::datatypes::DataType;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 
+/// Defines the state of the user-defined window function during
+/// physical execution.
 #[derive(Debug, Default)]
 pub struct PartitionEvaluatorArgs<'a> {
+    /// The expressions passed as arguments to the user-defined window
+    /// function.
     input_exprs: &'a [Arc<dyn PhysicalExpr>],
+    /// The corresponding data types of expressions passed as arguments
+    /// to the user-defined window function.
     input_types: &'a [DataType],
+    /// Set to `true` if the user-defined window function is reversed.
     is_reversed: bool,
+    /// Set to `true` if `IGNORE NULLS` is specified.
     ignore_nulls: bool,
 }
 
 impl<'a> PartitionEvaluatorArgs<'a> {
+    /// Create an instance of [`PartitionEvaluatorArgs`].
+    ///
+    /// # Arguments
+    ///
+    /// * `input_exprs` - The expressions passed as arguments
+    ///     to the user-defined window function.
+    /// * `input_types` - The data types corresponding to the
+    ///     arguments to the user-defined window function.
+    /// * `is_reversed` - Set to `true` if and only if the user-defined
+    ///     window function is reversible and is reversed.
+    /// * `ignore_nulls` - Set to `true` when `IGNORE NULLS` is
+    ///     specified.
+    ///
     pub fn new(
         input_exprs: &'a [Arc<dyn PhysicalExpr>],
         input_types: &'a [DataType],
@@ -42,18 +63,26 @@ impl<'a> PartitionEvaluatorArgs<'a> {
         }
     }
 
+    /// Returns `Some(expr)` argument at index if it exists, otherwise
+    /// returns `None`.
     pub fn input_expr_at(&self, index: usize) -> Option<&Arc<dyn PhysicalExpr>> {
         self.input_exprs.get(index)
     }
 
+    /// Returns `Some(data_type)`, the `DataType` of the expression at
+    /// index if it exists, otherwise returns `None`.
     pub fn input_types_at(&self, index: usize) -> Option<&DataType> {
         self.input_types.get(index)
     }
 
+    /// Returns `true` when the user-defined window function is
+    /// reversed, otherwise returns `false`.
     pub fn is_reversed(&self) -> bool {
         self.is_reversed
     }
 
+    /// Returns `true` when `IGNORE NULLS` is specified, otherwise
+    /// returns `false`.
     pub fn ignore_nulls(&self) -> bool {
         self.ignore_nulls
     }
