@@ -79,7 +79,6 @@ async fn test_group_by_single_int64() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
-        .data_gen_rounds(20)
         .sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b")
         .table_name("fuzz_table")
         .build();
@@ -111,7 +110,6 @@ async fn test_group_by_single_string() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
-        .data_gen_rounds(20)
         .sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b")
         .table_name("fuzz_table")
         .build();
@@ -144,7 +142,6 @@ async fn test_group_by_mixed_string_int64() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
-        .data_gen_rounds(20)
         .sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b,c")
         .table_name("fuzz_table")
         .build();
