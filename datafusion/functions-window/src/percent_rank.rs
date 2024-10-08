@@ -37,7 +37,7 @@ use field::WindowUDFFieldArgs;
 define_udwf_and_expr!(
     PercentRank,
     percent_rank,
-    "Returns the relative rank of the current row within a window partition."
+    "Returns the relative rank of the current row: (rank - 1) / (total rows - 1)"
 );
 
 /// percent_rank expression

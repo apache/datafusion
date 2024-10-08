@@ -83,10 +83,8 @@ impl MockSessionState {
     }
 
     pub fn with_window_function(mut self, window_function: Arc<WindowUDF>) -> Self {
-        self.window_functions.insert(
-            window_function.name().to_string().to_lowercase(),
-            window_function,
-        );
+        self.window_functions
+            .insert(window_function.name().to_string(), window_function);
         self
     }
 }

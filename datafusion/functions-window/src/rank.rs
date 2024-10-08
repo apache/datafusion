@@ -38,7 +38,7 @@ use field::WindowUDFFieldArgs;
 define_udwf_and_expr!(
     Rank,
     rank,
-    "Returns the rank of each row within a window partition, with gaps."
+    "Returns rank of the current row with gaps. Same as `row_number` of its first peer"
 );
 
 /// rank expression

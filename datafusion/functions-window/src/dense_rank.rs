@@ -39,7 +39,7 @@ use field::WindowUDFFieldArgs;
 define_udwf_and_expr!(
     DenseRank,
     dense_rank,
-    "Returns the rank of each row within a window partition without gaps."
+    "Returns rank of the current row without gaps. This function counts peer groups"
 );
 
 /// dense_rank expression
