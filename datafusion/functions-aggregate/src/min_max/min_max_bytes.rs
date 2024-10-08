@@ -15,15 +15,13 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, BinaryViewArray,
-    BinaryViewBuilder, BooleanArray, LargeBinaryArray, LargeBinaryBuilder,
-    LargeStringArray, LargeStringBuilder, StringArray, StringBuilder, StringViewArray,
-    StringViewBuilder,
+    Array, ArrayRef, AsArray, BinaryBuilder, BinaryViewBuilder, BooleanArray,
+    LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
 };
 use arrow_schema::DataType;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use std::sync::Arc;
 
 /// Implements Min/Max accumulators for "bytes" types ([`StringArray`], [`BinaryArray`], etc)
@@ -66,6 +64,9 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
         assert_eq!(array.len(), group_indices.len());
         // Ensure the input matches the output
         assert_eq!(array.data_type(), &self.inner.data_type);
+
+        // apply filter if needed
+        let array = apply_filter_as_nulls(array, opt_filter)?;
 
         // dispatch to appropriate kernel / specialized implementation
         fn string_min(a: &[u8], b: &[u8]) -> bool {
@@ -323,96 +324,7 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
     ) -> Result<Vec<ArrayRef>> {
         // Min/max do not change the values as they are their own states
         // apply the filter by combining with the null mask, if any
-        let input = &values[0];
-        let nulls = filtered_null_mask(opt_filter, input);
-        if let Some(nulls) = nulls.as_ref() {
-            assert_eq!(nulls.len(), input.len());
-        }
-
-        let output: ArrayRef = match input.data_type() {
-            // TODO it would be nice to have safe apis in arrow-rs to update the null buffers in the arrays
-            DataType::Utf8 => {
-                let input = input.as_string::<i32>();
-                // safety: values / offsets came from a valid string array, so are valid utf8
-                // and we checked nulls has the same length as values
-                unsafe {
-                    Arc::new(StringArray::new_unchecked(
-                        input.offsets().clone(),
-                        input.values().clone(),
-                        nulls,
-                    ))
-                }
-            }
-            DataType::LargeUtf8 => {
-                let input = input.as_string::<i64>();
-                // safety: values / offsets came from a valid string array, so are valid utf8
-                // and we checked nulls has the same length as values
-                unsafe {
-                    Arc::new(LargeStringArray::new_unchecked(
-                        input.offsets().clone(),
-                        input.values().clone(),
-                        nulls,
-                    ))
-                }
-            }
-            DataType::Utf8View => {
-                let input = input.as_string_view();
-                // safety: values / views came from a valid string view array, so are valid utf8
-                // and we checked nulls has the same length as values
-                unsafe {
-                    Arc::new(StringViewArray::new_unchecked(
-                        input.views().clone(),
-                        input.data_buffers().to_vec(),
-                        nulls,
-                    ))
-                }
-            }
-
-            DataType::Binary => {
-                let input = input.as_binary::<i32>();
-                // safety: values / offsets came from a valid binary array
-                // and we checked nulls has the same length as values
-                unsafe {
-                    Arc::new(BinaryArray::new_unchecked(
-                        input.offsets().clone(),
-                        input.values().clone(),
-                        nulls,
-                    ))
-                }
-            }
-            DataType::LargeBinary => {
-                let input = input.as_binary::<i64>();
-                // safety: values / offsets came from a valid large binary array
-                // and we checked nulls has the same length as values
-                unsafe {
-                    Arc::new(LargeBinaryArray::new_unchecked(
-                        input.offsets().clone(),
-                        input.values().clone(),
-                        nulls,
-                    ))
-                }
-            }
-            DataType::BinaryView => {
-                let input = input.as_binary_view();
-                // safety: values / views came from a valid binary view array
-                // and we checked nulls has the same length as values
-                unsafe {
-                    Arc::new(BinaryViewArray::new_unchecked(
-                        input.views().clone(),
-                        input.data_buffers().to_vec(),
-                        nulls,
-                    ))
-                }
-            }
-            _ => {
-                return internal_err!(
-                    "Unexpected data type for convert_to_state in MinMaxBytesAccumulator: {:?}",
-                    self.inner.data_type
-                );
-            }
-        };
-        assert_eq!(input.len(), output.len());
-        assert_eq!(input.data_type(), output.data_type());
+        let output = apply_filter_as_nulls(&values[0], opt_filter)?;
         Ok(vec![output])
     }
 
