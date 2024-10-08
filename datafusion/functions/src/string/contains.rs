@@ -85,77 +85,11 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 
             Ok(Arc::new(res) as ArrayRef)
         }
-        (Utf8View, Utf8) => {
-            let mod_str = args[0].as_string_view();
-            let match_str = args[1].as_string::<i32>();
-            let res = regexp_is_match_utf8::<
-                StringViewArray,
-                GenericStringArray<i32>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (Utf8View, LargeUtf8) => {
-            let mod_str = args[0].as_string_view();
-            let match_str = args[1].as_string::<i64>();
-            let res = regexp_is_match_utf8::<
-                StringViewArray,
-                GenericStringArray<i64>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (Utf8, Utf8View) => {
-            let mod_str = args[0].as_string::<i32>();
-            let match_str = args[1].as_string_view();
-            let res = regexp_is_match_utf8::<
-                GenericStringArray<i32>,
-                StringViewArray,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
         (Utf8, Utf8) => {
             let mod_str = args[0].as_string::<i32>();
             let match_str = args[1].as_string::<i32>();
             let res = regexp_is_match_utf8::<
                 GenericStringArray<i32>,
-                GenericStringArray<i32>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (Utf8, LargeUtf8) => {
-            let mod_str = args[0].as_string::<i32>();
-            let match_str = args[1].as_string::<i64>();
-            let res = regexp_is_match_utf8::<
-                GenericStringArray<i32>,
-                GenericStringArray<i64>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (LargeUtf8, Utf8View) => {
-            let mod_str = args[0].as_string::<i64>();
-            let match_str = args[1].as_string_view();
-            let res = regexp_is_match_utf8::<
-                GenericStringArray<i64>,
-                StringViewArray,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (LargeUtf8, Utf8) => {
-            let mod_str = args[0].as_string::<i64>();
-            let match_str = args[1].as_string::<i32>();
-            let res = regexp_is_match_utf8::<
-                GenericStringArray<i64>,
                 GenericStringArray<i32>,
                 GenericStringArray<i32>,
             >(mod_str, match_str, None)?;
