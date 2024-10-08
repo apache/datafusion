@@ -196,7 +196,7 @@ mod tests {
 
         /// Create a new COUNT(column) aggregate
         pub fn new_count_column(schema: &Arc<Schema>) -> Self {
-            Self::ColumnA(schema.clone())
+            Self::ColumnA(Arc::clone(schema))
         }
 
         /// Return appropriate expr depending if COUNT is for col or table (*)
