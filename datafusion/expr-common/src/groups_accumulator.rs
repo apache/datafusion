@@ -123,7 +123,7 @@ pub trait GroupsAccumulator: Send {
     /// Note that subsequent calls to update_batch may have larger
     /// total_num_groups as new groups are seen.
     ///
-    /// See [`NullState`] tp help keep the state for groups that have not seen any
+    /// See [`NullState`] to help keep the state for groups that have not seen any
     /// values and produce the correct output for those groups.
     ///
     /// [`NullState`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.NullState.html
