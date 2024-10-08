@@ -22,9 +22,9 @@ use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::function::Hint;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 use std::any::Any;
 use std::sync::OnceLock;
 

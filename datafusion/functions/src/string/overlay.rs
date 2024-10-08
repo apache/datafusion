@@ -26,8 +26,8 @@ use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
 #[derive(Debug)]

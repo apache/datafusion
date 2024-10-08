@@ -18,13 +18,15 @@
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
-use arrow::array::{ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
-use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use crate::string::common::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
+use arrow::array::{ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
+use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct StrposFunc {

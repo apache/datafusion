@@ -18,6 +18,8 @@
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
+use crate::string::common::StringArrayType;
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringViewArray,
@@ -26,13 +28,9 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int64, LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-use crate::string::common::StringArrayType;
-use crate::utils::{make_scalar_function, utf8_to_str_type};
-use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 
 #[derive(Debug)]
 pub struct RepeatFunc {

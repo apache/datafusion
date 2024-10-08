@@ -16,19 +16,17 @@
 // under the License.
 
 use crate::utils::make_scalar_function;
-
 use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, StringViewArray};
+use arrow::compute::regexp_is_match;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
 use datafusion_common::exec_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_expr::ScalarUDFImpl;
-use datafusion_expr::{ColumnarValue, Signature, Volatility};
-use datafusion_expr::{Documentation, ScalarUDFImpl};
-
-use arrow::compute::regexp_is_match;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
