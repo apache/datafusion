@@ -69,10 +69,10 @@ impl<'a> PartitionEvaluatorArgs<'a> {
         self.input_exprs
     }
 
-    /// Returns `Some(data_type)`, the `DataType` of the expression at
-    /// index if it exists, otherwise returns `None`.
-    pub fn input_types_at(&self, index: usize) -> Option<&DataType> {
-        self.input_types.get(index)
+    /// Returns the [`DataType`]s corresponding to the input expressions
+    /// to the user-defined window function.
+    pub fn input_types(&self) -> &'a [DataType] {
+        self.input_types
     }
 
     /// Returns `true` when the user-defined window function is
