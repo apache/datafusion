@@ -19,6 +19,7 @@ extern crate criterion;
 
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
 use datafusion_functions::encoding;
 use std::sync::Arc;
@@ -28,7 +29,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for size in [1024, 4096, 8192] {
         let str_array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, 32));
         c.bench_function(&format!("base64_decode/{size}"), |b| {
-            let method = ColumnarValue::Scalar("base64".into());
+            let method = ColumnarValue::from(ScalarValue::from("base64"));
             let encoded = encoding::encode()
                 .invoke(&[ColumnarValue::Array(str_array.clone()), method.clone()])
                 .unwrap();
@@ -38,7 +39,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
 
         c.bench_function(&format!("hex_decode/{size}"), |b| {
-            let method = ColumnarValue::Scalar("hex".into());
+            let method = ColumnarValue::from(ScalarValue::from("hex"));
             let encoded = encoding::encode()
                 .invoke(&[ColumnarValue::Array(str_array.clone()), method.clone()])
                 .unwrap();
