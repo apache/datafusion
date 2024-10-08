@@ -19,8 +19,8 @@ use datafusion_common::arrow::datatypes::DataType;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 
-/// Defines the state of the user-defined window function during
-/// physical execution.
+/// Arguments passed to created user-defined window function state
+/// during physical execution.
 #[derive(Debug, Default)]
 pub struct PartitionEvaluatorArgs<'a> {
     /// The expressions passed as arguments to the user-defined window
