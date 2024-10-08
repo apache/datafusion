@@ -29,11 +29,6 @@ use crate::fuzz_cases::aggregation_fuzzer::{
     run_sql,
 };
 
-/// Rounds to call `generate` of [`DatasetGenerator`]
-/// in [`AggregationFuzzer`] `len(sort_keys_set) + 1` datasets
-/// will be generated for testing.
-const DATA_GEN_ROUNDS: usize = 16;
-
 /// Rounds to call `generate` of [`SessionContextGenerator`]
 /// in [`AggregationFuzzer`], `ctx_gen_rounds` random [`SessionContext`]
 /// will generated for each dataset for testing.
@@ -50,6 +45,9 @@ pub struct AggregationFuzzerBuilder {
     /// Used to generate `dataset_generator` in [`AggregationFuzzer`],
     /// no default, and required to set
     data_gen_config: Option<DatasetGeneratorConfig>,
+
+    /// See `data_gen_rounds` in [`AggregationFuzzer`], default 16
+    data_gen_rounds: usize,
 }
 
 impl AggregationFuzzerBuilder {
@@ -58,6 +56,7 @@ impl AggregationFuzzerBuilder {
             candidate_sqls: Vec::new(),
             table_name: None,
             data_gen_config: None,
+            data_gen_rounds: 16,
         }
     }
 
@@ -76,11 +75,17 @@ impl AggregationFuzzerBuilder {
         self
     }
 
+    pub fn data_gen_rounds(mut self, data_gen_rounds: usize) -> Self {
+        self.data_gen_rounds = data_gen_rounds;
+        self
+    }
+
     pub fn build(self) -> AggregationFuzzer {
         assert!(!self.candidate_sqls.is_empty());
         let candidate_sqls = self.candidate_sqls;
         let table_name = self.table_name.expect("table_name is required");
         let data_gen_config = self.data_gen_config.expect("data_gen_config is required");
+        let data_gen_rounds = self.data_gen_rounds;
 
         let dataset_generator = DatasetGenerator::new(data_gen_config);
 
@@ -88,6 +93,7 @@ impl AggregationFuzzerBuilder {
             candidate_sqls,
             table_name,
             dataset_generator,
+            data_gen_rounds,
         }
     }
 }
@@ -110,6 +116,13 @@ pub struct AggregationFuzzer {
 
     /// Dataset generator used to randomly generate datasets
     dataset_generator: DatasetGenerator,
+
+    /// Rounds to call `generate` of [`DatasetGenerator`],
+    /// len(sort_keys_set) + 1` datasets will be generated for testing.
+    ///
+    /// It is suggested to set value 2x or more bigger than num of
+    /// `candidate_sqls` for better test coverage.
+    data_gen_rounds: usize,
 }
 
 /// Query group including the tested dataset and its sql query
@@ -124,7 +137,7 @@ impl AggregationFuzzer {
         let mut rng = thread_rng();
 
         // Loop to generate datasets and its query
-        for _ in 0..DATA_GEN_ROUNDS {
+        for _ in 0..self.data_gen_rounds {
             // Generate datasets first
             let datasets = self
                 .dataset_generator

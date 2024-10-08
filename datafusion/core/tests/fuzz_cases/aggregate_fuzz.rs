@@ -62,7 +62,7 @@ async fn test_group_by_single_int64() {
 
     // Define data generator config
     let columns = vec![
-        ColumnDescr::new("a", DataType::Int64),
+        ColumnDescr::new("a", DataType::Int32),
         ColumnDescr::new("b", DataType::Int64),
         ColumnDescr::new("c", DataType::Int64),
     ];
@@ -79,10 +79,13 @@ async fn test_group_by_single_int64() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
+        .data_gen_rounds(32)
         .add_sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, sum(distinct a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, min(a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, count(a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, count(distinct a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, avg(a) FROM fuzz_table GROUP BY b")
         .table_name("fuzz_table")
         .build();
@@ -97,7 +100,7 @@ async fn test_group_by_single_string() {
 
     // Define data generator config
     let columns = vec![
-        ColumnDescr::new("a", DataType::Int64),
+        ColumnDescr::new("a", DataType::Int32),
         ColumnDescr::new("b", DataType::Utf8),
         ColumnDescr::new("c", DataType::Int64),
     ];
@@ -114,7 +117,14 @@ async fn test_group_by_single_string() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
+        .data_gen_rounds(32)
         .add_sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, sum(distinct a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, min(a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, count(a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, count(distinct a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, avg(a) FROM fuzz_table GROUP BY b")
         .table_name("fuzz_table")
         .build();
 
@@ -128,7 +138,7 @@ async fn test_group_by_mixed_string_int64() {
 
     // Define data generator config
     let columns = vec![
-        ColumnDescr::new("a", DataType::Int64),
+        ColumnDescr::new("a", DataType::Int32),
         ColumnDescr::new("b", DataType::Utf8),
         ColumnDescr::new("c", DataType::Int64),
         ColumnDescr::new("d", DataType::Int32),
@@ -146,7 +156,14 @@ async fn test_group_by_mixed_string_int64() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
-        .add_sql("SELECT b, c, sum(a) FROM fuzz_table GROUP BY b,c")
+        .data_gen_rounds(32)
+        .add_sql("SELECT b, c, sum(a) FROM fuzz_table GROUP BY b, c")
+        .add_sql("SELECT b, c, sum(distinct a) FROM fuzz_table GROUP BY b,c")
+        .add_sql("SELECT b, c, max(a) FROM fuzz_table GROUP BY b, c")
+        .add_sql("SELECT b, c, min(a) FROM fuzz_table GROUP BY b, c")
+        .add_sql("SELECT b, c, count(a) FROM fuzz_table GROUP BY b, c")
+        .add_sql("SELECT b, c, count(distinct a) FROM fuzz_table GROUP BY b, c")
+        .add_sql("SELECT b, c, avg(a) FROM fuzz_table GROUP BY b, c")
         .table_name("fuzz_table")
         .build();
 
