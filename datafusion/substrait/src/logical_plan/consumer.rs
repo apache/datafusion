@@ -990,12 +990,10 @@ fn ensure_schema_compatability(
     table: DataFrame,
     substrait_schema: DFSchema,
 ) -> Result<LogicalPlan> {
-    let df_schema = table.schema().to_owned().strip_qualifiers();
+    let df_schema = table.schema().to_owned();
     if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
         return Ok(table.into_unoptimized_plan());
     }
-
-    let qualified_schema = table.schema().to_owned();
 
     let t = table.into_unoptimized_plan();
 
@@ -1018,7 +1016,7 @@ fn ensure_schema_compatability(
 
             let fields = column_indices
                 .iter()
-                .map(|i| qualified_schema.qualified_field(*i))
+                .map(|i| df_schema.qualified_field(*i))
                 .map(|(qualifier, field)| (qualifier.cloned(), Arc::new(field.clone())))
                 .collect();
 

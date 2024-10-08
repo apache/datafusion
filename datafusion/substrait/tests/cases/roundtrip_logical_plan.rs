@@ -472,12 +472,12 @@ async fn roundtrip_inlist_5() -> Result<()> {
     \n  Subquery:\
     \n    Projection: data2.a\
     \n      Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n        TableScan: data2 projection=[a, b, c, d, e, f]\
+    \n        TableScan: data2\
     \n  TableScan: data projection=[a, f], partial_filters=[data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)]\
     \n    Subquery:\
     \n      Projection: data2.a\
     \n        Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n          TableScan: data2 projection=[a, b, c, d, e, f]",
+    \n          TableScan: data2",
     true).await
 }
 

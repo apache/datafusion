@@ -70,7 +70,7 @@ mod tests {
             assert_eq!(
                 format!("{}", plan),
                 "Projection: DATA.a, DATA.b\
-                \n  TableScan: DATA projection=[a, b]"
+                \n  TableScan: DATA"
             );
             Ok(())
         }
