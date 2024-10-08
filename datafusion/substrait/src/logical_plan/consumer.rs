@@ -55,7 +55,6 @@ use crate::variation_const::{
 use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::dataframe::DataFrame;
-use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -227,7 +226,6 @@ pub async fn from_substrait_plan(
                             // Nothing to do if the schema is already equivalent
                             return Ok(plan);
                         }
-
                         match plan {
                             // If the last node of the plan produces expressions, bake the renames into those expressions.
                             // This isn't necessary for correctness, but helps with roundtrip tests.
@@ -327,11 +325,10 @@ pub async fn from_substrait_extended_expr(
     })
 }
 
-/// parse projection
-pub fn extract_projection(
-    t: LogicalPlan,
+pub fn apply_projection(
+    schema: DFSchema,
     projection: &::core::option::Option<expression::MaskExpression>,
-) -> Result<LogicalPlan> {
+) -> Result<DFSchema> {
     match projection {
         Some(MaskExpression { select, .. }) => match &select.as_ref() {
             Some(projection) => {
@@ -340,41 +337,20 @@ pub fn extract_projection(
                     .iter()
                     .map(|item| item.field as usize)
                     .collect();
-                match t {
-                    LogicalPlan::TableScan(mut scan) => {
-                        let fields = column_indices
-                            .iter()
-                            .map(|i| scan.projected_schema.qualified_field(*i))
-                            .map(|(qualifier, field)| {
-                                (qualifier.cloned(), Arc::new(field.clone()))
-                            })
-                            .collect();
-                        scan.projection = Some(column_indices);
-                        scan.projected_schema = DFSchemaRef::new(
-                            DFSchema::new_with_metadata(fields, HashMap::new())?,
-                        );
-                        Ok(LogicalPlan::TableScan(scan))
-                    }
-                    LogicalPlan::Projection(projection) => {
-                        // create another Projection around the Projection to handle the field masking
-                        let fields: Vec<Expr> = column_indices
-                            .into_iter()
-                            .map(|i| {
-                                let (qualifier, field) =
-                                    projection.schema.qualified_field(i);
-                                let column =
-                                    Column::new(qualifier.cloned(), field.name());
-                                Expr::Column(column)
-                            })
-                            .collect();
-                        project(LogicalPlan::Projection(projection), fields)
-                    }
-                    _ => plan_err!("unexpected plan for table"),
-                }
+
+                let fields = column_indices
+                    .iter()
+                    .map(|i| schema.qualified_field(*i))
+                    .map(|(qualifier, field)| {
+                        (qualifier.cloned(), Arc::new(field.clone()))
+                    })
+                    .collect();
+
+                Ok(DFSchema::new_with_metadata(fields, HashMap::new())?)
             }
-            _ => Ok(t),
+            _ => Ok(schema),
         },
-        _ => Ok(t),
+        _ => Ok(schema),
     }
 }
 
@@ -781,9 +757,11 @@ pub async fn from_substrait_rel(
                     from_substrait_named_struct(named_struct, extensions)?
                         .replace_qualifier(table_reference.clone());
 
+                let substrait_schema =
+                    apply_projection(substrait_schema, &read.projection)?;
+
                 let t = ctx.table(table_reference.clone()).await?;
-                let t = ensure_schema_compatability(t, substrait_schema)?;
-                extract_projection(t, &read.projection)
+                ensure_schema_compatability(t, substrait_schema)
             }
             Some(ReadType::VirtualTable(vt)) => {
                 let base_schema = read.base_schema.as_ref().ok_or_else(|| {
@@ -834,6 +812,10 @@ pub async fn from_substrait_rel(
                 }))
             }
             Some(ReadType::LocalFiles(lf)) => {
+                let named_struct = read.base_schema.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("No base schema provided for LocalFiles")
+                })?;
+
                 fn extract_filename(name: &str) -> Option<String> {
                     let corrected_url =
                         if name.starts_with("file://") && !name.starts_with("file:///") {
@@ -864,9 +846,16 @@ pub async fn from_substrait_rel(
                 let name = filename.unwrap();
                 // directly use unwrap here since we could determine it is a valid one
                 let table_reference = TableReference::Bare { table: name.into() };
-                let t = ctx.table(table_reference).await?;
-                let t = t.into_unoptimized_plan();
-                extract_projection(t, &read.projection)
+                let t = ctx.table(table_reference.clone()).await?;
+
+                let substrait_schema =
+                    from_substrait_named_struct(named_struct, extensions)?
+                        .replace_qualifier(table_reference);
+
+                let substrait_schema =
+                    apply_projection(substrait_schema, &read.projection)?;
+
+                ensure_schema_compatability(t, substrait_schema)
             }
             _ => not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type),
         },
@@ -991,11 +980,12 @@ fn ensure_schema_compatability(
     substrait_schema: DFSchema,
 ) -> Result<LogicalPlan> {
     let df_schema = table.schema().to_owned();
-    if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
-        return Ok(table.into_unoptimized_plan());
-    }
 
     let t = table.into_unoptimized_plan();
+
+    if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
+        return Ok(t);
+    }
 
     match t {
         LogicalPlan::TableScan(mut scan) => {
@@ -1023,6 +1013,7 @@ fn ensure_schema_compatability(
             scan.projected_schema =
                 DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
             scan.projection = Some(column_indices);
+
             Ok(LogicalPlan::TableScan(scan))
         }
         _ => Ok(t),

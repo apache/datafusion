@@ -103,10 +103,10 @@ mod tests {
             );
             // the DataFusion schema { b, a, c, d } contains the Substrait schema { a, b, c }
             let df_schema = vec![
-                ("b", DataType::Int32, true),
+                ("d", DataType::Int32, true),
                 ("a", DataType::Int32, false),
                 ("c", DataType::Int32, false),
-                ("d", DataType::Int32, false),
+                ("b", DataType::Int32, false),
             ];
             let ctx = generate_context_with_table("DATA", df_schema)?;
             let plan = from_substrait_plan(&ctx, &proto_plan).await?;
@@ -114,7 +114,7 @@ mod tests {
             assert_eq!(
                 format!("{}", plan),
                 "Projection: DATA.a, DATA.b\
-                \n  TableScan: DATA projection=[b, a]"
+                \n  TableScan: DATA projection=[a, b]"
             );
             Ok(())
         }
