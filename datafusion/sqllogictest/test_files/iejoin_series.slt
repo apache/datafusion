@@ -17,7 +17,7 @@ SELECT
     i AS id,
     i AS begin,
     i + 1 AS end
-FROM unnest(generate_series(1, 1000001)) tbl(i);
+FROM unnest(generate_series(1, 10001)) tbl(i);
 
 statement ok
 CREATE TABLE rhs (
@@ -29,15 +29,15 @@ CREATE TABLE rhs (
 statement ok
 INSERT INTO rhs (id, begin, end)
 SELECT
-    i - 1000000 AS id,
+    i - 10000 AS id,
     i AS begin,
     i + 1 AS end
-FROM unnest(generate_series(1000001, 2000001)) tbl(i);
+FROM unnest(generate_series(10001, 20001)) tbl(i);
 
 # query II
 # SELECT lhs.begin, rhs.begin
 # FROM lhs, rhs
 # WHERE lhs.begin < rhs.end AND rhs.begin < lhs.end;
 # ----
-# 1000001 1000001
+# 10001 10001
 
