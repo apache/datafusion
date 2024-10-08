@@ -26,7 +26,6 @@ use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -44,14 +43,7 @@ impl Default for LevenshteinFunc {
 impl LevenshteinFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![DataType::Utf8View, DataType::Utf8View]),
-                    Exact(vec![DataType::Utf8, DataType::Utf8]),
-                    Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
         }
     }
 }

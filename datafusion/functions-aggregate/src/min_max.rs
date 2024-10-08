@@ -1240,26 +1240,24 @@ impl Accumulator for SlidingMinAccumulator {
     }
 }
 
-//
-// Moving min and moving max
-// The implementation is taken from https://github.com/spebern/moving_min_max/blob/master/src/lib.rs.
-
-// Keep track of the minimum or maximum value in a sliding window.
-//
-// `moving min max` provides one data structure for keeping track of the
-// minimum value and one for keeping track of the maximum value in a sliding
-// window.
-//
-// Each element is stored with the current min/max. One stack to push and another one for pop. If pop stack is empty,
-// push to this stack all elements popped from first stack while updating their current min/max. Now pop from
-// the second stack (MovingMin/Max struct works as a queue). To find the minimum element of the queue,
-// look at the smallest/largest two elements of the individual stacks, then take the minimum of those two values.
-//
-// The complexity of the operations are
-// - O(1) for getting the minimum/maximum
-// - O(1) for push
-// - amortized O(1) for pop
-
+/// Keep track of the minimum value in a sliding window.
+///
+/// The implementation is taken from <https://github.com/spebern/moving_min_max/blob/master/src/lib.rs>
+///
+/// `moving min max` provides one data structure for keeping track of the
+/// minimum value and one for keeping track of the maximum value in a sliding
+/// window.
+///
+/// Each element is stored with the current min/max. One stack to push and another one for pop. If pop stack is empty,
+/// push to this stack all elements popped from first stack while updating their current min/max. Now pop from
+/// the second stack (MovingMin/Max struct works as a queue). To find the minimum element of the queue,
+/// look at the smallest/largest two elements of the individual stacks, then take the minimum of those two values.
+///
+/// The complexity of the operations are
+/// - O(1) for getting the minimum/maximum
+/// - O(1) for push
+/// - amortized O(1) for pop
+///
 /// ```
 /// # use datafusion_functions_aggregate::min_max::MovingMin;
 /// let mut moving_min = MovingMin::<i32>::new();
@@ -1375,6 +1373,11 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
         self.len() == 0
     }
 }
+
+/// Keep track of the maximum value in a sliding window.
+///
+/// See [`MovingMin`] for more details.
+///
 /// ```
 /// # use datafusion_functions_aggregate::min_max::MovingMax;
 /// let mut moving_max = MovingMax::<i32>::new();

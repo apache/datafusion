@@ -1492,6 +1492,8 @@ impl<'a> DependencyEnumerator<'a> {
         // Since we work on intermediate nodes, we are sure `val.target_sort_expr`
         // exists.
         let target_sort_expr = node.target_sort_expr.as_ref().unwrap();
+        // An empty dependency means the referred_sort_expr represents a global ordering.
+        // Return its projected version, which is the target_expression.
         if node.dependencies.is_empty() {
             return vec![vec![target_sort_expr.clone()]];
         };

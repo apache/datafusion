@@ -25,8 +25,7 @@ use datafusion_common::cast::as_int64_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -50,15 +49,15 @@ impl SplitPartFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8View, Utf8View, Int64]),
-                    Exact(vec![Utf8View, Utf8, Int64]),
-                    Exact(vec![Utf8View, LargeUtf8, Int64]),
-                    Exact(vec![Utf8, Utf8View, Int64]),
-                    Exact(vec![Utf8, Utf8, Int64]),
-                    Exact(vec![LargeUtf8, Utf8View, Int64]),
-                    Exact(vec![LargeUtf8, Utf8, Int64]),
-                    Exact(vec![Utf8, LargeUtf8, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8View, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Utf8View, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, Utf8View, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, Utf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8, LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, Int64]),
                 ],
                 Volatility::Immutable,
             ),
