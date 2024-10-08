@@ -591,6 +591,6 @@ impl MinMaxBytesState {
     }
 
     fn size(&self) -> usize {
-        self.total_data_bytes + self.min_max.len() * size_of::<Option<String>>()
+        self.total_data_bytes + self.min_max.len() * std::mem::size_of::<Option<String>>()
     }
 }
