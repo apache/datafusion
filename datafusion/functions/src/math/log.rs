@@ -37,7 +37,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
-#[udf_doc(description="log_description", example="log_example")]
+#[udf_doc(description = "log_description", example = "log_example")]
 #[derive(Debug)]
 pub struct LogFunc {
     signature: Signature,
@@ -657,9 +657,12 @@ mod tests {
     #[test]
     fn test_doc() {
         let log = LogFunc::new();
-        assert_eq!(log.documentation_test(), Some(DocumentationTest {
-            description: "log_description".to_string(),
-            syntax_example: "log_example".to_string(),
-        }));
+        assert_eq!(
+            log.documentation_test(),
+            Some(DocumentationTest {
+                description: "log_description".to_string(),
+                syntax_example: "log_example".to_string(),
+            })
+        );
     }
 }
