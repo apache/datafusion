@@ -1644,7 +1644,7 @@ impl<'a> DependencyEnumerator<'a> {
     ) -> Vec<LexOrdering> {
         let node = dependency_map
             .get(referred_sort_expr)
-            .expect("`referred_sort_expr` is inside `dependency_map`");
+            .expect("`referred_sort_expr` should be inside `dependency_map`");
         // Since we work on intermediate nodes, we are sure `val.target_sort_expr`
         // exists.
         let target_sort_expr = node.target_sort_expr.as_ref().unwrap();
