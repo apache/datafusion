@@ -31,19 +31,20 @@ use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
 
 /// SessionContext generator
 ///
-/// It will generate one random `SessionContext` when `generate` function is called.
+/// During testing, `generate_baseline` will be called firstly to generate a standard [`SessionContext`],
+/// and we will run `sql` on it to get the `expected result`. Then `generate` will be called some times to
+/// generate some random [`SessionContext`]s, and we will run the same `sql` on them to get `actual results`.
+/// Finally, we compare the `actual results` with `expected result`, the test only success while all they are
+/// same with the expected.
 ///
 /// Following parameters of [`SessionContext`] used in query running will be generated randomly:
 ///   - `batch_size`
 ///   - `target_partitions`
 ///   - `skip_partial parameters`
-///   - push down `sorted information`` or not
+///   - hint `sorted` or not
 ///   - `spilling` or not (TODO, I think a special `MemoryPool` may be needed
 ///      to support this)
 ///
-/// Then we will use [`SessionContext`] to accept `sql`, and generate [`DataFrame`] to run related query.
-///
-/// [`DataFrame`]: datafusion::prelude::DataFrame
 pub struct SessionContextGenerator {
     /// Current testing dataset
     dataset: Arc<Dataset>,
