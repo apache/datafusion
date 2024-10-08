@@ -68,10 +68,7 @@ impl PartialEq for ScalarUDF {
 // Manual implementation based on `ScalarUDFImpl::equals`
 impl PartialOrd for ScalarUDF {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.name().partial_cmp(other.name()) {
-            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
-            cmp => cmp,
-        }
+        self.name().partial_cmp(other.name())
     }
 }
 

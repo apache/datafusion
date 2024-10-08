@@ -27,6 +27,7 @@ use datafusion_common::{
     Result,
 };
 use datafusion_expr_common::{
+    logical_type::LogicalType,
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
     type_coercion::binary::string_coercion,
 };
@@ -489,14 +490,35 @@ fn get_valid_types(
                 );
             }
 
+            let mut new_types = Vec::with_capacity(current_types.len());
             for (data_type, target_type) in current_types.iter().zip(target_types.iter())
             {
-                if !can_cast_types(data_type, target_type) {
-                    return plan_err!("{data_type} is not coercible to {target_type}");
+                if !target_type.can_decode_to(data_type) {
+                    fn search_castable_physical_type(
+                        data_type: &DataType,
+                        target_type: &Arc<dyn LogicalType>,
+                    ) -> Option<DataType> {
+                        for physical_type in target_type.decode_types().iter() {
+                            if can_cast_types(data_type, physical_type) {
+                                return Some(physical_type.to_owned());
+                            }
+                        }
+                        None
+                    }
+
+                    if let Some(physical_type) =
+                        search_castable_physical_type(data_type, target_type)
+                    {
+                        new_types.push(physical_type);
+                    } else {
+                        return plan_err!("{target_type} can't decode to {data_type} and {data_type} can't cast to any of {:?}", target_type.decode_types());
+                    }
+                } else {
+                    new_types.push(data_type.to_owned());
                 }
             }
 
-            vec![target_types.to_owned()]
+            vec![new_types]
         }
         TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()

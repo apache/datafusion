@@ -24,6 +24,7 @@ use arrow::{
     compute::kernels::cast,
     datatypes::{DataType, Field},
 };
+use datafusion_expr_common::logical_type::logical_float;
 use std::sync::OnceLock;
 use std::{fmt::Debug, sync::Arc};
 
@@ -81,10 +82,7 @@ impl VarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("var_sample"), String::from("var_samp")],
-            signature: Signature::coercible(
-                vec![DataType::Float64],
-                Volatility::Immutable,
-            ),
+            signature: Signature::coercible(vec![logical_float()], Volatility::Immutable),
         }
     }
 }

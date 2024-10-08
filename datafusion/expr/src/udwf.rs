@@ -428,10 +428,7 @@ impl PartialEq for dyn WindowUDFImpl {
 
 impl PartialOrd for dyn WindowUDFImpl {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.name().partial_cmp(other.name()) {
-            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
-            cmp => cmp,
-        }
+        self.name().partial_cmp(other.name())
     }
 }
 

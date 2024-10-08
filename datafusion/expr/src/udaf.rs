@@ -652,10 +652,7 @@ impl PartialEq for dyn AggregateUDFImpl {
 // https://users.rust-lang.org/t/how-to-compare-two-trait-objects-for-equality/88063/5
 impl PartialOrd for dyn AggregateUDFImpl {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.name().partial_cmp(other.name()) {
-            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
-            cmp => cmp,
-        }
+        self.name().partial_cmp(other.name())
     }
 }
 

@@ -30,6 +30,7 @@ pub mod accumulator;
 pub mod columnar_value;
 pub mod groups_accumulator;
 pub mod interval_arithmetic;
+pub mod logical_type;
 pub mod operator;
 pub mod signature;
 pub mod sort_properties;
