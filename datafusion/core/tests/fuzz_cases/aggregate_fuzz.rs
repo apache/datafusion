@@ -117,7 +117,7 @@ async fn test_group_by_single_string() {
     fuzzer.run().await;
 }
 
-/// Fuzz test for group by `sting + int64`
+/// Fuzz test for group by `string + int64`
 #[tokio::test(flavor = "multi_thread")]
 async fn test_group_by_mixed_string_int64() {
     let builder = AggregationFuzzerBuilder::default();
@@ -142,7 +142,7 @@ async fn test_group_by_mixed_string_int64() {
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
-        .sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b,c")
+        .sql("SELECT b, c, sum(a) FROM fuzz_table GROUP BY b,c")
         .table_name("fuzz_table")
         .build();
 
