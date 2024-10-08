@@ -90,8 +90,9 @@ var(expression)
 
 - **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
-#### Aliases- var_sample
+#### Aliases
 
+- var_sample
 - var_samp
 
 ### `var_pop`
@@ -106,50 +107,18 @@ var_pop(expression)
 
 - **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
-#### Aliases- var_population
+#### Aliases
 
-### `var_pop`
+- var_population
 
-Returns the statistical population variance of a set of numbers.
+### `var_population`
 
-```
-var_pop(expression)
-```
+_Alias of [var_pop](#var_pop)._
 
-#### Arguments
+### `var_samp`
 
-- **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+_Alias of [var](#var)._
 
-#### Aliases- var_population
+### `var_sample`
 
-### `var`
-
-Returns the statistical sample variance of a set of numbers.
-
-```
-var(expression)
-```
-
-#### Arguments
-
-- **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
-
-#### Aliases- var_sample
-
-- var_samp
-
-### `var`
-
-Returns the statistical sample variance of a set of numbers.
-
-```
-var(expression)
-```
-
-#### Arguments
-
-- **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
-
-#### Aliases- var_sample
-
-- var_samp
+_Alias of [var](#var)._

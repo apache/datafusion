@@ -26,8 +26,7 @@ use datafusion_common::{arrow_datafusion_err, plan_err};
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{ColumnarValue, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
@@ -53,10 +52,10 @@ impl RegexpMatchFunc {
                     // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8, Utf8)`.
                     // If that fails, it proceeds to `(LargeUtf8, Utf8)`.
                     // TODO: Native support Utf8View for regexp_match.
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
+                    TypeSignature::Exact(vec![Utf8, Utf8]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
                 ],
                 Volatility::Immutable,
             ),
