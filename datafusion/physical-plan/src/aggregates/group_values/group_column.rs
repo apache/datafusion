@@ -20,12 +20,20 @@ use arrow::array::GenericBinaryArray;
 use arrow::array::GenericStringArray;
 use arrow::array::OffsetSizeTrait;
 use arrow::array::PrimitiveArray;
+use arrow::array::PrimitiveBuilder;
+use arrow::array::StringBuilder;
+use arrow::array::StringViewBuilder;
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::ByteArrayType;
+use arrow::datatypes::ByteViewType;
 use arrow::datatypes::DataType;
 use arrow::datatypes::GenericBinaryType;
+use arrow_array::BinaryViewArray;
+use arrow_array::GenericByteViewArray;
+use arrow_array::StringViewArray;
+use arrow_buffer::Buffer;
 use datafusion_common::utils::proxy::VecAllocExt;
 
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
@@ -375,6 +383,64 @@ where
         }
     }
 }
+
+/// An implementation of [`GroupColumn`] for binary view and utf8 view types.
+///
+/// Stores a collection of binary view or utf8 view group values in a buffer
+/// whose structure is similar to `GenericByteViewArray`, and we can get benefits:
+///
+/// 1. Efficient comparison of incoming rows to existing rows
+/// 2. Efficient construction of the final output array
+/// 3. Efficient to perform `take_n` comparing to use `GenericByteViewBuilder`
+pub struct ByteGroupValueViewBuilder {
+    output_type: OutputType,
+
+    /// The views of string values
+    ///
+    /// If string len <= 12, the view's format will be:
+    ///   string(12B) | len(4B)
+    ///
+    /// If string len > 12, its format will be:
+    ///     offset(4B) | buffer_index(4B) | prefix(4B) | len(4B)
+    views: Vec<u128>,
+
+    /// The progressing block
+    ///
+    /// New values will be inserted into it until its capacity
+    /// is not enough(detail can see `max_block_size`).
+    in_progress: Vec<u8>,
+
+    /// The completed blocks
+    completed: Vec<Buffer>,
+
+    /// The max size of `in_progress`
+    ///
+    /// `in_progress` will be flushed into `completed`, and create new `in_progress`
+    /// when found its remaining capacity(`max_block_size` - `len(in_progress)`),
+    /// is no enough to store the appended value.
+    max_block_size: usize,
+
+    /// Nulls
+    nulls: MaybeNullBufferBuilder,
+}
+
+// impl ByteGroupValueViewBuilder {
+//     fn append_val_inner<B>(&mut self, array: &ArrayRef, row: usize)
+//     where
+//         B: ByteViewType,
+//     {
+//         let arr = array.as_byte_view::<B>();
+//         if arr.is_null(row) {
+//             self.nulls.append(true);
+//             self.views.push(0);
+//         } else {
+//             self.nulls.append(false);
+//             let value: &[u8] = arr.value(row).as_ref();
+//             self.buffer.append_slice(value);
+//             self.offsets.push(O::usize_as(self.buffer.len()));
+//         }
+//     }
+// }
 
 /// Determines if the nullability of the existing and new input array can be used
 /// to short-circuit the comparison of the two values.
