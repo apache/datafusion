@@ -31,7 +31,7 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, Volatility,
 };
-use datafusion_expr_common::logical_type::logical_float;
+use datafusion_expr_common::logical_type::logical_float64;
 use datafusion_functions_aggregate_common::stats::StatsType;
 
 use crate::variance::{VarianceAccumulator, VarianceGroupsAccumulator};
@@ -69,7 +69,10 @@ impl Stddev {
     /// Create a new STDDEV aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(vec![logical_float()], Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![logical_float64()],
+                Volatility::Immutable,
+            ),
             alias: vec!["stddev_samp".to_string()],
         }
     }

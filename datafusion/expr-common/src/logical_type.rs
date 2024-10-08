@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{hash::Hash, sync::Arc};
+use std::{
+    hash::Hash,
+    sync::{Arc, LazyLock},
+};
 
 use arrow::datatypes::DataType;
 
@@ -70,30 +73,60 @@ impl LogicalType for String {
 }
 
 #[derive(Debug)]
-pub struct Float;
+pub struct Float64;
 
-impl LogicalType for Float {
-    fn name(&self) -> &str {
-        "float"
-    }
+#[derive(Debug)]
+pub struct Float32;
 
-    fn can_decode_to(&self, data_type: &DataType) -> bool {
-        matches!(
-            data_type,
-            DataType::Float64 | DataType::Float32 | DataType::Float16
-        )
-    }
+#[derive(Debug)]
+pub struct Float16;
 
-    fn decode_types(&self) -> Vec<DataType> {
-        vec![DataType::Float64, DataType::Float32, DataType::Float16]
-    }
+// Macro to generate simple LogicalType implementation
+macro_rules! impl_logical_type {
+    ($data_type:ident, $name:expr) => {
+        impl LogicalType for $data_type {
+            fn name(&self) -> &str {
+                $name
+            }
+
+            fn can_decode_to(&self, data_type: &DataType) -> bool {
+                matches!(data_type, DataType::$data_type)
+            }
+
+            fn decode_types(&self) -> Vec<DataType> {
+                vec![DataType::$data_type]
+            }
+        }
+    };
 }
 
-// TODO: Make this singleton
+// Applying the macro for each float type
+impl_logical_type!(Float64, "f64");
+impl_logical_type!(Float32, "f32");
+impl_logical_type!(Float16, "f16");
+
+// Singleton instances
+pub static LOGICAL_STRING: LazyLock<LogicalTypeRef> = LazyLock::new(|| Arc::new(String));
+pub static LOGICAL_FLOAT16: LazyLock<LogicalTypeRef> =
+    LazyLock::new(|| Arc::new(Float16));
+pub static LOGICAL_FLOAT32: LazyLock<LogicalTypeRef> =
+    LazyLock::new(|| Arc::new(Float32));
+pub static LOGICAL_FLOAT64: LazyLock<LogicalTypeRef> =
+    LazyLock::new(|| Arc::new(Float64));
+
+// Usage functions
 pub fn logical_string() -> LogicalTypeRef {
-    Arc::new(String)
+    Arc::clone(&LOGICAL_STRING)
 }
 
-pub fn logical_float() -> LogicalTypeRef {
-    Arc::new(Float)
+pub fn logical_float16() -> LogicalTypeRef {
+    Arc::clone(&LOGICAL_FLOAT16)
+}
+
+pub fn logical_float32() -> LogicalTypeRef {
+    Arc::clone(&LOGICAL_FLOAT32)
+}
+
+pub fn logical_float64() -> LogicalTypeRef {
+    Arc::clone(&LOGICAL_FLOAT64)
 }
