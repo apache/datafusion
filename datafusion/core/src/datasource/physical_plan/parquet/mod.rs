@@ -179,8 +179,8 @@ pub use writer::plan_to_parquet;
 /// # fn parquet_exec() -> ParquetExec { unimplemented!() }
 /// // Split a single ParquetExec into multiple ParquetExecs, one for each file
 /// let exec = parquet_exec();
-/// let exiting_file_groups = &exec.base_config().file_groups;
-/// let new_execs = exiting_file_groups
+/// let existing_file_groups = &exec.base_config().file_groups;
+/// let new_execs = existing_file_groups
 ///   .iter()
 ///   .map(|file_group| {
 ///     // create a new exec by copying the existing exec into a builder
@@ -500,7 +500,7 @@ impl ParquetExec {
 
     /// Convert this `ParquetExec` into a builder for modification
     pub fn into_builder(self) -> ParquetExecBuilder {
-        // list out fileds so it is clear what is being dropped
+        // list out fields so it is clear what is being dropped
         let Self {
             base_config,
             projected_statistics: _,
