@@ -101,7 +101,7 @@ mod tests {
             let proto_plan = read_json(
                 "tests/testdata/test_plans/simple_select_with_mask.substrait.json",
             );
-            // the DataFusion schema { b, a, c, d } contains the Substrait schema { a, b, c }
+            // the DataFusion schema { d, a, c, b } contains the Substrait schema { a, b, c }
             let df_schema = vec![
                 ("d", DataType::Int32, true),
                 ("a", DataType::Int32, false),

@@ -348,9 +348,9 @@ pub fn apply_projection(
 
                 Ok(DFSchema::new_with_metadata(fields, HashMap::new())?)
             }
-            _ => Ok(schema),
+            None => Ok(schema),
         },
-        _ => Ok(schema),
+        None => Ok(schema),
     }
 }
 
