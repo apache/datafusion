@@ -42,6 +42,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Literal;
 
+use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -232,6 +233,10 @@ impl ExecutionPlan for ProjectionExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
     }
 }
 
