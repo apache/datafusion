@@ -148,17 +148,16 @@ SELECT MAKE_MAP([1,2], ['a', 'b'], [3,4], ['b']);
 {[1, 2]: [a, b], [3, 4]: [b]}
 
 query ?
-SELECT MAKE_MAP('POST', 41, 'HEAD', 'ab', 'PATCH', 30);
+SELECT MAKE_MAP('POST', 41, 'HEAD', 53, 'PATCH', 30);
 ----
-{POST: 41, HEAD: ab, PATCH: 30}
+{POST: 41, HEAD: 53, PATCH: 30}
 
+query error DataFusion error: Arrow error: Cast error: Cannot cast string 'ab' to value of Int64 type
+SELECT MAKE_MAP('POST', 41, 'HEAD', 'ab', 'PATCH', 30);
+
+# Map keys can not be NULL
 query error
 SELECT MAKE_MAP('POST', 41, 'HEAD', 33, null, 30);
-
-query ?
-SELECT MAKE_MAP('POST', 41, 'HEAD', 'ab', 'PATCH', 30);
-----
-{POST: 41, HEAD: ab, PATCH: 30}
 
 query ?
 SELECT MAKE_MAP()
@@ -517,9 +516,12 @@ query error
 SELECT MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} }[NULL];
 
 query ?
-SELECT MAP { 'a': 1, 2: 3 };
+SELECT MAP { 'a': 1, 'b': 3 };
 ----
-{a: 1, 2: 3}
+{a: 1, b: 3}
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+SELECT MAP { 'a': 1, 2: 3 };
 
 # TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
 # query ?
@@ -610,9 +612,12 @@ select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7)
 # Tests for map_keys
 
 query ?
-SELECT map_keys(MAP { 'a': 1, 2: 3 });
+SELECT map_keys(MAP { 'a': 1, 'b': 3 });
 ----
-[a, 2]
+[a, b]
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+SELECT map_keys(MAP { 'a': 1, 2: 3 });
 
 query ?
 SELECT map_keys(MAP {'a':1, 'b':2, 'c':3 }) FROM t;
@@ -657,8 +662,11 @@ SELECT map_keys(column1) from map_array_table_1;
 
 # Tests for map_values
 
-query ?
+query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 SELECT map_values(MAP { 'a': 1, 2: 3 });
+
+query ?
+SELECT map_values(MAP { 'a': 1, 'b': 3 });
 ----
 [1, 3]
 

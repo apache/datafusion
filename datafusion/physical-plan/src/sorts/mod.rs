@@ -28,4 +28,3 @@ mod stream;
 pub mod streaming_merge;
 
 pub use index::RowIndex;
-pub(crate) use streaming_merge::streaming_merge;
