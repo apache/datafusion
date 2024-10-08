@@ -18,20 +18,18 @@
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
+use crate::string::common::StringArrayType;
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int64, LargeUtf8, Utf8, Utf8View};
-
-use crate::string::common::StringArrayType;
-use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
 #[derive(Debug)]
@@ -53,9 +51,9 @@ impl RepeatFunc {
                     // Planner attempts coercion to the target type starting with the most preferred candidate.
                     // For example, given input `(Utf8View, Int64)`, it first tries coercing to `(Utf8View, Int64)`.
                     // If that fails, it proceeds to `(Utf8, Int64)`.
-                    Exact(vec![Utf8View, Int64]),
-                    Exact(vec![Utf8, Int64]),
-                    Exact(vec![LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, Int64]),
                 ],
                 Volatility::Immutable,
             ),
