@@ -15,24 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::BooleanBufferBuilder;
 use arrow::array::BufferBuilder;
 use arrow::array::GenericBinaryArray;
 use arrow::array::GenericStringArray;
 use arrow::array::OffsetSizeTrait;
 use arrow::array::PrimitiveArray;
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray};
-use arrow::buffer::NullBuffer;
 use arrow::buffer::OffsetBuffer;
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::ArrowNativeType;
 use arrow::datatypes::ByteArrayType;
 use arrow::datatypes::DataType;
 use arrow::datatypes::GenericBinaryType;
-use arrow::datatypes::GenericStringType;
 use datafusion_common::utils::proxy::VecAllocExt;
 
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
+use arrow_array::types::GenericStringType;
 use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
 use std::sync::Arc;
 use std::vec;
@@ -63,75 +60,25 @@ pub trait GroupColumn: Send + Sync {
     fn take_n(&mut self, n: usize) -> ArrayRef;
 }
 
-/// An implementation of [`GroupColumn`] for primitive values which are known to have no nulls
+/// An implementation of [`GroupColumn`] for primitive values
+///
+/// Optimized to skip null buffer construction if the input is known to be non nullable
+///
+/// # Template parameters
+///
+/// `T`: the native Rust type that stores the data
+/// `NULLABLE`: if the data can contain any nulls
 #[derive(Debug)]
-pub struct NonNullPrimitiveGroupValueBuilder<T: ArrowPrimitiveType> {
-    group_values: Vec<T::Native>,
-}
-
-impl<T> NonNullPrimitiveGroupValueBuilder<T>
-where
-    T: ArrowPrimitiveType,
-{
-    pub fn new() -> Self {
-        Self {
-            group_values: vec![],
-        }
-    }
-}
-
-impl<T: ArrowPrimitiveType> GroupColumn for NonNullPrimitiveGroupValueBuilder<T> {
-    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
-        // know input has no nulls
-        self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
-    }
-
-    fn append_val(&mut self, array: &ArrayRef, row: usize) {
-        // input can't possibly have nulls, so don't worry about them
-        self.group_values.push(array.as_primitive::<T>().value(row))
-    }
-
-    fn len(&self) -> usize {
-        self.group_values.len()
-    }
-
-    fn size(&self) -> usize {
-        self.group_values.allocated_size()
-    }
-
-    fn build(self: Box<Self>) -> ArrayRef {
-        let Self { group_values } = *self;
-
-        let nulls = None;
-
-        Arc::new(PrimitiveArray::<T>::new(
-            ScalarBuffer::from(group_values),
-            nulls,
-        ))
-    }
-
-    fn take_n(&mut self, n: usize) -> ArrayRef {
-        let first_n = self.group_values.drain(0..n).collect::<Vec<_>>();
-        let first_n_nulls = None;
-
-        Arc::new(PrimitiveArray::<T>::new(
-            ScalarBuffer::from(first_n),
-            first_n_nulls,
-        ))
-    }
-}
-
-/// An implementation of [`GroupColumn`] for primitive values which may have nulls
-#[derive(Debug)]
-pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType> {
+pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: bool> {
     group_values: Vec<T::Native>,
     nulls: MaybeNullBufferBuilder,
 }
 
-impl<T> PrimitiveGroupValueBuilder<T>
+impl<T, const NULLABLE: bool> PrimitiveGroupValueBuilder<T, NULLABLE>
 where
     T: ArrowPrimitiveType,
 {
+    /// Create a new `PrimitiveGroupValueBuilder`
     pub fn new() -> Self {
         Self {
             group_values: vec![],
@@ -140,18 +87,34 @@ where
     }
 }
 
-impl<T: ArrowPrimitiveType> GroupColumn for PrimitiveGroupValueBuilder<T> {
+impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
+    for PrimitiveGroupValueBuilder<T, NULLABLE>
+{
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
-        self.nulls.is_null(lhs_row) == array.is_null(rhs_row)
-            && self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
+        // Perf: skip null check (by short circuit) if input is not nullable
+        if NULLABLE {
+            let exist_null = self.nulls.is_null(lhs_row);
+            let input_null = array.is_null(rhs_row);
+            if let Some(result) = nulls_equal_to(exist_null, input_null) {
+                return result;
+            }
+            // Otherwise, we need to check their values
+        }
+
+        self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
-        if array.is_null(row) {
-            self.nulls.append(true);
-            self.group_values.push(T::default_value());
+        // Perf: skip null check if input can't have nulls
+        if NULLABLE {
+            if array.is_null(row) {
+                self.nulls.append(true);
+                self.group_values.push(T::default_value());
+            } else {
+                self.nulls.append(false);
+                self.group_values.push(array.as_primitive::<T>().value(row));
+            }
         } else {
-            self.nulls.append(false);
             self.group_values.push(array.as_primitive::<T>().value(row));
         }
     }
@@ -171,6 +134,9 @@ impl<T: ArrowPrimitiveType> GroupColumn for PrimitiveGroupValueBuilder<T> {
         } = *self;
 
         let nulls = nulls.build();
+        if !NULLABLE {
+            assert!(nulls.is_none(), "unexpected nulls in non nullable input");
+        }
 
         Arc::new(PrimitiveArray::<T>::new(
             ScalarBuffer::from(group_values),
@@ -180,7 +146,8 @@ impl<T: ArrowPrimitiveType> GroupColumn for PrimitiveGroupValueBuilder<T> {
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
         let first_n = self.group_values.drain(0..n).collect::<Vec<_>>();
-        let first_n_nulls = self.nulls.take_n(n);
+
+        let first_n_nulls = if NULLABLE { self.nulls.take_n(n) } else { None };
 
         Arc::new(PrimitiveArray::<T>::new(
             ScalarBuffer::from(first_n),
@@ -190,6 +157,12 @@ impl<T: ArrowPrimitiveType> GroupColumn for PrimitiveGroupValueBuilder<T> {
 }
 
 /// An implementation of [`GroupColumn`] for binary and utf8 types.
+///
+/// Stores a collection of binary or utf8 group values in a single buffer
+/// in a way that allows:
+///
+/// 1. Efficient comparison of incoming rows to existing rows
+/// 2. Efficient construction of the final output array
 pub struct ByteGroupValueBuilder<O>
 where
     O: OffsetSizeTrait,
@@ -201,8 +174,8 @@ where
     /// stored in the range `offsets[i]..offsets[i+1]` in `buffer`. Null values
     /// are stored as a zero length string.
     offsets: Vec<O>,
-    /// Null indexes in offsets, if `i` is in nulls, `offsets[i]` should be equals to `offsets[i+1]`
-    nulls: Vec<usize>,
+    /// Nulls
+    nulls: MaybeNullBufferBuilder,
 }
 
 impl<O> ByteGroupValueBuilder<O>
@@ -214,7 +187,7 @@ where
             output_type,
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()],
-            nulls: vec![],
+            nulls: MaybeNullBufferBuilder::new(),
         }
     }
 
@@ -224,40 +197,38 @@ where
     {
         let arr = array.as_bytes::<B>();
         if arr.is_null(row) {
-            self.nulls.push(self.len());
+            self.nulls.append(true);
             // nulls need a zero length in the offset buffer
             let offset = self.buffer.len();
-
             self.offsets.push(O::usize_as(offset));
-            return;
+        } else {
+            self.nulls.append(false);
+            let value: &[u8] = arr.value(row).as_ref();
+            self.buffer.append_slice(value);
+            self.offsets.push(O::usize_as(self.buffer.len()));
         }
-
-        let value: &[u8] = arr.value(row).as_ref();
-        self.buffer.append_slice(value);
-        self.offsets.push(O::usize_as(self.buffer.len()));
     }
 
     fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
     where
         B: ByteArrayType,
     {
-        // Handle nulls
-        let is_lhs_null = self.nulls.iter().any(|null_idx| *null_idx == lhs_row);
-        let arr = array.as_bytes::<B>();
-        if is_lhs_null {
-            return arr.is_null(rhs_row);
-        } else if arr.is_null(rhs_row) {
-            return false;
+        let array = array.as_bytes::<B>();
+        let exist_null = self.nulls.is_null(lhs_row);
+        let input_null = array.is_null(rhs_row);
+        if let Some(result) = nulls_equal_to(exist_null, input_null) {
+            return result;
         }
+        // Otherwise, we need to check their values
+        self.value(lhs_row) == (array.value(rhs_row).as_ref() as &[u8])
+    }
 
-        let arr = array.as_bytes::<B>();
-        let rhs_elem: &[u8] = arr.value(rhs_row).as_ref();
-        let rhs_elem_len = arr.value_length(rhs_row).as_usize();
-        debug_assert_eq!(rhs_elem_len, rhs_elem.len());
-        let l = self.offsets[lhs_row].as_usize();
-        let r = self.offsets[lhs_row + 1].as_usize();
-        let existing_elem = unsafe { self.buffer.as_slice().get_unchecked(l..r) };
-        rhs_elem == existing_elem
+    /// return the current value of the specified row irrespective of null
+    pub fn value(&self, row: usize) -> &[u8] {
+        let l = self.offsets[row].as_usize();
+        let r = self.offsets[row + 1].as_usize();
+        // Safety: the offsets are constructed correctly and never decrease
+        unsafe { self.buffer.as_slice().get_unchecked(l..r) }
     }
 }
 
@@ -325,18 +296,7 @@ where
             nulls,
         } = *self;
 
-        let null_buffer = if nulls.is_empty() {
-            None
-        } else {
-            // Only make a `NullBuffer` if there was a null value
-            let num_values = offsets.len() - 1;
-            let mut bool_builder = BooleanBufferBuilder::new(num_values);
-            bool_builder.append_n(num_values, true);
-            nulls.into_iter().for_each(|null_index| {
-                bool_builder.set_bit(null_index, false);
-            });
-            Some(NullBuffer::from(bool_builder.finish()))
-        };
+        let null_buffer = nulls.build();
 
         // SAFETY: the offsets were constructed correctly in `insert_if_new` --
         // monotonically increasing, overflows were checked.
@@ -353,9 +313,9 @@ where
                 // SAFETY:
                 // 1. the offsets were constructed safely
                 //
-                // 2. we asserted the input arrays were all the correct type and
-                // thus since all the values that went in were valid (e.g. utf8)
-                // so are all the values that come out
+                // 2. the input arrays were all the correct type and thus since
+                // all the values that went in were valid (e.g. utf8) so are all
+                // the values that come out
                 Arc::new(unsafe {
                     GenericStringArray::new_unchecked(offsets, values, null_buffer)
                 })
@@ -366,27 +326,7 @@ where
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
         debug_assert!(self.len() >= n);
-
-        let null_buffer = if self.nulls.is_empty() {
-            None
-        } else {
-            // Only make a `NullBuffer` if there was a null value
-            let mut bool_builder = BooleanBufferBuilder::new(n);
-            bool_builder.append_n(n, true);
-
-            let mut new_nulls = vec![];
-            self.nulls.iter().for_each(|null_index| {
-                if *null_index < n {
-                    bool_builder.set_bit(*null_index, false);
-                } else {
-                    new_nulls.push(null_index - n);
-                }
-            });
-
-            self.nulls = new_nulls;
-            Some(NullBuffer::from(bool_builder.finish()))
-        };
-
+        let null_buffer = self.nulls.take_n(n);
         let first_remaining_offset = O::as_usize(self.offsets[n]);
 
         // Given offests like [0, 2, 4, 5] and n = 1, we expect to get
@@ -436,12 +376,30 @@ where
     }
 }
 
+/// Determines if the nullability of the existing and new input array can be used
+/// to short-circuit the comparison of the two values.
+///
+/// Returns `Some(result)` if the result of the comparison can be determined
+/// from the nullness of the two values, and `None` if the comparison must be
+/// done on the values themselves.
+fn nulls_equal_to(lhs_null: bool, rhs_null: bool) -> Option<bool> {
+    match (lhs_null, rhs_null) {
+        (true, true) => Some(true),
+        (false, true) | (true, false) => Some(false),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{ArrayRef, StringArray};
+    use arrow::datatypes::Int64Type;
+    use arrow_array::{ArrayRef, Int64Array, StringArray};
+    use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
     use datafusion_physical_expr::binary_map::OutputType;
+
+    use crate::aggregates::group_values::group_column::PrimitiveGroupValueBuilder;
 
     use super::{ByteGroupValueBuilder, GroupColumn};
 
@@ -488,5 +446,137 @@ mod tests {
             None,
         ])) as ArrayRef;
         assert_eq!(&output, &array);
+    }
+
+    #[test]
+    fn test_nullable_primitive_equal_to() {
+        // Will cover such cases:
+        //   - exist null, input not null
+        //   - exist null, input null; values not equal
+        //   - exist null, input null; values equal
+        //   - exist not null, input null
+        //   - exist not null, input not null; values not equal
+        //   - exist not null, input not null; values equal
+
+        // Define PrimitiveGroupValueBuilder
+        let mut builder = PrimitiveGroupValueBuilder::<Int64Type, true>::new();
+        let builder_array = Arc::new(Int64Array::from(vec![
+            None,
+            None,
+            None,
+            Some(1),
+            Some(2),
+            Some(3),
+        ])) as ArrayRef;
+        builder.append_val(&builder_array, 0);
+        builder.append_val(&builder_array, 1);
+        builder.append_val(&builder_array, 2);
+        builder.append_val(&builder_array, 3);
+        builder.append_val(&builder_array, 4);
+        builder.append_val(&builder_array, 5);
+
+        // Define input array
+        let (_nulls, values, _) =
+            Int64Array::from(vec![Some(1), Some(2), None, None, Some(1), Some(3)])
+                .into_parts();
+
+        // explicitly build a boolean buffer where one of the null values also happens to match
+        let mut boolean_buffer_builder = BooleanBufferBuilder::new(6);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(false); // this sets Some(2) to null above
+        boolean_buffer_builder.append(false);
+        boolean_buffer_builder.append(false);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(true);
+        let nulls = NullBuffer::new(boolean_buffer_builder.finish());
+        let input_array = Arc::new(Int64Array::new(values, Some(nulls))) as ArrayRef;
+
+        // Check
+        assert!(!builder.equal_to(0, &input_array, 0));
+        assert!(builder.equal_to(1, &input_array, 1));
+        assert!(builder.equal_to(2, &input_array, 2));
+        assert!(!builder.equal_to(3, &input_array, 3));
+        assert!(!builder.equal_to(4, &input_array, 4));
+        assert!(builder.equal_to(5, &input_array, 5));
+    }
+
+    #[test]
+    fn test_not_nullable_primitive_equal_to() {
+        // Will cover such cases:
+        //   - values equal
+        //   - values not equal
+
+        // Define PrimitiveGroupValueBuilder
+        let mut builder = PrimitiveGroupValueBuilder::<Int64Type, false>::new();
+        let builder_array =
+            Arc::new(Int64Array::from(vec![Some(0), Some(1)])) as ArrayRef;
+        builder.append_val(&builder_array, 0);
+        builder.append_val(&builder_array, 1);
+
+        // Define input array
+        let input_array = Arc::new(Int64Array::from(vec![Some(0), Some(2)])) as ArrayRef;
+
+        // Check
+        assert!(builder.equal_to(0, &input_array, 0));
+        assert!(!builder.equal_to(1, &input_array, 1));
+    }
+
+    #[test]
+    fn test_byte_array_equal_to() {
+        // Will cover such cases:
+        //   - exist null, input not null
+        //   - exist null, input null; values not equal
+        //   - exist null, input null; values equal
+        //   - exist not null, input null
+        //   - exist not null, input not null; values not equal
+        //   - exist not null, input not null; values equal
+
+        // Define PrimitiveGroupValueBuilder
+        let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
+        let builder_array = Arc::new(StringArray::from(vec![
+            None,
+            None,
+            None,
+            Some("foo"),
+            Some("bar"),
+            Some("baz"),
+        ])) as ArrayRef;
+        builder.append_val(&builder_array, 0);
+        builder.append_val(&builder_array, 1);
+        builder.append_val(&builder_array, 2);
+        builder.append_val(&builder_array, 3);
+        builder.append_val(&builder_array, 4);
+        builder.append_val(&builder_array, 5);
+
+        // Define input array
+        let (offsets, buffer, _nulls) = StringArray::from(vec![
+            Some("foo"),
+            Some("bar"),
+            None,
+            None,
+            Some("foo"),
+            Some("baz"),
+        ])
+        .into_parts();
+
+        // explicitly build a boolean buffer where one of the null values also happens to match
+        let mut boolean_buffer_builder = BooleanBufferBuilder::new(6);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(false); // this sets Some("bar") to null above
+        boolean_buffer_builder.append(false);
+        boolean_buffer_builder.append(false);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(true);
+        let nulls = NullBuffer::new(boolean_buffer_builder.finish());
+        let input_array =
+            Arc::new(StringArray::new(offsets, buffer, Some(nulls))) as ArrayRef;
+
+        // Check
+        assert!(!builder.equal_to(0, &input_array, 0));
+        assert!(builder.equal_to(1, &input_array, 1));
+        assert!(builder.equal_to(2, &input_array, 2));
+        assert!(!builder.equal_to(3, &input_array, 3));
+        assert!(!builder.equal_to(4, &input_array, 4));
+        assert!(builder.equal_to(5, &input_array, 5));
     }
 }

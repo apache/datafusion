@@ -15,17 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
+use crate::datetime::common::*;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
-
-use crate::datetime::common::*;
 use datafusion_common::error::DataFusionError;
 use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use std::any::Any;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct ToDateFunc {
@@ -77,6 +79,50 @@ impl ToDateFunc {
     }
 }
 
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_to_date_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_DATETIME)
+            .with_description(r#"Converts a value to a date (`YYYY-MM-DD`).
+Supports strings, integer and double types as input.
+Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
+Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding date.
+
+Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.
+"#)
+            .with_syntax_example("to_date('2017-05-31', '%Y-%m-%d')")
+            .with_sql_example(r#"```sql
+> select to_date('2023-01-31');
++-----------------------------+
+| to_date(Utf8("2023-01-31")) |
++-----------------------------+
+| 2023-01-31                  |
++-----------------------------+
+> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');
++---------------------------------------------------------------+
+| to_date(Utf8("2023/01/31"),Utf8("%Y-%m-%d"),Utf8("%Y/%m/%d")) |
++---------------------------------------------------------------+
+| 2023-01-31                                                    |
++---------------------------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
+"#)
+            .with_standard_argument("expression", "String")
+            .with_argument(
+                "format_n",
+                "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned.",
+            )
+            .build()
+            .unwrap()
+    })
+}
+
 impl ScalarUDFImpl for ToDateFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -116,6 +162,10 @@ impl ScalarUDFImpl for ToDateFunc {
                 exec_err!("Unsupported data type {:?} for function to_date", other)
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_to_date_doc())
     }
 }
 

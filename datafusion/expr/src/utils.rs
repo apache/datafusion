@@ -19,6 +19,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction};
@@ -38,6 +39,7 @@ use datafusion_common::{
     DataFusionError, Result, TableReference,
 };
 
+use indexmap::IndexSet;
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
 
 pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
@@ -65,9 +67,10 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
                 "Invalid group by expressions, GroupingSet must be the only expression"
             );
         }
-        Ok(grouping_set.distinct_expr().len())
+        // Groupings sets have an additional interal column for the grouping id
+        Ok(grouping_set.distinct_expr().len() + 1)
     } else {
-        Ok(group_expr.len())
+        grouping_set_to_exprlist(group_expr).map(|exprs| exprs.len())
     }
 }
 
@@ -260,7 +263,11 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<&Expr>> {
         }
         Ok(grouping_set.distinct_expr())
     } else {
-        Ok(group_expr.iter().collect())
+        Ok(group_expr
+            .iter()
+            .collect::<IndexSet<_>>()
+            .into_iter()
+            .collect())
     }
 }
 
@@ -758,6 +765,15 @@ pub fn find_base_plan(input: &LogicalPlan) -> &LogicalPlan {
     match input {
         LogicalPlan::Window(window) => find_base_plan(&window.input),
         LogicalPlan::Aggregate(agg) => find_base_plan(&agg.input),
+        // [SqlToRel::try_process_unnest] will convert Expr(Unnest(Expr)) to Projection/Unnest/Projection
+        // We should expand the wildcard expression based on the input plan of the inner Projection.
+        LogicalPlan::Unnest(unnest) => {
+            if let LogicalPlan::Projection(projection) = unnest.input.deref() {
+                find_base_plan(&projection.input)
+            } else {
+                input
+            }
+        }
         LogicalPlan::Filter(filter) => {
             if filter.having {
                 // If a filter is used for a having clause, its input plan is an aggregation.

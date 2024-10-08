@@ -1060,6 +1060,10 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
             expr: exprs.swap_remove(0),
         })
     }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
+    }
 }
 
 #[derive(Debug)]

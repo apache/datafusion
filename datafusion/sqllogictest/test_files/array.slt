@@ -6595,7 +6595,7 @@ select make_array(1, 2.0, null, 3)
 query ?
 select make_array(1.0, '2', null)
 ----
-[1.0, 2, ]
+[1.0, 2.0, ]
 
 ### FixedSizeListArray
 

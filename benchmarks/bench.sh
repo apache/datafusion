@@ -211,6 +211,7 @@ main() {
                     run_clickbench_1
                     run_clickbench_partitioned
                     run_clickbench_extended
+                    run_imdb
                     ;;
                 tpch)
                     run_tpch "1"
@@ -238,6 +239,9 @@ main() {
                     ;;
                 clickbench_extended)
                     run_clickbench_extended
+                    ;;
+                imdb)
+                    run_imdb
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -508,6 +512,16 @@ data_imdb() {
     else
         echo "IMDB dataset already exists and contains required parquet files."
     fi
+}
+
+# Runs the imdb benchmark
+run_imdb() {
+    IMDB_DIR="${DATA_DIR}/imdb"
+    
+    RESULTS_FILE="${RESULTS_DIR}/imdb.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running imdb benchmark..."
+    $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}"
 }
 
 

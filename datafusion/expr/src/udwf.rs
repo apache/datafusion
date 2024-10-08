@@ -33,7 +33,8 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 
 use crate::expr::WindowFunction;
 use crate::{
-    function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
+    function::WindowFunctionSimplification, Documentation, Expr, PartitionEvaluator,
+    Signature,
 };
 
 /// Logical representation of a user-defined window function (UDWF)
@@ -180,6 +181,14 @@ impl WindowUDF {
     pub fn reverse_expr(&self) -> ReversedUDWF {
         self.inner.reverse_expr()
     }
+
+    /// Returns the documentation for this Window UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    pub fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
+    }
 }
 
 impl<F> From<F> for WindowUDF
@@ -204,30 +213,47 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
+/// # use std::sync::OnceLock;
 /// # use arrow::datatypes::{DataType, Field};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt};
+/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
-/// use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// # use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
+/// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+///
 /// #[derive(Debug, Clone)]
 /// struct SmoothIt {
-///   signature: Signature
+///   signature: Signature,
 /// }
 ///
 /// impl SmoothIt {
 ///   fn new() -> Self {
 ///     Self {
-///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable)
+///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
 ///      }
 ///   }
 /// }
 ///
-/// /// Implement the WindowUDFImpl trait for AddOne
+/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+///
+/// fn get_doc() -> &'static Documentation {
+///     DOCUMENTATION.get_or_init(|| {
+///         Documentation::builder()
+///             .with_doc_section(DOC_SECTION_ANALYTICAL)
+///             .with_description("smooths the windows")
+///             .with_syntax_example("smooth_it(2)")
+///             .with_argument("arg1", "The int32 number to smooth by")
+///             .build()
+///             .unwrap()
+///     })
+/// }
+///
+/// /// Implement the WindowUDFImpl trait for SmoothIt
 /// impl WindowUDFImpl for SmoothIt {
 ///    fn as_any(&self) -> &dyn Any { self }
 ///    fn name(&self) -> &str { "smooth_it" }
 ///    fn signature(&self) -> &Signature { &self.signature }
-///    // The actual implementation would add one to the argument
+///    // The actual implementation would smooth the window
 ///    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> { unimplemented!() }
 ///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
 ///      if let Some(DataType::Int32) = field_args.get_input_type(0) {
@@ -235,6 +261,9 @@ where
 ///      } else {
 ///        plan_err!("smooth_it only accepts Int32 arguments")
 ///      }
+///    }
+///    fn documentation(&self) -> Option<&Documentation> {
+///      Some(get_doc())
 ///    }
 /// }
 ///
@@ -326,6 +355,10 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     }
 
     /// The [`Field`] of the final result of evaluating this window function.
+    ///
+    /// Call `field_args.name()` to get the fully qualified name for defining
+    /// the [`Field`]. For a complete example see the implementation in the
+    /// [Basic Example](WindowUDFImpl#basic-example) section.
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field>;
 
     /// Allows the window UDF to define a custom result ordering.
@@ -364,6 +397,14 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// function when it is evaluated in reverse order.
     fn reverse_expr(&self) -> ReversedUDWF {
         ReversedUDWF::NotSupported
+    }
+
+    /// Returns the documentation for this Window UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    fn documentation(&self) -> Option<&Documentation> {
+        None
     }
 }
 
@@ -465,6 +506,41 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
+    }
+}
+
+// Window UDF doc sections for use in public documentation
+pub mod window_doc_sections {
+    use crate::DocSection;
+
+    pub fn doc_sections() -> Vec<DocSection> {
+        vec![
+            DOC_SECTION_AGGREGATE,
+            DOC_SECTION_RANKING,
+            DOC_SECTION_ANALYTICAL,
+        ]
+    }
+
+    pub const DOC_SECTION_AGGREGATE: DocSection = DocSection {
+        include: true,
+        label: "Aggregate Functions",
+        description: Some("All aggregate functions can be used as window functions."),
+    };
+
+    pub const DOC_SECTION_RANKING: DocSection = DocSection {
+        include: true,
+        label: "Ranking Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_ANALYTICAL: DocSection = DocSection {
+        include: true,
+        label: "Analytical Functions",
+        description: None,
+    };
 }
 
 #[cfg(test)]

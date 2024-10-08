@@ -185,9 +185,7 @@ pub fn resolve_table_references(
                 let _ = s.as_ref().visit(visitor);
             }
             DFStatement::CreateExternalTable(table) => {
-                visitor
-                    .relations
-                    .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
+                visitor.relations.insert(table.name.clone());
             }
             DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
                 CopyToSource::Relation(table_name) => {

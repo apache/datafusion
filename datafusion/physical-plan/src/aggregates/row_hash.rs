@@ -29,7 +29,7 @@ use crate::aggregates::{
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
-use crate::sorts::streaming_merge;
+use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::{read_spill_as_stream, spill_record_batch_by_size};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
@@ -38,7 +38,7 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -449,13 +449,13 @@ impl GroupedHashAggregateStream {
         let aggregate_arguments = aggregates::aggregate_expressions(
             &agg.aggr_expr,
             &agg.mode,
-            agg_group_by.expr.len(),
+            agg_group_by.num_group_exprs(),
         )?;
         // arguments for aggregating spilled data is the same as the one for final aggregation
         let merging_aggregate_arguments = aggregates::aggregate_expressions(
             &agg.aggr_expr,
             &AggregateMode::Final,
-            agg_group_by.expr.len(),
+            agg_group_by.num_group_exprs(),
         )?;
 
         let filter_expressions = match agg.mode {
@@ -473,7 +473,7 @@ impl GroupedHashAggregateStream {
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
 
-        let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
+        let group_schema = group_schema(&agg.input().schema(), &agg_group_by)?;
         let spill_expr = group_schema
             .fields
             .into_iter()
@@ -1001,15 +1001,14 @@ impl GroupedHashAggregateStream {
             streams.push(stream);
         }
         self.spill_state.is_stream_merging = true;
-        self.input = streaming_merge(
-            streams,
-            schema,
-            &self.spill_state.spill_expr,
-            self.baseline_metrics.clone(),
-            self.batch_size,
-            None,
-            self.reservation.new_empty(),
-        )?;
+        self.input = StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_schema(schema)
+            .with_expressions(&self.spill_state.spill_expr)
+            .with_metrics(self.baseline_metrics.clone())
+            .with_batch_size(self.batch_size)
+            .with_reservation(self.reservation.new_empty())
+            .build()?;
         self.input_done = false;
         self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
         Ok(())
@@ -1081,13 +1080,14 @@ impl GroupedHashAggregateStream {
 
     /// Transforms input batch to intermediate aggregate state, without grouping it
     fn transform_to_states(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let group_values = evaluate_group_by(&self.group_by, &batch)?;
+        let mut group_values = evaluate_group_by(&self.group_by, &batch)?;
         let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
         let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
 
-        let mut output = group_values.first().cloned().ok_or_else(|| {
-            internal_datafusion_err!("group_values expected to have at least one element")
-        })?;
+        if group_values.len() != 1 {
+            return internal_err!("group_values expected to have single element");
+        }
+        let mut output = group_values.swap_remove(0);
 
         let iter = self
             .accumulators

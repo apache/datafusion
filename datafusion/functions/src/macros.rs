@@ -284,7 +284,7 @@ macro_rules! make_math_binary_udf {
             use arrow::datatypes::DataType;
             use datafusion_common::{exec_err, DataFusionError, Result};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-            use datafusion_expr::TypeSignature::*;
+            use datafusion_expr::TypeSignature;
             use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
             #[derive(Debug)]
@@ -298,8 +298,8 @@ macro_rules! make_math_binary_udf {
                     Self {
                         signature: Signature::one_of(
                             vec![
-                                Exact(vec![Float32, Float32]),
-                                Exact(vec![Float64, Float64]),
+                                TypeSignature::Exact(vec![Float32, Float32]),
+                                TypeSignature::Exact(vec![Float64, Float64]),
                             ],
                             Volatility::Immutable,
                         ),

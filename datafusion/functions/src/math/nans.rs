@@ -19,10 +19,9 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, TypeSignature};
 
 use arrow::array::{ArrayRef, BooleanArray, Float32Array, Float64Array};
-use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
@@ -43,7 +42,10 @@ impl IsNanFunc {
         use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![Exact(vec![Float32]), Exact(vec![Float64])],
+                vec![
+                    TypeSignature::Exact(vec![Float32]),
+                    TypeSignature::Exact(vec![Float64]),
+                ],
                 Volatility::Immutable,
             ),
         }

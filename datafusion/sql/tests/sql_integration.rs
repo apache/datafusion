@@ -1914,6 +1914,13 @@ fn create_external_table_with_pk() {
 }
 
 #[test]
+fn create_external_table_wih_schema() {
+    let sql = "CREATE EXTERNAL TABLE staging.foo STORED AS CSV LOCATION 'foo.csv'";
+    let expected = "CreateExternalTable: Partial { schema: \"staging\", table: \"foo\" }";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn create_schema_with_quoted_name() {
     let sql = "CREATE SCHEMA \"quoted_schema_name\"";
     let expected = "CreateCatalogSchema: \"quoted_schema_name\"";
