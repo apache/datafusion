@@ -521,7 +521,7 @@ impl MinMaxBytesState {
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
         self.min_max.resize(total_num_groups, None);
-        let mut locations = vec![MinMaxLocation::ExistingMinMax; group_indices.len()];
+        let mut locations = vec![MinMaxLocation::ExistingMinMax; total_num_groups];
 
         assert!(opt_filter.is_none(), "Filtering not yet implemented");
 
