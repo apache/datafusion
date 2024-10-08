@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::RecordBatch;
+use rand::{thread_rng, Rng};
 use tokio::task::JoinSet;
 
 use crate::fuzz_cases::aggregation_fuzzer::{
@@ -41,7 +42,7 @@ const CTX_GEN_ROUNDS: usize = 16;
 /// Aggregation fuzzer's builder
 pub struct AggregationFuzzerBuilder {
     /// See `sql` in [`AggregationFuzzer`], no default, and required to set
-    sql: Option<Arc<str>>,
+    candidate_sqls: Vec<Arc<str>>,
 
     /// See `table_name` in [`AggregationFuzzer`], no default, and required to set
     table_name: Option<Arc<str>>,
@@ -54,14 +55,14 @@ pub struct AggregationFuzzerBuilder {
 impl AggregationFuzzerBuilder {
     fn new() -> Self {
         Self {
-            sql: None,
+            candidate_sqls: Vec::new(),
             table_name: None,
             data_gen_config: None,
         }
     }
 
-    pub fn sql(mut self, sql: &str) -> Self {
-        self.sql = Some(Arc::from(sql));
+    pub fn add_sql(mut self, sql: &str) -> Self {
+        self.candidate_sqls.push(Arc::from(sql));
         self
     }
 
@@ -76,14 +77,15 @@ impl AggregationFuzzerBuilder {
     }
 
     pub fn build(self) -> AggregationFuzzer {
-        let sql = self.sql.expect("sql is required");
+        assert!(!self.candidate_sqls.is_empty());
+        let candidate_sqls = self.candidate_sqls;
         let table_name = self.table_name.expect("table_name is required");
         let data_gen_config = self.data_gen_config.expect("data_gen_config is required");
 
         let dataset_generator = DatasetGenerator::new(data_gen_config);
 
         AggregationFuzzer {
-            sql,
+            candidate_sqls,
             table_name,
             dataset_generator,
         }
@@ -101,7 +103,7 @@ impl Default for AggregationFuzzerBuilder {
 /// (e.g. sorted, partial skipping, spilling...)
 pub struct AggregationFuzzer {
     /// Test query represented by sql
-    sql: Arc<str>,
+    candidate_sqls: Vec<Arc<str>>,
 
     /// The queried table name
     table_name: Arc<str>,
@@ -110,17 +112,37 @@ pub struct AggregationFuzzer {
     dataset_generator: DatasetGenerator,
 }
 
+/// Query group including the tested dataset and its sql query
+struct QueryGroup {
+    dataset: Dataset,
+    sql: Arc<str>,
+}
+
 impl AggregationFuzzer {
     pub async fn run(&self) {
         let mut join_set = JoinSet::new();
+        let mut rng = thread_rng();
 
-        // Loop to generate datasets
+        // Loop to generate datasets and its query
         for _ in 0..DATA_GEN_ROUNDS {
+            // Generate datasets first
             let datasets = self
                 .dataset_generator
                 .generate()
                 .expect("should success to generate dataset");
-            let tasks = self.generate_fuzz_tasks(datasets).await;
+
+            // Then for each of them, we random select a test sql for it
+            let query_groups = datasets
+                .into_iter()
+                .map(|dataset| {
+                    let sql_idx = rng.gen_range(0..self.candidate_sqls.len());
+                    let sql = self.candidate_sqls[sql_idx].clone();
+
+                    QueryGroup { dataset, sql }
+                })
+                .collect::<Vec<_>>();
+
+            let tasks = self.generate_fuzz_tasks(query_groups).await;
             for task in tasks {
                 join_set.spawn(async move {
                     task.run().await;
@@ -136,10 +158,10 @@ impl AggregationFuzzer {
 
     async fn generate_fuzz_tasks(
         &self,
-        datasets: Vec<Dataset>,
+        query_groups: Vec<QueryGroup>,
     ) -> Vec<AggregationFuzzTestTask> {
-        let mut tasks = Vec::with_capacity(datasets.len() * CTX_GEN_ROUNDS);
-        for dataset in datasets {
+        let mut tasks = Vec::with_capacity(query_groups.len() * CTX_GEN_ROUNDS);
+        for QueryGroup { dataset, sql } in query_groups {
             let dataset_ref = Arc::new(dataset);
             let ctx_generator =
                 SessionContextGenerator::new(dataset_ref.clone(), &self.table_name);
@@ -148,7 +170,7 @@ impl AggregationFuzzer {
             let baseline_ctx_with_params = ctx_generator
                 .generate_baseline()
                 .expect("should success to generate baseline session context");
-            let baseline_result = run_sql(&self.sql, &baseline_ctx_with_params.ctx)
+            let baseline_result = run_sql(&sql, &baseline_ctx_with_params.ctx)
                 .await
                 .expect("should success to run baseline sql");
             let baseline_result = Arc::new(baseline_result);
@@ -160,7 +182,7 @@ impl AggregationFuzzer {
                 let task = AggregationFuzzTestTask {
                     dataset_ref: dataset_ref.clone(),
                     expected_result: baseline_result.clone(),
-                    sql: self.sql.clone(),
+                    sql: sql.clone(),
                     ctx_with_params,
                 };
 
