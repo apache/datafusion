@@ -17,6 +17,7 @@
 
 use arrow::array::make_view;
 use arrow::array::BufferBuilder;
+use arrow::array::ByteView;
 use arrow::array::GenericBinaryArray;
 use arrow::array::GenericStringArray;
 use arrow::array::OffsetSizeTrait;
@@ -445,7 +446,9 @@ impl ByteGroupValueViewBuilder {
         let value: &[u8] = arr.value(row).as_ref();
 
         let value_len = value.len();
-        let view = if value_len > 12 {
+        let view = if value_len <= 12 {
+            make_view(value, 0, 0)
+        } else {
             // Ensure big enough block to hold the value firstly
             self.ensure_in_progress_big_enough(value_len);
 
@@ -455,8 +458,6 @@ impl ByteGroupValueViewBuilder {
             self.in_progress.extend_from_slice(value);
 
             make_view(value, block_id, offset)
-        } else {
-            make_view(value, 0, 0)
         };
 
         // Append view
@@ -475,6 +476,83 @@ impl ByteGroupValueViewBuilder {
             );
             let buffer = Buffer::from_vec(flushed_block);
             self.completed.push(buffer);
+        }
+    }
+
+    fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
+    where
+        B: ByteViewType,
+    {
+        let array = array.as_byte_view::<B>();
+
+        // Check if nulls equal firstly
+        let exist_null = self.nulls.is_null(lhs_row);
+        let input_null = array.is_null(rhs_row);
+        if let Some(result) = nulls_equal_to(exist_null, input_null) {
+            return result;
+        }
+
+        // Otherwise, we need to check their values
+        let exist_view = self.views[lhs_row];
+        let exist_view_len = exist_view as u32;
+
+        let input_view = array.views()[rhs_row];
+        let input_view_len = input_view as u32;
+
+        // The check logic
+        //   - Check len equality
+        //   - If non-inlined, check prefix and then check value in buffer
+        //     when needed
+        //   - If inlined, check inlined value
+        if exist_view_len != input_view_len {
+            return false;
+        }
+
+        if exist_view_len <= 12 {
+            let exist_inline = unsafe {
+                GenericByteViewArray::<T>::inline_value(
+                    &exist_view,
+                    exist_view_len as usize,
+                )
+            };
+            let input_inline = unsafe {
+                GenericByteViewArray::<T>::inline_value(
+                    &input_view,
+                    input_view_len as usize,
+                )
+            };
+            exist_inline == input_inline
+        } else {
+            let exist_prefix =
+                unsafe { GenericByteViewArray::<B>::inline_value(&exist_view, 4) };
+            let input_prefix =
+                unsafe { GenericByteViewArray::<B>::inline_value(&input_view, 4) };
+
+            if exist_prefix != input_prefix {
+                return false;
+            }
+
+            let exist_full = {
+                let byte_view = ByteView::from(exist_view);
+                self.value(
+                    byte_view.buffer_index as usize,
+                    byte_view.offset as usize,
+                    byte_view.length as usize,
+                )
+            };
+            let input_full: &[u8] = unsafe { array.value_unchecked(rhs_row).as_ref() };
+            exist_full == input_full
+        }
+    }
+
+    fn value(&self, buffer_index: usize, offset: usize, length: usize) -> &[u8] {
+        debug_assert!(buffer_index <= self.completed.len());
+
+        if buffer_index < self.completed.len() {
+            let block = &self.completed[buffer_index];
+            &block[offset..offset + length]
+        } else {
+            &self.in_progress[offset..offset + length]
         }
     }
 }
