@@ -43,7 +43,6 @@ arrow-buffer = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-string = { workspace = true }
-base64 = { version = "0.22", optional = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
@@ -57,7 +56,6 @@ itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 paste = "^1.0"
 petgraph = "0.6.2"
-regex = { workspace = true, optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
