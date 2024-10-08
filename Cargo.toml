@@ -48,6 +48,8 @@ members = [
     "datafusion-examples",
     "test-utils",
     "benchmarks",
+    "datafusion/macros",
+    "datafusion/pre-macros"
 ]
 resolver = "2"
 
@@ -105,11 +107,13 @@ datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate
 datafusion-functions-nested = { path = "datafusion/functions-nested", version = "42.1.0" }
 datafusion-functions-window = { path = "datafusion/functions-window", version = "42.1.0" }
 datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "42.1.0" }
+datafusion-macros = { path = "datafusion/macros", version = "42.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "42.1.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "42.1.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "42.1.0", default-features = false }
 datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "42.1.0" }
 datafusion-physical-plan = { path = "datafusion/physical-plan", version = "42.1.0" }
+datafusion-pre-macros = { path = "datafusion/pre-macros", version = "42.0.0" }
 datafusion-proto = { path = "datafusion/proto", version = "42.1.0" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "42.1.0" }
 datafusion-sql = { path = "datafusion/sql", version = "42.1.0" }
