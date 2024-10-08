@@ -210,7 +210,7 @@ macro_rules! binary_string_array_flag_op_scalar {
                     // downcast_dictionary_array duplicates code per possible key type, so we aim to do all prep work before
                     |evaluated_values| downcast_dictionary_array! {
                         $LEFT => {
-                            let unpacked_dict = $LEFT.keys().iter().map(|f| f.map(|k| evaluated_values.value(k as usize))).collect::<BooleanArray>();
+                            let unpacked_dict = evaluated_values.take_iter($LEFT.keys().iter().map(|opt| opt.map(|v| v as _))).collect::<BooleanArray>();
                             Arc::new(unpacked_dict) as _
                         },
                         _ => unreachable!(),
