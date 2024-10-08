@@ -79,7 +79,7 @@ impl WindowUDFImpl for PercentRank {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.name(), DataType::UInt64, false))
+        Ok(Field::new(field_args.name(), DataType::Float64, false))
     }
 
     fn sort_options(&self) -> Option<SortOptions> {
