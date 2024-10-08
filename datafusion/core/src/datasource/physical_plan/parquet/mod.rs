@@ -501,6 +501,8 @@ impl ParquetExec {
     /// Convert this `ParquetExec` into a builder for modification
     pub fn into_builder(self) -> ParquetExecBuilder {
         // list out fields so it is clear what is being dropped
+        // (note the fields which are dropped are re-created as part of calling
+        // `build` on the builder)
         let Self {
             base_config,
             projected_statistics: _,
