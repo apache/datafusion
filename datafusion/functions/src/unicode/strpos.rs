@@ -18,14 +18,12 @@
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
-use arrow::array::{ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
-use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
-
 use crate::string::common::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
+use arrow::array::{ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
+use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -44,20 +42,8 @@ impl Default for StrposFunc {
 
 impl StrposFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8, LargeUtf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                    Exact(vec![Utf8View, Utf8View]),
-                    Exact(vec![Utf8View, Utf8]),
-                    Exact(vec![Utf8View, LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
             aliases: vec![String::from("instr"), String::from("position")],
         }
     }
