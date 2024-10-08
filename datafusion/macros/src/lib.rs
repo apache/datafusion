@@ -1,8 +1,8 @@
 extern crate proc_macro;
+use datafusion_pre_macros::DocumentationTest;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, Lit, LitStr, Meta, MetaNameValue};
-use datafusion_pre_macros::DocumentationTest;
 
 #[proc_macro_attribute]
 pub fn udf_doc(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -28,7 +28,6 @@ pub fn udf_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = input.clone().ident;
 
     //eprintln!("input={input:?}");
-
 
     let expanded = quote! {
         #input
