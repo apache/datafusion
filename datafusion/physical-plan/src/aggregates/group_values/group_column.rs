@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::make_view;
 use arrow::array::BufferBuilder;
 use arrow::array::GenericBinaryArray;
 use arrow::array::GenericStringArray;
@@ -39,6 +40,7 @@ use datafusion_common::utils::proxy::VecAllocExt;
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow_array::types::GenericStringType;
 use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
+use std::mem;
 use std::sync::Arc;
 use std::vec;
 
@@ -424,23 +426,58 @@ pub struct ByteGroupValueViewBuilder {
     nulls: MaybeNullBufferBuilder,
 }
 
-// impl ByteGroupValueViewBuilder {
-//     fn append_val_inner<B>(&mut self, array: &ArrayRef, row: usize)
-//     where
-//         B: ByteViewType,
-//     {
-//         let arr = array.as_byte_view::<B>();
-//         if arr.is_null(row) {
-//             self.nulls.append(true);
-//             self.views.push(0);
-//         } else {
-//             self.nulls.append(false);
-//             let value: &[u8] = arr.value(row).as_ref();
-//             self.buffer.append_slice(value);
-//             self.offsets.push(O::usize_as(self.buffer.len()));
-//         }
-//     }
-// }
+impl ByteGroupValueViewBuilder {
+    fn append_val_inner<B>(&mut self, array: &ArrayRef, row: usize)
+    where
+        B: ByteViewType,
+    {
+        let arr = array.as_byte_view::<B>();
+
+        // If a null row, set and return
+        if arr.is_null(row) {
+            self.nulls.append(true);
+            self.views.push(0);
+            return;
+        }
+
+        // Not null case
+        self.nulls.append(false);
+        let value: &[u8] = arr.value(row).as_ref();
+
+        let value_len = value.len();
+        let view = if value_len > 12 {
+            // Ensure big enough block to hold the value firstly
+            self.ensure_in_progress_big_enough(value_len);
+
+            // Append value
+            let block_id = self.completed.len();
+            let offset = self.in_progress.len();
+            self.in_progress.extend_from_slice(value);
+
+            make_view(value, block_id, offset)
+        } else {
+            make_view(value, 0, 0)
+        };
+
+        // Append view
+        self.views.push(view);
+    }
+
+    fn ensure_in_progress_big_enough(&mut self, value_len: usize) {
+        debug_assert!(value_len > 12);
+        let require_cap = self.in_progress.len() + value_len;
+
+        // If current block isn't big enough, flush it and create a new in progress block
+        if require_cap > self.max_block_size {
+            let flushed_block = mem::replace(
+                &mut self.in_progress,
+                Vec::with_capacity(self.max_block_size),
+            );
+            let buffer = Buffer::from_vec(flushed_block);
+            self.completed.push(buffer);
+        }
+    }
+}
 
 /// Determines if the nullability of the existing and new input array can be used
 /// to short-circuit the comparison of the two values.
