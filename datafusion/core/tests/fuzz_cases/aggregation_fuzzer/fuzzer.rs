@@ -36,7 +36,7 @@ const CTX_GEN_ROUNDS: usize = 16;
 
 /// Aggregation fuzzer's builder
 pub struct AggregationFuzzerBuilder {
-    /// See `sql` in [`AggregationFuzzer`], no default, and required to set
+    /// See `candidate_sqls` in [`AggregationFuzzer`], no default, and required to set
     candidate_sqls: Vec<Arc<str>>,
 
     /// See `table_name` in [`AggregationFuzzer`], no default, and required to set
