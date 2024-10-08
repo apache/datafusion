@@ -128,5 +128,5 @@ from aggregate_test_100
 order by c9
 
 
-statement error Inconsistent data type across values list at row 1 column 0. Was Int64 but found Utf8
+query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Int64 type
 create table foo as values (1), ('foo');
