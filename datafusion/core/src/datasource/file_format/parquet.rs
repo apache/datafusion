@@ -26,8 +26,9 @@ use std::sync::Arc;
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
 use super::{
-    coerce_file_schema_to_view_type, transform_schema_to_view, FileFormat,
-    FileFormatFactory, FilePushdownSupport, FileScanConfig,
+    coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
+    transform_binary_to_string, transform_schema_to_view, FileFormat, FileFormatFactory,
+    FilePushdownSupport, FileScanConfig,
 };
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
@@ -260,6 +261,19 @@ impl ParquetFormat {
         self.options.global.schema_force_view_types = use_views;
         self
     }
+
+    /// Return `true` if binary type will be read as string.
+    pub fn binary_as_string(&self) -> bool {
+        self.options.global.binary_as_string
+    }
+
+    /// If true, will read binary type as string.
+    ///
+    /// Refer to [`Self::binary_as_string`].
+    pub fn with_binary_as_string(mut self, binary_as_string: bool) -> Self {
+        self.options.global.binary_as_string = binary_as_string;
+        self
+    }
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator
@@ -349,6 +363,12 @@ impl FileFormat for ParquetFormat {
         } else {
             Schema::try_merge(schemas)
         }?;
+
+        let schema = if self.binary_as_string() {
+            transform_binary_to_string(&schema)
+        } else {
+            schema
+        };
 
         let schema = if self.force_view_types() {
             transform_schema_to_view(&schema)
@@ -552,6 +572,10 @@ pub fn statistics_from_parquet_meta_calc(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
+    if let Some(merged) = coerce_file_schema_to_string_type(&table_schema, &file_schema) {
+        file_schema = merged;
+    }
+
     if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &file_schema) {
         file_schema = merged;
     }
