@@ -126,9 +126,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         ) {
                             match planner_result {
                                 PlannerResult::Planned(expr) => {
-                                    // sanity check on column
-                                    schema
-                                        .check_ambiguous_name(qualifier, field.name())?;
                                     return Ok(expr);
                                 }
                                 PlannerResult::Original(_args) => {}
@@ -139,8 +136,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 // found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {
-                    // sanity check on column
-                    schema.check_ambiguous_name(qualifier, field.name())?;
                     Ok(Expr::Column(Column::from((qualifier, field))))
                 }
                 None => {
@@ -184,9 +179,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             let s = &ids[0..ids.len()];
                             // safe unwrap as s can never be empty or exceed the bounds
                             let (relation, column_name) = form_identifier(s).unwrap();
-                            // sanity check on column
-                            schema
-                                .check_ambiguous_name(relation.as_ref(), column_name)?;
                             Ok(Expr::Column(Column::new(relation, column_name)))
                         }
                     }
