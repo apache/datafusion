@@ -17,6 +17,7 @@
 
 //! Math function: `log()`.
 
+use datafusion_macros::udf_doc;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -36,6 +37,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
+#[udf_doc(description="log_description", example="log_example")]
 #[derive(Debug)]
 pub struct LogFunc {
     signature: Signature,
@@ -185,10 +187,6 @@ impl ScalarUDFImpl for LogFunc {
         Ok(ColumnarValue::Array(arr))
     }
 
-    fn documentation(&self) -> Option<&Documentation> {
-        Some(get_log_doc())
-    }
-
     /// Simplify the `log` function by the relevant rules:
     /// 1. Log(a, 1) ===> 0
     /// 2. Log(a, Power(a, b)) ===> b
@@ -267,6 +265,7 @@ mod tests {
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
+    use datafusion_pre_macros::DocumentationTest;
 
     #[test]
     #[should_panic]
@@ -653,5 +652,14 @@ mod tests {
             log.output_ordering(&[base_order, num_order]).unwrap(),
             SortProperties::Unordered
         );
+    }
+
+    #[test]
+    fn test_doc() {
+        let log = LogFunc::new();
+        assert_eq!(log.documentation_test(), Some(DocumentationTest {
+            description: "log_description".to_string(),
+            syntax_example: "log_example".to_string(),
+        }));
     }
 }
