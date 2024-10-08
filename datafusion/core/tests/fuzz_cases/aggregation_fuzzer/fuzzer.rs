@@ -108,7 +108,7 @@ impl Default for AggregationFuzzerBuilder {
 /// and running them to check the correctness of the optimizations
 /// (e.g. sorted, partial skipping, spilling...)
 pub struct AggregationFuzzer {
-    /// Test query represented by sql
+    /// Candidate test queries represented by sqls
     candidate_sqls: Vec<Arc<str>>,
 
     /// The queried table name
@@ -215,7 +215,7 @@ impl AggregationFuzzer {
 ///   - `ctx`, a randomly generated [`SessionContext`], `sql` will be run
 ///     on it after, and check if the result is equal to expected.
 ///   
-///   - `sql`, test query represented by sql
+///   - `sql`, the selected test sql
 ///
 ///   - `dataset_ref`, the input dataset, store it for error reported when found
 ///      the inconsistency between the one for `ctx` and `expected results`.
