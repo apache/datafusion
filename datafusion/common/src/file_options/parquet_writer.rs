@@ -176,6 +176,7 @@ impl ParquetOptions {
             maximum_buffered_record_batches_per_stream: _,
             bloom_filter_on_read: _, // reads not used for writer props
             schema_force_view_types: _,
+            binary_as_string: _, // not used for writer props
         } = self;
 
         let mut builder = WriterProperties::builder()

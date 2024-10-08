@@ -487,6 +487,8 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
+
+        pub binary_as_string: bool, default = false
     }
 }
 

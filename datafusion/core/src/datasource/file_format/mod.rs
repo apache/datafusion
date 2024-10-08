@@ -302,6 +302,26 @@ pub(crate) fn coerce_file_schema_to_view_type(
     ))
 }
 
+/// Transform a schema to force binary types to be strings
+pub fn transform_binary_to_string(schema: &Schema) -> Schema {
+    let transformed_fields: Vec<Arc<Field>> = schema
+        .fields
+        .iter()
+        .map(|field| match field.data_type() {
+            DataType::Binary => Arc::new(
+                Field::new(field.name(), DataType::Utf8, field.is_nullable())
+                    .with_metadata(field.metadata().to_owned()),
+            ),
+            DataType::LargeBinary => Arc::new(
+                Field::new(field.name(), DataType::LargeUtf8, field.is_nullable())
+                    .with_metadata(field.metadata().to_owned()),
+            ),
+            _ => field.clone(),
+        })
+        .collect();
+    Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
+}
+
 #[cfg(test)]
 pub(crate) mod test_util {
     use std::ops::Range;
