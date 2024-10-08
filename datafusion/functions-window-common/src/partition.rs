@@ -63,10 +63,10 @@ impl<'a> PartitionEvaluatorArgs<'a> {
         }
     }
 
-    /// Returns `Some(expr)` argument at index if it exists, otherwise
-    /// returns `None`.
-    pub fn input_expr_at(&self, index: usize) -> Option<&Arc<dyn PhysicalExpr>> {
-        self.input_exprs.get(index)
+    /// Returns the expressions passed as arguments to the user-defined
+    /// window function.
+    pub fn input_exprs(&self) -> &'a [Arc<dyn PhysicalExpr>] {
+        self.input_exprs
     }
 
     /// Returns `Some(data_type)`, the `DataType` of the expression at
