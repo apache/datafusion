@@ -24,7 +24,6 @@ use arrow::datatypes::DataType;
 use crate::utils::make_scalar_function;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
