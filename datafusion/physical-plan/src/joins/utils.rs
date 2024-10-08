@@ -459,6 +459,8 @@ pub fn check_inequality_condition(inequality_condition: &JoinFilter) -> Result<(
     Ok(())
 }
 
+/// convert inequality conditions to sort expressions of each side and the operator
+/// for example, if the inequality condition is `a < b`, then the sort expressions for left and right side are `a asc` and `b asc` respectively
 pub fn inequality_conditions_to_sort_exprs(
     inequality_conditions: &[JoinFilter],
 ) -> Result<Vec<(PhysicalSortExpr, PhysicalSortExpr, Operator)>> {
