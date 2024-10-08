@@ -140,18 +140,9 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 
 ## Ranking functions
 
-- [row_number](#row_number)
 - [rank](#rank)
 - [dense_rank](#dense_rank)
 - [ntile](#ntile)
-
-### `row_number`
-
-Number of the current row within its partition, counting from 1.
-
-```sql
-row_number()
-```
 
 ### `rank`
 
