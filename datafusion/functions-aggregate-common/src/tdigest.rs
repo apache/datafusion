@@ -647,7 +647,6 @@ impl TDigest {
         if !min.is_finite() {
             min = f64::NEG_INFINITY;
         }
-    
         if !max.is_finite() {
             max = f64::INFINITY;
         }
