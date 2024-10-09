@@ -84,7 +84,7 @@ impl AggregateUDFImpl for StringAgg {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if let Some(lit) = acc_args.exprs[1].as_any().downcast_ref::<Literal>() {
-            return match lit.value() {
+            return match lit.scalar().value() {
                 ScalarValue::Utf8(Some(delimiter))
                 | ScalarValue::LargeUtf8(Some(delimiter)) => {
                     Ok(Box::new(StringAggAccumulator::new(delimiter.as_str())))

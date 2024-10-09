@@ -34,7 +34,7 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    BuiltInWindowFunction, PartitionEvaluator, ReversedUDWF, WindowFrame,
+    BuiltInWindowFunction, PartitionEvaluator, ReversedUDWF, Scalar, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
@@ -168,7 +168,7 @@ fn window_expr_from_aggregate_expr(
 fn get_scalar_value_from_args(
     args: &[Arc<dyn PhysicalExpr>],
     index: usize,
-) -> Result<Option<ScalarValue>> {
+) -> Result<Option<Scalar>> {
     Ok(if let Some(field) = args.get(index) {
         let tmp = field
             .as_any()
@@ -176,7 +176,7 @@ fn get_scalar_value_from_args(
             .ok_or_else(|| DataFusionError::NotImplemented(
                 format!("There is only support Literal types for field at idx: {index} in Window Function"),
             ))?
-            .value()
+            .scalar()
             .clone();
         Some(tmp)
     } else {
@@ -184,36 +184,36 @@ fn get_scalar_value_from_args(
     })
 }
 
-fn get_signed_integer(value: ScalarValue) -> Result<i64> {
-    if value.is_null() {
+fn get_signed_integer(scalar: Scalar) -> Result<i64> {
+    if scalar.value().is_null() {
         return Ok(0);
     }
 
-    if !value.data_type().is_integer() {
+    if !scalar.data_type().is_integer() {
         return exec_err!("Expected an integer value");
     }
 
-    value.cast_to(&DataType::Int64)?.try_into()
+    scalar.cast_to(&DataType::Int64)?.into_value().try_into()
 }
 
-fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
-    if value.is_null() {
+fn get_unsigned_integer(scalar: Scalar) -> Result<u64> {
+    if scalar.value().is_null() {
         return Ok(0);
     }
 
-    if !value.data_type().is_integer() {
+    if !scalar.data_type().is_integer() {
         return exec_err!("Expected an integer value");
     }
 
-    value.cast_to(&DataType::UInt64)?.try_into()
+    scalar.cast_to(&DataType::UInt64)?.into_value().try_into()
 }
 
 fn get_casted_value(
-    default_value: Option<ScalarValue>,
+    default_value: Option<Scalar>,
     dtype: &DataType,
 ) -> Result<ScalarValue> {
     match default_value {
-        Some(v) if !v.data_type().is_null() => v.cast_to(dtype),
+        Some(v) if !v.data_type().is_null() => Ok(v.cast_to(dtype)?.into_value()),
         // If None or Null datatype
         _ => ScalarValue::try_from(dtype),
     }
@@ -241,11 +241,11 @@ fn create_built_in_window_expr(
                 )
             })?;
 
-            if n.is_null() {
+            if n.value().is_null() {
                 return exec_err!("NTILE requires a positive integer, but finds NULL");
             }
 
-            if n.is_unsigned() {
+            if n.value().is_unsigned() {
                 let n = get_unsigned_integer(n)?;
                 Arc::new(Ntile::new(name, n, out_data_type))
             } else {
@@ -297,7 +297,7 @@ fn create_built_in_window_expr(
                     .ok_or_else(|| {
                         exec_datafusion_err!("Expected a signed integer literal for the second argument of nth_value, got {}", args[1])
                     })?
-                    .value()
+                    .scalar()
                     .clone(),
             )?;
             Arc::new(NthValue::nth(
@@ -437,7 +437,7 @@ pub(crate) fn calc_requirements<
         let PhysicalSortExpr { expr, options } = element.borrow();
         if !sort_reqs.iter().any(|e| e.expr.eq(expr)) {
             sort_reqs.push(PhysicalSortRequirement::new(
-                Arc::clone(expr),
+                Arc::clone(&expr),
                 Some(*options),
             ));
         }

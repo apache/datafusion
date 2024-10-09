@@ -31,7 +31,7 @@ fn make_col(name: &str, index: usize) -> Arc<dyn PhysicalExpr> {
 }
 
 fn make_lit_i32(n: i32) -> Arc<dyn PhysicalExpr> {
-    Arc::new(Literal::new(ScalarValue::Int32(Some(n))))
+    Arc::new(Literal::from(ScalarValue::Int32(Some(n))))
 }
 
 fn criterion_benchmark(c: &mut Criterion) {

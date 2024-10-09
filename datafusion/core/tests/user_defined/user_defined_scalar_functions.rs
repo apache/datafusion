@@ -42,7 +42,7 @@ use datafusion_common::{
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, ExprSchemable,
-    LogicalPlanBuilder, OperateFunctionArg, ScalarUDF, ScalarUDFImpl, Signature,
+    LogicalPlanBuilder, OperateFunctionArg, Scalar, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
@@ -648,8 +648,10 @@ impl ScalarUDFImpl for TakeUDF {
             return plan_err!("Expected 3 arguments, got {}.", arg_exprs.len());
         }
 
-        let take_idx = if let Some(Expr::Literal(ScalarValue::Int64(Some(idx)))) =
-            arg_exprs.get(2)
+        let take_idx = if let Some(Expr::Literal(Scalar {
+            value: ScalarValue::Int64(Some(idx)),
+            ..
+        })) = arg_exprs.get(2)
         {
             if *idx == 0 || *idx == 1 {
                 *idx as usize

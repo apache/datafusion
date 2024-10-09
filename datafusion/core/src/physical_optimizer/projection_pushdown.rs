@@ -2187,7 +2187,7 @@ mod tests {
                         Arc::new(Column::new("b_left_inter", 0)),
                         Operator::Minus,
                         Arc::new(BinaryExpr::new(
-                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                            Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
                             Operator::Plus,
                             Arc::new(Column::new("a_right_inter", 1)),
                         )),
@@ -2301,7 +2301,7 @@ mod tests {
                         Arc::new(Column::new("b_left_inter", 0)),
                         Operator::Minus,
                         Arc::new(BinaryExpr::new(
-                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                            Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
                             Operator::Plus,
                             Arc::new(Column::new("a_right_inter", 1)),
                         )),
@@ -2382,7 +2382,7 @@ mod tests {
             Arc::new(Column::new("b", 7)),
             Operator::Minus,
             Arc::new(BinaryExpr::new(
-                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
                 Operator::Plus,
                 Arc::new(Column::new("a", 1)),
             )),
@@ -2410,7 +2410,7 @@ mod tests {
                         Arc::new(Column::new("b_left_inter", 0)),
                         Operator::Minus,
                         Arc::new(BinaryExpr::new(
-                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                            Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
                             Operator::Plus,
                             Arc::new(Column::new("a_right_inter", 1)),
                         )),

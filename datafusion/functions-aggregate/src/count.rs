@@ -316,7 +316,7 @@ impl AggregateUDFImpl for Count {
                     .as_any()
                     .downcast_ref::<expressions::Literal>()
                 {
-                    if lit_expr.value() == &COUNT_STAR_EXPANSION {
+                    if lit_expr.scalar().value() == &COUNT_STAR_EXPANSION {
                         return Some(ScalarValue::Int64(Some(num_rows as i64)));
                     }
                 }

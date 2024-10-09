@@ -33,7 +33,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan};
+use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan, Scalar};
 
 /// [`UnwrapCastInComparison`] attempts to remove casts from
 /// comparisons to literals ([`ScalarValue`]s) by applying the casts
@@ -314,14 +314,14 @@ fn is_supported_dictionary_type(data_type: &DataType) -> bool {
 
 /// Convert a literal value from one data type to another
 fn try_cast_literal_to_type(
-    lit_value: &ScalarValue,
+    lit_value: &Scalar,
     target_type: &DataType,
 ) -> Option<ScalarValue> {
     let lit_data_type = lit_value.data_type();
     if !is_supported_type(&lit_data_type) || !is_supported_type(target_type) {
         return None;
     }
-    if lit_value.is_null() {
+    if lit_value.value().is_null() {
         // null value can be cast to any type of null value
         return ScalarValue::try_from(target_type).ok();
     }
@@ -332,7 +332,7 @@ fn try_cast_literal_to_type(
 
 /// Convert a numeric value from one numeric data type to another
 fn try_cast_numeric_literal(
-    lit_value: &ScalarValue,
+    lit_value: &Scalar,
     target_type: &DataType,
 ) -> Option<ScalarValue> {
     let lit_data_type = lit_value.data_type();
@@ -374,7 +374,7 @@ fn try_cast_numeric_literal(
         ),
         _ => return None,
     };
-    let lit_value_target_type = match lit_value {
+    let lit_value_target_type = match lit_value.value() {
         ScalarValue::Int8(Some(v)) => (*v as i128).checked_mul(mul),
         ScalarValue::Int16(Some(v)) => (*v as i128).checked_mul(mul),
         ScalarValue::Int32(Some(v)) => (*v as i128).checked_mul(mul),
@@ -472,10 +472,10 @@ fn try_cast_numeric_literal(
 }
 
 fn try_cast_string_literal(
-    lit_value: &ScalarValue,
+    lit_value: &Scalar,
     target_type: &DataType,
 ) -> Option<ScalarValue> {
-    let string_value = match lit_value {
+    let string_value = match lit_value.value() {
         ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) | ScalarValue::Utf8View(s) => {
             s.clone()
         }
@@ -492,11 +492,11 @@ fn try_cast_string_literal(
 
 /// Attempt to cast to/from a dictionary type by wrapping/unwrapping the dictionary
 fn try_cast_dictionary(
-    lit_value: &ScalarValue,
+    lit_value: &Scalar,
     target_type: &DataType,
 ) -> Option<ScalarValue> {
     let lit_value_type = lit_value.data_type();
-    let result_scalar = match (lit_value, target_type) {
+    let result_scalar = match (lit_value.value(), target_type) {
         // Unwrap dictionary when inner type matches target type
         (ScalarValue::Dictionary(_, inner_value), _)
             if inner_value.data_type() == *target_type =>
@@ -505,9 +505,12 @@ fn try_cast_dictionary(
         }
         // Wrap type when target type is dictionary
         (_, DataType::Dictionary(index_type, inner_type))
-            if **inner_type == lit_value_type =>
+            if inner_type.as_ref() == lit_value_type =>
         {
-            ScalarValue::Dictionary(index_type.clone(), Box::new(lit_value.clone()))
+            ScalarValue::Dictionary(
+                index_type.clone(),
+                Box::new(lit_value.value().clone()),
+            )
         }
         _ => {
             return None;
@@ -1180,10 +1183,11 @@ mod tests {
         target_type: DataType,
         expected_result: ExpectedCast,
     ) {
-        let actual_value = try_cast_literal_to_type(&literal, &target_type);
+        let scalar = Scalar::from(literal);
+        let actual_value = try_cast_literal_to_type(&scalar, &target_type);
 
         println!("expect_cast: ");
-        println!("  {literal:?} --> {target_type:?}");
+        println!("  {scalar:?} --> {target_type:?}");
         println!("  expected_result: {expected_result:?}");
         println!("  actual_result:   {actual_value:?}");
 
@@ -1197,7 +1201,7 @@ mod tests {
                 // Verify that calling the arrow
                 // cast kernel yields the same results
                 // input array
-                let literal_array = literal
+                let literal_array = scalar
                     .to_array_of_size(1)
                     .expect("Failed to convert to array of size");
                 let expected_array = expected_value
@@ -1212,7 +1216,7 @@ mod tests {
 
                 assert_eq!(
                     &expected_array, &cast_array,
-                    "Result of casting {literal:?} with arrow was\n {cast_array:#?}\nbut expected\n{expected_array:#?}"
+                    "Result of casting {scalar:?} with arrow was\n {cast_array:#?}\nbut expected\n{expected_array:#?}"
                 );
 
                 // Verify that for timestamp types the timezones are the same
@@ -1239,7 +1243,7 @@ mod tests {
     fn test_try_cast_literal_to_timestamp() {
         // same timestamp
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            &ScalarValue::TimestampNanosecond(Some(123456), None).into(),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
@@ -1251,7 +1255,7 @@ mod tests {
 
         // TimestampNanosecond to TimestampMicrosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            &ScalarValue::TimestampNanosecond(Some(123456), None).into(),
             &DataType::Timestamp(TimeUnit::Microsecond, None),
         )
         .unwrap();
@@ -1263,7 +1267,7 @@ mod tests {
 
         // TimestampNanosecond to TimestampMillisecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            &ScalarValue::TimestampNanosecond(Some(123456), None).into(),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();
@@ -1272,7 +1276,7 @@ mod tests {
 
         // TimestampNanosecond to TimestampSecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            &ScalarValue::TimestampNanosecond(Some(123456), None).into(),
             &DataType::Timestamp(TimeUnit::Second, None),
         )
         .unwrap();
@@ -1281,7 +1285,7 @@ mod tests {
 
         // TimestampMicrosecond to TimestampNanosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMicrosecond(Some(123), None),
+            &ScalarValue::TimestampMicrosecond(Some(123), None).into(),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
@@ -1293,7 +1297,7 @@ mod tests {
 
         // TimestampMicrosecond to TimestampMillisecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMicrosecond(Some(123), None),
+            &ScalarValue::TimestampMicrosecond(Some(123), None).into(),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();
@@ -1302,7 +1306,7 @@ mod tests {
 
         // TimestampMicrosecond to TimestampSecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMicrosecond(Some(123456789), None),
+            &ScalarValue::TimestampMicrosecond(Some(123456789), None).into(),
             &DataType::Timestamp(TimeUnit::Second, None),
         )
         .unwrap();
@@ -1310,7 +1314,7 @@ mod tests {
 
         // TimestampMillisecond to TimestampNanosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMillisecond(Some(123), None),
+            &ScalarValue::TimestampMillisecond(Some(123), None).into(),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
@@ -1321,7 +1325,7 @@ mod tests {
 
         // TimestampMillisecond to TimestampMicrosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMillisecond(Some(123), None),
+            &ScalarValue::TimestampMillisecond(Some(123), None).into(),
             &DataType::Timestamp(TimeUnit::Microsecond, None),
         )
         .unwrap();
@@ -1331,7 +1335,7 @@ mod tests {
         );
         // TimestampMillisecond to TimestampSecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampMillisecond(Some(123456789), None),
+            &ScalarValue::TimestampMillisecond(Some(123456789), None).into(),
             &DataType::Timestamp(TimeUnit::Second, None),
         )
         .unwrap();
@@ -1339,7 +1343,7 @@ mod tests {
 
         // TimestampSecond to TimestampNanosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampSecond(Some(123), None),
+            &ScalarValue::TimestampSecond(Some(123), None).into(),
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .unwrap();
@@ -1350,7 +1354,7 @@ mod tests {
 
         // TimestampSecond to TimestampMicrosecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampSecond(Some(123), None),
+            &ScalarValue::TimestampSecond(Some(123), None).into(),
             &DataType::Timestamp(TimeUnit::Microsecond, None),
         )
         .unwrap();
@@ -1361,7 +1365,7 @@ mod tests {
 
         // TimestampSecond to TimestampMillisecond
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampSecond(Some(123), None),
+            &ScalarValue::TimestampSecond(Some(123), None).into(),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();
@@ -1372,7 +1376,7 @@ mod tests {
 
         // overflow
         let new_scalar = try_cast_literal_to_type(
-            &ScalarValue::TimestampSecond(Some(i64::MAX), None),
+            &ScalarValue::TimestampSecond(Some(i64::MAX), None).into(),
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
         .unwrap();

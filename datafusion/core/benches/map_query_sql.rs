@@ -71,8 +71,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     let mut value_buffer = Vec::new();
 
     for i in 0..1000 {
-        key_buffer.push(Expr::Literal(ScalarValue::Utf8(Some(keys[i].clone()))));
-        value_buffer.push(Expr::Literal(ScalarValue::Int32(Some(values[i]))));
+        key_buffer.push(Expr::from(ScalarValue::Utf8(Some(keys[i].clone()))));
+        value_buffer.push(Expr::from(ScalarValue::Int32(Some(values[i]))));
     }
     c.bench_function("map_1000_1", |b| {
         b.iter(|| {

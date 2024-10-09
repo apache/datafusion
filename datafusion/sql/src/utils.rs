@@ -163,23 +163,26 @@ pub(crate) fn resolve_positions_to_exprs(
     expr: Expr,
     select_exprs: &[Expr],
 ) -> Result<Expr> {
-    match expr {
+    match &expr {
         // sql_expr_to_logical_expr maps number to i64
         // https://github.com/apache/datafusion/blob/8d175c759e17190980f270b5894348dc4cff9bbf/datafusion/src/sql/planner.rs#L882-L887
-        Expr::Literal(ScalarValue::Int64(Some(position)))
-            if position > 0_i64 && position <= select_exprs.len() as i64 =>
-        {
-            let index = (position - 1) as usize;
-            let select_expr = &select_exprs[index];
-            Ok(match select_expr {
-                Expr::Alias(Alias { expr, .. }) => *expr.clone(),
-                _ => select_expr.clone(),
-            })
+        Expr::Literal(scalar) => match scalar.value() {
+            ScalarValue::Int64(Some(position))
+                if *position > 0_i64 && *position <= select_exprs.len() as i64 =>
+            {
+                let index = (position - 1) as usize;
+                let select_expr = &select_exprs[index];
+                Ok(match select_expr {
+                    Expr::Alias(Alias { expr, .. }) => *expr.clone(),
+                    _ => select_expr.clone(),
+                })
+            }
+            ScalarValue::Int64(Some(position)) => plan_err!(
+                "Cannot find column with position {} in SELECT clause. Valid columns: 1 to {}",
+                position, select_exprs.len()
+            ),
+            _ => Ok(expr),
         }
-        Expr::Literal(ScalarValue::Int64(Some(position))) => plan_err!(
-            "Cannot find column with position {} in SELECT clause. Valid columns: 1 to {}",
-            position, select_exprs.len()
-        ),
         _ => Ok(expr),
     }
 }

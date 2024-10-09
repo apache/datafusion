@@ -41,6 +41,7 @@ use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, JoinSide, ScalarValue, Statistics,
 };
+use datafusion_expr::Scalar;
 
 #[derive(Debug)]
 pub enum Error {
@@ -290,12 +291,20 @@ impl TryFrom<&DFSchemaRef> for protobuf::DfSchema {
     }
 }
 
+impl TryFrom<&Scalar> for protobuf::ScalarValue {
+    type Error = Error;
+
+    fn try_from(scalar: &Scalar) -> Result<Self, Self::Error> {
+        scalar.value().try_into()
+    }
+}
+
 impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
     type Error = Error;
 
-    fn try_from(val: &ScalarValue) -> Result<Self, Self::Error> {
-        let data_type = val.data_type();
-        match val {
+    fn try_from(value: &ScalarValue) -> Result<Self, Self::Error> {
+        let data_type = value.data_type();
+        match value {
             ScalarValue::Boolean(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::BoolValue(*s))
             }
@@ -358,19 +367,19 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             ScalarValue::List(arr) => {
-                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, value)
             }
             ScalarValue::LargeList(arr) => {
-                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, value)
             }
             ScalarValue::FixedSizeList(arr) => {
-                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, value)
             }
             ScalarValue::Struct(arr) => {
-                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, value)
             }
             ScalarValue::Map(arr) => {
-                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, value)
             }
             ScalarValue::Date32(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date32Value(*s))

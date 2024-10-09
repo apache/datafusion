@@ -1698,7 +1698,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .cloned()
                         .unwrap_or_else(|| {
                             // If there is no default for the column, then the default is NULL
-                            Expr::Literal(ScalarValue::Null)
+                            Expr::from(ScalarValue::Null)
                         })
                         .cast_to(target_field.data_type(), &DFSchema::empty())?,
                 };

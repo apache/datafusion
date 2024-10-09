@@ -714,7 +714,7 @@ impl BoolVecBuilder {
 fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.as_any()
         .downcast_ref::<phys_expr::Literal>()
-        .map(|l| matches!(l.value(), ScalarValue::Boolean(Some(true))))
+        .map(|l| matches!(l.scalar().value(), ScalarValue::Boolean(Some(true))))
         .unwrap_or_default()
 }
 
@@ -1300,7 +1300,7 @@ fn build_is_null_column_expr(
                     Arc::new(phys_expr::BinaryExpr::new(
                         null_count_column_expr,
                         Operator::Gt,
-                        Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
+                        Arc::new(phys_expr::Literal::from(ScalarValue::UInt64(Some(0)))),
                     )) as _
                 })
                 .ok()
@@ -1328,7 +1328,7 @@ fn build_predicate_expression(
 ) -> Arc<dyn PhysicalExpr> {
     // Returned for unsupported expressions. Such expressions are
     // converted to TRUE.
-    let unhandled = Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(true))));
+    let unhandled = Arc::new(phys_expr::Literal::from(ScalarValue::Boolean(Some(true))));
 
     // predicate expression can only be a binary expression
     let expr_any = expr.as_any();
@@ -1549,7 +1549,7 @@ fn wrap_case_expr(
         Operator::Eq,
         expr_builder.row_count_column_expr()?,
     ));
-    let then = Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(false))));
+    let then = Arc::new(phys_expr::Literal::from(ScalarValue::Boolean(Some(false))));
 
     // CASE WHEN x_null_count = x_row_count THEN false ELSE <statistics_expr> END
     Ok(Arc::new(phys_expr::CaseExpr::try_new(

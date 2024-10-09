@@ -1722,7 +1722,7 @@ pub(crate) mod tests {
         let predicate = Arc::new(BinaryExpr::new(
             col("c", &schema()).unwrap(),
             Operator::Eq,
-            Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
+            Arc::new(Literal::from(ScalarValue::Int64(Some(0)))),
         ));
         Arc::new(FilterExec::try_new(predicate, input).unwrap())
     }

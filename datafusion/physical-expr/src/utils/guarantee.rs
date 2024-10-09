@@ -156,7 +156,7 @@ impl LiteralGuarantee {
                     builder.aggregate_multi_conjunct(
                         col,
                         guarantee,
-                        literals.iter().map(|e| e.value()),
+                        literals.iter().map(|e| e.scalar().value()),
                     )
                 } else {
                     // split disjunction: <expr> OR <expr> OR ...
@@ -211,7 +211,7 @@ impl LiteralGuarantee {
                         builder.aggregate_multi_conjunct(
                             first_term.col,
                             Guarantee::In,
-                            terms.iter().map(|term| term.lit.value()),
+                            terms.iter().map(|term| term.lit.scalar().value()),
                         )
                     } else {
                         // can't infer anything
@@ -274,7 +274,7 @@ impl<'a> GuaranteeBuilder<'a> {
         self.aggregate_multi_conjunct(
             col_op_lit.col,
             col_op_lit.guarantee,
-            [col_op_lit.lit.value()],
+            [col_op_lit.lit.scalar().value()],
         )
     }
 

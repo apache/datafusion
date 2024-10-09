@@ -112,7 +112,7 @@ impl ExprSchemable for Expr {
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
-            Expr::Literal(l) => Ok(l.data_type()),
+            Expr::Literal(l) => Ok(l.data_type().clone()),
             Expr::Case(case) => {
                 for (_, then_expr) in &case.when_then_expr {
                     let then_type = then_expr.get_type(schema)?;
@@ -277,7 +277,7 @@ impl ExprSchemable for Expr {
 
             Expr::Column(c) => input_schema.nullable(c),
             Expr::OuterReferenceColumn(_, _) => Ok(true),
-            Expr::Literal(value) => Ok(value.is_null()),
+            Expr::Literal(value) => Ok(value.value().is_null()),
             Expr::Case(case) => {
                 // this expression is nullable if any of the input expressions are nullable
                 let then_nullable = case
@@ -381,7 +381,7 @@ impl ExprSchemable for Expr {
                 .map(|(d, n)| (d.clone(), n)),
             Expr::OuterReferenceColumn(ty, _) => Ok((ty.clone(), true)),
             Expr::ScalarVariable(ty, _) => Ok((ty.clone(), true)),
-            Expr::Literal(l) => Ok((l.data_type(), l.is_null())),
+            Expr::Literal(l) => Ok((l.data_type().clone(), l.value().is_null())),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)

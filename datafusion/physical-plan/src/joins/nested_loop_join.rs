@@ -825,13 +825,13 @@ mod tests {
         let left_filter = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("x", 0)),
             Operator::NotEq,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(8)))),
         )) as Arc<dyn PhysicalExpr>;
         // right.b2!=10
         let right_filter = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("x", 1)),
             Operator::NotEq,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(10)))),
         )) as Arc<dyn PhysicalExpr>;
         // filter = left.b1!=8 and right.b2!=10
         // after filter:
@@ -1199,26 +1199,26 @@ mod tests {
         let left_mod = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("x", 0)),
             Operator::Modulo,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(3)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(3)))),
         )) as Arc<dyn PhysicalExpr>;
         // left.b1 % 3 != 0
         let left_filter = Arc::new(BinaryExpr::new(
             left_mod,
             Operator::NotEq,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(0)))),
         )) as Arc<dyn PhysicalExpr>;
 
         // right.b2 % 5
         let right_mod = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("x", 1)),
             Operator::Modulo,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(5)))),
         )) as Arc<dyn PhysicalExpr>;
         // right.b2 % 5 != 0
         let right_filter = Arc::new(BinaryExpr::new(
             right_mod,
             Operator::NotEq,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(0)))),
         )) as Arc<dyn PhysicalExpr>;
         // filter = left.b1 % 3 != 0 and right.b2 % 5 != 0
         let filter_expression =

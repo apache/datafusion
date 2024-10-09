@@ -127,7 +127,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
         };
         let data_type = args[0].get_type(schema)?;
-        match (data_type, name) {
+        match (data_type, name.value()) {
             (DataType::Map(fields, _), _) => {
                 match fields.data_type() {
                     DataType::Struct(fields) if fields.len() == 2 => {

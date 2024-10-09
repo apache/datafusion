@@ -28,7 +28,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::Expr;
+use datafusion_expr::{Expr, Scalar};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
@@ -36,24 +36,30 @@ use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 /// Represents a literal value
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Literal {
-    value: ScalarValue,
+    scalar: Scalar,
+}
+
+impl From<ScalarValue> for Literal {
+    fn from(value: ScalarValue) -> Self {
+        Self::new(Scalar::from(value))
+    }
 }
 
 impl Literal {
     /// Create a literal value expression
-    pub fn new(value: ScalarValue) -> Self {
-        Self { value }
+    pub fn new(value: Scalar) -> Self {
+        Self { scalar: value }
     }
 
     /// Get the scalar value
-    pub fn value(&self) -> &ScalarValue {
-        &self.value
+    pub fn scalar(&self) -> &Scalar {
+        &self.scalar
     }
 }
 
 impl std::fmt::Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.value)
+        write!(f, "{}", self.scalar)
     }
 }
 
@@ -64,15 +70,15 @@ impl PhysicalExpr for Literal {
     }
 
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(self.value.data_type())
+        Ok(self.scalar.data_type().clone())
     }
 
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        Ok(self.value.is_null())
+        Ok(self.scalar.value().is_null())
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        Ok(ColumnarValue::from(self.value.clone()))
+        Ok(ColumnarValue::Scalar(self.scalar.clone()))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -94,7 +100,10 @@ impl PhysicalExpr for Literal {
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
-            range: Interval::try_new(self.value().clone(), self.value().clone())?,
+            range: Interval::try_new(
+                self.scalar.value().clone(),
+                self.scalar.value().clone(),
+            )?,
         })
     }
 }

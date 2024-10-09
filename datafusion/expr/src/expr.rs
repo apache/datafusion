@@ -40,6 +40,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
 };
+use datafusion_expr_common::scalar::Scalar;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
@@ -54,7 +55,7 @@ use sqlparser::ast::{
 ///  BinaryExpr {
 ///    left: Expr::Column("A"),
 ///    op: Operator::Plus,
-///    right: Expr::Literal(ScalarValue::Int32(Some(1)))
+///    right: Expr::from(ScalarValue::Int32(Some(1)))
 /// }
 /// ```
 ///
@@ -107,9 +108,9 @@ use sqlparser::ast::{
 /// # use datafusion_expr::{lit, col, Expr};
 /// // All literals are strongly typed in DataFusion. To make an `i64` 42:
 /// let expr = lit(42i64);
-/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
+/// assert_eq!(expr, Expr::from(ScalarValue::Int64(Some(42))));
 /// // To make a (typed) NULL:
-/// let expr = Expr::Literal(ScalarValue::Int64(None));
+/// let expr = Expr::from(ScalarValue::Int64(None));
 /// // to make an (untyped) NULL (the optimizer will coerce this to the correct type):
 /// let expr = lit(ScalarValue::Null);
 /// ```
@@ -233,7 +234,7 @@ pub enum Expr {
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
     /// A constant value.
-    Literal(ScalarValue),
+    Literal(Scalar),
     /// A binary expression such as "age > 21"
     BinaryExpr(BinaryExpr),
     /// LIKE expression
@@ -333,7 +334,7 @@ pub enum Expr {
 
 impl Default for Expr {
     fn default() -> Self {
-        Expr::Literal(ScalarValue::Null)
+        Expr::from(ScalarValue::Null)
     }
 }
 
@@ -2409,7 +2410,7 @@ mod test {
     #[allow(deprecated)]
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),
+            expr: Box::new(Expr::from(ScalarValue::Float32(Some(1.23)))),
             data_type: DataType::Utf8,
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";

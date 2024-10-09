@@ -1634,7 +1634,7 @@ async fn consecutive_projection_same_schema() -> Result<()> {
 
     // Add `t` column full of nulls
     let df = df
-        .with_column("t", cast(Expr::Literal(ScalarValue::Null), DataType::Int32))
+        .with_column("t", cast(Expr::from(ScalarValue::Null), DataType::Int32))
         .unwrap();
     df.clone().show().await.unwrap();
 

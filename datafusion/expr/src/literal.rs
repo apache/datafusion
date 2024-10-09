@@ -19,6 +19,7 @@
 
 use crate::Expr;
 use datafusion_common::ScalarValue;
+use datafusion_expr_common::scalar::Scalar;
 
 /// Create a literal expression
 pub fn lit<T: Literal>(n: T) -> Expr {
@@ -41,39 +42,45 @@ pub trait TimestampLiteral {
     fn lit_timestamp_nano(&self) -> Expr;
 }
 
+impl From<ScalarValue> for Expr {
+    fn from(value: ScalarValue) -> Self {
+        Self::Literal(Scalar::from(value))
+    }
+}
+
 impl Literal for &str {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::from(*self))
+        Expr::from(ScalarValue::from(*self))
     }
 }
 
 impl Literal for String {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::from(self.as_ref()))
+        Expr::from(ScalarValue::from(self.as_ref()))
     }
 }
 
 impl Literal for &String {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::from(self.as_ref()))
+        Expr::from(ScalarValue::from(self.as_ref()))
     }
 }
 
 impl Literal for Vec<u8> {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Binary(Some((*self).to_owned())))
+        Expr::from(ScalarValue::Binary(Some((*self).to_owned())))
     }
 }
 
 impl Literal for &[u8] {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Binary(Some((*self).to_owned())))
+        Expr::from(ScalarValue::Binary(Some((*self).to_owned())))
     }
 }
 
 impl Literal for ScalarValue {
     fn lit(&self) -> Expr {
-        Expr::Literal(self.clone())
+        Expr::from(self.clone())
     }
 }
 
@@ -82,7 +89,7 @@ macro_rules! make_literal {
         #[doc = $DOC]
         impl Literal for $TYPE {
             fn lit(&self) -> Expr {
-                Expr::Literal(ScalarValue::$SCALAR(Some(self.clone())))
+                Expr::from(ScalarValue::$SCALAR(Some(self.clone())))
             }
         }
     };
@@ -93,7 +100,7 @@ macro_rules! make_nonzero_literal {
         #[doc = $DOC]
         impl Literal for $TYPE {
             fn lit(&self) -> Expr {
-                Expr::Literal(ScalarValue::$SCALAR(Some(self.get())))
+                Expr::from(ScalarValue::$SCALAR(Some(self.get())))
             }
         }
     };
@@ -104,7 +111,7 @@ macro_rules! make_timestamp_literal {
         #[doc = $DOC]
         impl TimestampLiteral for $TYPE {
             fn lit_timestamp_nano(&self) -> Expr {
-                Expr::Literal(ScalarValue::TimestampNanosecond(
+                Expr::from(ScalarValue::TimestampNanosecond(
                     Some((self.clone()).into()),
                     None,
                 ))

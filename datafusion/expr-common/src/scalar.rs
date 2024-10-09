@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use core::fmt;
+use std::hash::Hash;
+
 use arrow::{
     array::{Array, ArrayRef},
     datatypes::DataType,
@@ -40,9 +43,9 @@ use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 /// - [`Scalar::new_null_of`]
 ///
 /// [`Scalar`] is meant to be stored as a variant of [`crate::columnar_value::ColumnarValue`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Eq)]
 pub struct Scalar {
-    value: ScalarValue,
+    pub value: ScalarValue,
     data_type: DataType,
 }
 
@@ -76,6 +79,30 @@ impl PartialEq for Scalar {
     }
 }
 
+impl PartialOrd for Scalar {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.value.partial_cmp(&other.value)
+    }
+}
+
+impl Hash for Scalar {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
+    }
+}
+
+impl fmt::Display for Scalar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+impl fmt::Debug for Scalar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
 impl Scalar {
     /// Converts a value in `array` at `index` into a Scalar, resolving the
     /// [`DataType`] from the `array`'s data type.
@@ -104,7 +131,7 @@ impl Scalar {
 
     /// Converts an iterator of references [`Scalar`] into an [`ArrayRef`]
     /// corresponding to those values.
-    pub fn iter_to_array(scalars: impl IntoIterator<Item = Scalar>) -> Result<ArrayRef> {
+    pub fn iter_to_array(scalars: impl IntoIterator<Item = Self>) -> Result<ArrayRef> {
         let mut scalars = scalars.into_iter().peekable();
 
         // figure out the type based on the first element
@@ -114,6 +141,10 @@ impl Scalar {
         };
 
         ScalarValue::iter_to_array_of_type(scalars.map(|scalar| scalar.value), &data_type)
+    }
+
+    pub fn cast_to(&self, data_type: &DataType) -> Result<Self> {
+        Ok(Self::from(self.value.cast_to(data_type)?))
     }
 
     #[inline]

@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{lit, BinaryExpr, Expr, Like, Operator};
+use datafusion_expr::{lit, BinaryExpr, Expr, Like, Operator, Scalar};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
 /// Maximum number of regex alternations (`foo|bar|...`) that will be expanded into multiple `LIKE` expressions.
@@ -42,7 +42,11 @@ pub fn simplify_regex_expr(
 ) -> Result<Expr> {
     let mode = OperatorMode::new(&op);
 
-    if let Expr::Literal(ScalarValue::Utf8(Some(pattern))) = right.as_ref() {
+    if let Expr::Literal(Scalar {
+        value: ScalarValue::Utf8(Some(pattern)),
+        ..
+    }) = right.as_ref()
+    {
         match regex_syntax::Parser::new().parse(pattern) {
             Ok(hir) => {
                 let kind = hir.kind();
@@ -100,7 +104,7 @@ impl OperatorMode {
         let like = Like {
             negated: self.not,
             expr,
-            pattern: Box::new(Expr::Literal(ScalarValue::from(pattern))),
+            pattern: Box::new(Expr::from(ScalarValue::from(pattern))),
             escape_char: None,
             case_insensitive: self.i,
         };

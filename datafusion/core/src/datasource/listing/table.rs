@@ -1941,7 +1941,7 @@ mod tests {
         let filter_predicate = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(Expr::Column("column1".into())),
             Operator::GtEq,
-            Box::new(Expr::Literal(ScalarValue::Int32(Some(0)))),
+            Box::new(Expr::from(ScalarValue::Int32(Some(0)))),
         ));
 
         // Create a new batch of data to insert into the table

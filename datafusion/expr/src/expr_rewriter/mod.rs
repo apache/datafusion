@@ -380,14 +380,13 @@ mod test {
         // rewrites all "foo" string literals to "bar"
         let transformer = |expr: Expr| -> Result<Transformed<Expr>> {
             match expr {
-                Expr::Literal(ScalarValue::Utf8(Some(utf8_val))) => {
-                    let utf8_val = if utf8_val == "foo" {
-                        "bar".to_string()
-                    } else {
-                        utf8_val
-                    };
-                    Ok(Transformed::yes(lit(utf8_val)))
-                }
+                Expr::Literal(scalar) => match scalar.value() {
+                    ScalarValue::Utf8(Some(utf8_val)) => {
+                        let utf8_val = if utf8_val == "foo" { "bar" } else { utf8_val };
+                        Ok(Transformed::yes(lit(utf8_val)))
+                    }
+                    _ => Ok(Transformed::no(Expr::Literal(scalar))),
+                },
                 // otherwise, return None
                 _ => Ok(Transformed::no(expr)),
             }

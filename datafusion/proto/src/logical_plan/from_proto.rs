@@ -24,7 +24,6 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Alias, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
-use datafusion_expr::ExprFunctionExt;
 use datafusion_expr::{
     expr::{self, InList, WindowFunction},
     logical_plan::{PlanType, StringifiedPlan},
@@ -33,6 +32,7 @@ use datafusion_expr::{
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
 };
+use datafusion_expr::{ExprFunctionExt, Scalar};
 use datafusion_proto_common::{from_proto::FromOptionalField, FromProtoError as Error};
 
 use crate::protobuf::plan_type::PlanTypeEnum::{
@@ -189,11 +189,11 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
         match bound_type {
             protobuf::WindowFrameBoundType::CurrentRow => Ok(Self::CurrentRow),
             protobuf::WindowFrameBoundType::Preceding => match bound.bound_value {
-                Some(x) => Ok(Self::Preceding(ScalarValue::try_from(&x)?)),
+                Some(x) => Ok(Self::Preceding(Scalar::try_from(&x)?.into_value())),
                 None => Ok(Self::Preceding(ScalarValue::UInt64(None))),
             },
             protobuf::WindowFrameBoundType::Following => match bound.bound_value {
-                Some(x) => Ok(Self::Following(ScalarValue::try_from(&x)?)),
+                Some(x) => Ok(Self::Following(Scalar::try_from(&x)?.into_value())),
                 None => Ok(Self::Following(ScalarValue::UInt64(None))),
             },
         }
@@ -258,7 +258,7 @@ pub fn parse_expr(
         }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
         ExprType::Literal(literal) => {
-            let scalar_value: ScalarValue = literal.try_into()?;
+            let scalar_value: Scalar = literal.try_into()?;
             Ok(Expr::Literal(scalar_value))
         }
         ExprType::WindowExpr(expr) => {

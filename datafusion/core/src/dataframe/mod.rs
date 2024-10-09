@@ -1188,7 +1188,7 @@ impl DataFrame {
     /// ```
     pub async fn count(self) -> Result<usize> {
         let rows = self
-            .aggregate(vec![], vec![count(Expr::Literal(COUNT_STAR_EXPANSION))])?
+            .aggregate(vec![], vec![count(Expr::from(COUNT_STAR_EXPANSION))])?
             .collect()
             .await?;
         let len = *rows
@@ -2985,7 +2985,7 @@ mod tests {
         let join = left.clone().join_on(
             right.clone(),
             JoinType::Inner,
-            Some(Expr::Literal(ScalarValue::Null)),
+            Some(Expr::from(ScalarValue::Null)),
         )?;
         let expected_plan = "CrossJoin:\
         \n  TableScan: a projection=[c1], full_filters=[Boolean(NULL)]\

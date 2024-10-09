@@ -828,21 +828,21 @@ mod tests {
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
                 Operator::LtEq,
-                Arc::new(Literal::new(ScalarValue::Int32(Some(53)))),
+                Arc::new(Literal::from(ScalarValue::Int32(Some(53)))),
             )),
             Operator::And,
             Arc::new(BinaryExpr::new(
                 Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("b", 1)),
                     Operator::Eq,
-                    Arc::new(Literal::new(ScalarValue::Int32(Some(3)))),
+                    Arc::new(Literal::from(ScalarValue::Int32(Some(3)))),
                 )),
                 Operator::And,
                 Arc::new(BinaryExpr::new(
                     Arc::new(BinaryExpr::new(
                         Arc::new(Column::new("c", 2)),
                         Operator::LtEq,
-                        Arc::new(Literal::new(ScalarValue::Float32(Some(1075.0)))),
+                        Arc::new(Literal::from(ScalarValue::Float32(Some(1075.0)))),
                     )),
                     Operator::And,
                     Arc::new(BinaryExpr::new(
@@ -941,11 +941,11 @@ mod tests {
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
                 Operator::Lt,
-                Arc::new(Literal::new(ScalarValue::Int32(Some(200)))),
+                Arc::new(Literal::from(ScalarValue::Int32(Some(200)))),
             )),
             Operator::And,
             Arc::new(BinaryExpr::new(
-                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
                 Operator::LtEq,
                 Arc::new(Column::new("b", 1)),
             )),
@@ -996,11 +996,11 @@ mod tests {
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
                 Operator::Gt,
-                Arc::new(Literal::new(ScalarValue::Int32(Some(200)))),
+                Arc::new(Literal::from(ScalarValue::Int32(Some(200)))),
             )),
             Operator::And,
             Arc::new(BinaryExpr::new(
-                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
                 Operator::LtEq,
                 Arc::new(Column::new("b", 1)),
             )),
@@ -1059,7 +1059,7 @@ mod tests {
         let predicate = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Lt,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(50)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(50)))),
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
@@ -1098,16 +1098,16 @@ mod tests {
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
                 Operator::LtEq,
-                Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+                Arc::new(Literal::from(ScalarValue::Int32(Some(10)))),
             )),
             Operator::And,
             Arc::new(BinaryExpr::new(
-                Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+                Arc::new(Literal::from(ScalarValue::Int32(Some(0)))),
                 Operator::LtEq,
                 Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("a", 0)),
                     Operator::Minus,
-                    Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+                    Arc::new(Literal::from(ScalarValue::Int32(Some(5)))),
                 )),
             )),
         ));
@@ -1142,7 +1142,7 @@ mod tests {
         let predicate = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Eq,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(10)))),
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
@@ -1164,7 +1164,7 @@ mod tests {
         let predicate = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Eq,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(10)))),
         ));
         let filter = FilterExec::try_new(predicate, input)?;
         assert!(filter.with_default_selectivity(120).is_err());
@@ -1190,7 +1190,7 @@ mod tests {
         let predicate = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Eq,
-            Arc::new(Literal::new(ScalarValue::Decimal128(Some(10), 10, 10))),
+            Arc::new(Literal::from(ScalarValue::Decimal128(Some(10), 10, 10))),
         ));
         let filter = FilterExec::try_new(predicate, input)?;
         let statistics = filter.statistics()?;

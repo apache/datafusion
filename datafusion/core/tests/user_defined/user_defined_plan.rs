@@ -98,7 +98,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
 use datafusion_expr::tree_node::replace_sort_expression;
-use datafusion_expr::{Projection, SortExpr};
+use datafusion_expr::{Projection, Scalar, SortExpr};
 use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
 
@@ -728,9 +728,12 @@ impl MyAnalyzerRule {
             .map(|e| {
                 e.transform(|e| {
                     Ok(match e {
-                        Expr::Literal(ScalarValue::Int64(i)) => {
+                        Expr::Literal(Scalar {
+                            value: ScalarValue::Int64(i),
+                            ..
+                        }) => {
                             // transform to UInt64
-                            Transformed::yes(Expr::Literal(ScalarValue::UInt64(
+                            Transformed::yes(Expr::from(ScalarValue::UInt64(
                                 i.map(|i| i as u64),
                             )))
                         }

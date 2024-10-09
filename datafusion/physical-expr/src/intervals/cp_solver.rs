@@ -182,7 +182,7 @@ impl ExprIntervalGraphNode {
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
         let expr = Arc::clone(&node.expr);
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
-            let value = literal.value();
+            let value = literal.scalar().value();
             Interval::try_new(value.clone(), value.clone())
                 .map(|interval| Self::new_with_interval(expr, interval))
         } else {
@@ -530,7 +530,7 @@ impl ExprIntervalGraph {
     /// let expr = Arc::new(BinaryExpr::new(
     ///     Arc::new(Column::new("gnz", 0)),
     ///     Operator::Plus,
-    ///     Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+    ///     Arc::new(Literal::from(ScalarValue::Int32(Some(10)))),
     /// ));
     ///
     /// let schema = Schema::new(vec![Field::new("gnz".to_string(), DataType::Int32, true)]);
@@ -873,7 +873,7 @@ mod tests {
         let left_and_1 = Arc::new(BinaryExpr::new(
             Arc::clone(&left_col) as Arc<dyn PhysicalExpr>,
             Operator::Plus,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(5)))),
         ));
         let expr = Arc::new(BinaryExpr::new(
             left_and_1,
@@ -1198,7 +1198,7 @@ mod tests {
                 Arc::new(Column::new("b", 1)),
             )),
             Operator::Plus,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
         ));
 
         let right_expr = Arc::new(BinaryExpr::new(
@@ -1244,7 +1244,7 @@ mod tests {
                 Arc::new(Column::new("b", 1)),
             )),
             Operator::Plus,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
         ));
 
         let right_expr = Arc::new(BinaryExpr::new(
@@ -1292,7 +1292,7 @@ mod tests {
                 Arc::new(Column::new("b", 1)),
             )),
             Operator::Plus,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+            Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
         ));
 
         let right_expr = Arc::new(BinaryExpr::new(
@@ -1339,7 +1339,7 @@ mod tests {
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
                 Operator::Plus,
-                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
             )),
             Operator::Plus,
             Arc::new(Column::new("b", 1)),
@@ -1383,7 +1383,7 @@ mod tests {
         let expression = BinaryExpr::new(
             Arc::new(Column::new("ts_column", 0)),
             Operator::Plus,
-            Arc::new(Literal::new(ScalarValue::new_interval_mdn(0, 1, 321))),
+            Arc::new(Literal::from(ScalarValue::new_interval_mdn(0, 1, 321))),
         );
         let parent = Interval::try_new(
             // 15.10.2020 - 10:11:12.000_000_321 AM

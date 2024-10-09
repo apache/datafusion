@@ -21,7 +21,7 @@ use substrait::proto::expression_reference::ExprType;
 use arrow_buffer::ToByteSlice;
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
 use datafusion::logical_expr::{
-    CrossJoin, Distinct, Like, Partitioning, WindowFrameUnits,
+    CrossJoin, Distinct, Like, Partitioning, Scalar, WindowFrameUnits,
 };
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
@@ -1668,7 +1668,7 @@ fn make_substrait_like_expr(
     let expr = to_substrait_rex(ctx, expr, schema, col_ref_offset, extensions)?;
     let pattern = to_substrait_rex(ctx, pattern, schema, col_ref_offset, extensions)?;
     let escape_char = to_substrait_literal_expr(
-        &ScalarValue::Utf8(escape_char.map(|c| c.to_string())),
+        &ScalarValue::Utf8(escape_char.map(|c| c.to_string())).into(),
         extensions,
     )?;
     let arguments = vec![
@@ -1826,22 +1826,19 @@ fn to_substrait_bounds(window_frame: &WindowFrame) -> Result<(Bound, Bound)> {
     ))
 }
 
-fn to_substrait_literal(
-    value: &ScalarValue,
-    extensions: &mut Extensions,
-) -> Result<Literal> {
-    if value.is_null() {
+fn to_substrait_literal(scalar: &Scalar, extensions: &mut Extensions) -> Result<Literal> {
+    if scalar.value().is_null() {
         return Ok(Literal {
             nullable: true,
             type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
             literal_type: Some(LiteralType::Null(to_substrait_type(
-                &value.data_type(),
+                &scalar.data_type(),
                 true,
                 extensions,
             )?)),
         });
     }
-    let (literal_type, type_variation_reference) = match value {
+    let (literal_type, type_variation_reference) = match scalar.value() {
         ScalarValue::Boolean(Some(b)) => {
             (LiteralType::Boolean(*b), DEFAULT_TYPE_VARIATION_REF)
         }
@@ -2030,7 +2027,7 @@ fn to_substrait_literal(
                 let keys = (0..m.keys().len())
                     .map(|i| {
                         to_substrait_literal(
-                            &ScalarValue::try_from_array(&m.keys(), i)?,
+                            &Scalar::try_from_array(&m.keys(), i)?,
                             extensions,
                         )
                     })
@@ -2038,7 +2035,7 @@ fn to_substrait_literal(
                 let values = (0..m.values().len())
                     .map(|i| {
                         to_substrait_literal(
-                            &ScalarValue::try_from_array(&m.values(), i)?,
+                            &Scalar::try_from_array(&m.values(), i)?,
                             extensions,
                         )
                     })
@@ -2064,17 +2061,14 @@ fn to_substrait_literal(
                     .columns()
                     .iter()
                     .map(|col| {
-                        to_substrait_literal(
-                            &ScalarValue::try_from_array(col, 0)?,
-                            extensions,
-                        )
+                        to_substrait_literal(&Scalar::try_from_array(col, 0)?, extensions)
                     })
                     .collect::<Result<Vec<_>>>()?,
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
         _ => (
-            not_impl_err!("Unsupported literal: {value:?}")?,
+            not_impl_err!("Unsupported literal: {scalar:?}")?,
             DEFAULT_TYPE_VARIATION_REF,
         ),
     };
@@ -2095,10 +2089,7 @@ fn convert_array_to_literal_list<T: OffsetSizeTrait>(
 
     let values = (0..nested_array.len())
         .map(|i| {
-            to_substrait_literal(
-                &ScalarValue::try_from_array(&nested_array, i)?,
-                extensions,
-            )
+            to_substrait_literal(&Scalar::try_from_array(&nested_array, i)?, extensions)
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -2120,7 +2111,7 @@ fn convert_array_to_literal_list<T: OffsetSizeTrait>(
 }
 
 fn to_substrait_literal_expr(
-    value: &ScalarValue,
+    value: &Scalar,
     extensions: &mut Extensions,
 ) -> Result<Expression> {
     let literal = to_substrait_literal(value, extensions)?;
@@ -2357,6 +2348,7 @@ mod test {
         println!("Checking round trip of {scalar:?}");
 
         let mut extensions = Extensions::default();
+        let scalar = Scalar::from(scalar);
         let substrait_literal = to_substrait_literal(&scalar, &mut extensions)?;
         let roundtrip_scalar =
             from_substrait_literal_without_names(&substrait_literal, &extensions)?;
@@ -2371,6 +2363,8 @@ mod test {
         let scalar = ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::new(
             17, 25, 1234567890,
         )));
+
+        let scalar = Scalar::from(scalar);
         let substrait_literal = to_substrait_literal(&scalar, &mut extensions)?;
         let roundtrip_scalar =
             from_substrait_literal_without_names(&substrait_literal, &extensions)?;

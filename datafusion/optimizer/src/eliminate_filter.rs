@@ -19,7 +19,7 @@
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{EmptyRelation, Expr, Filter, LogicalPlan};
+use datafusion_expr::{EmptyRelation, Expr, Filter, LogicalPlan, Scalar};
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
@@ -60,7 +60,11 @@ impl OptimizerRule for EliminateFilter {
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(v)),
+                predicate:
+                    Expr::Literal(Scalar {
+                        value: ScalarValue::Boolean(v),
+                        ..
+                    }),
                 input,
                 ..
             }) => match v {
@@ -111,7 +115,7 @@ mod tests {
 
     #[test]
     fn filter_null() -> Result<()> {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(None));
+        let filter_expr = Expr::from(ScalarValue::Boolean(None));
 
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)

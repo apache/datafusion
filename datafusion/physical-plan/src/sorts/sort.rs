@@ -1542,7 +1542,7 @@ mod tests {
                 .unwrap();
 
         let expressions = vec![PhysicalSortExpr {
-            expr: Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+            expr: Arc::new(Literal::from(ScalarValue::Int64(Some(1)))),
             options: SortOptions::default(),
         }];
 

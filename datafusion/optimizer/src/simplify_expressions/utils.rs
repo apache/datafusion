@@ -134,47 +134,56 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
 
 pub fn is_zero(s: &Expr) -> bool {
     match s {
-        Expr::Literal(ScalarValue::Int8(Some(0)))
-        | Expr::Literal(ScalarValue::Int16(Some(0)))
-        | Expr::Literal(ScalarValue::Int32(Some(0)))
-        | Expr::Literal(ScalarValue::Int64(Some(0)))
-        | Expr::Literal(ScalarValue::UInt8(Some(0)))
-        | Expr::Literal(ScalarValue::UInt16(Some(0)))
-        | Expr::Literal(ScalarValue::UInt32(Some(0)))
-        | Expr::Literal(ScalarValue::UInt64(Some(0))) => true,
-        Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 0. => true,
-        Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 0. => true,
-        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, _s)) if *v == 0 => true,
+        Expr::Literal(scalar) => match scalar.value() {
+            ScalarValue::Int8(Some(0))
+            | ScalarValue::Int16(Some(0))
+            | ScalarValue::Int32(Some(0))
+            | ScalarValue::Int64(Some(0))
+            | ScalarValue::UInt8(Some(0))
+            | ScalarValue::UInt16(Some(0))
+            | ScalarValue::UInt32(Some(0))
+            | ScalarValue::UInt64(Some(0)) => true,
+            ScalarValue::Float32(Some(v)) if *v == 0. => true,
+            ScalarValue::Float64(Some(v)) if *v == 0. => true,
+            ScalarValue::Decimal128(Some(v), _p, _s) if *v == 0 => true,
+            _ => false,
+        },
         _ => false,
     }
 }
 
 pub fn is_one(s: &Expr) -> bool {
     match s {
-        Expr::Literal(ScalarValue::Int8(Some(1)))
-        | Expr::Literal(ScalarValue::Int16(Some(1)))
-        | Expr::Literal(ScalarValue::Int32(Some(1)))
-        | Expr::Literal(ScalarValue::Int64(Some(1)))
-        | Expr::Literal(ScalarValue::UInt8(Some(1)))
-        | Expr::Literal(ScalarValue::UInt16(Some(1)))
-        | Expr::Literal(ScalarValue::UInt32(Some(1)))
-        | Expr::Literal(ScalarValue::UInt64(Some(1))) => true,
-        Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 1. => true,
-        Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 1. => true,
-        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, s)) => {
-            *s >= 0
-                && POWS_OF_TEN
-                    .get(*s as usize)
-                    .map(|x| x == v)
-                    .unwrap_or_default()
-        }
+        Expr::Literal(scalar) => match scalar.value() {
+            ScalarValue::Int8(Some(1))
+            | ScalarValue::Int16(Some(1))
+            | ScalarValue::Int32(Some(1))
+            | ScalarValue::Int64(Some(1))
+            | ScalarValue::UInt8(Some(1))
+            | ScalarValue::UInt16(Some(1))
+            | ScalarValue::UInt32(Some(1))
+            | ScalarValue::UInt64(Some(1)) => true,
+            ScalarValue::Float32(Some(v)) if *v == 1. => true,
+            ScalarValue::Float64(Some(v)) if *v == 1. => true,
+            ScalarValue::Decimal128(Some(v), _p, s) => {
+                *s >= 0
+                    && POWS_OF_TEN
+                        .get(*s as usize)
+                        .map(|x| x == v)
+                        .unwrap_or_default()
+            }
+            _ => false,
+        },
         _ => false,
     }
 }
 
 pub fn is_true(expr: &Expr) -> bool {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(Some(v))) => *v,
+        Expr::Literal(scalar) => match scalar.value() {
+            ScalarValue::Boolean(Some(v)) => *v,
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -182,24 +191,27 @@ pub fn is_true(expr: &Expr) -> bool {
 /// returns true if expr is a
 /// `Expr::Literal(ScalarValue::Boolean(v))` , false otherwise
 pub fn is_bool_lit(expr: &Expr) -> bool {
-    matches!(expr, Expr::Literal(ScalarValue::Boolean(_)))
+    matches!(expr, Expr::Literal(scalar) if matches!(scalar.value(), ScalarValue::Boolean(_)))
 }
 
 /// Return a literal NULL value of Boolean data type
 pub fn lit_bool_null() -> Expr {
-    Expr::Literal(ScalarValue::Boolean(None))
+    Expr::from(ScalarValue::Boolean(None))
 }
 
 pub fn is_null(expr: &Expr) -> bool {
     match expr {
-        Expr::Literal(v) => v.is_null(),
+        Expr::Literal(v) => v.value().is_null(),
         _ => false,
     }
 }
 
 pub fn is_false(expr: &Expr) -> bool {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(Some(v))) => !(*v),
+        Expr::Literal(scalar) => match scalar.value() {
+            ScalarValue::Boolean(Some(v)) => !(*v),
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -223,7 +235,10 @@ pub fn is_negative_of(not_expr: &Expr, expr: &Expr) -> bool {
 /// `Expr::Literal(ScalarValue::Boolean(v))`.
 pub fn as_bool_lit(expr: &Expr) -> Result<Option<bool>> {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(v)) => Ok(*v),
+        Expr::Literal(scalar) => match scalar.value() {
+            ScalarValue::Boolean(v) => Ok(*v),
+            _ => internal_err!("Expected boolean literal, got {expr:?}"),
+        },
         _ => internal_err!("Expected boolean literal, got {expr:?}"),
     }
 }

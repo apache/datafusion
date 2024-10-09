@@ -53,20 +53,23 @@ impl OptimizerRule for EliminateJoin {
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Join(join) if join.join_type == Inner && join.on.is_empty() => {
-                match join.filter {
-                    Some(Expr::Literal(ScalarValue::Boolean(Some(true)))) => {
-                        Ok(Transformed::yes(LogicalPlan::CrossJoin(CrossJoin {
-                            left: join.left,
-                            right: join.right,
-                            schema: join.schema,
-                        })))
-                    }
-                    Some(Expr::Literal(ScalarValue::Boolean(Some(false)))) => Ok(
-                        Transformed::yes(LogicalPlan::EmptyRelation(EmptyRelation {
-                            produce_one_row: false,
-                            schema: join.schema,
-                        })),
-                    ),
+                match &join.filter {
+                    Some(Expr::Literal(scalar)) => match scalar.value() {
+                        ScalarValue::Boolean(Some(true)) => {
+                            Ok(Transformed::yes(LogicalPlan::CrossJoin(CrossJoin {
+                                left: join.left,
+                                right: join.right,
+                                schema: join.schema,
+                            })))
+                        }
+                        ScalarValue::Boolean(Some(false)) => Ok(Transformed::yes(
+                            LogicalPlan::EmptyRelation(EmptyRelation {
+                                produce_one_row: false,
+                                schema: join.schema,
+                            }),
+                        )),
+                        _ => Ok(Transformed::no(LogicalPlan::Join(join))),
+                    },
                     _ => Ok(Transformed::no(LogicalPlan::Join(join))),
                 }
             }

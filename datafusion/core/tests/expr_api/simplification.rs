@@ -282,7 +282,7 @@ fn select_date_plus_interval() -> Result<()> {
 
     let date_plus_interval_expr = to_timestamp_expr(ts_string)
         .cast_to(&DataType::Date32, schema)?
-        + Expr::Literal(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+        + Expr::from(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
             days: 123,
             milliseconds: 0,
         })));

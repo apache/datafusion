@@ -102,7 +102,7 @@ impl AggregateUDFImpl for NthValueAgg {
         let n = match acc_args.exprs[1]
             .as_any()
             .downcast_ref::<Literal>()
-            .map(|lit| lit.value())
+            .map(|lit| lit.scalar().value())
         {
             Some(ScalarValue::Int64(Some(value))) => {
                 if acc_args.is_reversed {

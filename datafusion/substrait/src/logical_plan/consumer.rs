@@ -59,7 +59,8 @@ use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
-    Repartition, Subquery, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    Repartition, Scalar, Subquery, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -1213,7 +1214,7 @@ pub async fn from_substrait_agg_func(
     if let Ok(fun) = ctx.udaf(function_name) {
         // deal with situation that count(*) got no arguments
         let args = if fun.name() == "count" && args.is_empty() {
-            vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
+            vec![Expr::from(ScalarValue::Int64(Some(1)))]
         } else {
             args
         };
@@ -1870,7 +1871,7 @@ fn from_substrait_bound(
 pub(crate) fn from_substrait_literal_without_names(
     lit: &Literal,
     extensions: &Extensions,
-) -> Result<ScalarValue> {
+) -> Result<Scalar> {
     from_substrait_literal(lit, extensions, &vec![], &mut 0)
 }
 
@@ -1879,7 +1880,7 @@ fn from_substrait_literal(
     extensions: &Extensions,
     dfs_names: &Vec<String>,
     name_idx: &mut usize,
-) -> Result<ScalarValue> {
+) -> Result<Scalar> {
     let scalar_value = match &lit.literal_type {
         Some(LiteralType::Boolean(b)) => ScalarValue::Boolean(Some(*b)),
         Some(LiteralType::I8(n)) => match lit.type_variation_reference {
@@ -2023,6 +2024,7 @@ fn from_substrait_literal(
                         &mut element_name_idx,
                     )
                 })
+                .map(|el| el.map(|scalar| scalar.into_value()))
                 .collect::<Result<Vec<_>>>()?;
             *name_idx = element_name_idx;
             if elements.is_empty() {
@@ -2084,10 +2086,13 @@ fn from_substrait_literal(
                         &mut entry_name_idx,
                     )?;
                     ScalarStructBuilder::new()
-                        .with_scalar(Field::new("key", key_sv.data_type(), false), key_sv)
                         .with_scalar(
-                            Field::new("value", value_sv.data_type(), true),
-                            value_sv,
+                            Field::new("key", key_sv.data_type().clone(), false),
+                            key_sv.into_value(),
+                        )
+                        .with_scalar(
+                            Field::new("value", value_sv.data_type().clone(), true),
+                            value_sv.into_value(),
                         )
                         .build()
                 })
@@ -2147,7 +2152,10 @@ fn from_substrait_literal(
                 let sv = from_substrait_literal(field, extensions, dfs_names, name_idx)?;
                 // We assume everything to be nullable, since Arrow's strict about things matching
                 // and it's hard to match otherwise.
-                builder = builder.with_scalar(Field::new(name, sv.data_type(), true), sv);
+                builder = builder.with_scalar(
+                    Field::new(name, sv.data_type().clone(), true),
+                    sv.into_value(),
+                );
             }
             builder.build()?
         }
@@ -2279,7 +2287,7 @@ fn from_substrait_literal(
         _ => return not_impl_err!("Unsupported literal_type: {:?}", lit.literal_type),
     };
 
-    Ok(scalar_value)
+    Ok(Scalar::from(scalar_value))
 }
 
 fn from_substrait_null(
@@ -2589,7 +2597,10 @@ impl BuiltinExprBuilder {
                     .await?;
 
             match escape_char_expr {
-                Expr::Literal(ScalarValue::Utf8(escape_char_string)) => {
+                Expr::Literal(Scalar {
+                    value: ScalarValue::Utf8(escape_char_string),
+                    ..
+                }) => {
                     // Convert Option<String> to Option<char>
                     escape_char_string.and_then(|s| s.chars().next())
                 }

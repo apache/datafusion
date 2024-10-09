@@ -1448,7 +1448,7 @@ impl LogicalPlan {
                     e.infer_placeholder_types(&schema)?.transform_up(|e| {
                         if let Expr::Placeholder(Placeholder { id, .. }) = e {
                             let value = param_values.get_placeholders_with_values(&id)?;
-                            Ok(Transformed::yes(Expr::Literal(value)))
+                            Ok(Transformed::yes(Expr::from(value)))
                         } else {
                             Ok(Transformed::no(e))
                         }
@@ -4024,7 +4024,7 @@ digraph {
         let col = schema.field_names()[0].clone();
 
         let filter = Filter::try_new(
-            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
+            Expr::Column(col.into()).eq(Expr::from(ScalarValue::Int32(Some(1)))),
             scan,
         )
         .unwrap();

@@ -30,7 +30,7 @@ use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::Session;
 use datafusion_common::{assert_batches_eq, DFSchema, ScalarValue};
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
+use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, Scalar, TableType};
 use std::fs::File;
 use std::io::Seek;
 use std::path::Path;
@@ -201,7 +201,10 @@ impl TableFunctionImpl for SimpleCsvTableFunc {
         let mut filepath = String::new();
         for expr in exprs {
             match expr {
-                Expr::Literal(ScalarValue::Utf8(Some(ref path))) => {
+                Expr::Literal(Scalar {
+                    value: ScalarValue::Utf8(Some(ref path)),
+                    ..
+                }) => {
                     filepath.clone_from(path);
                 }
                 expr => new_exprs.push(expr.clone()),

@@ -1047,7 +1047,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         "result".to_string(),
     )));
     let aggr_args: Vec<Arc<dyn PhysicalExpr>> =
-        vec![Arc::new(Literal::new(ScalarValue::from(42)))];
+        vec![Arc::new(Literal::from(ScalarValue::from(42)))];
 
     let aggr_expr = AggregateExprBuilder::new(Arc::clone(&udaf), aggr_args.clone())
         .schema(Arc::clone(&schema))

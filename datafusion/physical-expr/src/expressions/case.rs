@@ -128,7 +128,7 @@ impl CaseExpr {
         // during SQL planning, but not necessarily for other use cases)
         let else_expr = match &else_expr {
             Some(e) => match e.as_any().downcast_ref::<Literal>() {
-                Some(lit) if lit.value().is_null() => None,
+                Some(lit) if lit.scalar().value().is_null() => None,
                 _ => else_expr,
             },
             _ => else_expr,
@@ -1094,7 +1094,7 @@ mod tests {
             .transform(|e| {
                 let transformed =
                     match e.as_any().downcast_ref::<crate::expressions::Literal>() {
-                        Some(lit_value) => match lit_value.value() {
+                        Some(lit_value) => match lit_value.scalar().value() {
                             ScalarValue::Utf8(Some(str_value)) => {
                                 Some(lit(str_value.to_uppercase()))
                             }
@@ -1115,7 +1115,7 @@ mod tests {
             .transform_down(|e| {
                 let transformed =
                     match e.as_any().downcast_ref::<crate::expressions::Literal>() {
-                        Some(lit_value) => match lit_value.value() {
+                        Some(lit_value) => match lit_value.scalar().value() {
                             ScalarValue::Utf8(Some(str_value)) => {
                                 Some(lit(str_value.to_uppercase()))
                             }
@@ -1182,7 +1182,7 @@ mod tests {
     }
 
     fn make_lit_i32(n: i32) -> Arc<dyn PhysicalExpr> {
-        Arc::new(Literal::new(ScalarValue::Int32(Some(n))))
+        Arc::new(Literal::from(ScalarValue::Int32(Some(n))))
     }
 
     fn generate_case_when_with_type_coercion(

@@ -32,13 +32,16 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{InList, InSubquery, WindowFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
     WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
+use datafusion_expr::{
+    expr::{InList, InSubquery, WindowFunction},
+    Scalar,
+};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
@@ -477,9 +480,9 @@ struct ConstEvaluator<'a> {
 /// The simplify result of ConstEvaluator
 enum ConstSimplifyResult {
     // Expr was simplified and contains the new expression
-    Simplified(ScalarValue),
+    Simplified(Scalar),
     // Expr was not simplified and original value is returned
-    NotSimplified(ScalarValue),
+    NotSimplified(Scalar),
     // Evaluation encountered an error, contains the original expression
     SimplifyRuntimeError(DataFusionError, Expr),
 }
@@ -643,19 +646,20 @@ impl<'a> ConstEvaluator<'a> {
                         expr,
                     )
                 } else if as_list_array(&a).is_ok() {
-                    ConstSimplifyResult::Simplified(ScalarValue::List(
-                        a.as_list::<i32>().to_owned().into(),
-                    ))
+                    ConstSimplifyResult::Simplified(
+                        ScalarValue::List(a.as_list::<i32>().to_owned().into()).into(),
+                    )
                 } else if as_large_list_array(&a).is_ok() {
-                    ConstSimplifyResult::Simplified(ScalarValue::LargeList(
-                        a.as_list::<i64>().to_owned().into(),
-                    ))
+                    ConstSimplifyResult::Simplified(
+                        ScalarValue::LargeList(a.as_list::<i64>().to_owned().into())
+                            .into(),
+                    )
                 } else {
                     // Non-ListArray
-                    match ScalarValue::try_from_array(&a, 0) {
+                    match Scalar::try_from_array(&a, 0) {
                         Ok(s) => {
                             // TODO: support the optimization for `Map` type after support impl hash for it
-                            if matches!(&s, ScalarValue::Map(_)) {
+                            if matches!(&s.value(), ScalarValue::Map(_)) {
                                 ConstSimplifyResult::SimplifyRuntimeError(
                                     DataFusionError::NotImplemented("Const evaluate for Map type is still not supported".to_string()),
                                     expr,
@@ -679,7 +683,7 @@ impl<'a> ConstEvaluator<'a> {
                         expr,
                     )
                 } else {
-                    ConstSimplifyResult::Simplified(s.into_value())
+                    ConstSimplifyResult::Simplified(s)
                 }
             }
         }
@@ -1061,7 +1065,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: BitwiseAnd,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_zero(
+                Transformed::yes(Expr::from(ScalarValue::new_zero(
                     &info.get_data_type(&left)?,
                 )?))
             }
@@ -1072,7 +1076,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: BitwiseAnd,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_zero(
+                Transformed::yes(Expr::from(ScalarValue::new_zero(
                     &info.get_data_type(&left)?,
                 )?))
             }
@@ -1147,7 +1151,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: BitwiseOr,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_negative_one(
+                Transformed::yes(Expr::from(ScalarValue::new_negative_one(
                     &info.get_data_type(&left)?,
                 )?))
             }
@@ -1158,7 +1162,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: BitwiseOr,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_negative_one(
+                Transformed::yes(Expr::from(ScalarValue::new_negative_one(
                     &info.get_data_type(&left)?,
                 )?))
             }
@@ -1233,7 +1237,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: BitwiseXor,
                 right,
             }) if is_negative_of(&left, &right) && !info.nullable(&right)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_negative_one(
+                Transformed::yes(Expr::from(ScalarValue::new_negative_one(
                     &info.get_data_type(&left)?,
                 )?))
             }
@@ -1244,7 +1248,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: BitwiseXor,
                 right,
             }) if is_negative_of(&right, &left) && !info.nullable(&left)? => {
-                Transformed::yes(Expr::Literal(ScalarValue::new_negative_one(
+                Transformed::yes(Expr::from(ScalarValue::new_negative_one(
                     &info.get_data_type(&left)?,
                 )?))
             }
@@ -1257,7 +1261,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if expr_contains(&left, &right, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&left, &right, false);
                 Transformed::yes(if expr == *right {
-                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&right)?)?)
+                    Expr::from(ScalarValue::new_zero(&info.get_data_type(&right)?)?)
                 } else {
                     expr
                 })
@@ -1271,7 +1275,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if expr_contains(&right, &left, BitwiseXor) => {
                 let expr = delete_xor_in_complex_expr(&right, &left, true);
                 Transformed::yes(if expr == *left {
-                    Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
+                    Expr::from(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
                 } else {
                     expr
                 })
@@ -1452,7 +1456,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if !is_null(&expr)
                 && matches!(
                     pattern.as_ref(),
-                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
+                    Expr::Literal(Scalar{ value: ScalarValue::Utf8(Some(pattern_str)), ..}) if pattern_str == "%"
                 ) =>
             {
                 Transformed::yes(lit(!negated))
@@ -1476,9 +1480,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 expr,
                 list,
                 negated,
-            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
-                Transformed::yes(lit(negated))
-            }
+            }) if list.is_empty() && !is_null(&expr) => Transformed::yes(lit(negated)),
 
             // null in (x, y, z) --> null
             // null not in (x, y, z) --> null
@@ -2032,7 +2034,7 @@ mod tests {
 
     #[test]
     fn test_simplify_multiply_by_null() {
-        let null = Expr::Literal(ScalarValue::Null);
+        let null = Expr::from(ScalarValue::Null);
         // A * null --> null
         {
             let expr = col("c2") * null.clone();
