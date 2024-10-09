@@ -2363,7 +2363,7 @@ mod tests {
                         expr: Box::new(col("a")),
                         data_type: DataType::Float64,
                     }),
-                    Expr::Literal(ScalarValue::Int64(Some(2))),
+                    Expr::from(ScalarValue::Int64(Some(2))),
                 ],
             });
             let ast = unparser.expr_to_sql(&expr)?;

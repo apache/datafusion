@@ -2539,7 +2539,7 @@ mod test {
         let ctx = SessionContext::new();
 
         // One expression, empty input schema
-        let expr = Expr::Literal(ScalarValue::Int32(Some(42)));
+        let expr = Expr::from(ScalarValue::Int32(Some(42)));
         let field = Field::new("out", DataType::Int32, false);
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
         let substrait =
