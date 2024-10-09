@@ -41,7 +41,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match value {
             Value::Number(n, _) => self.parse_sql_number(&n, false),
             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => Ok(lit(s)),
-            Value::Null => Ok(Expr::Literal(ScalarValue::Null)),
+            Value::Null => Ok(Expr::from(ScalarValue::Null)),
             Value::Boolean(n) => Ok(lit(n)),
             Value::Placeholder(param) => {
                 Self::create_placeholder_expr(param, param_data_types)
@@ -351,7 +351,7 @@ fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
         ))));
     }
 
-    Ok(Expr::Literal(ScalarValue::Decimal128(
+    Ok(Expr::from(ScalarValue::Decimal128(
         Some(if negative { -number } else { number }),
         precision as u8,
         scale as i8,

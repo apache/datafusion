@@ -765,14 +765,14 @@ mod tests {
 
     #[test]
     fn test_contains_any() {
-        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
+        let lit_true = Arc::new(Literal::from(ScalarValue::Boolean(Some(true))))
             as Arc<dyn PhysicalExpr>;
-        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
+        let lit_false = Arc::new(Literal::from(ScalarValue::Boolean(Some(false))))
             as Arc<dyn PhysicalExpr>;
         let lit2 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+            Arc::new(Literal::from(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
         let lit1 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+            Arc::new(Literal::from(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
 
         let cls1 =

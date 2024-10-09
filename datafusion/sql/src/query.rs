@@ -177,7 +177,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 /// <https://github.com/apache/datafusion/issues/9821> tracks a more general solution
 fn get_constant_result(expr: &Expr, arg_name: &str) -> Result<i64> {
     match expr {
-        Expr::Literal(ScalarValue::Int64(Some(s))) => Ok(*s),
+        Expr::Literal(scalar) => match scalar.value() {
+            ScalarValue::Int64(Some(s)) => Ok(*s),
+            _ => plan_err!("Unexpected scalar value {scalar} in {arg_name} clause"),
+        },
         Expr::BinaryExpr(binary_expr) => {
             let lhs = get_constant_result(&binary_expr.left, arg_name)?;
             let rhs = get_constant_result(&binary_expr.right, arg_name)?;

@@ -91,7 +91,7 @@ impl ScalarUDFImpl for CurrentDateFunc {
                     .unwrap()
                     .num_days_from_ce(),
         );
-        Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+        Ok(ExprSimplifyResult::Simplified(Expr::from(
             ScalarValue::Date32(days),
         )))
     }

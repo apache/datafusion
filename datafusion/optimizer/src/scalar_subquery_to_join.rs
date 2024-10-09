@@ -357,7 +357,7 @@ fn build_join(
                         ),
                         (
                             Box::new(Expr::Not(Box::new(filter.clone()))),
-                            Box::new(Expr::Literal(ScalarValue::Null)),
+                            Box::new(Expr::from(ScalarValue::Null)),
                         ),
                     ],
                     else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(

@@ -1391,7 +1391,10 @@ fn get_expr_properties(
     } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
-            range: Interval::try_new(literal.value().clone(), literal.value().clone())?,
+            range: Interval::try_new(
+                literal.scalar().value().clone(),
+                literal.scalar().value().clone(),
+            )?,
         })
     } else {
         // Find orderings of its children

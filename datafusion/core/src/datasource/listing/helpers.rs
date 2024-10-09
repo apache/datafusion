@@ -868,7 +868,7 @@ mod tests {
         assert_eq!(
             evaluate_partition_prefix(
                 partitions,
-                &[col("a").eq(Expr::Literal(ScalarValue::Date32(Some(3))))],
+                &[col("a").eq(Expr::from(ScalarValue::Date32(Some(3))))],
             ),
             Some(Path::from("a=1970-01-04")),
         );
@@ -877,7 +877,7 @@ mod tests {
         assert_eq!(
             evaluate_partition_prefix(
                 partitions,
-                &[col("a").eq(Expr::Literal(ScalarValue::Date64(Some(
+                &[col("a").eq(Expr::from(ScalarValue::Date64(Some(
                     4 * 24 * 60 * 60 * 1000
                 )))),],
             ),

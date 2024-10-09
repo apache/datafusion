@@ -43,6 +43,7 @@ json = ["serde", "serde_json", "pbjson"]
 arrow = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
 object_store = { workspace = true }
 pbjson = { workspace = true, optional = true }
 prost = { workspace = true }

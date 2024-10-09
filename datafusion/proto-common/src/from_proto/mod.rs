@@ -43,6 +43,7 @@ use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
 };
+use datafusion_expr::Scalar;
 
 #[derive(Debug)]
 pub enum Error {
@@ -358,6 +359,16 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
     fn try_from(
         scalar: &protobuf::ScalarValue,
     ) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(Scalar::try_from(scalar)?.into_value())
+    }
+}
+
+impl TryFrom<&protobuf::ScalarValue> for Scalar {
+    type Error = Error;
+
+    fn try_from(
+        scalar: &protobuf::ScalarValue,
+    ) -> datafusion_common::Result<Self, Self::Error> {
         use protobuf::scalar_value::Value;
 
         let value = scalar
@@ -365,22 +376,22 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             .as_ref()
             .ok_or_else(|| Error::required("value"))?;
 
-        Ok(match value {
-            Value::BoolValue(v) => Self::Boolean(Some(*v)),
-            Value::Utf8Value(v) => Self::Utf8(Some(v.to_owned())),
-            Value::Utf8ViewValue(v) => Self::Utf8View(Some(v.to_owned())),
-            Value::LargeUtf8Value(v) => Self::LargeUtf8(Some(v.to_owned())),
-            Value::Int8Value(v) => Self::Int8(Some(*v as i8)),
-            Value::Int16Value(v) => Self::Int16(Some(*v as i16)),
-            Value::Int32Value(v) => Self::Int32(Some(*v)),
-            Value::Int64Value(v) => Self::Int64(Some(*v)),
-            Value::Uint8Value(v) => Self::UInt8(Some(*v as u8)),
-            Value::Uint16Value(v) => Self::UInt16(Some(*v as u16)),
-            Value::Uint32Value(v) => Self::UInt32(Some(*v)),
-            Value::Uint64Value(v) => Self::UInt64(Some(*v)),
-            Value::Float32Value(v) => Self::Float32(Some(*v)),
-            Value::Float64Value(v) => Self::Float64(Some(*v)),
-            Value::Date32Value(v) => Self::Date32(Some(*v)),
+        let value = match value {
+            Value::BoolValue(v) => ScalarValue::Boolean(Some(*v)),
+            Value::Utf8Value(v) => ScalarValue::Utf8(Some(v.to_owned())),
+            Value::Utf8ViewValue(v) => ScalarValue::Utf8View(Some(v.to_owned())),
+            Value::LargeUtf8Value(v) => ScalarValue::LargeUtf8(Some(v.to_owned())),
+            Value::Int8Value(v) => ScalarValue::Int8(Some(*v as i8)),
+            Value::Int16Value(v) => ScalarValue::Int16(Some(*v as i16)),
+            Value::Int32Value(v) => ScalarValue::Int32(Some(*v)),
+            Value::Int64Value(v) => ScalarValue::Int64(Some(*v)),
+            Value::Uint8Value(v) => ScalarValue::UInt8(Some(*v as u8)),
+            Value::Uint16Value(v) => ScalarValue::UInt16(Some(*v as u16)),
+            Value::Uint32Value(v) => ScalarValue::UInt32(Some(*v)),
+            Value::Uint64Value(v) => ScalarValue::UInt64(Some(*v)),
+            Value::Float32Value(v) => ScalarValue::Float32(Some(*v)),
+            Value::Float64Value(v) => ScalarValue::Float64(Some(*v)),
+            Value::Date32Value(v) => ScalarValue::Date32(Some(*v)),
             // ScalarValue::List is serialized using arrow IPC format
             Value::ListValue(v)
             | Value::FixedSizeListValue(v)
@@ -474,18 +485,20 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let arr = record_batch.column(0);
                 match value {
                     Value::ListValue(_) => {
-                        Self::List(arr.as_list::<i32>().to_owned().into())
+                        ScalarValue::List(arr.as_list::<i32>().to_owned().into())
                     }
                     Value::LargeListValue(_) => {
-                        Self::LargeList(arr.as_list::<i64>().to_owned().into())
+                        ScalarValue::LargeList(arr.as_list::<i64>().to_owned().into())
                     }
-                    Value::FixedSizeListValue(_) => {
-                        Self::FixedSizeList(arr.as_fixed_size_list().to_owned().into())
-                    }
+                    Value::FixedSizeListValue(_) => ScalarValue::FixedSizeList(
+                        arr.as_fixed_size_list().to_owned().into(),
+                    ),
                     Value::StructValue(_) => {
-                        Self::Struct(arr.as_struct().to_owned().into())
+                        ScalarValue::Struct(arr.as_struct().to_owned().into())
                     }
-                    Value::MapValue(_) => Self::Map(arr.as_map().to_owned().into()),
+                    Value::MapValue(_) => {
+                        ScalarValue::Map(arr.as_map().to_owned().into())
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -495,7 +508,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             }
             Value::Decimal128Value(val) => {
                 let array = vec_to_array(val.value.clone());
-                Self::Decimal128(
+                ScalarValue::Decimal128(
                     Some(i128::from_be_bytes(array)),
                     val.p as u8,
                     val.s as i8,
@@ -503,22 +516,22 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             }
             Value::Decimal256Value(val) => {
                 let array = vec_to_array(val.value.clone());
-                Self::Decimal256(
+                ScalarValue::Decimal256(
                     Some(i256::from_be_bytes(array)),
                     val.p as u8,
                     val.s as i8,
                 )
             }
-            Value::Date64Value(v) => Self::Date64(Some(*v)),
+            Value::Date64Value(v) => ScalarValue::Date64(Some(*v)),
             Value::Time32Value(v) => {
                 let time_value =
                     v.value.as_ref().ok_or_else(|| Error::required("value"))?;
                 match time_value {
                     protobuf::scalar_time32_value::Value::Time32SecondValue(t) => {
-                        Self::Time32Second(Some(*t))
+                        ScalarValue::Time32Second(Some(*t))
                     }
                     protobuf::scalar_time32_value::Value::Time32MillisecondValue(t) => {
-                        Self::Time32Millisecond(Some(*t))
+                        ScalarValue::Time32Millisecond(Some(*t))
                     }
                 }
             }
@@ -527,18 +540,24 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     v.value.as_ref().ok_or_else(|| Error::required("value"))?;
                 match time_value {
                     protobuf::scalar_time64_value::Value::Time64MicrosecondValue(t) => {
-                        Self::Time64Microsecond(Some(*t))
+                        ScalarValue::Time64Microsecond(Some(*t))
                     }
                     protobuf::scalar_time64_value::Value::Time64NanosecondValue(t) => {
-                        Self::Time64Nanosecond(Some(*t))
+                        ScalarValue::Time64Nanosecond(Some(*t))
                     }
                 }
             }
-            Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
-            Value::DurationSecondValue(v) => Self::DurationSecond(Some(*v)),
-            Value::DurationMillisecondValue(v) => Self::DurationMillisecond(Some(*v)),
-            Value::DurationMicrosecondValue(v) => Self::DurationMicrosecond(Some(*v)),
-            Value::DurationNanosecondValue(v) => Self::DurationNanosecond(Some(*v)),
+            Value::IntervalYearmonthValue(v) => ScalarValue::IntervalYearMonth(Some(*v)),
+            Value::DurationSecondValue(v) => ScalarValue::DurationSecond(Some(*v)),
+            Value::DurationMillisecondValue(v) => {
+                ScalarValue::DurationMillisecond(Some(*v))
+            }
+            Value::DurationMicrosecondValue(v) => {
+                ScalarValue::DurationMicrosecond(Some(*v))
+            }
+            Value::DurationNanosecondValue(v) => {
+                ScalarValue::DurationNanosecond(Some(*v))
+            }
             Value::TimestampValue(v) => {
                 let timezone = if v.timezone.is_empty() {
                     None
@@ -551,16 +570,16 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
 
                 match ts_value {
                     protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(t) => {
-                        Self::TimestampMicrosecond(Some(*t), timezone)
+                        ScalarValue::TimestampMicrosecond(Some(*t), timezone)
                     }
                     protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(t) => {
-                        Self::TimestampNanosecond(Some(*t), timezone)
+                        ScalarValue::TimestampNanosecond(Some(*t), timezone)
                     }
                     protobuf::scalar_timestamp_value::Value::TimeSecondValue(t) => {
-                        Self::TimestampSecond(Some(*t), timezone)
+                        ScalarValue::TimestampSecond(Some(*t), timezone)
                     }
                     protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(t) => {
-                        Self::TimestampMillisecond(Some(*t), timezone)
+                        ScalarValue::TimestampMillisecond(Some(*t), timezone)
                     }
                 }
             }
@@ -578,15 +597,18 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     .as_ref()
                     .try_into()?;
 
-                Self::Dictionary(Box::new(index_type), Box::new(value))
+                ScalarValue::Dictionary(
+                    Box::new(index_type),
+                    Box::new(value.into_value()),
+                )
             }
-            Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
-            Value::BinaryViewValue(v) => Self::BinaryView(Some(v.clone())),
-            Value::LargeBinaryValue(v) => Self::LargeBinary(Some(v.clone())),
-            Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(
+            Value::BinaryValue(v) => ScalarValue::Binary(Some(v.clone())),
+            Value::BinaryViewValue(v) => ScalarValue::BinaryView(Some(v.clone())),
+            Value::LargeBinaryValue(v) => ScalarValue::LargeBinary(Some(v.clone())),
+            Value::IntervalDaytimeValue(v) => ScalarValue::IntervalDayTime(Some(
                 IntervalDayTimeType::make_value(v.days, v.milliseconds),
             )),
-            Value::IntervalMonthDayNano(v) => Self::IntervalMonthDayNano(Some(
+            Value::IntervalMonthDayNano(v) => ScalarValue::IntervalMonthDayNano(Some(
                 IntervalMonthDayNanoType::make_value(v.months, v.days, v.nanos),
             )),
             Value::UnionValue(val) => {
@@ -612,19 +634,21 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let val = match &val.value {
                     None => None,
                     Some(val) => {
-                        let val: ScalarValue = val
+                        let val: Scalar = val
                             .as_ref()
                             .try_into()
                             .map_err(|_| Error::General("Invalid Scalar".to_string()))?;
-                        Some((v_id, Box::new(val)))
+                        Some((v_id, Box::new(val.into_value())))
                     }
                 };
-                Self::Union(val, fields, mode)
+                ScalarValue::Union(val, fields, mode)
             }
             Value::FixedSizeBinaryValue(v) => {
-                Self::FixedSizeBinary(v.length, Some(v.clone().values))
+                ScalarValue::FixedSizeBinary(v.length, Some(v.clone().values))
             }
-        })
+        };
+
+        Ok(Scalar::from(value))
     }
 }
 
@@ -711,8 +735,10 @@ impl From<protobuf::Precision> for Precision<usize> {
         match precision_type {
             protobuf::PrecisionInfo::Exact => {
                 if let Some(val) = s.val {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&val)
+                    if let Ok(Scalar {
+                        value: ScalarValue::UInt64(Some(val)),
+                        ..
+                    }) = Scalar::try_from(&val)
                     {
                         Precision::Exact(val as usize)
                     } else {
@@ -724,8 +750,10 @@ impl From<protobuf::Precision> for Precision<usize> {
             }
             protobuf::PrecisionInfo::Inexact => {
                 if let Some(val) = s.val {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&val)
+                    if let Ok(Scalar {
+                        value: ScalarValue::UInt64(Some(val)),
+                        ..
+                    }) = Scalar::try_from(&val)
                     {
                         Precision::Inexact(val as usize)
                     } else {
@@ -748,8 +776,8 @@ impl From<protobuf::Precision> for Precision<ScalarValue> {
         match precision_type {
             protobuf::PrecisionInfo::Exact => {
                 if let Some(val) = s.val {
-                    if let Ok(val) = ScalarValue::try_from(&val) {
-                        Precision::Exact(val)
+                    if let Ok(val) = Scalar::try_from(&val) {
+                        Precision::Exact(val.into_value())
                     } else {
                         Precision::Absent
                     }
@@ -759,8 +787,8 @@ impl From<protobuf::Precision> for Precision<ScalarValue> {
             }
             protobuf::PrecisionInfo::Inexact => {
                 if let Some(val) = s.val {
-                    if let Ok(val) = ScalarValue::try_from(&val) {
-                        Precision::Inexact(val)
+                    if let Ok(val) = Scalar::try_from(&val) {
+                        Precision::Inexact(val.into_value())
                     } else {
                         Precision::Absent
                     }

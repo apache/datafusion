@@ -27,7 +27,7 @@ use datafusion::common::{plan_err, Column};
 use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
-use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::{Expr, Scalar};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
@@ -321,7 +321,10 @@ pub struct ParquetMetadataFunc {}
 impl TableFunctionImpl for ParquetMetadataFunc {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let filename = match exprs.first() {
-            Some(Expr::Literal(ScalarValue::Utf8(Some(s)))) => s, // single quote: parquet_metadata('x.parquet')
+            Some(Expr::Literal(Scalar {
+                value: ScalarValue::Utf8(Some(s)),
+                ..
+            })) => s, // single quote: parquet_metadata('x.parquet')
             Some(Expr::Column(Column { name, .. })) => name, // double quote: parquet_metadata("x.parquet")
             _ => {
                 return plan_err!(

@@ -373,7 +373,7 @@ impl<'schema> TreeNodeRewriter for PushdownChecker<'schema> {
                         //
                         // See comments on `FilterCandidateBuilder` for more information
                         let null_value = ScalarValue::try_from(field.data_type())?;
-                        Ok(Transformed::yes(Arc::new(Literal::new(null_value)) as _))
+                        Ok(Transformed::yes(Arc::new(Literal::from(null_value)) as _))
                     })
                     // If the column is not in the table schema, should throw the error
                     .map_err(|e| arrow_datafusion_err!(e));
@@ -699,9 +699,10 @@ mod test {
             .expect("expected error free record batch");
 
         // Test all should fail
-        let expr = col("timestamp_col").lt(Expr::Literal(
-            ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
-        ));
+        let expr = col("timestamp_col").lt(Expr::from(ScalarValue::TimestampNanosecond(
+            Some(1),
+            Some(Arc::from("UTC")),
+        )));
         let expr = logical2physical(&expr, &table_schema);
         let candidate = FilterCandidateBuilder::new(expr, &file_schema, &table_schema)
             .build(&metadata)
@@ -723,9 +724,10 @@ mod test {
         assert!(matches!(filtered, Ok(a) if a == BooleanArray::from(vec![false; 8])));
 
         // Test all should pass
-        let expr = col("timestamp_col").gt(Expr::Literal(
-            ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("UTC"))),
-        ));
+        let expr = col("timestamp_col").gt(Expr::from(ScalarValue::TimestampNanosecond(
+            Some(0),
+            Some(Arc::from("UTC")),
+        )));
         let expr = logical2physical(&expr, &table_schema);
         let candidate = FilterCandidateBuilder::new(expr, &file_schema, &table_schema)
             .build(&metadata)
@@ -826,7 +828,7 @@ mod test {
 
         let expr = col("str_col")
             .is_not_null()
-            .or(col("int_col").gt(Expr::Literal(ScalarValue::UInt64(Some(5)))));
+            .or(col("int_col").gt(Expr::from(ScalarValue::UInt64(Some(5)))));
 
         assert!(can_expr_be_pushed_down_with_schemas(
             &expr,

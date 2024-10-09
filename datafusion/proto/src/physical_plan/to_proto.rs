@@ -121,7 +121,7 @@ pub fn serialize_physical_window_expr(
         } else if let Some(ntile_expr) = built_in_fn_expr.downcast_ref::<Ntile>() {
             args.insert(
                 0,
-                Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
+                Arc::new(Literal::from(datafusion_common::ScalarValue::Int64(Some(
                     ntile_expr.get_n() as i64,
                 )))),
             );
@@ -131,13 +131,13 @@ pub fn serialize_physical_window_expr(
         {
             args.insert(
                 1,
-                Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
+                Arc::new(Literal::from(datafusion_common::ScalarValue::Int64(Some(
                     window_shift_expr.get_shift_offset(),
                 )))),
             );
             args.insert(
                 2,
-                Arc::new(Literal::new(window_shift_expr.get_default_value())),
+                Arc::new(Literal::from(window_shift_expr.get_default_value())),
             );
 
             if window_shift_expr.get_shift_offset() >= 0 {
@@ -152,7 +152,7 @@ pub fn serialize_physical_window_expr(
                 NthValueKind::Nth(n) => {
                     args.insert(
                         1,
-                        Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(
+                        Arc::new(Literal::from(datafusion_common::ScalarValue::Int64(
                             Some(n),
                         ))),
                     );
@@ -352,7 +352,7 @@ pub fn serialize_physical_expr(
     } else if let Some(lit) = expr.downcast_ref::<Literal>() {
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
-                lit.value().try_into()?,
+                lit.scalar().value().try_into()?,
             )),
         })
     } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {

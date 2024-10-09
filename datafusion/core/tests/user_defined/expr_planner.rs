@@ -55,7 +55,7 @@ impl ExprPlanner for MyCustomPlanner {
             }
             BinaryOperator::Question => {
                 Ok(PlannerResult::Planned(Expr::Alias(Alias::new(
-                    Expr::Literal(ScalarValue::Boolean(Some(true))),
+                    Expr::from(ScalarValue::Boolean(Some(true))),
                     None::<&str>,
                     format!("{} ? {}", expr.left, expr.right),
                 ))))

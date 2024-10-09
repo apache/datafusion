@@ -286,17 +286,19 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
 
     for arg in args.clone() {
         match arg {
+            Expr::Literal(scalar) => match scalar.value() {
+
             // filter out `null` args
-            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None)) => {}
+            ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None) => {}
             // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
             // Concatenate it with the `contiguous_scalar`.
-            Expr::Literal(
-                ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) | ScalarValue::Utf8View(Some(v)),
-            ) => contiguous_scalar += &v,
-            Expr::Literal(x) => {
+                ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) | ScalarValue::Utf8View(Some(v))
+             => contiguous_scalar += v,
+            x => {
                 return internal_err!(
                     "The scalar {x} should be casted to string type during the type coercion."
                 )
+            }
             }
             // If the arg is not a literal, we should first push the current `contiguous_scalar`
             // to the `new_args` (if it is not empty) and reset it to empty string.

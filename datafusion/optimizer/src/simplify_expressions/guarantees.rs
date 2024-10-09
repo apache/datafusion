@@ -90,7 +90,10 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                     high.as_ref(),
                 ) {
                     let expr_interval = NullableInterval::NotNull {
-                        values: Interval::try_new(low.clone(), high.clone())?,
+                        values: Interval::try_new(
+                            low.value().clone(),
+                            high.value().clone(),
+                        )?,
                     };
 
                     let contains = expr_interval.contains(*interval)?;
@@ -116,7 +119,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                     .map(|interval| Cow::Borrowed(*interval))
                     .or_else(|| {
                         if let Expr::Literal(value) = left.as_ref() {
-                            Some(Cow::Owned(value.clone().into()))
+                            Some(Cow::Owned(value.value().clone().into()))
                         } else {
                             None
                         }
@@ -127,7 +130,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                     .map(|interval| Cow::Borrowed(*interval))
                     .or_else(|| {
                         if let Expr::Literal(value) = right.as_ref() {
-                            Some(Cow::Owned(value.clone().into()))
+                            Some(Cow::Owned(value.value().clone().into()))
                         } else {
                             None
                         }
@@ -169,9 +172,9 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                         .iter()
                         .filter_map(|expr| {
                             if let Expr::Literal(item) = expr {
-                                match interval
-                                    .contains(NullableInterval::from(item.clone()))
-                                {
+                                match interval.contains(NullableInterval::from(
+                                    item.value().clone(),
+                                )) {
                                     // If we know for certain the value isn't in the column's interval,
                                     // we can skip checking it.
                                     Ok(interval) if interval.is_certainly_false() => None,
@@ -417,7 +420,7 @@ mod tests {
             let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
             let output = col("x").rewrite(&mut rewriter).data().unwrap();
-            assert_eq!(output, Expr::Literal(scalar.clone()));
+            assert_eq!(output, Expr::from(scalar.clone()));
         }
     }
 

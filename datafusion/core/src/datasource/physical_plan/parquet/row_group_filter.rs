@@ -1237,10 +1237,10 @@ mod tests {
             .run(
                 lit("1").eq(lit("1")).and(
                     col(r#""String""#)
-                        .eq(Expr::Literal(ScalarValue::Utf8View(Some(String::from(
+                        .eq(Expr::from(ScalarValue::Utf8View(Some(String::from(
                             "Hello_Not_Exists",
                         )))))
-                        .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
+                        .or(col(r#""String""#).eq(Expr::from(ScalarValue::Utf8View(
                             Some(String::from("Hello_Not_Exists2")),
                         )))),
                 ),
@@ -1322,15 +1322,15 @@ mod tests {
             // generate pruning predicate `(String = "Hello") OR (String = "the quick") OR (String = "are you")`
             .run(
                 col(r#""String""#)
-                    .eq(Expr::Literal(ScalarValue::Utf8View(Some(String::from(
+                    .eq(Expr::from(ScalarValue::Utf8View(Some(String::from(
                         "Hello",
                     )))))
-                    .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
-                        Some(String::from("the quick")),
-                    ))))
-                    .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
-                        Some(String::from("are you")),
-                    )))),
+                    .or(col(r#""String""#).eq(Expr::from(ScalarValue::Utf8View(Some(
+                        String::from("the quick"),
+                    )))))
+                    .or(col(r#""String""#).eq(Expr::from(ScalarValue::Utf8View(Some(
+                        String::from("are you"),
+                    ))))),
             )
             .await
     }

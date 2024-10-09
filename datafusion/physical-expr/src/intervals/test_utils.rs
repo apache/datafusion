@@ -43,17 +43,17 @@ pub fn gen_conjunctive_numerical_expr(
     let left_and_1 = Arc::new(BinaryExpr::new(
         Arc::clone(&left_col),
         op_1,
-        Arc::new(Literal::new(a)),
+        Arc::new(Literal::from(a)),
     ));
     let left_and_2 = Arc::new(BinaryExpr::new(
         Arc::clone(&right_col),
         op_2,
-        Arc::new(Literal::new(b)),
+        Arc::new(Literal::from(b)),
     ));
     let right_and_1 =
-        Arc::new(BinaryExpr::new(left_col, op_3, Arc::new(Literal::new(c))));
+        Arc::new(BinaryExpr::new(left_col, op_3, Arc::new(Literal::from(c))));
     let right_and_2 =
-        Arc::new(BinaryExpr::new(right_col, op_4, Arc::new(Literal::new(d))));
+        Arc::new(BinaryExpr::new(right_col, op_4, Arc::new(Literal::from(d))));
     let (greater_op, less_op) = bounds;
 
     let left_expr = Arc::new(BinaryExpr::new(left_and_1, greater_op, left_and_2));
@@ -81,17 +81,17 @@ pub fn gen_conjunctive_temporal_expr(
     let left_and_1 = binary(
         Arc::clone(&left_col),
         op_1,
-        Arc::new(Literal::new(a)),
+        Arc::new(Literal::from(a)),
         schema,
     )?;
     let left_and_2 = binary(
         Arc::clone(&right_col),
         op_2,
-        Arc::new(Literal::new(b)),
+        Arc::new(Literal::from(b)),
         schema,
     )?;
-    let right_and_1 = binary(left_col, op_3, Arc::new(Literal::new(c)), schema)?;
-    let right_and_2 = binary(right_col, op_4, Arc::new(Literal::new(d)), schema)?;
+    let right_and_1 = binary(left_col, op_3, Arc::new(Literal::from(c)), schema)?;
+    let right_and_2 = binary(right_col, op_4, Arc::new(Literal::from(d)), schema)?;
     let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
     let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
     Ok(Arc::new(BinaryExpr::new(

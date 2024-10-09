@@ -329,7 +329,7 @@ impl JoinFuzzTestCase {
                     filter.schema().fields().len(),
                 )
             } else {
-                (Arc::new(Literal::new(ScalarValue::from(true))) as _, 0)
+                (Arc::new(Literal::from(ScalarValue::from(true))) as _, 0)
             };
 
         let equal_a = Arc::new(BinaryExpr::new(

@@ -88,7 +88,7 @@ physical_plan
 21)----------------------------------CoalesceBatchesExec: target_batch_size=8192
 22)------------------------------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
 23)--------------------------------------CoalesceBatchesExec: target_batch_size=8192
-24)----------------------------------------FilterExec: p_brand@1 != Brand#45 AND p_type@2 NOT LIKE MEDIUM POLISHED% AND Use p_size@3 IN (SET) ([Literal { value: Int32(49) }, Literal { value: Int32(14) }, Literal { value: Int32(23) }, Literal { value: Int32(45) }, Literal { value: Int32(19) }, Literal { value: Int32(3) }, Literal { value: Int32(36) }, Literal { value: Int32(9) }])
+24)----------------------------------------FilterExec: p_brand@1 != Brand#45 AND p_type@2 NOT LIKE MEDIUM POLISHED% AND Use p_size@3 IN (SET) ([Literal { scalar: Int32(49) }, Literal { scalar: Int32(14) }, Literal { scalar: Int32(23) }, Literal { scalar: Int32(45) }, Literal { scalar: Int32(19) }, Literal { scalar: Int32(3) }, Literal { scalar: Int32(36) }, Literal { scalar: Int32(9) }])
 25)------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 26)--------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl]]}, projection=[p_partkey, p_brand, p_type, p_size], has_header=false
 27)--------------------------CoalesceBatchesExec: target_batch_size=8192

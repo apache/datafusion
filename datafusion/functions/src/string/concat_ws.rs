@@ -323,24 +323,25 @@ fn get_concat_ws_doc() -> &'static Documentation {
 
 fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyResult> {
     match delimiter {
-        Expr::Literal(
+        Expr::Literal(scalar) => match scalar.value() {
             ScalarValue::Utf8(delimiter)
             | ScalarValue::LargeUtf8(delimiter)
-            | ScalarValue::Utf8View(delimiter),
-        ) => {
-            match delimiter {
-                // when the delimiter is an empty string,
-                // we can use `concat` to replace `concat_ws`
-                Some(delimiter) if delimiter.is_empty() => simplify_concat(args.to_vec()),
-                Some(delimiter) => {
-                    let mut new_args = Vec::with_capacity(args.len());
-                    new_args.push(lit(delimiter));
-                    let mut contiguous_scalar = None;
-                    for arg in args {
-                        match arg {
-                            // filter out null args
-                            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None)) => {}
-                            Expr::Literal(ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) | ScalarValue::Utf8View(Some(v))) => {
+            | ScalarValue::Utf8View(delimiter) => {
+                match delimiter {
+                    // when the delimiter is an empty string,
+                    // we can use `concat` to replace `concat_ws`
+                    Some(delimiter) if delimiter.is_empty() => {
+                        simplify_concat(args.to_vec())
+                    }
+                    Some(delimiter) => {
+                        let mut new_args = Vec::with_capacity(args.len());
+                        new_args.push(lit(delimiter));
+                        let mut contiguous_scalar = None;
+                        for arg in args {
+                            match arg {
+                                Expr::Literal(scalar) => match scalar.value() {
+                            ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None) => {}
+                            ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) | ScalarValue::Utf8View(Some(v)) => {
                                 match contiguous_scalar {
                                     None => contiguous_scalar = Some(v.to_string()),
                                     Some(mut pre) => {
@@ -350,7 +351,8 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                                     }
                                 }
                             }
-                            Expr::Literal(s) => return internal_err!("The scalar {s} should be casted to string type during the type coercion."),
+                            s => return internal_err!("The scalar {s} should be casted to string type during the type coercion."),
+                                }
                             // If the arg is not a literal, we should first push the current `contiguous_scalar`
                             // to the `new_args` and reset it to None.
                             // Then pushing this arg to the `new_args`.
@@ -362,27 +364,28 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                                 contiguous_scalar = None;
                             }
                         }
-                    }
-                    if let Some(val) = contiguous_scalar {
-                        new_args.push(lit(val));
-                    }
+                        }
+                        if let Some(val) = contiguous_scalar {
+                            new_args.push(lit(val));
+                        }
 
-                    Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
-                        ScalarFunction {
-                            func: concat_ws(),
-                            args: new_args,
-                        },
-                    )))
+                        Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
+                            ScalarFunction {
+                                func: concat_ws(),
+                                args: new_args,
+                            },
+                        )))
+                    }
+                    // if the delimiter is null, then the value of the whole expression is null.
+                    None => Ok(ExprSimplifyResult::Simplified(Expr::from(
+                        ScalarValue::Utf8(None),
+                    ))),
                 }
-                // if the delimiter is null, then the value of the whole expression is null.
-                None => Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-                    ScalarValue::Utf8(None),
-                ))),
             }
-        }
-        Expr::Literal(d) => internal_err!(
+            d => internal_err!(
             "The scalar {d} should be casted to string type during the type coercion."
         ),
+        },
         _ => {
             let mut args = args
                 .iter()
@@ -397,7 +400,7 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
 
 fn is_null(expr: &Expr) -> bool {
     match expr {
-        Expr::Literal(v) => v.is_null(),
+        Expr::Literal(v) => v.value().is_null(),
         _ => false,
     }
 }

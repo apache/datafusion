@@ -256,7 +256,7 @@ fn test_expression_serialization_roundtrip() {
     use datafusion_proto::logical_plan::from_proto::parse_expr;
 
     let ctx = SessionContext::new();
-    let lit = Expr::Literal(ScalarValue::Utf8(None));
+    let lit = Expr::from(ScalarValue::Utf8(None));
     for function in string::functions() {
         // default to 4 args (though some exprs like substr have error checking)
         let num_args = 4;

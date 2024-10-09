@@ -51,7 +51,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             (None, Some(for_expr)) => {
                 let arg =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
-                let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)));
+                let from_logic = Expr::from(ScalarValue::Int64(Some(1)));
                 let for_logic =
                     self.sql_expr_to_logical_expr(*for_expr, schema, planner_context)?;
                 vec![arg, from_logic, for_logic]

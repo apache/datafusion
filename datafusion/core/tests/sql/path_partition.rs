@@ -91,7 +91,7 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
     let expected = Arc::new(BinaryExpr::new(
         Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
         Operator::Gt,
-        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
     ));
 
     assert!(pred.as_any().is::<BinaryExpr>());
