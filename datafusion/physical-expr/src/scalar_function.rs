@@ -142,7 +142,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // evaluate the function
         let output = match self.args.is_empty() {
             true => self.fun.invoke_no_args(batch.num_rows()),
-            false => self.fun.invoke(&inputs),
+            false => self.fun.invoke_with_return_type(&inputs, &self.return_type),
         }?;
 
         if let ColumnarValue::Array(array) = &output {

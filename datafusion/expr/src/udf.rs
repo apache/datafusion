@@ -191,8 +191,8 @@ impl ScalarUDF {
     /// Invoke the function on `args`, returning the appropriate result.
     ///
     /// See [`ScalarUDFImpl::invoke`] for more details.
-    pub fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        self.inner.invoke(args)
+    pub fn invoke_with_return_type(&self, args: &[ColumnarValue], return_type: &DataType) -> Result<ColumnarValue>{
+        self.inner.invoke_with_return_type(args, return_type)
     }
 
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
@@ -438,6 +438,12 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// [invoke_no_args]: ScalarUDFImpl::invoke_no_args
     fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue>;
+
+    /// This function will be called with the evaluated children as in `invoke` however, the value
+    /// returned previously from `ScalarUDFImpl::return_type` for this expr will be passed in.
+    fn invoke_with_return_type(&self, args: &[ColumnarValue], _return_type: &DataType) -> Result<ColumnarValue>{
+        self.invoke(args)
+    }
 
     /// Invoke the function without `args`, instead the number of rows are provided,
     /// returning the appropriate result.
