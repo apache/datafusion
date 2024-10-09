@@ -501,9 +501,9 @@ impl ByteGroupValueViewBuilder {
 
         // The check logic
         //   - Check len equality
+        //   - If inlined, check inlined value
         //   - If non-inlined, check prefix and then check value in buffer
         //     when needed
-        //   - If inlined, check inlined value
         if exist_view_len != input_view_len {
             return false;
         }
