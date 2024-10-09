@@ -17,21 +17,6 @@
 //! [`Max`] and [`MaxAccumulator`] accumulator for the `max` function
 //! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
 
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array,
@@ -1240,26 +1225,24 @@ impl Accumulator for SlidingMinAccumulator {
     }
 }
 
-//
-// Moving min and moving max
-// The implementation is taken from https://github.com/spebern/moving_min_max/blob/master/src/lib.rs.
-
-// Keep track of the minimum or maximum value in a sliding window.
-//
-// `moving min max` provides one data structure for keeping track of the
-// minimum value and one for keeping track of the maximum value in a sliding
-// window.
-//
-// Each element is stored with the current min/max. One stack to push and another one for pop. If pop stack is empty,
-// push to this stack all elements popped from first stack while updating their current min/max. Now pop from
-// the second stack (MovingMin/Max struct works as a queue). To find the minimum element of the queue,
-// look at the smallest/largest two elements of the individual stacks, then take the minimum of those two values.
-//
-// The complexity of the operations are
-// - O(1) for getting the minimum/maximum
-// - O(1) for push
-// - amortized O(1) for pop
-
+/// Keep track of the minimum value in a sliding window.
+///
+/// The implementation is taken from <https://github.com/spebern/moving_min_max/blob/master/src/lib.rs>
+///
+/// `moving min max` provides one data structure for keeping track of the
+/// minimum value and one for keeping track of the maximum value in a sliding
+/// window.
+///
+/// Each element is stored with the current min/max. One stack to push and another one for pop. If pop stack is empty,
+/// push to this stack all elements popped from first stack while updating their current min/max. Now pop from
+/// the second stack (MovingMin/Max struct works as a queue). To find the minimum element of the queue,
+/// look at the smallest/largest two elements of the individual stacks, then take the minimum of those two values.
+///
+/// The complexity of the operations are
+/// - O(1) for getting the minimum/maximum
+/// - O(1) for push
+/// - amortized O(1) for pop
+///
 /// ```
 /// # use datafusion_functions_aggregate::min_max::MovingMin;
 /// let mut moving_min = MovingMin::<i32>::new();
@@ -1375,6 +1358,11 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
         self.len() == 0
     }
 }
+
+/// Keep track of the maximum value in a sliding window.
+///
+/// See [`MovingMin`] for more details.
+///
 /// ```
 /// # use datafusion_functions_aggregate::min_max::MovingMax;
 /// let mut moving_max = MovingMax::<i32>::new();
