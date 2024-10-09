@@ -23,12 +23,12 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
+use arrow::array::new_empty_array;
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
     datatypes::UInt32Type,
 };
-use arrow::array::new_empty_array;
 use datafusion_common::{
     arrow_datafusion_err, utils::take_arrays, DataFusionError, Result, ScalarValue,
 };
@@ -415,7 +415,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
                 .map(|state_val| new_empty_array(&state_val.data_type()))
                 .collect::<Vec<_>>();
 
-            return Ok(empty_arrays)
+            return Ok(empty_arrays);
         }
 
         // Each row has its respective group
