@@ -584,8 +584,13 @@ dev/update_function_docs.sh file for updating surrounding text.
 -->
 <section id="window-functions-new">
 <h1>Window Functions (NEW)<a class="headerlink" href="#window-functions-new" title="Link to this heading">¶</a></h1>
-<p>This page is a WIP and will replace the Window Functions page once completed.</p>
-<p>A <em>window function</em> performs a calculation across a set of table rows that are somehow related to the current row. This is comparable to the type of calculation that can be done with an aggregate function. However, window functions do not cause rows to become grouped into a single output row like non-window aggregate calls would. Instead, the rows retain their separate identities. Behind the scenes, the window function is able to access more than just the current row of the query result</p>
+<p>Note: this documentation is in the process of being migrated to be <a class="reference external" href="https://github.com/apache/datafusion/issues/12740">automatically created from the codebase</a>.
+Please see the <a class="reference internal" href="window_functions.html"><span class="std std-doc">Window Functions (Old)</span></a> page for
+the rest of the documentation.</p>
+<p>A <em>window function</em> performs a calculation across a set of table rows that are somehow related to the current row.
+This is comparable to the type of calculation that can be done with an aggregate function.
+However, window functions do not cause rows to become grouped into a single output row like non-window aggregate calls would.
+Instead, the rows retain their separate identities. Behind the scenes, the window function is able to access more than just the current row of the query result</p>
 <p>Here is an example that shows how to compare each employee’s salary with the average salary in his or her department:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">depname</span><span class="p">,</span><span class="w"> </span><span class="n">empno</span><span class="p">,</span><span class="w"> </span><span class="n">salary</span><span class="p">,</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="n">salary</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">depname</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">empsalary</span><span class="p">;</span>
 
