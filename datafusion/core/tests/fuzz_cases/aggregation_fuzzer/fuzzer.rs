@@ -133,8 +133,17 @@ struct QueryGroup {
 }
 
 impl AggregationFuzzer {
-    /// Run the fuzzer, returning error if any inconsistency found
-    pub async fn run(&self) -> Result<()> {
+    /// Run the fuzzer, printing an error and panicking if any of the tasks fail
+    pub async fn run(&self) {
+        let res = self.run_inner().await;
+
+        if let Err(e) = res {
+            println!("{e}");
+            panic!("Error!");
+        }
+    }
+
+    async fn run_inner(&self) -> Result<()> {
         let mut join_set = JoinSet::new();
         let mut rng = thread_rng();
 
