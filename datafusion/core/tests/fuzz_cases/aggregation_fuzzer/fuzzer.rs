@@ -138,7 +138,7 @@ impl AggregationFuzzer {
         let res = self.run_inner().await;
 
         if let Err(e) = res {
-            // Print the error via `Display` so that it displays nicely (the default `unwrap()` 
+            // Print the error via `Display` so that it displays nicely (the default `unwrap()`
             // prints using `Debug` which escapes newlines, and makes multi-line messages
             // hard to read
             println!("{e}");
