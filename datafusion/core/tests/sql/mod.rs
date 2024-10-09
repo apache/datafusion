@@ -62,6 +62,7 @@ pub mod explain_analyze;
 pub mod joins;
 mod path_partition;
 pub mod select;
+pub mod show;
 mod sql_api;
 
 async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
