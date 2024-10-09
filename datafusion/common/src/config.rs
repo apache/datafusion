@@ -384,6 +384,10 @@ config_namespace! {
         /// and `Binary/BinaryLarge` with `BinaryView`.
         pub schema_force_view_types: bool, default = false
 
+        /// (reading) If true, parquet reader will read columns of `Binary/LargeBinary` with `Utf8`,
+        /// and `BinaryView` with `Utf8View`.
+        pub binary_as_string: bool, default = false
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
@@ -487,8 +491,6 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
-
-        pub binary_as_string: bool, default = false
     }
 }
 
