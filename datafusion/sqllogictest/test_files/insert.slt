@@ -255,7 +255,7 @@ insert into table_without_values(id, id) values(3, 3);
 statement error Arrow error: Cast error: Cannot cast string 'zoo' to value of Int64 type
 insert into table_without_values(name, id) values(4, 'zoo');
 
-statement error Error during planning: Column count doesn't match insert query!
+statement error Error during planning: Values list does not match the provided number of data types: got 2 values but expected 1
 insert into table_without_values(id) values(4, 'zoo');
 
 # insert NULL values for the missing column (name)
@@ -433,3 +433,17 @@ drop table test_column_defaults
 
 statement error DataFusion error: Error during planning: Column reference is not allowed in the DEFAULT expression : Schema error: No field named a.
 create table test_column_defaults(a int, b int default a+1)
+
+# test value casting
+statement ok
+create table test_column_insert_cast(
+  a BIGINT UNSIGNED
+);
+
+query I
+insert into test_column_insert_cast(a) values (0), (12775823699315690233);
+----
+2
+
+statement ok
+drop table test_column_insert_cast
