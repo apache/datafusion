@@ -453,11 +453,11 @@ impl ByteGroupValueViewBuilder {
             self.ensure_in_progress_big_enough(value_len);
 
             // Append value
-            let block_id = self.completed.len();
+            let buffer_index = self.completed.len();
             let offset = self.in_progress.len();
             self.in_progress.extend_from_slice(value);
 
-            make_view(value, block_id, offset)
+            make_view(value, buffer_index as u32, offset as u32)
         };
 
         // Append view
@@ -510,13 +510,13 @@ impl ByteGroupValueViewBuilder {
 
         if exist_view_len <= 12 {
             let exist_inline = unsafe {
-                GenericByteViewArray::<T>::inline_value(
+                GenericByteViewArray::<B>::inline_value(
                     &exist_view,
                     exist_view_len as usize,
                 )
             };
             let input_inline = unsafe {
-                GenericByteViewArray::<T>::inline_value(
+                GenericByteViewArray::<B>::inline_value(
                     &input_view,
                     input_view_len as usize,
                 )
