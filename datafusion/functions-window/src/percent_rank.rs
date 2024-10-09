@@ -32,6 +32,7 @@ use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 use datafusion_functions_window_common::field;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use field::WindowUDFFieldArgs;
 
 define_udwf_and_expr!(
@@ -74,7 +75,10 @@ impl WindowUDFImpl for PercentRank {
         &self.signature
     }
 
-    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+    fn partition_evaluator(
+        &self,
+        _partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::<PercentRankEvaluator>::default())
     }
 
@@ -152,8 +156,9 @@ mod tests {
         ranks: Vec<Range<usize>>,
         expected: Vec<f64>,
     ) -> Result<()> {
+        let args = PartitionEvaluatorArgs::default();
         let result = expr
-            .partition_evaluator()?
+            .partition_evaluator(args)?
             .evaluate_all_with_rank(num_rows, &ranks)?;
         let result = as_float64_array(&result)?;
         let result = result.values();
