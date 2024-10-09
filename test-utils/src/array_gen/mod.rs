@@ -15,13 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod aggregate_fuzz;
-mod distinct_count_string_fuzz;
-mod join_fuzz;
-mod merge_fuzz;
-mod sort_fuzz;
+mod primitive;
+mod string;
 
-mod aggregation_fuzzer;
-mod limit_fuzz;
-mod sort_preserving_repartition_fuzz;
-mod window_fuzz;
+pub use primitive::PrimitiveArrayGenerator;
+pub use string::StringArrayGenerator;
