@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expression for `rank` that can evaluated at runtime during query execution
+//! `rank` window function implementation
 
 use std::any::Any;
 use std::fmt::Debug;

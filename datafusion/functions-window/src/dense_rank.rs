@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expression for `dense_rank` that can evaluated at runtime during query execution
+//! `dense_rank` window function implementation
 
 use std::any::Any;
 use std::fmt::Debug;
