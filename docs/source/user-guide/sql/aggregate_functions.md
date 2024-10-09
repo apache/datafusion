@@ -30,9 +30,6 @@ the rest of the documentation.
 ## General
 
 - [avg](#avg)
-- [bit_and](#bit_and)
-- [bit_or](#bit_or)
-- [bit_xor](#bit_xor)
 - [bool_and](#bool_and)
 - [bool_or](#bool_or)
 - [count](#count)
@@ -61,45 +58,6 @@ avg(expression)
 #### Aliases
 
 - `mean`
-
-### `bit_and`
-
-Computes the bitwise AND of all non-null input values.
-
-```
-bit_and(expression)
-```
-
-#### Arguments
-
-- **expression**: Expression to operate on.
-  Can be a constant, column, or function, and any combination of arithmetic operators.
-
-### `bit_or`
-
-Computes the bitwise OR of all non-null input values.
-
-```
-bit_or(expression)
-```
-
-#### Arguments
-
-- **expression**: Expression to operate on.
-  Can be a constant, column, or function, and any combination of arithmetic operators.
-
-### `bit_xor`
-
-Computes the bitwise exclusive OR of all non-null input values.
-
-```
-bit_xor(expression)
-```
-
-#### Arguments
-
-- **expression**: Expression to operate on.
-  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `bool_and`
 

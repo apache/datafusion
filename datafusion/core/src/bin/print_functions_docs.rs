@@ -130,13 +130,14 @@ fn print_docs(
                 .find(|f| f.get_name() == name || f.get_aliases().contains(&name))
                 .unwrap();
 
-            let name = f.get_name();
             let aliases = f.get_aliases();
             let documentation = f.get_documentation();
 
             // if this name is an alias we need to display what it's an alias of
             if aliases.contains(&name) {
-                let _ = write!(docs, "_Alias of [{name}](#{name})._");
+                let fname = f.get_name();
+                let _ = writeln!(docs, r#"### `{name}`"#);
+                let _ = writeln!(docs, "_Alias of [{fname}](#{fname})._");
                 continue;
             }
 
@@ -183,10 +184,10 @@ fn print_docs(
 
             // next, aliases
             if !f.get_aliases().is_empty() {
-                let _ = write!(docs, "#### Aliases");
+                let _ = writeln!(docs, "#### Aliases");
 
                 for alias in f.get_aliases() {
-                    let _ = writeln!(docs, "- {alias}");
+                    let _ = writeln!(docs, "- {}", alias.replace("_", r#"\_"#));
                 }
             }
 
