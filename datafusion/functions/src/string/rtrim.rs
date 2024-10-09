@@ -147,7 +147,7 @@ mod tests {
         // String view cases for checking normal logic
         test_function!(
             RtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            &[ColumnarValue::from(ScalarValue::Utf8View(Some(
                 String::from("alphabet  ")
             ))),],
             Ok(Some("alphabet")),
@@ -157,7 +157,7 @@ mod tests {
         );
         test_function!(
             RtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            &[ColumnarValue::from(ScalarValue::Utf8View(Some(
                 String::from("  alphabet  ")
             ))),],
             Ok(Some("  alphabet")),
@@ -168,10 +168,10 @@ mod tests {
         test_function!(
             RtrimFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("t ")))),
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("t ")))),
             ],
             Ok(Some("alphabe")),
             &str,
@@ -181,12 +181,10 @@ mod tests {
         test_function!(
             RtrimFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "alphabe"
-                )))),
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("alphabe")))),
             ],
             Ok(Some("alphabet")),
             &str,
@@ -196,10 +194,10 @@ mod tests {
         test_function!(
             RtrimFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+                ColumnarValue::from(ScalarValue::Utf8View(None)),
             ],
             Ok(None),
             &str,
@@ -210,10 +208,10 @@ mod tests {
         test_function!(
             RtrimFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from(
                     "alphabetalphabetxxx"
                 )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("x")))),
+                ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("x")))),
             ],
             Ok(Some("alphabetalphabet")),
             &str,
@@ -223,9 +221,9 @@ mod tests {
         // String cases
         test_function!(
             RtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                String::from("alphabet  ")
-            ))),],
+            &[ColumnarValue::from(ScalarValue::Utf8(Some(String::from(
+                "alphabet  "
+            )))),],
             Ok(Some("alphabet")),
             &str,
             Utf8,
@@ -233,9 +231,9 @@ mod tests {
         );
         test_function!(
             RtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                String::from("  alphabet  ")
-            ))),],
+            &[ColumnarValue::from(ScalarValue::Utf8(Some(String::from(
+                "  alphabet  "
+            )))),],
             Ok(Some("  alphabet")),
             &str,
             Utf8,
@@ -244,8 +242,8 @@ mod tests {
         test_function!(
             RtrimFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("t ")))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("t ")))),
             ],
             Ok(Some("alphabe")),
             &str,
@@ -255,8 +253,8 @@ mod tests {
         test_function!(
             RtrimFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabe")))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("alphabe")))),
             ],
             Ok(Some("alphabet")),
             &str,
@@ -266,8 +264,8 @@ mod tests {
         test_function!(
             RtrimFunc::new(),
             &[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+                ColumnarValue::from(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::from(ScalarValue::Utf8(None)),
             ],
             Ok(None),
             &str,
