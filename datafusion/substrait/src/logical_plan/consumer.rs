@@ -68,7 +68,7 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
 use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
@@ -325,11 +325,11 @@ pub async fn from_substrait_extended_expr(
     })
 }
 
-pub fn apply_projection(
+pub fn apply_masking(
     schema: DFSchema,
-    projection: &::core::option::Option<expression::MaskExpression>,
+    mask_expression: &::core::option::Option<expression::MaskExpression>,
 ) -> Result<DFSchema> {
-    match projection {
+    match mask_expression {
         Some(MaskExpression { select, .. }) => match &select.as_ref() {
             Some(projection) => {
                 let column_indices: Vec<usize> = projection
@@ -346,7 +346,10 @@ pub fn apply_projection(
                     })
                     .collect();
 
-                Ok(DFSchema::new_with_metadata(fields, HashMap::new())?)
+                Ok(DFSchema::new_with_metadata(
+                    fields,
+                    schema.metadata().clone(),
+                )?)
             }
             None => Ok(schema),
         },
@@ -753,15 +756,20 @@ pub async fn from_substrait_rel(
                     },
                 };
 
+                let t = ctx.table(table_reference.clone()).await?;
+
                 let substrait_schema =
                     from_substrait_named_struct(named_struct, extensions)?
-                        .replace_qualifier(table_reference.clone());
+                        .replace_qualifier(table_reference);
 
-                let substrait_schema =
-                    apply_projection(substrait_schema, &read.projection)?;
+                ensure_schema_compatability(
+                    t.schema().to_owned(),
+                    substrait_schema.clone(),
+                )?;
 
-                let t = ctx.table(table_reference.clone()).await?;
-                ensure_schema_compatability(t, substrait_schema)
+                let substrait_schema = apply_masking(substrait_schema, &read.projection)?;
+
+                apply_projection(t, substrait_schema)
             }
             Some(ReadType::VirtualTable(vt)) => {
                 let base_schema = read.base_schema.as_ref().ok_or_else(|| {
@@ -852,10 +860,14 @@ pub async fn from_substrait_rel(
                     from_substrait_named_struct(named_struct, extensions)?
                         .replace_qualifier(table_reference);
 
-                let substrait_schema =
-                    apply_projection(substrait_schema, &read.projection)?;
+                ensure_schema_compatability(
+                    t.schema().to_owned(),
+                    substrait_schema.clone(),
+                )?;
 
-                ensure_schema_compatability(t, substrait_schema)
+                let substrait_schema = apply_masking(substrait_schema, &read.projection)?;
+
+                apply_projection(t, substrait_schema)
             }
             _ => not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type),
         },
@@ -972,13 +984,27 @@ pub async fn from_substrait_rel(
 /// 1. All fields present in the Substrait schema are present in the DataFusion schema. The
 ///    DataFusion schema may have MORE fields, but not the other way around.
 /// 2. All fields are compatible. See [`ensure_field_compatability`] for details
-///
+fn ensure_schema_compatability(
+    table_schema: DFSchema,
+    substrait_schema: DFSchema,
+) -> Result<()> {
+    substrait_schema
+        .strip_qualifiers()
+        .fields()
+        .iter()
+        .map(|substrait_field| {
+            let df_field =
+                table_schema.field_with_unqualified_name(substrait_field.name())?;
+            ensure_field_compatability(df_field, substrait_field)
+        })
+        .collect::<Result<()>>()?;
+
+    Ok(())
+}
+
 /// This function returns a DataFrame with fields adjusted if necessary in the event that the
 /// Substrait schema is a subset of the DataFusion schema.
-fn ensure_schema_compatability(
-    table: DataFrame,
-    substrait_schema: DFSchema,
-) -> Result<LogicalPlan> {
+fn apply_projection(table: DataFrame, substrait_schema: DFSchema) -> Result<LogicalPlan> {
     let df_schema = table.schema().to_owned();
 
     let t = table.into_unoptimized_plan();
@@ -994,10 +1020,6 @@ fn ensure_schema_compatability(
                 .fields()
                 .iter()
                 .map(|substrait_field| {
-                    let df_field =
-                        df_schema.field_with_unqualified_name(substrait_field.name())?;
-                    ensure_field_compatability(df_field, substrait_field)?;
-
                     Ok(df_schema
                         .index_of_column_by_name(None, substrait_field.name().as_str())
                         .unwrap())
@@ -1010,8 +1032,10 @@ fn ensure_schema_compatability(
                 .map(|(qualifier, field)| (qualifier.cloned(), Arc::new(field.clone())))
                 .collect();
 
-            scan.projected_schema =
-                DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
+            scan.projected_schema = DFSchemaRef::new(DFSchema::new_with_metadata(
+                fields,
+                df_schema.metadata().clone(),
+            )?);
             scan.projection = Some(column_indices);
 
             Ok(LogicalPlan::TableScan(scan))
