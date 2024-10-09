@@ -144,7 +144,7 @@ use sqlparser::ast::{
 /// if let Expr::BinaryExpr(binary_expr) = expr {
 ///   assert_eq!(*binary_expr.left, col("c1"));
 ///   let scalar = ScalarValue::Int32(Some(42));
-///   assert_eq!(*binary_expr.right, Expr::Literal(scalar));
+///   assert_eq!(*binary_expr.right, Expr::from(scalar));
 ///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
@@ -191,7 +191,7 @@ use sqlparser::ast::{
 /// // apply recursively visits all nodes in the expression tree
 /// expr.apply(|e| {
 ///    if let Expr::Literal(scalar) = e {
-///       scalars.insert(scalar);
+///       scalars.insert(scalar.value());
 ///    }
 ///    // The return value controls whether to continue visiting the tree
 ///    Ok(TreeNodeRecursion::Continue)
