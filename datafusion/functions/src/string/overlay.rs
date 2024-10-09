@@ -27,8 +27,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 
 #[derive(Debug)]
@@ -48,12 +47,12 @@ impl OverlayFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8View, Utf8View, Int64, Int64]),
-                    Exact(vec![Utf8, Utf8, Int64, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64]),
-                    Exact(vec![Utf8View, Utf8View, Int64]),
-                    Exact(vec![Utf8, Utf8, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8View, Int64, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Int64, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8View, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, Int64]),
                 ],
                 Volatility::Immutable,
             ),

@@ -22,9 +22,9 @@ use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::function::Hint;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 use std::any::Any;
 use std::sync::OnceLock;
 
@@ -49,18 +49,9 @@ impl Default for BTrimFunc {
 
 impl BTrimFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![
-                    // Planner attempts coercion to the target type starting with the most preferred candidate.
-                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
-                    // If that fails, it proceeds to `(Utf8, Utf8)`.
-                    Exact(vec![Utf8View, Utf8View]),
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8View]),
-                    Exact(vec![Utf8]),
-                ],
+                vec![TypeSignature::String(2), TypeSignature::String(1)],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("trim")],

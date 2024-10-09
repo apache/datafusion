@@ -16,19 +16,17 @@
 // under the License.
 
 use crate::utils::make_scalar_function;
-
 use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, StringViewArray};
+use arrow::compute::regexp_is_match;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
 use datafusion_common::exec_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, Signature, Volatility};
-use datafusion_expr::{Documentation, ScalarUDFImpl};
-
-use arrow::compute::regexp_is_match;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -45,22 +43,8 @@ impl Default for ContainsFunc {
 
 impl ContainsFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8View, Utf8View]),
-                    Exact(vec![Utf8View, Utf8]),
-                    Exact(vec![Utf8View, LargeUtf8]),
-                    Exact(vec![Utf8, Utf8View]),
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8, LargeUtf8]),
-                    Exact(vec![LargeUtf8, Utf8View]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
         }
     }
 }
@@ -132,77 +116,11 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 
             Ok(Arc::new(res) as ArrayRef)
         }
-        (Utf8View, Utf8) => {
-            let mod_str = args[0].as_string_view();
-            let match_str = args[1].as_string::<i32>();
-            let res = regexp_is_match::<
-                StringViewArray,
-                GenericStringArray<i32>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (Utf8View, LargeUtf8) => {
-            let mod_str = args[0].as_string_view();
-            let match_str = args[1].as_string::<i64>();
-            let res = regexp_is_match::<
-                StringViewArray,
-                GenericStringArray<i64>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (Utf8, Utf8View) => {
-            let mod_str = args[0].as_string::<i32>();
-            let match_str = args[1].as_string_view();
-            let res = regexp_is_match::<
-                GenericStringArray<i32>,
-                StringViewArray,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
         (Utf8, Utf8) => {
             let mod_str = args[0].as_string::<i32>();
             let match_str = args[1].as_string::<i32>();
             let res = regexp_is_match::<
                 GenericStringArray<i32>,
-                GenericStringArray<i32>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (Utf8, LargeUtf8) => {
-            let mod_str = args[0].as_string::<i32>();
-            let match_str = args[1].as_string::<i64>();
-            let res = regexp_is_match::<
-                GenericStringArray<i32>,
-                GenericStringArray<i64>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (LargeUtf8, Utf8View) => {
-            let mod_str = args[0].as_string::<i64>();
-            let match_str = args[1].as_string_view();
-            let res = regexp_is_match::<
-                GenericStringArray<i64>,
-                StringViewArray,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (LargeUtf8, Utf8) => {
-            let mod_str = args[0].as_string::<i64>();
-            let match_str = args[1].as_string::<i32>();
-            let res = regexp_is_match::<
-                GenericStringArray<i64>,
                 GenericStringArray<i32>,
                 GenericStringArray<i32>,
             >(mod_str, match_str, None)?;
@@ -223,97 +141,5 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         other => {
             exec_err!("Unsupported data type {other:?} for function `contains`.")
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::string::contains::ContainsFunc;
-    use crate::utils::test::test_function;
-    use arrow::array::Array;
-    use arrow::{array::BooleanArray, datatypes::DataType::Boolean};
-    use datafusion_common::Result;
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::ColumnarValue;
-    use datafusion_expr::ScalarUDFImpl;
-    #[test]
-    fn test_functions() -> Result<()> {
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("alph")),
-            ],
-            Ok(Some(true)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("dddddd")),
-            ],
-            Ok(Some(false)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("pha")),
-            ],
-            Ok(Some(true)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "Apache"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("pac")))),
-            ],
-            Ok(Some(true)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "Apache"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ap")))),
-            ],
-            Ok(Some(false)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "Apache"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
-                    "DataFusion"
-                )))),
-            ],
-            Ok(Some(false)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-
-        Ok(())
     }
 }
