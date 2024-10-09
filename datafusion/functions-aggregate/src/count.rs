@@ -122,7 +122,7 @@ impl AggregateUDFImpl for Count {
     }
 
     fn is_nullable(&self) -> bool {
-        false
+        true
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
