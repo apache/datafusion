@@ -641,8 +641,16 @@ impl TDigest {
             v => panic!("invalid centroids type {v:?}"),
         };
 
-        let max = cast_scalar_f64!(&state[3]);
-        let min = cast_scalar_f64!(&state[4]);
+        let mut max = cast_scalar_f64!(&state[3]);
+        let mut min = cast_scalar_f64!(&state[4]);
+
+        if !min.is_finite() {
+            min = f64::NEG_INFINITY;
+        }
+    
+        if !max.is_finite() {
+            max = f64::INFINITY;
+        }
 
         assert!(max.total_cmp(&min).is_ge());
 
