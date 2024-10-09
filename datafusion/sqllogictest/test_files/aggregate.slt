@@ -1398,7 +1398,7 @@ INSERT INTO t1 VALUES (TRUE);
 query R
 SELECT approx_percentile_cont_with_weight('NaN'::DOUBLE, 0, 0) FROM t1 WHERE t1.v1;
 ----
--Infinity
+Infinity
 
 statement ok
 DROP TABLE t1;
