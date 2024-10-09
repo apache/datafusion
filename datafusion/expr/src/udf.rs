@@ -203,9 +203,6 @@ impl ScalarUDF {
         self.inner.simplify(args, info)
     }
 
-    /// Invoke the function on `args`, returning the appropriate result.
-    ///
-    /// See [`ScalarUDFImpl::invoke`] for more details.
     #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
     pub fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         #[allow(deprecated)]
@@ -225,6 +222,19 @@ impl ScalarUDF {
         number_rows: usize,
     ) -> Result<ColumnarValue> {
         self.inner.invoke_batch(args, number_rows)
+    }
+
+    /// Invoke the function on `args`, returning the appropriate result.
+    ///
+    /// See [`ScalarUDFImpl::invoke_batch`] for more details.
+    pub fn invoke_batch_with_return_type(
+        &self,
+        args: &[ColumnarValue],
+        number_rows: usize,
+        return_type: &DataType,
+    ) -> Result<ColumnarValue> {
+        self.inner
+            .invoke_batch_with_return_type(args, number_rows, return_type)
     }
 
     /// Invoke the function without `args` but number of rows, returning the appropriate result.
@@ -356,7 +366,7 @@ where
 ///      }
 ///   }
 /// }
-///  
+///
 /// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 ///
 /// fn get_doc() -> &'static Documentation {
@@ -535,6 +545,17 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
                 self.invoke(args)
             }
         }
+    }
+
+    /// This function will be called with the evaluated children as in `invoke` however, the value
+    /// returned previously from `ScalarUDFImpl::return_type` for this expr will be passed in.
+    fn invoke_batch_with_return_type(
+        &self,
+        args: &[ColumnarValue],
+        number_rows: usize,
+        _return_type: &DataType,
+    ) -> Result<ColumnarValue> {
+        self.invoke_batch(args, number_rows)
     }
 
     /// Invoke the function without `args`, instead the number of rows are provided,
