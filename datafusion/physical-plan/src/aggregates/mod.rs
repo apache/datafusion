@@ -48,6 +48,7 @@ use datafusion_physical_expr::{
     PhysicalExpr, PhysicalSortRequirement,
 };
 
+use crate::execution_plan::CardinalityEffect;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use itertools::Itertools;
 
@@ -865,6 +866,10 @@ impl ExecutionPlan for AggregateExec {
                 })
             }
         }
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::LowerEqual
     }
 }
 
