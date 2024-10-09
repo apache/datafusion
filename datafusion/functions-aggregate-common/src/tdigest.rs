@@ -651,7 +651,9 @@ impl TDigest {
             max = f64::INFINITY;
         }
 
-        assert!(max.total_cmp(&min).is_ge());
+        if min.is_finite() && max.is_finite() {
+            assert!(max.total_cmp(&min).is_ge());
+        }
 
         Self {
             max_size,
