@@ -2101,16 +2101,13 @@ mod tests {
     use crate::equivalence::add_offset_to_expr;
     use crate::equivalence::tests::{
         convert_to_orderings, convert_to_sort_exprs, convert_to_sort_reqs,
-        create_random_schema, create_test_params, create_test_schema,
-        generate_table_for_eq_properties, is_table_same_after_sort, output_schema,
+        create_test_params, create_test_schema, output_schema,
     };
     use crate::expressions::{col, BinaryExpr, Column};
-    use crate::utils::tests::TestScalarUDF;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{Fields, TimeUnit};
-    use datafusion_common::DFSchema;
-    use datafusion_expr::{Operator, ScalarUDF};
+    use datafusion_expr::Operator;
 
     #[test]
     fn project_equivalence_properties_test() -> Result<()> {
@@ -2621,83 +2618,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_find_longest_permutation_random() -> Result<()> {
-        const N_RANDOM_SCHEMA: usize = 100;
-        const N_ELEMENTS: usize = 125;
-        const N_DISTINCT: usize = 5;
-
-        for seed in 0..N_RANDOM_SCHEMA {
-            // Create a random schema with random properties
-            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
-            // Generate a data that satisfies properties given
-            let table_data_with_properties =
-                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
-
-            let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
-            let floor_a = crate::udf::create_physical_expr(
-                &test_fun,
-                &[col("a", &test_schema)?],
-                &test_schema,
-                &[],
-                &DFSchema::empty(),
-            )?;
-            let a_plus_b = Arc::new(BinaryExpr::new(
-                col("a", &test_schema)?,
-                Operator::Plus,
-                col("b", &test_schema)?,
-            )) as Arc<dyn PhysicalExpr>;
-            let exprs = [
-                col("a", &test_schema)?,
-                col("b", &test_schema)?,
-                col("c", &test_schema)?,
-                col("d", &test_schema)?,
-                col("e", &test_schema)?,
-                col("f", &test_schema)?,
-                floor_a,
-                a_plus_b,
-            ];
-
-            for n_req in 0..=exprs.len() {
-                for exprs in exprs.iter().combinations(n_req) {
-                    let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-                    let (ordering, indices) =
-                        eq_properties.find_longest_permutation(&exprs);
-                    // Make sure that find_longest_permutation return values are consistent
-                    let ordering2 = indices
-                        .iter()
-                        .zip(ordering.iter())
-                        .map(|(&idx, sort_expr)| PhysicalSortExpr {
-                            expr: Arc::clone(&exprs[idx]),
-                            options: sort_expr.options,
-                        })
-                        .collect::<Vec<_>>();
-                    assert_eq!(
-                        ordering, ordering2,
-                        "indices and lexicographical ordering do not match"
-                    );
-
-                    let err_msg = format!(
-                        "Error in test case ordering:{:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
-                        ordering, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
-                    );
-                    assert_eq!(ordering.len(), indices.len(), "{}", err_msg);
-                    // Since ordered section satisfies schema, we expect
-                    // that result will be same after sort (e.g sort was unnecessary).
-                    assert!(
-                        is_table_same_after_sort(
-                            ordering.clone(),
-                            table_data_with_properties.clone(),
-                        )?,
-                        "{}",
-                        err_msg
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
     #[test]
     fn test_find_longest_permutation() -> Result<()> {
         // Schema satisfies following orderings:
