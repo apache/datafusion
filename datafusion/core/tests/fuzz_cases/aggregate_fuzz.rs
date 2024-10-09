@@ -83,7 +83,8 @@ async fn test_basic_prim_aggr_no_group() {
         .table_name("fuzz_table")
         .build();
 
-    fuzzer.run().await;
+    let res = fuzzer.run().await;
+    unwrap_and_report(res)
 }
 
 /// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single int64`
@@ -121,7 +122,8 @@ async fn test_basic_prim_aggr_group_by_single_int64() {
         .table_name("fuzz_table")
         .build();
 
-    fuzzer.run().await;
+    let res = fuzzer.run().await;
+    unwrap_and_report(res);
 }
 
 /// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single string`
@@ -159,7 +161,8 @@ async fn test_basic_prim_aggr_group_by_single_string() {
         .table_name("fuzz_table")
         .build();
 
-    fuzzer.run().await;
+    let res = fuzzer.run().await;
+    unwrap_and_report(res);
 }
 
 /// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `group by string + int64`
@@ -198,7 +201,8 @@ async fn test_basic_prim_aggr_group_by_mixed_string_int64() {
         .table_name("fuzz_table")
         .build();
 
-    fuzzer.run().await;
+    let res = fuzzer.run().await;
+    unwrap_and_report(res);
 }
 
 /// Fuzz test for `basic string aggr(count/count distinct/min/max)` + `no group by`
@@ -226,7 +230,8 @@ async fn test_basic_string_aggr_no_group() {
         .table_name("fuzz_table")
         .build();
 
-    fuzzer.run().await;
+    let res = fuzzer.run().await;
+    unwrap_and_report(res);
 }
 
 /// Fuzz test for `basic string aggr(count/count distinct/min/max)` + `group by single int64`
@@ -263,7 +268,8 @@ async fn test_basic_string_aggr_group_by_single_int64() {
         .table_name("fuzz_table")
         .build();
 
-    fuzzer.run().await;
+    let res = fuzzer.run().await;
+    unwrap_and_report(res);
 }
 
 /// Fuzz test for `basic string aggr(count/count distinct/min/max)` + `group by single string`
@@ -300,7 +306,8 @@ async fn test_basic_string_aggr_group_by_single_string() {
         .table_name("fuzz_table")
         .build();
 
-    fuzzer.run().await;
+    let res = fuzzer.run().await;
+    unwrap_and_report(res);
 }
 
 /// Fuzz test for `basic string aggr(count/count distinct/min/max)` + `group by string + int64`
@@ -338,7 +345,8 @@ async fn test_basic_string_aggr_group_by_mixed_string_int64() {
         .table_name("fuzz_table")
         .build();
 
-    fuzzer.run().await;
+    let res = fuzzer.run().await;
+    unwrap_and_report(res);
 }
 
 // ========================================================================
@@ -705,4 +713,13 @@ fn extract_result_counts(results: Vec<RecordBatch>) -> HashMap<Option<String>, i
         }
     }
     output
+}
+
+/// if res is an error, prints the erorr message neatly (e.g. with newlines
+/// expanded) before panic'ing
+fn unwrap_and_report(res: Result<()>) {
+    if let Err(e) = res {
+        println!("{e}");
+        panic!("Error!");
+    }
 }
