@@ -21,7 +21,7 @@ use crate::datasource::file_format::coerce_file_schema_to_view_type;
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::row_group_filter::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
-    row_filter, should_enable_page_index, ParquetAccessPlan,
+    row_filter, should_enable_page_index, ParquetAccessPlan, ParquetFileReader,
 };
 use crate::datasource::physical_plan::{
     FileMeta, FileOpenFuture, FileOpener, ParquetFileMetrics, ParquetFileReaderFactory,
@@ -35,7 +35,6 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
-use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use std::sync::Arc;
 
@@ -87,7 +86,7 @@ impl FileOpener for ParquetOpener {
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
 
-        let mut reader: Box<dyn AsyncFileReader> =
+        let mut reader: Box<dyn ParquetFileReader> =
             self.parquet_file_reader_factory.create_reader(
                 self.partition_index,
                 file_meta,
@@ -119,8 +118,7 @@ impl FileOpener for ParquetOpener {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
 
             let mut metadata_timer = file_metrics.metadata_load_time.timer();
-            let metadata =
-                ArrowReaderMetadata::load_async(&mut reader, options.clone()).await?;
+            let metadata = reader.load_metadata(options.clone()).await?;
             let mut schema = metadata.schema().clone();
             // read with view types
             if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &schema)
@@ -136,8 +134,10 @@ impl FileOpener for ParquetOpener {
 
             metadata_timer.stop();
 
-            let mut builder =
-                ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata);
+            let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
+                reader.upcast(),
+                metadata,
+            );
 
             let file_schema = builder.schema().clone();
 

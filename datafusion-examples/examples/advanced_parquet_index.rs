@@ -24,13 +24,15 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::{
     ParquetAccessPlan, ParquetExecBuilder,
 };
-use datafusion::datasource::physical_plan::{
-    parquet::ParquetFileReaderFactory, FileMeta, FileScanConfig,
+use datafusion::datasource::physical_plan::parquet::{
+    ParquetFileReader, ParquetFileReaderFactory,
 };
+use datafusion::datasource::physical_plan::{FileMeta, FileScanConfig};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::arrow_reader::{
-    ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+    RowSelection, RowSelector,
 };
 use datafusion::parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use datafusion::parquet::arrow::ArrowWriter;
@@ -552,7 +554,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
         _metrics: &ExecutionPlanMetricsSet,
-    ) -> Result<Box<dyn AsyncFileReader + Send>> {
+    ) -> Result<Box<dyn ParquetFileReader>> {
         // for this example we ignore the partition index and metrics
         // but in a real system you would likely use them to report details on
         // the performance of the reader.
@@ -618,6 +620,20 @@ impl AsyncFileReader for ParquetReaderWithCache {
         // return the cached metadata so the parquet reader does not read it
         let metadata = self.metadata.clone();
         async move { Ok(metadata) }.boxed()
+    }
+}
+
+impl ParquetFileReader for ParquetReaderWithCache {
+    fn upcast(self: Box<Self>) -> Box<dyn AsyncFileReader + 'static> {
+        Box::new(*self)
+    }
+
+    fn load_metadata(
+        &mut self,
+        options: ArrowReaderOptions,
+    ) -> BoxFuture<'_, datafusion::parquet::errors::Result<ArrowReaderMetadata>> {
+        // This could be cached too, if CPU time is a concern in addition to storage latency
+        Box::pin(ArrowReaderMetadata::load_async(self, options))
     }
 }
 
