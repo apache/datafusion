@@ -111,7 +111,12 @@ impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
 {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        _batch_hashes: &[u64],
+    ) -> Result<()> {
         assert_eq!(cols.len(), 1);
         groups.clear();
 

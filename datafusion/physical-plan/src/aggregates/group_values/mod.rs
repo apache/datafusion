@@ -86,7 +86,12 @@ pub trait GroupValues: Send {
     /// If a row has the same value as a previous row, the same group id is
     /// assigned. If a row has a new value, the next available group id is
     /// assigned.
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        batch_hashes: &[u64],
+    ) -> Result<()>;
 
     /// Returns the number of bytes of memory used by this [`GroupValues`]
     fn size(&self) -> usize;

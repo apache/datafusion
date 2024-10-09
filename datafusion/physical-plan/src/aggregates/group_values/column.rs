@@ -19,7 +19,6 @@ use crate::aggregates::group_values::group_column::{
     ByteGroupValueBuilder, GroupColumn, PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
 use arrow::compute::cast;
 use arrow::datatypes::{
     Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
@@ -28,7 +27,6 @@ use arrow::datatypes::{
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::{DataType, Schema, SchemaRef};
-use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
@@ -68,9 +66,6 @@ pub struct GroupValuesColumn {
 
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
-
-    /// Random state for creating hashes
-    random_state: RandomState,
 }
 
 impl GroupValuesColumn {
@@ -83,7 +78,6 @@ impl GroupValuesColumn {
             map_size: 0,
             group_values: vec![],
             hashes_buffer: Default::default(),
-            random_state: Default::default(),
         })
     }
 
@@ -143,9 +137,12 @@ macro_rules! instantiate_primitive {
 }
 
 impl GroupValues for GroupValuesColumn {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        let n_rows = cols[0].len();
-
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        batch_hashes: &[u64],
+    ) -> Result<()> {
         if self.group_values.is_empty() {
             let mut v = Vec::with_capacity(cols.len());
 
@@ -194,12 +191,6 @@ impl GroupValues for GroupValuesColumn {
 
         // tracks to which group each of the input rows belongs
         groups.clear();
-
-        // 1.1 Calculate the group keys for the group values
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, batch_hashes)?;
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {

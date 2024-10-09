@@ -325,11 +325,7 @@ config_namespace! {
         /// Aggregation ratio (number of distinct groups / number of input rows)
         /// threshold for skipping partial aggregation. If the value is greater
         /// then partial aggregation will skip aggregation for further input
-        pub skip_partial_aggregation_probe_ratio_threshold: f64, default = 0.8
-
-        /// Number of input rows partial aggregation partition should process, before
-        /// aggregation ratio check and trying to switch to skipping aggregation mode
-        pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
+        pub skip_partial_aggregation_probe_ratio_threshold: f64, default = 0.1
 
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,

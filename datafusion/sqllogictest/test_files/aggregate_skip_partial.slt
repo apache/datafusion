@@ -58,9 +58,6 @@ FROM aggregate_test_100;
 
 # Prepare settings to skip partial aggregation from the beginning
 statement ok
-set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
-
-statement ok
 set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
 
 statement ok
@@ -206,9 +203,6 @@ d NULL false NULL
 e true false NULL
 
 # Prepare settings to always skip aggregation after couple of batches
-statement ok
-set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 10;
-
 statement ok
 set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
 
@@ -669,9 +663,6 @@ DROP TABLE decimal_table;
 
 # Extra tests for 'bool_*()' edge cases
 statement ok
-set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
-
-statement ok
 set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
 
 statement ok
@@ -700,9 +691,6 @@ query BBBBBBBB
 SELECT bool_and(c1), bool_and(c2), bool_and(c3), bool_and(c4), bool_and(c5), bool_and(c6), bool_and(c7), bool_and(c8) FROM bool_aggregate_functions
 ----
 true false false false false true false NULL
-
-statement ok
-set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 2;
 
 query BBBBBBBB
 SELECT bool_and(c1), bool_and(c2), bool_and(c3), bool_and(c4), bool_and(c5), bool_and(c6), bool_and(c7), bool_and(c8) FROM bool_aggregate_functions

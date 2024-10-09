@@ -108,7 +108,12 @@ impl GroupValuesRows {
 }
 
 impl GroupValues for GroupValuesRows {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+        _batch_hashes: &[u64],
+    ) -> Result<()> {
         // Convert the group keys into the row format
         let group_rows = &mut self.rows_buffer;
         group_rows.clear();
