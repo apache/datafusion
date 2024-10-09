@@ -838,22 +838,18 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if expr_contains(&right, &left, Or) => Transformed::yes(*right),
-            // A OR (A AND B) --> A (if B not null)
+            // A OR (A AND B) --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if !info.nullable(&right)? && is_op_with(And, &right, &left) => {
-                Transformed::yes(*left)
-            }
-            // (A AND B) OR A --> A (if B not null)
+            }) if is_op_with(And, &right, &left) => Transformed::yes(*left),
+            // (A AND B) OR A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if !info.nullable(&left)? && is_op_with(And, &left, &right) => {
-                Transformed::yes(*right)
-            }
+            }) if is_op_with(And, &left, &right) => Transformed::yes(*right),
 
             //
             // Rules for AND
@@ -911,22 +907,18 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: And,
                 right,
             }) if expr_contains(&right, &left, And) => Transformed::yes(*right),
-            // A AND (A OR B) --> A (if B not null)
+            // A AND (A OR B) --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if !info.nullable(&right)? && is_op_with(Or, &right, &left) => {
-                Transformed::yes(*left)
-            }
-            // (A OR B) AND A --> A (if B not null)
+            }) if is_op_with(Or, &right, &left) => Transformed::yes(*left),
+            // (A OR B) AND A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if !info.nullable(&left)? && is_op_with(Or, &left, &right) => {
-                Transformed::yes(*right)
-            }
+            }) if is_op_with(Or, &left, &right) => Transformed::yes(*right),
 
             //
             // Rules for Multiply
@@ -1789,6 +1781,8 @@ fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
+    use crate::simplify_expressions::SimplifyContext;
+    use crate::test::test_table_scan_with_name;
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
         function::{
@@ -1799,14 +1793,12 @@ mod tests {
         *,
     };
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+    use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
         sync::Arc,
     };
-
-    use crate::simplify_expressions::SimplifyContext;
-    use crate::test::test_table_scan_with_name;
 
     use super::*;
 
@@ -2609,15 +2601,11 @@ mod tests {
         // (c2 > 5) OR ((c1 < 6) AND (c2 > 5))
         let expr = or(l.clone(), r.clone());
 
-        // no rewrites if c1 can be null
-        let expected = expr.clone();
+        let expected = l.clone();
         assert_eq!(simplify(expr), expected);
 
         // ((c1 < 6) AND (c2 > 5)) OR (c2 > 5)
-        let expr = or(l, r);
-
-        // no rewrites if c1 can be null
-        let expected = expr.clone();
+        let expr = or(r, l);
         assert_eq!(simplify(expr), expected);
     }
 
@@ -2648,13 +2636,11 @@ mod tests {
         // (c2 > 5) AND ((c1 < 6) OR (c2 > 5)) --> c2 > 5
         let expr = and(l.clone(), r.clone());
 
-        // no rewrites if c1 can be null
-        let expected = expr.clone();
+        let expected = l.clone();
         assert_eq!(simplify(expr), expected);
 
         // ((c1 < 6) OR (c2 > 5)) AND (c2 > 5) --> c2 > 5
-        let expr = and(l, r);
-        let expected = expr.clone();
+        let expr = and(r, l);
         assert_eq!(simplify(expr), expected);
     }
 
@@ -3223,7 +3209,7 @@ mod tests {
                 )],
                 Some(Box::new(col("c2").eq(lit(true)))),
             )))),
-            col("c2").or(col("c2").not().and(col("c2"))) // #1716
+            col("c2")
         );
 
         // CASE WHEN ISNULL(c2) THEN true ELSE c2
@@ -3910,7 +3896,10 @@ mod tests {
             }
         }
 
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn partition_evaluator(
+            &self,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!("not needed for tests")
         }
 

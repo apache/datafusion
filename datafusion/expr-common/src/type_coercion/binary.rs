@@ -471,10 +471,16 @@ fn type_union_resolution_coercion(
             let new_value_type = type_union_resolution_coercion(value_type, other_type);
             new_value_type.map(|t| DataType::Dictionary(index_type.clone(), Box::new(t)))
         }
+        (DataType::List(lhs), DataType::List(rhs)) => {
+            let new_item_type =
+                type_union_resolution_coercion(lhs.data_type(), rhs.data_type());
+            new_item_type.map(|t| DataType::List(Arc::new(Field::new("item", t, true))))
+        }
         _ => {
             // numeric coercion is the same as comparison coercion, both find the narrowest type
             // that can accommodate both types
             binary_numeric_coercion(lhs_type, rhs_type)
+                .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
                 .or_else(|| string_coercion(lhs_type, rhs_type))
                 .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
         }
@@ -505,22 +511,6 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
         .or_else(|| binary_coercion(lhs_type, rhs_type))
         .or_else(|| struct_coercion(lhs_type, rhs_type))
-}
-
-/// Coerce `lhs_type` and `rhs_type` to a common type for `VALUES` expression
-///
-/// For example `VALUES (1, 2), (3.0, 4.0)` where the first row is `Int32` and
-/// the second row is `Float64` will coerce to `Float64`
-///
-pub fn values_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type == rhs_type {
-        // same type => equality is possible
-        return Some(lhs_type.clone());
-    }
-    binary_numeric_coercion(lhs_type, rhs_type)
-        .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
-        .or_else(|| string_coercion(lhs_type, rhs_type))
-        .or_else(|| binary_coercion(lhs_type, rhs_type))
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -969,7 +959,7 @@ fn string_concat_internal_coercion(
 /// based on the observation that StringArray to StringViewArray is cheap but not vice versa.
 ///
 /// Between Utf8 and LargeUtf8, we coerce to LargeUtf8.
-fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         // If Utf8View is in any side, we coerce to Utf8View.

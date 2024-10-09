@@ -26,8 +26,9 @@ use datafusion_common::{
     utils::{coerced_fixed_size_list_to_list, list_ndims},
     Result,
 };
-use datafusion_expr_common::signature::{
-    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
+use datafusion_expr_common::{
+    signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
+    type_coercion::binary::string_coercion,
 };
 use std::sync::Arc;
 
@@ -167,6 +168,21 @@ pub fn data_types(
     try_coerce_types(valid_types, current_types, &signature.type_signature)
 }
 
+fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
+    if let TypeSignature::OneOf(signatures) = type_signature {
+        return signatures.iter().all(is_well_supported_signature);
+    }
+
+    matches!(
+        type_signature,
+        TypeSignature::UserDefined
+            | TypeSignature::Numeric(_)
+            | TypeSignature::String(_)
+            | TypeSignature::Coercible(_)
+            | TypeSignature::Any(_)
+    )
+}
+
 fn try_coerce_types(
     valid_types: Vec<Vec<DataType>>,
     current_types: &[DataType],
@@ -175,14 +191,7 @@ fn try_coerce_types(
     let mut valid_types = valid_types;
 
     // Well-supported signature that returns exact valid types.
-    if !valid_types.is_empty()
-        && matches!(
-            type_signature,
-            TypeSignature::UserDefined
-                | TypeSignature::Numeric(_)
-                | TypeSignature::Coercible(_)
-        )
-    {
+    if !valid_types.is_empty() && is_well_supported_signature(type_signature) {
         // exact valid types
         assert_eq!(valid_types.len(), 1);
         let valid_types = valid_types.swap_remove(0);
@@ -374,6 +383,67 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
+        TypeSignature::String(number) => {
+            if *number < 1 {
+                return plan_err!(
+                    "The signature expected at least one argument but received {}",
+                    current_types.len()
+                );
+            }
+            if *number != current_types.len() {
+                return plan_err!(
+                    "The signature expected {} arguments but received {}",
+                    number,
+                    current_types.len()
+                );
+            }
+
+            fn coercion_rule(
+                lhs_type: &DataType,
+                rhs_type: &DataType,
+            ) -> Result<DataType> {
+                match (lhs_type, rhs_type) {
+                    (DataType::Null, DataType::Null) => Ok(DataType::Utf8),
+                    (DataType::Null, data_type) | (data_type, DataType::Null) => {
+                        coercion_rule(data_type, &DataType::Utf8)
+                    }
+                    (DataType::Dictionary(_, lhs), DataType::Dictionary(_, rhs)) => {
+                        coercion_rule(lhs, rhs)
+                    }
+                    (DataType::Dictionary(_, v), other)
+                    | (other, DataType::Dictionary(_, v)) => coercion_rule(v, other),
+                    _ => {
+                        if let Some(coerced_type) = string_coercion(lhs_type, rhs_type) {
+                            Ok(coerced_type)
+                        } else {
+                            plan_err!(
+                                "{} and {} are not coercible to a common string type",
+                                lhs_type,
+                                rhs_type
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Length checked above, safe to unwrap
+            let mut coerced_type = current_types.first().unwrap().to_owned();
+            for t in current_types.iter().skip(1) {
+                coerced_type = coercion_rule(&coerced_type, t)?;
+            }
+
+            fn base_type_or_default_type(data_type: &DataType) -> DataType {
+                if data_type.is_null() {
+                    DataType::Utf8
+                } else if let DataType::Dictionary(_, v) = data_type {
+                    base_type_or_default_type(v)
+                } else {
+                    data_type.to_owned()
+                }
+            }
+
+            vec![vec![base_type_or_default_type(&coerced_type); *number]]
+        }
         TypeSignature::Numeric(number) => {
             if *number < 1 {
                 return plan_err!(

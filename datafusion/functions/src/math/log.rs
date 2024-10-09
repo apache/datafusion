@@ -57,10 +57,8 @@ fn get_log_doc() -> &'static Documentation {
             .with_description("Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.")
             .with_syntax_example(r#"log(base, numeric_expression)
 log(numeric_expression)"#)
-            .with_argument("base",
-                           "Base numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
-            .with_argument("numeric_expression",
-                           "Numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_standard_argument("base", "Base numeric")
+            .with_standard_argument("numeric_expression", "Numeric")
             .build()
             .unwrap()
     })
