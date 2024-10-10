@@ -70,7 +70,7 @@ impl StructFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            aliases: vec![String::from("row")]
+            aliases: vec![String::from("row")],
         }
     }
 }
