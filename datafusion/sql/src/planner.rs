@@ -117,7 +117,7 @@ impl ValueNormalizer {
 /// CTEs, Views, subqueries and PREPARE statements. The states include
 /// Common Table Expression (CTE) provided with WITH clause and
 /// Parameter Data Types provided with PREPARE statement and the query schema of the
-/// outer query plan
+/// outer query plan.
 ///
 /// # Cloning
 ///
@@ -166,12 +166,12 @@ impl PlannerContext {
         self
     }
 
-    // return a reference to the outer queries schema
+    // Return a reference to the outer query's schema
     pub fn outer_query_schema(&self) -> Option<&DFSchema> {
         self.outer_query_schema.as_ref().map(|s| s.as_ref())
     }
 
-    /// sets the outer query schema, returning the existing one, if
+    /// Sets the outer query schema, returning the existing one, if
     /// any
     pub fn set_outer_query_schema(
         &mut self,
@@ -181,12 +181,12 @@ impl PlannerContext {
         schema
     }
 
-    // return a clone of the outer FROM schema
+    // Return a clone of the outer FROM schema
     pub fn outer_from_schema(&self) -> Option<Arc<DFSchema>> {
         self.outer_from_schema.clone()
     }
 
-    /// sets the outer FROM schema, returning the existing one, if any
+    /// Sets the outer FROM schema, returning the existing one, if any
     pub fn set_outer_from_schema(
         &mut self,
         mut schema: Option<DFSchemaRef>,
@@ -195,7 +195,7 @@ impl PlannerContext {
         schema
     }
 
-    /// extends the FROM schema, returning the existing one, if any
+    /// Extends the FROM schema, returning the existing one, if any
     pub fn extend_outer_from_schema(&mut self, schema: &DFSchemaRef) -> Result<()> {
         match self.outer_from_schema.as_mut() {
             Some(from_schema) => Arc::make_mut(from_schema).merge(schema),
@@ -209,7 +209,7 @@ impl PlannerContext {
         &self.prepare_param_data_types
     }
 
-    /// returns true if there is a Common Table Expression (CTE) /
+    /// Returns true if there is a Common Table Expression (CTE) /
     /// Subquery for the specified name
     pub fn contains_cte(&self, cte_name: &str) -> bool {
         self.ctes.contains_key(cte_name)
@@ -520,9 +520,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
-            // precision is not supported
+            // Precision is not supported
             | SQLDataType::Timestamp(Some(_), _)
-            // precision is not supported
+            // Precision is not supported
             | SQLDataType::Time(Some(_), _)
             | SQLDataType::Dec(_)
             | SQLDataType::BigNumeric(_)
@@ -586,7 +586,7 @@ pub fn object_name_to_table_reference(
     object_name: ObjectName,
     enable_normalization: bool,
 ) -> Result<TableReference> {
-    // use destructure to make it clear no fields on ObjectName are ignored
+    // Use destructure to make it clear no fields on ObjectName are ignored
     let ObjectName(idents) = object_name;
     idents_to_table_reference(idents, enable_normalization)
 }
@@ -597,7 +597,7 @@ pub(crate) fn idents_to_table_reference(
     enable_normalization: bool,
 ) -> Result<TableReference> {
     struct IdentTaker(Vec<Ident>);
-    /// take the next identifier from the back of idents, panic'ing if
+    /// Take the next identifier from the back of idents, panic'ing if
     /// there are none left
     impl IdentTaker {
         fn take(&mut self, enable_normalization: bool) -> String {
