@@ -348,3 +348,116 @@ DROP TABLE list_columns;
 # Clean up
 statement ok
 DROP TABLE listing_table;
+
+query I
+COPY (SELECT
+        arrow_cast(string_col, 'Binary') as binary_col,
+        arrow_cast(string_col, 'LargeBinary') as large_binary_col,
+        arrow_cast(string_col, 'BinaryView') as binary_view_col
+    FROM src_table LIMIT 3)
+TO 'test_files/scratch/parquet/binary_as_string.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE binary_as_string
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/binary_as_string.parquet'
+OPTIONS (
+  'binary_as_string' 'true'
+);
+
+query TTT
+DESCRIBE binary_as_string;
+----
+binary_col Utf8 YES
+large_binary_col Utf8 YES
+binary_view_col Utf8 YES
+
+query TTT
+SELECT binary_col, large_binary_col, binary_view_col FROM binary_as_string
+----
+aaa aaa aaa
+bbb bbb bbb
+ccc ccc ccc
+
+query TTT
+SELECT arrow_typeof(binary_col), arrow_typeof(large_binary_col), arrow_typeof(binary_view_col) FROM binary_as_string LIMIT 1
+----
+Utf8 Utf8 Utf8
+
+statement ok
+CREATE EXTERNAL TABLE binary_as_string_view
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/binary_as_string.parquet'
+OPTIONS (
+  'binary_as_string' 'true',
+  'schema_force_view_types' 'true'
+);
+
+query TTT
+DESCRIBE binary_as_string_view;
+----
+binary_col Utf8View YES
+large_binary_col Utf8View YES
+binary_view_col Utf8View YES
+
+query TTT
+SELECT binary_col, large_binary_col, binary_view_col FROM binary_as_string_view
+----
+aaa aaa aaa
+bbb bbb bbb
+ccc ccc ccc
+
+query TTT
+SELECT arrow_typeof(binary_col), arrow_typeof(large_binary_col), arrow_typeof(binary_view_col) FROM binary_as_string_view LIMIT 1
+----
+Utf8View Utf8View Utf8View
+
+statement ok
+CREATE EXTERNAL TABLE binary_as_string_with_col_type (binary_col VARCHAR, large_binary_col VARCHAR, binary_view_col VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/binary_as_string.parquet';
+
+query TTT
+DESCRIBE binary_as_string_with_col_type;
+----
+binary_col Utf8 YES
+large_binary_col Utf8 YES
+binary_view_col Utf8 YES
+
+query TTT
+SELECT binary_col, large_binary_col, binary_view_col FROM binary_as_string_with_col_type
+----
+aaa aaa aaa
+bbb bbb bbb
+ccc ccc ccc
+
+statement ok
+DROP TABLE binary_as_string;
+
+statement ok
+DROP TABLE binary_as_string_view;
+
+statement ok
+DROP TABLE binary_as_string_with_col_type;
+
+statement ok
+CREATE EXTERNAL TABLE test_non_utf8_binary
+STORED AS PARQUET
+LOCATION '../core/tests/data/test_binary.parquet'
+OPTIONS (
+  'binary_as_string' 'true'
+);
+
+query TTT
+DESCRIBE test_non_utf8_binary;
+----
+ids FixedSizeBinary(16) YES
+
+statement ok
+SELECT ids FROM test_non_utf8_binary
+
+statement ok
+DROP TABLE test_non_utf8_binary;
