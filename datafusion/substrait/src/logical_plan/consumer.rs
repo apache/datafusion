@@ -992,14 +992,11 @@ fn ensure_schema_compatability(
         .strip_qualifiers()
         .fields()
         .iter()
-        .map(|substrait_field| {
+        .try_for_each(|substrait_field| {
             let df_field =
                 table_schema.field_with_unqualified_name(substrait_field.name())?;
             ensure_field_compatability(df_field, substrait_field)
         })
-        .collect::<Result<()>>()?;
-
-    Ok(())
 }
 
 /// This function returns a DataFrame with fields adjusted if necessary in the event that the
