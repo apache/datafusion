@@ -340,15 +340,27 @@ pub(crate) fn coerce_file_schema_to_string_type(
             |field| match (table_fields.get(field.name()), field.data_type()) {
                 (Some(DataType::Utf8), DataType::Binary) => {
                     transform = true;
-                    Arc::new(Field::new(field.name(), DataType::Utf8, field.is_nullable()))
+                    Arc::new(Field::new(
+                        field.name(),
+                        DataType::Utf8,
+                        field.is_nullable(),
+                    ))
                 }
                 (Some(DataType::LargeUtf8), DataType::LargeBinary) => {
                     transform = true;
-                    Arc::new(Field::new(field.name(), DataType::LargeUtf8, field.is_nullable()))
+                    Arc::new(Field::new(
+                        field.name(),
+                        DataType::LargeUtf8,
+                        field.is_nullable(),
+                    ))
                 }
                 (Some(DataType::Utf8View), DataType::BinaryView) => {
                     transform = true;
-                    Arc::new(Field::new(field.name(), DataType::Utf8View, field.is_nullable()))
+                    Arc::new(Field::new(
+                        field.name(),
+                        DataType::Utf8View,
+                        field.is_nullable(),
+                    ))
                 }
                 _ => field.clone(),
             },
@@ -357,8 +369,7 @@ pub(crate) fn coerce_file_schema_to_string_type(
 
     if !transform {
         None
-    }
-    else {
+    } else {
         Some(Schema::new_with_metadata(
             transformed_fields,
             file_schema.metadata.clone(),

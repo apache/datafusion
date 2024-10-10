@@ -17,7 +17,9 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
-use crate::datasource::file_format::{coerce_file_schema_to_string_type, coerce_file_schema_to_view_type};
+use crate::datasource::file_format::{
+    coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
+};
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::row_group_filter::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
