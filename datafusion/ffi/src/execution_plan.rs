@@ -157,17 +157,17 @@ unsafe extern "C" fn clone_fn_wrapper(plan: *const FFI_ExecutionPlan) -> FFI_Exe
 // This struct exists on the consumer side (datafusion-python, for example) and not
 // in the provider's side.
 #[derive(Debug)]
-pub struct ExportedExecutionPlan {
+pub struct ForeignExecutionPlan {
     name: String,
     plan: Box<FFI_ExecutionPlan>,
     properties: PlanProperties,
     children: Vec<Arc<dyn ExecutionPlan>>,
 }
 
-unsafe impl Send for ExportedExecutionPlan {}
-unsafe impl Sync for ExportedExecutionPlan {}
+unsafe impl Send for ForeignExecutionPlan {}
+unsafe impl Sync for ForeignExecutionPlan {}
 
-impl DisplayAs for ExportedExecutionPlan {
+impl DisplayAs for ForeignExecutionPlan {
     fn fmt_as(
         &self,
         _t: datafusion::physical_plan::DisplayFormatType,
@@ -219,7 +219,7 @@ impl Drop for FFI_ExecutionPlan {
     }
 }
 
-impl ExportedExecutionPlan {
+impl ForeignExecutionPlan {
     /// Takes ownership of a FFI_ExecutionPlan
     ///
     /// # Safety
@@ -265,7 +265,7 @@ impl ExportedExecutionPlan {
                 .into_iter()
                 .map(|child| {
 
-                    let child_plan = ExportedExecutionPlan::new(child);
+                    let child_plan = ForeignExecutionPlan::new(child);
 
                     child_plan.map(|c| Arc::new(c) as Arc<dyn ExecutionPlan>)
                 })
@@ -292,7 +292,7 @@ impl Clone for FFI_ExecutionPlan {
     }
 }
 
-impl ExecutionPlan for ExportedExecutionPlan {
+impl ExecutionPlan for ForeignExecutionPlan {
     fn name(&self) -> &str {
         &self.name
     }
@@ -316,7 +316,7 @@ impl ExecutionPlan for ExportedExecutionPlan {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(ExportedExecutionPlan {
+        Ok(Arc::new(ForeignExecutionPlan {
             plan: self.plan.clone(),
             name: self.name.clone(),
             children,

@@ -48,7 +48,7 @@ use prost::Message;
 use crate::{session_config::ExportedSessionConfig, table_source::{FFI_TableProviderFilterPushDown, FFI_TableType}};
 
 use super::{
-    execution_plan::{ExportedExecutionPlan, FFI_ExecutionPlan},
+    execution_plan::{ForeignExecutionPlan, FFI_ExecutionPlan},
     session_config::FFI_SessionConfig,
 };
 use datafusion::error::Result;
@@ -424,7 +424,7 @@ impl TableProvider for ForeignTableProvider {
                 ));
             }
 
-            ExportedExecutionPlan::new(plan_ptr)?
+            ForeignExecutionPlan::new(plan_ptr)?
         };
 
         Ok(Arc::new(plan))
@@ -463,4 +463,41 @@ impl TableProvider for ForeignTableProvider {
             }
         }
     }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_round_trip_ffi_table_provider() -> Result<()> {
+        use datafusion::datasource::MemTable;
+        use datafusion::arrow::{
+            array::Float32Array, datatypes::DataType, record_batch::RecordBatch,
+        };
+        use arrow::datatypes::Field;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+        
+        // define data in two partitions
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Float32Array::from(vec![2.0, 4.0, 8.0]))],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Float32Array::from(vec![64.0]))],
+        )?;
+        
+        // declare a new context. In spark API, this corresponds to a new spark SQLsession
+        let ctx = SessionContext::new();
+        
+        // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+        let provider = MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?;
+        ctx.register_table("t", Arc::new(provider))?;
+
+        Ok(())
+    }
+
 }
