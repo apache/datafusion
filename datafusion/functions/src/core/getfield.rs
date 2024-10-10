@@ -15,18 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    make_array, Array, Capacities, MutableArrayData, Scalar, StringArray,
-};
+use std::any::Any;
+use std::sync::Arc;
+
+use arrow::array::{make_array, Array, ArrayRef, Capacities, MutableArrayData, Scalar};
 use arrow::datatypes::DataType;
+
 use datafusion_common::cast::{as_map_array, as_struct_array};
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{
     exec_err, plan_datafusion_err, plan_err, ExprSchema, Result, ScalarValue,
 };
 use datafusion_expr::{ColumnarValue, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct GetFieldFunc {
@@ -47,7 +48,6 @@ impl GetFieldFunc {
     }
 }
 
-// get_field(struct_array, field_name)
 impl ScalarUDFImpl for GetFieldFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -184,9 +184,25 @@ impl ScalarUDFImpl for GetFieldFunc {
         };
 
         match (array.data_type(), name) {
-            (DataType::Map(_, _), ScalarValue::Utf8(Some(k))) => {
+            (DataType::Map(_, _), name) => {
                 let map_array = as_map_array(array.as_ref())?;
-                let key_scalar: Scalar<arrow::array::GenericByteArray<arrow::datatypes::GenericStringType<i32>>> = Scalar::new(StringArray::from(vec![k.clone()]));
+                if !matches!(name, ScalarValue::Utf8(_) | ScalarValue::Int64(_) | ScalarValue::Float64(_)) {
+                    return exec_err!(
+                "get indexed field is only possible on map with utf8, int64 and float64 indexes. \
+                             Tried with {name:?} index")
+                }
+
+                let mut key_array: ArrayRef = name.to_array()?;
+                if key_array.data_type() != map_array.key_type() {
+                    let pre_cast_dt = key_array.data_type().clone();
+                    if arrow::compute::kernels::cast::can_cast_types(key_array.data_type(), map_array.key_type()) {
+                        key_array = arrow::compute::kernels::cast::cast_with_options(&key_array, map_array.key_type(), &DEFAULT_CAST_OPTIONS)?;
+                    }
+                    if key_array.null_count() > 0{
+                        return exec_err!("Could not convert {} {} to {}", pre_cast_dt, name, map_array.key_type())
+                    }
+                }
+                let key_scalar = Scalar::new(key_array);
                 let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
 
                 // note that this array has more entries than the expected output/input size
@@ -195,16 +211,16 @@ impl ScalarUDFImpl for GetFieldFunc {
                 let capacity = Capacities::Array(original_data.len());
                 let mut mutable =
                     MutableArrayData::with_capacities(vec![&original_data], true,
-                         capacity);
+                                                      capacity);
 
                 for entry in 0..map_array.len(){
                     let start = map_array.value_offsets()[entry] as usize;
                     let end = map_array.value_offsets()[entry + 1] as usize;
 
                     let maybe_matched =
-                                        keys.slice(start, end-start).
-                                        iter().enumerate().
-                                        find(|(_, t)| t.unwrap());
+                        keys.slice(start, end-start).
+                            iter().enumerate().
+                            find(|(_, t)| t.unwrap());
                     if maybe_matched.is_none(){
                         mutable.extend_nulls(1);
                         continue

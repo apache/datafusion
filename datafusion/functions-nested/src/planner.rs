@@ -150,6 +150,16 @@ impl ExprPlanner for FieldAccessPlanner {
             // expr[idx] ==> array_element(expr, idx)
             GetFieldAccess::ListIndex { key: index } => {
                 match expr {
+                    // Special case for accessing map value with non-string values
+                    Expr::ScalarFunction(scalar_func) if is_map(&scalar_func) => {
+                        let Expr::Literal(name) = *index else {
+                            return plan_err!("index should be a literal");
+                        };
+                        Ok(PlannerResult::Planned(get_field(
+                            Expr::ScalarFunction(scalar_func),
+                            name,
+                        )))
+                    }
                     // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
                     Expr::AggregateFunction(agg_func) if is_array_agg(&agg_func) => {
                         Ok(PlannerResult::Planned(Expr::AggregateFunction(
@@ -187,4 +197,8 @@ impl ExprPlanner for FieldAccessPlanner {
 
 fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
     return agg_func.func.name() == "array_agg";
+}
+
+fn is_map(scalar_func: &datafusion_expr::expr::ScalarFunction) -> bool {
+    return scalar_func.func.name() == "map";
 }
